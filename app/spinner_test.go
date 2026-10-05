@@ -240,22 +240,25 @@ func BenchmarkRenderActivity(b *testing.B) {
 	}
 }
 
-// By default there is no scanner: the line starts with the word. After
-// half a minute it counts the run's output tokens: the finished calls'
-// usage plus the call in progress at four characters a token.
+// By default there is no scanner: the line starts with the word. From
+// the first token it counts the run's tokens: the finished calls' usage,
+// plus what the call in progress has written (thinking, text, tool calls)
+// at four characters a token.
 func TestActivityDefaultAndTokens(t *testing.T) {
-	a, now := busyApp(t, "Thinking", 0)
+	a, _ := busyApp(t, "Thinking", 0)
 	a.spinnerScan = false
 	// A column of margin, then the word, set apart from the rest.
 	if got := tui.StripEscapes(a.renderActivity(200)[1]); got != " Thinking…  ·  0ms  ·  esc to interrupt" {
 		t.Fatalf("default line %q", got)
 	}
-	a.onEvent(agent.StepEnd{Usage: provider.Usage{PromptTokens: 50000, CachedTokens: 41900, CompletionTokens: 1000}})
-	a.onEvent(agent.TextDelta{Text: strings.Repeat("x", 800)})
-	if got := activityText(a); strings.Contains(got, "tokens") {
-		t.Fatalf("tokens before 30s: %q", got)
+	a.onEvent(agent.ReasoningDelta{Text: strings.Repeat("x", 400)})
+	if got := activityText(a); !strings.Contains(got, "↓ 100 tokens") {
+		t.Fatalf("while thinking: %q", got)
 	}
-	*now = a.runStart.Add(31 * time.Second)
+	a.onEvent(agent.StepEnd{Usage: provider.Usage{PromptTokens: 50000, CachedTokens: 41900, CompletionTokens: 1000}})
+	a.onEvent(agent.TextDelta{Text: strings.Repeat("x", 400)})
+	a.onEvent(agent.ToolDraft{Index: 0, Args: agent.BashArgs{Command: strings.Repeat("y", 200)}})
+	a.onEvent(agent.ToolDraft{Index: 0, Args: agent.BashArgs{Command: strings.Repeat("y", 400)}}) // the same call, longer
 	if got := activityText(a); !strings.Contains(got, "  ·  ↑ 8.1k  ↓ 1.2k tokens  ·  esc to interrupt") {
 		t.Fatalf("tokens: %q", got)
 	}

@@ -287,6 +287,10 @@ func (a *App) onEvent(ev any) {
 	case agent.ToolDraft:
 		// The call's block shows what it is and how long it has run.
 		a.activity = "Working"
+		if a.draftChars == nil {
+			a.draftChars = map[int]int{}
+		}
+		a.draftChars[e.Index] = len(e.Args.Command) + len(e.Args.Description)
 	case agent.ToolStart:
 		a.activity = "Working"
 		a.toolsRunning++
@@ -299,6 +303,7 @@ func (a *App) onEvent(ev any) {
 		a.streamChars += len(e.Text)
 	case agent.StepEnd:
 		a.turnOut += e.Usage.CompletionTokens
+		a.draftChars = nil
 		a.turnIn += max(0, e.Usage.PromptTokens-e.Usage.CachedTokens-e.Usage.CacheWriteTokens)
 		a.streamChars = 0
 		a.ctxTokens = e.Context

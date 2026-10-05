@@ -14,8 +14,9 @@ import (
 //
 // With spinnerScanner, a scanner before the word sweeps a lit teal head
 // across seven cells and back, a fading trail behind it (tui.Scanner).
-// After showTokensAfter the line adds the run's tokens so far: input the
-// server had not cached (↑) and output, thinking included (↓). The
+// As soon as there are any, the line adds the run's tokens so far: input
+// the server had not cached (↑) and output (↓): thinking, text and the
+// tool calls being written. The
 // label is teal, with a lighter band
 // sweeping across it left to right on its own, slower rhythm: the scanner
 // says "busy", the shimmer only adds a little life, and tying them
@@ -58,8 +59,6 @@ const (
 	shimmerSpeed  = 10.0
 	shimmerRadius = 3.0
 	shimmerRest   = 8.0
-	// showTokensAfter is when the line starts counting the run's output.
-	showTokensAfter = 30 * time.Second
 )
 
 func (a *App) clock() time.Time {
@@ -113,6 +112,16 @@ func (a *App) activityLabel() string {
 	return a.activity
 }
 
+// liveChars is how much the model call in progress has written so far:
+// thinking, text and tool calls.
+func (a *App) liveChars() int {
+	n := a.streamChars
+	for _, c := range a.draftChars {
+		n += c
+	}
+	return n
+}
+
 // stallLevel is how far the line has turned toward amber, 0 to 1: the
 // time the model has sent nothing beyond stallAfter, over stallRamp. A
 // running command is not a stall.
@@ -151,7 +160,7 @@ func (a *App) renderActivity(width int) []string {
 	// A column of margin and wide separators, so the parts read apart.
 	const sep = "  ·  "
 	meta := sep + tui.FormatDuration(el.Truncate(100*time.Millisecond))
-	if out := a.turnOut + a.streamChars/4; el >= showTokensAfter && (out > 0 || a.turnIn > 0) {
+	if out := a.turnOut + a.liveChars()/4; out > 0 || a.turnIn > 0 {
 		meta += sep
 		if a.turnIn > 0 {
 			meta += "↑ " + compactTokens(a.turnIn) + "  "

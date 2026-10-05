@@ -92,6 +92,9 @@ type App struct {
 	// usage, plus streamChars (text and thinking so far of the call in
 	// progress) at about four characters a token.
 	turnOut, streamChars int
+	// draftChars is how much of each tool call (by index) the call in
+	// progress has written.
+	draftChars map[int]int
 	// turnIn counts the run's input tokens the server had not cached
 	// (as the status line's ↑): what each call added to the context.
 	turnIn       int
@@ -649,7 +652,7 @@ func (a *App) start(activity string, fn func(context.Context, func(any)) error) 
 	a.busy, a.cancel = true, cancel
 	a.runStart, a.activity = a.clock(), activity
 	a.lastEvent, a.toolsRunning = a.runStart, 0
-	a.turnOut, a.streamChars, a.turnIn = 0, 0, 0
+	a.turnOut, a.streamChars, a.turnIn, a.draftChars = 0, 0, 0, nil
 	a.turnVerb = a.pickVerb()
 	if a.runKind == "turn" {
 		a.goal.BeginTurn()
