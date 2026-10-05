@@ -33,6 +33,7 @@ const agentUsage = `usage:
   atto agent report NAME                    its last message, status, duration and tokens
   atto agent list                           this session's subagents
   atto agent stop NAME                      interrupt its running turn
+  atto agent rm NAME... | rm -done          remove finished subagents (their sessions are archived)
   atto agent presets                        the presets subagents start from
 
 A subagent is a separate atto session working for this one: it sees only
@@ -42,7 +43,8 @@ digits and dashes, unique in this session). PRESET is one of the presets
 (atto agent presets): it fixes the subagent's model, effort and
 instructions. Each turn runs in the background; when one ends you get an
 [atto event] and read the result with atto agent report NAME. wait exits
-with status 124 when -timeout passes first.
+with status 124 when -timeout passes first. Once you have a subagent's
+result and no more work for it, remove it with atto agent rm NAME.
 
 Subagents are off unless settings.json has "subagents": {"enabled": true};
 "maxConcurrent" (default 3) caps the turns running at once, more wait in
@@ -58,6 +60,7 @@ func RunAgent(args []string, out io.Writer) error {
 	fs := newFlags("agent " + sub)
 	session := sessionFlag(fs)
 	timeout := fs.Duration("timeout", 0, "give up after this long")
+	done := fs.Bool("done", false, "rm: every subagent that is not running or queued")
 	words, err := parseWords(fs, rest)
 	if err != nil {
 		return fmt.Errorf("%v\n%s", err, agentUsage)
@@ -77,6 +80,9 @@ func RunAgent(args []string, out io.Writer) error {
 		if !settings.SubagentsEnabled() {
 			return fmt.Errorf(`subagents are off. Only the user can turn them on: "subagents": {"enabled": true} in %s`, config.SettingsPath())
 		}
+	}
+	if sub == "rm" {
+		return agentRemove(out, *session, words, *done)
 	}
 	name := ""
 	if sub != "list" && sub != "ls" && sub != "wait-any" && sub != "presets" {
@@ -181,6 +187,49 @@ func RunAgent(args []string, out io.Writer) error {
 		}
 	default:
 		return fmt.Errorf("unknown subcommand %q\n%s", sub, agentUsage)
+	}
+	return nil
+}
+
+// agentRemove removes subagents that are done (not running or queued):
+// their state goes, freeing the name, and their sessions are archived.
+func agentRemove(out io.Writer, parent string, names []string, done bool) error {
+	var subs []subagent.State
+	switch {
+	case done && len(names) > 0:
+		return fmt.Errorf("usage: atto agent rm NAME... | atto agent rm -done")
+	case done:
+		for _, s := range subagent.List(parent) {
+			if !s.Latest().Status.Active() {
+				subs = append(subs, s)
+			}
+		}
+		if len(subs) == 0 {
+			fmt.Fprintln(out, "no finished subagents")
+			return nil
+		}
+	case len(names) == 0:
+		return fmt.Errorf("usage: atto agent rm NAME... | atto agent rm -done")
+	default:
+		for _, n := range names {
+			s, err := subagent.Load(parent, n)
+			if err != nil {
+				return err
+			}
+			if t := s.Latest(); t.Status.Active() {
+				return fmt.Errorf("subagent %s is %s: stop it first (atto agent stop %s)", n, t.Status, n)
+			}
+			subs = append(subs, s)
+		}
+	}
+	for _, s := range subs {
+		if path, err := session.Find(s.Session); err == nil && !isArchived(path) {
+			if _, err := session.Archive(path); err != nil {
+				fmt.Fprintf(out, "warning: subagent %s: archiving its session: %v\n", s.Name, err)
+			}
+		}
+		subagent.Remove(parent, s.Name)
+		fmt.Fprintf(out, "removed subagent %s (session %s archived)\n", s.Name, s.Session)
 	}
 	return nil
 }

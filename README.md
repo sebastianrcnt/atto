@@ -271,6 +271,7 @@ atto agent wait NAME [-timeout 10m]     block until its turn ends and print its 
 atto agent wait-any [NAME...]           the first running one to finish
 atto agent report NAME                  its last message, status, duration, tokens (and ≈cost when the model has prices)
 atto agent list | stop NAME | presets
+atto agent rm NAME... | rm -done        remove finished ones; their sessions are archived
 ```
 
 - A subagent is its own session (in the parent's directory) that sees only the messages it is given, and the parent sees only its last message. Each turn runs headless as a job of the parent (`atto job list` shows `agent NAME`); when it ends the parent gets an `[atto event]` saying so. Its session is hidden from `atto resume` and `atto sessions`.

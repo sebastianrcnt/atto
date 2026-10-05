@@ -267,6 +267,21 @@ func TestAgentStartWaitReport(t *testing.T) {
 	if err != nil || !strings.Contains(out, "fixed them") {
 		t.Fatalf("report %q %v", out, err)
 	}
+	// Removed: gone from the list, its session archived, its name free.
+	st, _ := subagent.Load(parent, "bugs")
+	out, err = runAgent(t, "rm", "bugs", "-session", parent)
+	if err != nil || !strings.Contains(out, "removed subagent bugs") {
+		t.Fatalf("rm: %q %v", out, err)
+	}
+	if l := subagent.List(parent); len(l) != 0 {
+		t.Fatalf("listed after rm: %+v", l)
+	}
+	if p, err := session.Find(st.Session); err != nil || !strings.HasPrefix(p, config.ArchivedDir()) {
+		t.Fatalf("the session is not archived: %s %v", p, err)
+	}
+	if _, err := runAgent(t, "rm", "bugs", "-session", parent); err == nil {
+		t.Fatal("rm of a removed subagent")
+	}
 }
 
 func TestAgentWaitTimeout(t *testing.T) {
@@ -289,6 +304,12 @@ func TestAgentWaitTimeout(t *testing.T) {
 	if out, _ := runAgent(t, "list", "-session", "p1"); !strings.Contains(out, "running") {
 		t.Fatalf("list %q", out)
 	}
+	if _, err := runAgent(t, "rm", "slow", "-session", "p1"); err == nil || !strings.Contains(err.Error(), "stop it first") {
+		t.Fatalf("rm while running: %v", err)
+	}
+	if out, _ := runAgent(t, "rm", "-done", "-session", "p1"); !strings.Contains(out, "no finished subagents") {
+		t.Fatalf("rm -done while running: %q", out)
+	}
 	out, err = runAgent(t, "stop", "slow", "-session", "p1")
 	if err != nil || !strings.Contains(out, "stopped") {
 		t.Fatalf("stop: %q %v", out, err)
@@ -296,6 +317,9 @@ func TestAgentWaitTimeout(t *testing.T) {
 	st, _ := subagent.Load("p1", "slow")
 	if s := st.Latest().Status; s != subagent.Stopped {
 		t.Fatalf("status %s", s)
+	}
+	if out, err := runAgent(t, "rm", "-done", "-session", "p1"); err != nil || !strings.Contains(out, "removed subagent slow") || len(subagent.List("p1")) != 0 {
+		t.Fatalf("rm -done: %q %v", out, err)
 	}
 }
 
