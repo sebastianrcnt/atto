@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"sync"
 
 	"github.com/sebastianrcnt/atto/ai"
 )
@@ -26,9 +27,40 @@ type Client struct {
 	OnRequest func(body []byte)
 }
 
+// noToolChoice holds the models (provider/id) that refused a tool_choice:
+// some OpenAI-compatible servers take only "auto".
+var noToolChoice sync.Map
+
 // Stream sends req and streams the response. On error (including context
 // cancellation) the returned Result holds whatever was received so far.
+//
+// A tool_choice the server refuses is dropped and the request sent again,
+// once, before anything streamed; the model is then sent none from here on.
+// Compaction and summaries ask for "none" only to keep the tools in the
+// prefix without calls, and their callers ignore a call made anyway.
 func (c *Client) Stream(ctx context.Context, req Request, h Handler) (Result, error) {
+	key := c.Model.Provider + "/" + c.Model.ID
+	if _, ok := noToolChoice.Load(key); ok {
+		req.ToolChoice = ""
+	}
+	streamed := false
+	res, err := c.stream(ctx, req, h, &streamed)
+	if err != nil && req.ToolChoice != "" && !streamed && ctx.Err() == nil && toolChoiceRefused(err) {
+		noToolChoice.Store(key, true)
+		req.ToolChoice = ""
+		return c.stream(ctx, req, h, &streamed)
+	}
+	return res, err
+}
+
+// toolChoiceRefused reports whether an error is a server refusing the
+// request's tool_choice.
+func toolChoiceRefused(err error) bool {
+	m := err.Error()
+	return strings.Contains(m, "tool_choice") && (strings.Contains(m, "400") || strings.Contains(m, "invalid") || strings.Contains(m, "not supported"))
+}
+
+func (c *Client) stream(ctx context.Context, req Request, h Handler, streamed *bool) (Result, error) {
 	model := c.Model
 	key := c.APIKey
 	if c.KeyFunc != nil {
@@ -62,6 +94,10 @@ func (c *Client) Stream(ctx context.Context, req Request, h Handler) (Result, er
 	toolArgs := map[int]*strings.Builder{} // tool call index -> arguments so far
 	var final *ai.AssistantMessage
 	for ev := range stream.All() {
+		switch ev.Type {
+		case ai.EventThinkingDelta, ai.EventTextDelta, ai.EventToolCallStart:
+			*streamed = true
+		}
 		switch ev.Type {
 		case ai.EventThinkingDelta:
 			if h.OnReasoning != nil {

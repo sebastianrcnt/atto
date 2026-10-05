@@ -131,3 +131,29 @@ func TestImagesToParts(t *testing.T) {
 		t.Fatalf("text %+v", u)
 	}
 }
+
+// A server that takes only tool_choice "auto" gets the request again
+// without it, and that model is sent none afterwards.
+func TestClientDropsRefusedToolChoice(t *testing.T) {
+	var bodies []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		bodies = append(bodies, string(b))
+		if strings.Contains(string(b), `"tool_choice"`) {
+			w.WriteHeader(http.StatusBadRequest)
+			fmt.Fprint(w, `{"error":{"message":"only \"auto\" is supported for `+"`tool_choice`"+`","param":"tool_choice","type":"invalid_request_error"}}`)
+			return
+		}
+		fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"notes\"},\"finish_reason\":\"stop\"}]}\n\n")
+	}))
+	t.Cleanup(srv.Close)
+	c := &Client{Model: ai.Model{ID: "auto-only", Api: ai.ApiOpenAICompletions, Provider: "p-auto", BaseURL: srv.URL}}
+	req := Request{ToolChoice: "none", Messages: []Message{{Role: "user", Content: "hi"}}}
+	res, err := c.Stream(context.Background(), req, Handler{})
+	if err != nil || res.Message.Content != "notes" || len(bodies) != 2 {
+		t.Fatalf("res %+v err %v bodies %d", res.Message, err, len(bodies))
+	}
+	if _, err := c.Stream(context.Background(), req, Handler{}); err != nil || len(bodies) != 3 || strings.Contains(bodies[2], "tool_choice") {
+		t.Fatalf("second request: err %v, %d bodies: %s", err, len(bodies), bodies[len(bodies)-1])
+	}
+}
