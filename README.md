@@ -261,6 +261,34 @@ echo '{"query": "atto"}' | atto mcp call docs search -    # arguments from stdin
 - **Servers live in the session.** They start on first use and stay until the session ends, so a stateful server is not restarted per call. `atto mcp call` and `tools` run by the agent talk to the running atto over a Unix domain socket (`~/.atto/mcp/<session id>.json` holds its path and a random token, mode 0600; it works on Windows 10+ too). Run from a normal terminal, a server is started for that one command and stopped after. `/reload` (or `atto reload`) re-reads the files, keeps servers whose entry did not change and restarts those that did.
 - **Transparency.** The Loaded block and `atto context` list every server with its scope, transport, command or URL, and status (not started, running with N tools, failed with the reason, needs approval). The calls are ordinary shell commands, so they appear as normal tool blocks and a `PreToolUse` hook with matcher `Bash` can gate them (for example by looking for `atto mcp call github`). Extensions can use the same servers: `await atto.mcp.call(server, tool, args)` and `atto.mcp.tools(server?)`.
 
+**Subagents** (off by default) let the model hand self-contained work to a background child session, through its shell like everything else. Turn them on with `"subagents": {"enabled": true}` in `settings.json`; the system prompt then tells the model about them and to start them only when you ask.
+
+```
+atto agent start NAME PRESET "<task>"   start one in the background; returns at once
+atto agent steer NAME "<message>"       add instructions to its running turn
+atto agent next NAME "<message>"        a follow-up turn when it is idle
+atto agent wait NAME [-timeout 10m]     block until its turn ends and print its report (exit 124 on timeout)
+atto agent wait-any [NAME...]           the first running one to finish
+atto agent report NAME                  its last message, status, duration, tokens (and ≈cost when the model has prices)
+atto agent list | stop NAME | presets
+```
+
+- A subagent is its own session (in the parent's directory) that sees only the messages it is given, and the parent sees only its last message. Each turn runs headless as a job of the parent (`atto job list` shows `agent NAME`); when it ends the parent gets an `[atto event]` saying so. Its session is hidden from `atto resume` and `atto sessions`.
+- **Presets** fix a subagent's model, effort and instructions; the model can't choose them otherwise. The built-in `general` uses the parent's model and effort (or `subagents.model` / `subagents.effort` from `settings.json`) with generic worker instructions. Add presets as Markdown files in `~/.atto/agents/` or the project's `.atto/agents/` (the project wins on the same name, and either replaces the built-in `general`):
+
+  ```markdown
+  ---
+  name: reviewer
+  description: reviews a diff for bugs
+  model: anthropic/claude-sonnet-4-5
+  effort: high
+  ---
+  Review the change you are given. Report bugs with file:line, most serious first.
+  ```
+
+  The body is added to the subagent's system prompt; the names and descriptions are listed in the parent's. `atto context` shows them too.
+- `subagents.maxConcurrent` (default 3) caps the turns one session runs at once; the rest wait in a queue (`list` shows them `queued`). Subagents can't start subagents of their own (`ATTO_SUBAGENT` is set in their commands' environment).
+
 **Front end and back end are separate.** Both servers speak the same JSON-RPC protocol, built around threads, turns and items:
 
 - `atto serve` serves it over HTTP + SSE and includes a web client, so you can use atto from a phone. Listening beyond this machine (`-listen 0.0.0.0:7878`), it prints the link with a QR code to scan.
@@ -281,7 +309,8 @@ Everything lives in `~/.atto`. Set `ATTO_DIR` to move it.
 
 | Path | Contents |
 | --- | --- |
-| `settings.json` | default model and effort, renderer, `mouse`, `toolGroups` (`false`: no command groups), `spinnerVerbs` (the word the activity line shows while commands run, drawn once per turn: `en`, the default, made-up English verbs; `ko`, made-up Korean words, as `글벅거리는 중…`; `ko-literary`, Korean verbs; `off`, just `Working…`), `spinnerScanner` (`true`: a sweeping `▰▱` scanner before that word), status line, hooks, `updateCheck`, `doubleEscapeAction` (`tree`, `fork` or `none`), `branchSummary.skipPrompt`, `toolOutputTokenLimit` (how much of a command's output the model gets, default 10000 tokens; the middle is cut and the full output saved to a file, as in codex), `backgroundExit` (experimental: `false` turns off the exit menu that offers "Run in background" while a turn runs), `remote.port` (`/remote`'s port, default 7879), `extensions` (`disabled` names, handler `timeout` in seconds), `skills.disabled` (built-in skills to turn off) |
+| `settings.json` | default model and effort, renderer, `mouse`, `toolGroups` (`false`: no command groups), `spinnerVerbs` (the word the activity line shows while commands run, drawn once per turn: `en`, the default, made-up English verbs; `ko`, made-up Korean words, as `글벅거리는 중…`; `ko-literary`, Korean verbs; `off`, just `Working…`), `spinnerScanner` (`true`: a sweeping `▰▱` scanner before that word), status line, hooks, `updateCheck`, `doubleEscapeAction` (`tree`, `fork` or `none`), `branchSummary.skipPrompt`, `toolOutputTokenLimit` (how much of a command's output the model gets, default 10000 tokens; the middle is cut and the full output saved to a file, as in codex), `backgroundExit` (experimental: `false` turns off the exit menu that offers "Run in background" while a turn runs), `remote.port` (`/remote`'s port, default 7879), `extensions` (`disabled` names, handler `timeout` in seconds), `skills.disabled` (built-in skills to turn off), `subagents` (`enabled`, `maxConcurrent`, `model`, `effort`) |
+| `agents/` | subagent presets (`<name>.md`); `subagents/` holds the state of the subagents each session started |
 | `mcp.json` | MCP servers (Claude Code's `.mcp.json` format); `mcp-approvals.json` holds approved project servers, `mcp/` the endpoints of running sessions |
 | `extensions/` | your extensions; `extension-approvals.json` holds approved project extensions, `extensions.log` their logs |
 | `models.json` | your providers and models |
