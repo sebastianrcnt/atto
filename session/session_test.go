@@ -132,3 +132,20 @@ func TestWriteAfterCloseKeepsNoHandle(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestSubagentSessionsAreNotListed(t *testing.T) {
+	t.Setenv("ATTO_DIR", t.TempDir())
+	w := NewSubagent("/work", "parent1")
+	w.Append(Entry{Type: TypeMessage, Message: &provider.Message{Role: "user", Content: "task"}})
+	w.Close()
+	h, _, err := Load(w.Path)
+	if err != nil || h.AgentOf != "parent1" {
+		t.Fatalf("header %+v %v", h, err)
+	}
+	if l, _ := List("", false); len(l) != 0 {
+		t.Fatalf("listed: %+v", l)
+	}
+	if p, err := Find(w.ID); err != nil || p != w.Path {
+		t.Fatalf("find: %s %v", p, err)
+	}
+}

@@ -92,6 +92,9 @@ type Entry struct {
 	Cwd           string `json:"cwd,omitempty"`
 	ParentSession string `json:"parentSession,omitempty"` // path of the session this was forked from
 	GitBranch     string `json:"gitBranch,omitempty"`     // branch checked out in Cwd when the session began ("HEAD" if detached)
+	// AgentOf is the ID of the session a subagent session works for (atto
+	// agent). Such sessions are left out of listings.
+	AgentOf string `json:"agentOf,omitempty"`
 
 	// message
 	Message    *provider.Message `json:"message,omitempty"`
@@ -191,6 +194,7 @@ type Writer struct {
 	created time.Time
 	parent  string // ParentSession for the header
 	branch  string // GitBranch for the header
+	agentOf string // AgentOf for the header
 	leaf    string // ID of the last entry: the parent of the next one
 	hasLeaf bool   // leaf is known; else read from the file on open
 	f       *os.File
@@ -230,6 +234,14 @@ func New(cwd string) *Writer {
 	id := newID()
 	path := filepath.Join(config.SessionsDir(), now.Format("2006/01/02"), now.Format("20060102-150405")+"-"+id+".jsonl")
 	return &Writer{ID: id, Path: path, cwd: cwd, created: now, branch: GitBranch(cwd)}
+}
+
+// NewSubagent is New for the session of a subagent working for session
+// parent.
+func NewSubagent(cwd, parent string) *Writer {
+	w := New(cwd)
+	w.agentOf = parent
+	return w
 }
 
 // Resume returns a writer that appends to an existing session file. New
@@ -291,7 +303,7 @@ func (w *Writer) open() error {
 		}
 	}
 	if statErr != nil { // new file: write the header
-		return w.write(Entry{Type: TypeSession, Time: w.created, Version: Version, ID: w.ID, Cwd: w.cwd, ParentSession: w.parent, GitBranch: w.branch})
+		return w.write(Entry{Type: TypeSession, Time: w.created, Version: Version, ID: w.ID, Cwd: w.cwd, ParentSession: w.parent, GitBranch: w.branch, AgentOf: w.agentOf})
 	}
 	return nil
 }
@@ -437,11 +449,13 @@ type Summary struct {
 	Branch   string // git branch when the session began; "" if unknown
 	Size     int64  // file size in bytes
 	Running  int    // pid of the background process writing it; 0 if none
+	AgentOf  string // the session a subagent session works for
 }
 
 // List returns sessions, newest first. If cwd is non-empty only sessions
 // started in that directory are returned. archived selects archived
-// sessions instead of active ones.
+// sessions instead of active ones. Subagent sessions are left out: they
+// are reached through atto agent (or by ID).
 func List(cwd string, archived bool) ([]Summary, error) {
 	var out []Summary
 	root := config.SessionsDir()
@@ -453,7 +467,7 @@ func List(cwd string, archived bool) ([]Summary, error) {
 			return nil
 		}
 		s, err := summarize(path)
-		if err != nil || (cwd != "" && !SameDir(s.Cwd, cwd)) || s.Preview == "" {
+		if err != nil || (cwd != "" && !SameDir(s.Cwd, cwd)) || s.Preview == "" || s.AgentOf != "" {
 			return nil
 		}
 		s.Archived = archived
@@ -483,7 +497,7 @@ func summarize(path string) (Summary, error) {
 	if err != nil {
 		return Summary{}, err
 	}
-	s := Summary{Path: path, ID: h.ID, Cwd: h.Cwd, Created: h.Time, Updated: h.Time, Branch: h.GitBranch}
+	s := Summary{Path: path, ID: h.ID, Cwd: h.Cwd, Created: h.Time, Updated: h.Time, Branch: h.GitBranch, AgentOf: h.AgentOf}
 	if st, err := os.Stat(path); err == nil {
 		s.Size = st.Size()
 	}
