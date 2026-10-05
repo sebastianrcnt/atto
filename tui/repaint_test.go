@@ -11,12 +11,12 @@ import (
 func TestAnimationInterval(t *testing.T) {
 	ui := New(newVterm(10, 3))
 	ui.FullRepaint = false
-	if d := ui.AnimationInterval(); d != 80*time.Millisecond {
-		t.Fatalf("diff mode interval = %v", d)
+	if d, g := ui.AnimationInterval(), ui.GlyphInterval(); d != 33*time.Millisecond || g != 80*time.Millisecond {
+		t.Fatalf("diff mode intervals = %v, %v", d, g)
 	}
 	ui.FullRepaint = true
-	if d := ui.AnimationInterval(); d != 250*time.Millisecond {
-		t.Fatalf("full repaint interval = %v", d)
+	if d, g := ui.AnimationInterval(), ui.GlyphInterval(); d != 250*time.Millisecond || g != 250*time.Millisecond {
+		t.Fatalf("full repaint intervals = %v, %v", d, g)
 	}
 }
 

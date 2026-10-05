@@ -137,7 +137,7 @@ Pasting the path of an image file, or dropping the file on the terminal, attache
 
 Pastes over 1000 characters show as `[Pasted Content 1234 chars]` and are sent in full.
 
-Commands the agent runs: while one runs, its block shows the command and the last lines of output (the line above the input then just says `Working…`). Once it ends it folds to one line, `✓ description · time  $ command`; a failed one (non-zero exit, timeout, canceled) keeps its last two output lines. Click the line for the full command and the output's first and last lines, `… +N lines` for all of it. Commands run one after another, with only the model's thinking between them, group: the ones before the last fold into one dim line of their descriptions, `▸ Read main.go, Search for TODOs  +3 more · 12s`, with `· 1 failed` in red when some failed (those stay shown below it, as does the last command). Click it, or press `Ctrl+T`, to see every command and thought of the group on a shaded background. Set `"toolGroups": false` in `settings.json` to show each command on its own.
+Commands the agent runs: while one runs, its block shows the command and the last lines of output (the line above the input then shows a made-up verb, as `Blorping…`, one per turn; see `spinnerVerbs` below). Once it ends it folds to one line, `✓ description · time  $ command`; a failed one (non-zero exit, timeout, canceled) keeps its last two output lines. Click the line for the full command and the output's first and last lines, `… +N lines` for all of it. Commands run one after another, with only the model's thinking between them, group: the ones before the last fold into one dim line of their descriptions, `▸ Read main.go, Search for TODOs  +3 more · 12s`, with `· 1 failed` in red when some failed (those stay shown below it, as does the last command). Click it, or press `Ctrl+T`, to see every command and thought of the group on a shaded background. Set `"toolGroups": false` in `settings.json` to show each command on its own.
 
 ### Mouse and selection
 
@@ -281,7 +281,7 @@ Everything lives in `~/.atto`. Set `ATTO_DIR` to move it.
 
 | Path | Contents |
 | --- | --- |
-| `settings.json` | default model and effort, renderer, `mouse`, `toolGroups` (`false`: no command groups), status line, hooks, `updateCheck`, `doubleEscapeAction` (`tree`, `fork` or `none`), `branchSummary.skipPrompt`, `toolOutputTokenLimit` (how much of a command's output the model gets, default 10000 tokens; the middle is cut and the full output saved to a file, as in codex), `backgroundExit` (experimental: `false` turns off the exit menu that offers "Run in background" while a turn runs), `remote.port` (`/remote`'s port, default 7879), `extensions` (`disabled` names, handler `timeout` in seconds), `skills.disabled` (built-in skills to turn off) |
+| `settings.json` | default model and effort, renderer, `mouse`, `toolGroups` (`false`: no command groups), `spinnerVerbs` (the word the activity line shows while commands run, drawn once per turn: `en`, the default, made-up English verbs; `ko`, made-up Korean words, as `글벅거리는 중…`; `ko-literary`, Korean verbs; `off`, just `Working…`), status line, hooks, `updateCheck`, `doubleEscapeAction` (`tree`, `fork` or `none`), `branchSummary.skipPrompt`, `toolOutputTokenLimit` (how much of a command's output the model gets, default 10000 tokens; the middle is cut and the full output saved to a file, as in codex), `backgroundExit` (experimental: `false` turns off the exit menu that offers "Run in background" while a turn runs), `remote.port` (`/remote`'s port, default 7879), `extensions` (`disabled` names, handler `timeout` in seconds), `skills.disabled` (built-in skills to turn off) |
 | `mcp.json` | MCP servers (Claude Code's `.mcp.json` format); `mcp-approvals.json` holds approved project servers, `mcp/` the endpoints of running sessions |
 | `extensions/` | your extensions; `extension-approvals.json` holds approved project extensions, `extensions.log` their logs |
 | `models.json` | your providers and models |
@@ -291,7 +291,9 @@ Everything lives in `~/.atto`. Set `ATTO_DIR` to move it.
 
 ### Troubleshooting
 
-If text looks garbled, doubled or leaves fragments behind (seen with wide characters such as Korean in Windows Terminal and other ConPTY hosts), atto can repaint every visible row on each frame instead of only the changed ones. This is on by default on Windows. Set `ATTO_FULL_REPAINT=1` to force it on, or `ATTO_FULL_REPAINT=0` to force it off, on any OS.
+If text looks garbled, doubled or leaves fragments behind (seen with wide characters such as Korean in Windows Terminal and other ConPTY hosts), atto can repaint every visible row on each frame instead of only the changed ones. This is on by default on Windows. Set `ATTO_FULL_REPAINT=1` to force it on, or `ATTO_FULL_REPAINT=0` to force it off, on any OS. While atto works, the line above the input animates at about 30 frames a second (only that line is rewritten); full repaint animates it every 250ms instead.
+
+The activity line's colors blend in 24-bit color when the terminal says it can (`COLORTERM=truecolor` or `24bit`, Windows Terminal, iTerm2, WezTerm, VS Code, Ghostty) and are rounded to the 256-color palette otherwise; on the Linux console and other 16-color terminals it is plain ASCII. Its teal turns amber when the model has sent nothing for 15 seconds (while no command runs), and back when output arrives.
 
 ## Development
 

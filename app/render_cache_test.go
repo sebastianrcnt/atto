@@ -243,3 +243,45 @@ func TestRenderLongTranscriptAllocs(t *testing.T) {
 		t.Errorf("frame allocations grow with the transcript: %.0f, then %.0f", steady[40], steady[80])
 	}
 }
+
+// recordTerm is a sizedTerm that keeps what is written.
+type recordTerm struct {
+	sizedTerm
+	out *strings.Builder
+}
+
+func (r recordTerm) Write(s string) { r.out.WriteString(s) }
+
+// TestActivityFrameWritesOneLine: at 30 frames a second, a frame in which
+// only the activity line moves writes that line alone, and costs no more
+// for a transcript twice as long (the blocks' render caches hit).
+func TestActivityFrameWritesOneLine(t *testing.T) {
+	for _, mode := range []tui.Mode{tui.Fullscreen, tui.Inline} {
+		allocs := map[int]float64{}
+		for _, groups := range []int{40, 80} {
+			var out strings.Builder
+			a := transcriptAppOn(t, recordTerm{sizedTerm{120, 40}, &out}, mode, false)
+			if groups == 80 {
+				for _, c := range slices.Clone(a.ui.Body.Children[1:]) {
+					a.ui.Body.Add(c)
+				}
+			}
+			a.ui.Colors = tui.TrueColor
+			now := a.runStart
+			a.now = func() time.Time { return now }
+			a.ui.RenderNow()
+			allocs[groups] = testing.AllocsPerRun(30, func() {
+				out.Reset()
+				now = now.Add(a.ui.AnimationInterval())
+				a.ui.RenderNow()
+				w := tui.StripEscapes(out.String())
+				if !strings.Contains(w, "Thinking…") || strings.Contains(w, "part") || strings.Count(w, "\n") > 0 || len(w) > 400 {
+					t.Fatalf("mode %v: a frame wrote %q", mode, w)
+				}
+			})
+		}
+		if allocs[80] > allocs[40]+20 {
+			t.Errorf("mode %v: frame allocations grow with the transcript: %.0f, then %.0f", mode, allocs[40], allocs[80])
+		}
+	}
+}

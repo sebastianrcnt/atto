@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math/rand/v2"
 	"os"
 	"path/filepath"
 	"strings"
@@ -81,6 +82,15 @@ type App struct {
 	cancel   context.CancelFunc
 	runStart time.Time
 	activity string
+	// Activity line state (activity.go): the turn's verb, the setting it
+	// comes from, when the run last sent an event and how many commands
+	// run; now and verbRand are replaced by tests.
+	turnVerb     string
+	spinnerVerbs string
+	lastEvent    time.Time
+	toolsRunning int
+	now          func() time.Time
+	verbRand     *rand.Rand
 	// ctxTokens mirrors the agent's context estimate; updated from events so
 	// rendering never reads agent state while a turn runs.
 	ctxTokens int
@@ -226,6 +236,7 @@ func Run(opts Options) error {
 		a.ui.Mode = tui.Inline
 	}
 	a.escAction = settings.DoubleEscapeAction
+	a.spinnerVerbs = settings.SpinnerVerbs
 	a.bgx.off = settings.BackgroundExit != nil && !*settings.BackgroundExit
 	a.skipSummary = settings.BranchSummary != nil && settings.BranchSummary.SkipPrompt
 	a.ui.NoMouse = mouseDisabled(settings.Mouse, os.Getenv)
@@ -628,7 +639,9 @@ func (a *App) startTurn(text string, att []tui.Attachment) {
 func (a *App) start(activity string, fn func(context.Context, func(any)) error) {
 	ctx, cancel := context.WithCancel(context.Background())
 	a.busy, a.cancel = true, cancel
-	a.runStart, a.activity = time.Now(), activity
+	a.runStart, a.activity = a.clock(), activity
+	a.lastEvent, a.toolsRunning = a.runStart, 0
+	a.turnVerb = a.pickVerb()
 	if a.runKind == "turn" {
 		a.goal.BeginTurn()
 	}
@@ -718,20 +731,6 @@ func (a *App) setEffort(level string, announce bool) {
 }
 
 // --- footer rendering ---
-
-var spinnerFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
-
-func (a *App) renderActivity(width int) []string {
-	if !a.busy {
-		return nil
-	}
-	el := time.Since(a.runStart)
-	// One frame per animation tick: stepping by a fixed 80ms while full
-	// repaint renders every 250ms skipped frames, and the spinner jerked.
-	frame := spinnerFrames[int(el/a.ui.AnimationInterval())%len(spinnerFrames)]
-	line := tui.FG(6, frame) + " " + a.activity + "…" + tui.Dim("  "+tui.FormatDuration(el.Truncate(100*time.Millisecond))+" · esc to interrupt")
-	return []string{"", tui.Truncate(line, width, "…")}
-}
 
 func (a *App) renderInput(width int) []string {
 	if a.modal != nil {

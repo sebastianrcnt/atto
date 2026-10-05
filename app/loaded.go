@@ -170,6 +170,7 @@ func (a *App) applyReload(r core.Reloaded, err error) {
 	}
 	a.models, a.hooks, a.hookSrc, a.loaded = r.Models, r.Hooks, r.HookSrc, r.Loaded
 	a.escAction = r.Settings.DoubleEscapeAction
+	a.spinnerVerbs = r.Settings.SpinnerVerbs
 	a.skipSummary = r.Settings.BranchSummary != nil && r.Settings.BranchSummary.SkipPrompt
 	a.noToolGroups = r.Settings.ToolGroups != nil && !*r.Settings.ToolGroups
 	if a.sugList != nil { // skills may have changed

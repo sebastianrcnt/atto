@@ -23,9 +23,14 @@ func (s sizedTerm) Size() (int, int)               { return s.w, s.h }
 // many and mixed, with long thinking text and a few huge one-line
 // commands, the busy footer of a turn running on top.
 func transcriptApp(tb testing.TB, mode tui.Mode, fullRepaint bool) *App {
+	return transcriptAppOn(tb, sizedTerm{120, 40}, mode, fullRepaint)
+}
+
+// transcriptAppOn is transcriptApp on the terminal term.
+func transcriptAppOn(tb testing.TB, term tui.Terminal, mode tui.Mode, fullRepaint bool) *App {
 	tb.Setenv("ATTO_DIR", tb.TempDir())
 	model := config.ModelRef{ProviderName: "t", Model: config.Model{ID: "m"}}
-	a := &App{ui: tui.New(sizedTerm{120, 40}), agent: agent.New(model, "", tb.TempDir()), tools: map[string]*toolBlock{}, quit: make(chan struct{})}
+	a := &App{ui: tui.New(term), agent: agent.New(model, "", tb.TempDir()), tools: map[string]*toolBlock{}, quit: make(chan struct{})}
 	a.build()
 	a.ui.Mode, a.ui.FullRepaint = mode, fullRepaint
 	words := strings.Fields("the quick brown fox jumps over the lazy dog while reading src/main.go and thinking about the next step")
@@ -63,6 +68,7 @@ func transcriptApp(tb testing.TB, mode tui.Mode, fullRepaint bool) *App {
 		a.add(&noticeBlock{text: "a notice " + para(20), style: tui.Dim})
 	}
 	a.busy, a.runStart, a.activity = true, time.Now(), "Thinking"
+	a.lastEvent = a.runStart
 	return a
 }
 

@@ -280,6 +280,7 @@ func (a *App) onEvent(ev any) {
 	}
 	a.tr().Event(ev)
 	a.goal.Event(ev)
+	a.lastEvent = a.clock()
 	a.remoteGoal()
 	a.backgroundEvent(ev)
 	switch e := ev.(type) {
@@ -288,8 +289,10 @@ func (a *App) onEvent(ev any) {
 		a.activity = "Working"
 	case agent.ToolStart:
 		a.activity = "Working"
+		a.toolsRunning++
 	case agent.ToolEnd:
 		a.activity = "Thinking"
+		a.toolsRunning = max(0, a.toolsRunning-1)
 	case agent.StepEnd:
 		a.ctxTokens = e.Context
 		a.usage.add(e.Usage)

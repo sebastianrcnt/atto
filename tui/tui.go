@@ -103,6 +103,11 @@ type TUI struct {
 	// are never touched. New sets it from DefaultFullRepaint.
 	FullRepaint bool
 
+	// Colors is how many colors the terminal shows, for styles that blend
+	// colors (the activity line's shimmer). New sets it from
+	// DetectColorDepth; the rest of atto assumes 256 colors.
+	Colors ColorDepth
+
 	// FullRedraws counts full redraws; useful for tests and debugging.
 	FullRedraws int
 
@@ -124,7 +129,7 @@ type TUI struct {
 }
 
 func New(term Terminal) *TUI {
-	return &TUI{term: term, FullRepaint: DefaultFullRepaint(), wake: make(chan struct{}, 1), done: make(chan struct{})}
+	return &TUI{term: term, FullRepaint: DefaultFullRepaint(), Colors: DetectColorDepth(os.Getenv), wake: make(chan struct{}, 1), done: make(chan struct{})}
 }
 
 // DefaultFullRepaint reports whether full-repaint mode is on by default: on
@@ -133,10 +138,24 @@ func DefaultFullRepaint() bool {
 	return fullRepaintFor(runtime.GOOS, os.Getenv("ATTO_FULL_REPAINT"))
 }
 
-// AnimationInterval is how often a busy UI should request a render to turn a
-// spinner. Full repaint rewrites the whole viewport per frame, so it ticks
-// slower (elapsed time is computed at render time and stays accurate).
+// AnimationInterval is how often a busy UI should request a render to move
+// its animations: about 30 frames a second, so the activity line's shimmer
+// glides; a frame that changes only that line writes only that line with
+// the differential renderer. Full repaint rewrites the whole viewport per
+// frame, so it ticks at 250ms. Animations derive their state from the
+// elapsed time at render, never from counting ticks (see GlyphInterval).
 func (t *TUI) AnimationInterval() time.Duration {
+	if t.FullRepaint {
+		return 250 * time.Millisecond
+	}
+	return 33 * time.Millisecond
+}
+
+// GlyphInterval is how long a spinner glyph shows before the next: 80ms,
+// or one per tick in full repaint, which ticks slower (stepping by 80ms
+// there skipped frames, and the spinner jerked). It is also the tick for
+// what only needs a timer kept moving.
+func (t *TUI) GlyphInterval() time.Duration {
 	if t.FullRepaint {
 		return 250 * time.Millisecond
 	}

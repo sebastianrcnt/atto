@@ -68,7 +68,7 @@ func (s *Spinner) Start(ui *TUI) {
 	s.stop = make(chan struct{})
 	stop := s.stop
 	go func() {
-		tick := time.NewTicker(ui.AnimationInterval())
+		tick := time.NewTicker(ui.GlyphInterval())
 		defer tick.Stop()
 		for {
 			select {

@@ -106,6 +106,11 @@ type Settings struct {
 	// line of their descriptions (the last, and any that failed, stay
 	// shown); a click or ctrl+t expands it.
 	ToolGroups *bool `json:"toolGroups,omitempty"`
+	// SpinnerVerbs picks the words the activity line shows while a command
+	// runs, one per turn: "en" (default, made-up English verbs), "ko"
+	// (made-up Korean words), "ko-literary" (Korean verbs) or "off" (just
+	// "Working").
+	SpinnerVerbs string `json:"spinnerVerbs,omitempty"`
 	// BranchSummary configures what going back in the session tree (/tree)
 	// does with the branch being left, as pi's setting of the same name.
 	BranchSummary *BranchSummary `json:"branchSummary,omitempty"`

@@ -68,7 +68,7 @@ func (a *App) submitShell(text, cmd string, exclude bool) {
 	a.shell = run
 	a.tr().Event(transcript.ShellStart{Command: cmd, Exclude: exclude})
 	go func() { // keep the timer moving
-		t := time.NewTicker(a.ui.AnimationInterval())
+		t := time.NewTicker(a.ui.GlyphInterval())
 		defer t.Stop()
 		for {
 			select {
