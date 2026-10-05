@@ -26,6 +26,7 @@ import (
 	"github.com/sebastianrcnt/atto/session"
 	"github.com/sebastianrcnt/atto/shell"
 	"github.com/sebastianrcnt/atto/skills"
+	"github.com/sebastianrcnt/atto/subagent"
 )
 
 // HookOutcome is what hooks decided for one event.
@@ -227,6 +228,10 @@ type Agent struct {
 	// start and on Reload), not per request, so the prompt only changes
 	// when the configuration does.
 	MCP MCPServers
+	// Subagent, if set, makes this agent a subagent (atto agent): its
+	// prompt says so and carries the preset's instructions. Set it before
+	// SetStart (core.Bind).
+	Subagent *Subagent
 
 	// LastUsage is the usage of the most recent model call.
 	LastUsage provider.Usage
@@ -386,6 +391,32 @@ func (a *Agent) Reload() (changed bool) {
 	return true
 }
 
+// Subagent describes an agent working for another one (atto agent).
+type Subagent struct {
+	Name, Preset string
+	Instructions string // the preset's
+}
+
+// subagentPart is the prompt's paragraph about subagents: for a subagent,
+// what it is; for any other agent, the presets it may start when
+// subagents are enabled (nothing otherwise).
+func subagentPart(sub *Subagent, enabled bool, presets []subagent.Preset) string {
+	if sub != nil {
+		text := fmt.Sprintf("You are subagent %q (preset %s): another atto agent delegated a task to you and runs you in the background. "+
+			"It sees only the last message of each of your turns, so end with a self-contained report. "+
+			"Messages starting with \"[atto event] Message from the parent agent:\" come from it.\n\n", sub.Name, sub.Preset)
+		if sub.Instructions != "" {
+			text += "Instructions for this subagent:\n" + sub.Instructions + "\n\n"
+		}
+		return text
+	}
+	if !enabled {
+		return ""
+	}
+	return "Subagents: only when the user explicitly asks for them, delegate self-contained work to a background subagent with " +
+		"\"atto agent start NAME PRESET '<task>'\" (see \"atto agent -h\").\n" + subagent.PromptList(presets) + "\n"
+}
+
 // Sources is what the system prompt was built from.
 type Sources struct {
 	Cwd          string
@@ -406,7 +437,8 @@ func (a *Agent) scan(start time.Time) (Sources, string) {
 	dirs := skills.Dirs(config.SkillsDir(), projectRoot(a.Cwd), home)
 	sk, issues := skills.LoadIssues(dirs)
 	var disabled []string
-	if st, _ := config.LoadSettings(); st.Skills != nil {
+	st, _ := config.LoadSettings()
+	if st.Skills != nil {
 		disabled = st.Skills.Disabled
 	}
 	sk, bissues := skills.WithBuiltin(sk, config.SkillsCacheDir(), disabled)
@@ -416,7 +448,12 @@ func (a *Agent) scan(start time.Time) (Sources, string) {
 	if a.MCP != nil {
 		mcp = a.MCP.PromptServers()
 	}
-	prompt := buildPrompt(a.Cwd, a.Shell, start, sk, files, mcp)
+	var presets []subagent.Preset
+	if a.Subagent == nil && st.SubagentsEnabled() {
+		presets, _ = subagent.LoadPresets(subagent.Dirs(a.Cwd, projectRoot(a.Cwd)))
+	}
+	sub := subagentPart(a.Subagent, st.SubagentsEnabled(), presets)
+	prompt := buildPrompt(a.Cwd, a.Shell, start, sk, files, mcp, sub)
 	var instr strings.Builder
 	writeInstructions(&instr, files)
 	return Sources{
@@ -1275,7 +1312,7 @@ func shellGuide(sh shell.Shell) string {
 }
 
 func systemPrompt(cwd string, sh shell.Shell, start time.Time, sk []skills.Skill) string {
-	return buildPrompt(cwd, sh, start, sk, loadInstructions(cwd), nil)
+	return buildPrompt(cwd, sh, start, sk, loadInstructions(cwd), nil, "")
 }
 
 // mcpLine is the prompt's one line about MCP, with the blank line after
@@ -1289,7 +1326,8 @@ func mcpLine(names []string) string {
 	return fmt.Sprintf("MCP servers are available through \"atto mcp tools [server [tool]]\" and \"atto mcp call <server> <tool> '<json args>'\" (configured: %s).\n\n", strings.Join(names, ", "))
 }
 
-func buildPrompt(cwd string, sh shell.Shell, start time.Time, sk []skills.Skill, instr []instructionFile, mcp []string) string {
+// sub is the paragraph about subagents (see subagentPart), "" for none.
+func buildPrompt(cwd string, sh shell.Shell, start time.Time, sk []skills.Skill, instr []instructionFile, mcp []string, sub string) string {
 	var b strings.Builder
 	name := sh.ToolName()
 	fmt.Fprintf(&b, `You are atto, a coding agent running in the user's terminal.
@@ -1305,14 +1343,14 @@ Background work: start long-running commands (dev servers, watchers, long builds
 
 Goals: when a message starts with "[atto goal]", you are working toward a goal the user set and atto keeps starting turns until it is done. Mark it with "atto goal complete '<evidence>'" only after verifying it, or "atto goal blocked '<reason>'" when only the user can unblock it. Set a goal ("atto goal set '<objective>'") only when the user explicitly asks for one.
 
-%sWork autonomously: investigate, make the change, verify it. Keep replies concise and plain; the user sees your tool calls.
+%s%sWork autonomously: investigate, make the change, verify it. Keep replies concise and plain; the user sees your tool calls.
 
 Environment:
 - Working directory: %s
 - Platform: %s/%s
 - Shell: %s
 - Session started: %s
-`, mcpLine(mcp), cwd, runtime.GOOS, runtime.GOARCH, sh.Path, start.Format("2006-01-02"))
+`, sub, mcpLine(mcp), cwd, runtime.GOOS, runtime.GOARCH, sh.Path, start.Format("2006-01-02"))
 
 	writeInstructions(&b, instr)
 	b.WriteString(skills.FormatForPrompt(sk, name))

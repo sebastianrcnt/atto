@@ -40,6 +40,8 @@ usage:
   atto history grep|show ...        search a session transcript
   atto job|monitor|timer|sleep ...  background jobs and wake-ups (atto job for details)
   atto goal [complete|blocked|pause|set]  the session goal (or /goal, -goal)
+  atto agent start|steer|next|wait|report|list|stop ...
+                                    subagents: background child sessions (atto agent -h)
   atto context [-json]              what a session here loads: AGENTS.md, skills,
                                     hooks, settings, model
   atto reload                       from the agent's shell: reload AGENTS.md, skills,
@@ -89,26 +91,28 @@ func subcommandNames() []string {
 // subcommands maps each subcommand to its implementation.
 func subcommands() map[string]func([]string, io.Writer) error {
 	return map[string]func([]string, io.Writer) error{
-		"history":    cli.RunHistory,
-		"sessions":   cli.RunSessions,
-		"auth":       cli.RunAuth,
-		"models":     cli.RunModels,
-		"job":        cli.RunJob,
-		"monitor":    cli.RunMonitor,
-		"timer":      cli.RunTimer,
-		"sleep":      cli.RunSleep,
-		"goal":       cli.RunGoal,
-		"context":    cli.RunContext,
-		"reload":     cli.RunReload,
-		"extensions": cli.RunExtensions,
-		"mcp":        cli.RunMCP,
-		"update":     cli.RunUpdate,
-		"channel":    cli.RunChannel,
-		"_supervise": cli.RunSupervise,
-		"_shell":     cli.RunShellHost,
-		"_continue":  cli.RunContinue,
-		"login":      cli.RunLogin,
-		"logout":     cli.RunLogout,
+		"history":     cli.RunHistory,
+		"sessions":    cli.RunSessions,
+		"auth":        cli.RunAuth,
+		"models":      cli.RunModels,
+		"job":         cli.RunJob,
+		"monitor":     cli.RunMonitor,
+		"timer":       cli.RunTimer,
+		"sleep":       cli.RunSleep,
+		"goal":        cli.RunGoal,
+		"agent":       cli.RunAgent,
+		"_agent-turn": cli.RunAgentTurn,
+		"context":     cli.RunContext,
+		"reload":      cli.RunReload,
+		"extensions":  cli.RunExtensions,
+		"mcp":         cli.RunMCP,
+		"update":      cli.RunUpdate,
+		"channel":     cli.RunChannel,
+		"_supervise":  cli.RunSupervise,
+		"_shell":      cli.RunShellHost,
+		"_continue":   cli.RunContinue,
+		"login":       cli.RunLogin,
+		"logout":      cli.RunLogout,
 		"serve": func(args []string, out io.Writer) error {
 			provider.UserAgent = "github.com/sebastianrcnt/atto/" + update.Current()
 			return server.RunHTTP(update.Current(), args, out)
@@ -243,6 +247,10 @@ func main() {
 		sub := subcommands()[os.Args[1]]
 		if sub != nil {
 			if err := sub(os.Args[2:], os.Stdout); err != nil {
+				var code cli.ExitCode
+				if errors.As(err, &code) {
+					os.Exit(int(code))
+				}
 				if !errors.Is(err, cli.ErrSilent) {
 					fmt.Fprintln(os.Stderr, err)
 				}

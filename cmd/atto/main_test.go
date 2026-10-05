@@ -91,3 +91,16 @@ func TestImageFlagRepeats(t *testing.T) {
 		t.Fatalf("p %v, images %q, words %q", *p, imgs, words)
 	}
 }
+
+// A top-level agent may drive subagents from its shell (atto agent
+// refuses start/next for a subagent itself); plain atto stays refused.
+func TestNestedAllowsAgent(t *testing.T) {
+	for _, cmd := range []string{"agent", "_agent-turn"} {
+		if nestedRefused[cmd] || subcommands()[cmd] == nil {
+			t.Errorf("%s must work from the agent's shell", cmd)
+		}
+	}
+	if !nestedRefused[""] {
+		t.Error("atto itself must stay refused")
+	}
+}

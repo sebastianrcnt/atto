@@ -3,18 +3,38 @@ package cli
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/sebastianrcnt/atto/config"
+	"github.com/sebastianrcnt/atto/jobs"
 	"github.com/sebastianrcnt/atto/mcp"
 	"github.com/sebastianrcnt/atto/mcp/mcptest"
 )
 
+// The test binary also serves the processes atto agent starts: job
+// supervisors (_supervise) and subagent turns (_agent-turn).
 func TestMain(m *testing.M) {
 	mcptest.ServeIfRequested()
+	if len(os.Args) >= 2 {
+		switch os.Args[1] {
+		case "_supervise":
+			if jobs.Supervise(os.Args[2]) != nil {
+				os.Exit(1)
+			}
+			os.Exit(0)
+		case "_agent-turn":
+			if err := RunAgentTurn(os.Args[2:], io.Discard); err != nil {
+				fmt.Fprintln(os.Stderr, err)
+				os.Exit(1)
+			}
+			os.Exit(0)
+		}
+	}
 	os.Exit(m.Run())
 }
 

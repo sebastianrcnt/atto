@@ -19,6 +19,7 @@ import (
 
 	"github.com/sebastianrcnt/atto/agent"
 	"github.com/sebastianrcnt/atto/config"
+	"github.com/sebastianrcnt/atto/events"
 	"github.com/sebastianrcnt/atto/extensions"
 	"github.com/sebastianrcnt/atto/goal"
 	"github.com/sebastianrcnt/atto/images"
@@ -49,6 +50,13 @@ type PrintOptions struct {
 	// -session names without a new message, holding its lock, and notify
 	// the Notification hook when done.
 	Background bool
+	// Subagent runs a turn of a subagent (atto _agent-turn): its prompt
+	// says so, its commands can't start subagents, and what arrives in the
+	// session's inbox (the parent's steers, its jobs' events) is delivered
+	// while it works, and in another turn after it.
+	Subagent *agent.Subagent
+	// done, if set, receives the result before RunPrint returns.
+	done func(printResult)
 }
 
 // printResult is the final JSON object for --output-format json and the
@@ -70,6 +78,7 @@ type printResult struct {
 		CachedInputTokens int `json:"cached_input_tokens"`
 		OutputTokens      int `json:"output_tokens"`
 	} `json:"usage"`
+	cost float64 // US dollars, 0 when the model has no prices
 }
 
 // ErrPrintFailed signals a non-zero exit after output was already written.
@@ -234,6 +243,7 @@ func RunPrint(o PrintOptions) error {
 		return err
 	}
 	ag.MaxSteps = o.MaxSteps
+	ag.Subagent = o.Subagent
 	// Extensions have no UI here: notices go to stderr, dialogs get their
 	// default answers, and sendMessage steers the run.
 	ext := core.LoadExtensions(ag, &extensions.Headless{Out: os.Stderr, Send: ag.Steer})
@@ -241,6 +251,9 @@ func RunPrint(o PrintOptions) error {
 	mc := core.LoadMCP(ag) // servers start on first use and end with the run
 	defer mc.Close()
 	core.Bind(ag, hk, sess, start, !o.NoSave)
+	if o.Subagent != nil {
+		ag.SetSession(sess.ID, append(core.Env(sess.ID), config.EnvSubagent+"=1"))
+	}
 	ext.SessionStart(source)
 	if hk != nil {
 		for _, n := range hk.SessionStart(context.Background(), source) {
@@ -301,6 +314,19 @@ func RunPrint(o PrintOptions) error {
 		input = d.Goal.Continuation()
 	}
 	imgs := o.Images // with the first turn only
+	if o.Subagent != nil {
+		// Messages that came before the turn go with its prompt; later
+		// ones are taken at each step boundary.
+		if text := inboxText(sess.ID); text != "" {
+			input += "\n\n" + text
+		}
+		var poll func() string
+		poll = func() string {
+			ag.AtBoundary(poll)
+			return inboxText(sess.ID)
+		}
+		ag.AtBoundary(poll)
+	}
 
 	resume := o.Background && mode == bgResumeTurn // the first turn has its message already
 	turn := func(ctx context.Context, input string, emit func(any)) error {
@@ -322,6 +348,15 @@ func RunPrint(o PrintOptions) error {
 			fmt.Fprintf(os.Stderr, "\n◎ continuing goal · turn %d · %s\n", d.Goal.Turns+1, d.Goal.Usage())
 		}
 	})
+	// What arrived as the turn ended gets a turn of its own.
+	for o.Subagent != nil && runErr == nil && ctx.Err() == nil {
+		text := inboxText(sess.ID)
+		if text == "" {
+			break
+		}
+		p.flushStep()
+		runErr = turn(ctx, text, p.event)
+	}
 	if g := d.Goal; g != nil {
 		res.GoalStatus, res.GoalNote = string(g.Status), g.Note
 		if !o.NoSave { // so resuming the session shows the goal
@@ -349,6 +384,9 @@ func RunPrint(o PrintOptions) error {
 		res.Subtype, res.IsError, res.Error = "error", true, runErr.Error()
 	}
 
+	if o.done != nil {
+		o.done(res)
+	}
 	if o.Background {
 		name := saved.Name
 		if name == "" {
@@ -520,4 +558,16 @@ func addUsage(res *printResult, u provider.Usage) {
 	res.Usage.InputTokens += u.PromptTokens
 	res.Usage.CachedInputTokens += u.CachedTokens
 	res.Usage.OutputTokens += u.CompletionTokens
+	res.cost += u.Cost
+}
+
+// inboxText takes the events waiting in the session's inbox, as one
+// message for the model ("" for none). Reload requests are dropped: a
+// print run reads its configuration once.
+func inboxText(id string) string {
+	_, evs := events.SplitReload(core.Poll(id))
+	if len(evs) == 0 {
+		return ""
+	}
+	return events.Format(evs)
 }

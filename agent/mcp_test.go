@@ -16,12 +16,12 @@ func (f fakeMCP) PromptServers() []string { return f }
 func TestMCPLineIsDeterministicAndOnlyWhenConfigured(t *testing.T) {
 	sh := shell.Default()
 	start := time.Date(2026, 1, 2, 0, 0, 0, 0, time.UTC)
-	none := buildPrompt("/p", sh, start, nil, nil, nil)
+	none := buildPrompt("/p", sh, start, nil, nil, nil, "")
 	if strings.Contains(none, "MCP") {
 		t.Fatal("the prompt mentions MCP with no servers")
 	}
-	a := buildPrompt("/p", sh, start, nil, nil, []string{"linear", "github"})
-	b := buildPrompt("/p", sh, start, nil, nil, []string{"github", "linear"})
+	a := buildPrompt("/p", sh, start, nil, nil, []string{"linear", "github"}, "")
+	b := buildPrompt("/p", sh, start, nil, nil, []string{"github", "linear"}, "")
 	if a != b {
 		t.Fatal("the prompt depends on the order the servers were listed in")
 	}
