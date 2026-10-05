@@ -1,6 +1,7 @@
 package app
 
 import (
+	"github.com/sebastianrcnt/atto/provider"
 	"math/rand/v2"
 	"slices"
 	"strings"
@@ -19,6 +20,7 @@ func busyApp(t *testing.T, activity string, el time.Duration) (*App, *time.Time)
 	a.now = func() time.Time { return now }
 	a.busy, a.activity, a.runStart, a.lastEvent = true, activity, start, start
 	a.ui.Colors = tui.Colors256 // whatever the environment says
+	a.spinnerScan = true        // the scanner is what most tests here look at
 	return a, &now
 }
 
@@ -232,5 +234,29 @@ func BenchmarkRenderActivity(b *testing.B) {
 	for range b.N {
 		now = now.Add(33 * time.Millisecond)
 		a.renderActivity(120)
+	}
+}
+
+// By default there is no scanner: the line starts with the word. After
+// half a minute it counts the run's output tokens: the finished calls'
+// usage plus the call in progress at four characters a token.
+func TestActivityDefaultAndTokens(t *testing.T) {
+	a, now := busyApp(t, "Thinking", 0)
+	a.spinnerScan = false
+	if got := activityText(a); !strings.HasPrefix(got, "Thinking…  0ms") {
+		t.Fatalf("default line %q", got)
+	}
+	a.onEvent(agent.StepEnd{Usage: provider.Usage{CompletionTokens: 1000}})
+	a.onEvent(agent.TextDelta{Text: strings.Repeat("x", 800)})
+	if got := activityText(a); strings.Contains(got, "tokens") {
+		t.Fatalf("tokens before 30s: %q", got)
+	}
+	*now = a.runStart.Add(31 * time.Second)
+	if got := activityText(a); !strings.Contains(got, "· ↓ 1.2k tokens · esc to interrupt") {
+		t.Fatalf("tokens: %q", got)
+	}
+	a.onEvent(agent.StepEnd{Usage: provider.Usage{CompletionTokens: 300}})
+	if got := activityText(a); !strings.Contains(got, "↓ 1.3k tokens") {
+		t.Fatalf("after the call ends its usage replaces the estimate: %q", got)
 	}
 }

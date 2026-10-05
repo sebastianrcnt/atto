@@ -267,6 +267,7 @@ func TestActivityFrameWritesOneLine(t *testing.T) {
 				}
 			}
 			a.ui.Colors = tui.TrueColor
+			a.spinnerScan = true // so every frame changes
 			now := a.runStart
 			a.now = func() time.Time { return now }
 			a.ui.RenderNow()

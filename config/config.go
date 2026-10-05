@@ -111,6 +111,9 @@ type Settings struct {
 	// (made-up Korean words), "ko-literary" (Korean verbs) or "off" (just
 	// "Working").
 	SpinnerVerbs string `json:"spinnerVerbs,omitempty"`
+	// SpinnerScanner: true puts a sweeping scanner (▰▱) before the
+	// activity line's word. Off by default: the word's shimmer is enough.
+	SpinnerScanner bool `json:"spinnerScanner,omitempty"`
 	// BranchSummary configures what going back in the session tree (/tree)
 	// does with the branch being left, as pi's setting of the same name.
 	BranchSummary *BranchSummary `json:"branchSummary,omitempty"`

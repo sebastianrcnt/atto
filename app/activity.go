@@ -10,10 +10,12 @@ import (
 
 // The activity line above the editor while a run is busy:
 //
-//	▱▰▰▰▱▱▱ Blorping…  1m23s · esc to interrupt
+//	Blorping…  1m23s · ↓ 1.2k tokens · esc to interrupt
 //
-// A scanner sweeps a lit teal head across seven cells and back, a fading
-// trail behind it (tui.Scanner). The label is teal, with a lighter band
+// With spinnerScanner, a scanner before the word sweeps a lit teal head
+// across seven cells and back, a fading trail behind it (tui.Scanner).
+// After showTokensAfter the line adds the run's output tokens so far. The
+// label is teal, with a lighter band
 // sweeping across it left to right on its own, slower rhythm: the scanner
 // says "busy", the shimmer only adds a little life, and tying them
 // together made the band rush across the text (and jump at 250ms). When
@@ -55,6 +57,8 @@ const (
 	shimmerSpeed  = 10.0
 	shimmerRadius = 3.0
 	shimmerRest   = 8.0
+	// showTokensAfter is when the line starts counting the run's output.
+	showTokensAfter = 30 * time.Second
 )
 
 func (a *App) clock() time.Time {
@@ -139,7 +143,14 @@ func (a *App) renderActivity(width int) []string {
 	label := a.activityLabel() + "…"
 	travel := float64(tui.VisibleWidth(label)) + 2*shimmerRadius + shimmerRest
 	center := math.Mod(el.Seconds()*shimmerSpeed, travel) - shimmerRadius
-	line := sc.Render(scanAt, depth) + " " + tui.Shimmer(label, depth, base, hi, center, shimmerRadius) +
-		tui.Dim("  "+tui.FormatDuration(el.Truncate(100*time.Millisecond))+" · esc to interrupt")
+	line := tui.Shimmer(label, depth, base, hi, center, shimmerRadius)
+	if a.spinnerScan {
+		line = sc.Render(scanAt, depth) + " " + line
+	}
+	meta := "  " + tui.FormatDuration(el.Truncate(100*time.Millisecond))
+	if n := a.turnOut + a.streamChars/4; el >= showTokensAfter && n > 0 {
+		meta += " · ↓ " + compactTokens(n) + " tokens"
+	}
+	line += tui.Dim(meta + " · esc to interrupt")
 	return []string{"", tui.Truncate(line, width, "…")}
 }

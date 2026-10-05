@@ -87,10 +87,15 @@ type App struct {
 	// run; now and verbRand are replaced by tests.
 	turnVerb     string
 	spinnerVerbs string
-	lastEvent    time.Time
-	toolsRunning int
-	now          func() time.Time
-	verbRand     *rand.Rand
+	spinnerScan  bool // settings.json spinnerScanner
+	// turnOut counts the run's output tokens: the finished model calls'
+	// usage, plus streamChars (text and thinking so far of the call in
+	// progress) at about four characters a token.
+	turnOut, streamChars int
+	lastEvent            time.Time
+	toolsRunning         int
+	now                  func() time.Time
+	verbRand             *rand.Rand
 	// ctxTokens mirrors the agent's context estimate; updated from events so
 	// rendering never reads agent state while a turn runs.
 	ctxTokens int
@@ -236,7 +241,7 @@ func Run(opts Options) error {
 		a.ui.Mode = tui.Inline
 	}
 	a.escAction = settings.DoubleEscapeAction
-	a.spinnerVerbs = settings.SpinnerVerbs
+	a.spinnerVerbs, a.spinnerScan = settings.SpinnerVerbs, settings.SpinnerScanner
 	a.bgx.off = settings.BackgroundExit != nil && !*settings.BackgroundExit
 	a.skipSummary = settings.BranchSummary != nil && settings.BranchSummary.SkipPrompt
 	a.ui.NoMouse = mouseDisabled(settings.Mouse, os.Getenv)
@@ -641,6 +646,7 @@ func (a *App) start(activity string, fn func(context.Context, func(any)) error) 
 	a.busy, a.cancel = true, cancel
 	a.runStart, a.activity = a.clock(), activity
 	a.lastEvent, a.toolsRunning = a.runStart, 0
+	a.turnOut, a.streamChars = 0, 0
 	a.turnVerb = a.pickVerb()
 	if a.runKind == "turn" {
 		a.goal.BeginTurn()

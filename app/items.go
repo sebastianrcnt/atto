@@ -293,7 +293,13 @@ func (a *App) onEvent(ev any) {
 	case agent.ToolEnd:
 		a.activity = "Thinking"
 		a.toolsRunning = max(0, a.toolsRunning-1)
+	case agent.TextDelta:
+		a.streamChars += len(e.Text)
+	case agent.ReasoningDelta:
+		a.streamChars += len(e.Text)
 	case agent.StepEnd:
+		a.turnOut += e.Usage.CompletionTokens
+		a.streamChars = 0
 		a.ctxTokens = e.Context
 		a.usage.add(e.Usage)
 		a.statusTrigger()
