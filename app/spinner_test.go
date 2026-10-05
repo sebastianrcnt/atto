@@ -246,13 +246,13 @@ func TestActivityDefaultAndTokens(t *testing.T) {
 	if got := activityText(a); !strings.HasPrefix(got, "Thinking…  0ms") {
 		t.Fatalf("default line %q", got)
 	}
-	a.onEvent(agent.StepEnd{Usage: provider.Usage{CompletionTokens: 1000}})
+	a.onEvent(agent.StepEnd{Usage: provider.Usage{PromptTokens: 50000, CachedTokens: 41900, CompletionTokens: 1000}})
 	a.onEvent(agent.TextDelta{Text: strings.Repeat("x", 800)})
 	if got := activityText(a); strings.Contains(got, "tokens") {
 		t.Fatalf("tokens before 30s: %q", got)
 	}
 	*now = a.runStart.Add(31 * time.Second)
-	if got := activityText(a); !strings.Contains(got, "· ↓ 1.2k tokens · esc to interrupt") {
+	if got := activityText(a); !strings.Contains(got, "· ↑ 8.1k ↓ 1.2k tokens · esc to interrupt") {
 		t.Fatalf("tokens: %q", got)
 	}
 	a.onEvent(agent.StepEnd{Usage: provider.Usage{CompletionTokens: 300}})

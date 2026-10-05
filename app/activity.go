@@ -10,11 +10,12 @@ import (
 
 // The activity line above the editor while a run is busy:
 //
-//	Blorping…  1m23s · ↓ 1.2k tokens · esc to interrupt
+//	Blorping…  1m23s · ↑ 8.1k ↓ 1.2k tokens · esc to interrupt
 //
 // With spinnerScanner, a scanner before the word sweeps a lit teal head
 // across seven cells and back, a fading trail behind it (tui.Scanner).
-// After showTokensAfter the line adds the run's output tokens so far. The
+// After showTokensAfter the line adds the run's tokens so far: input the
+// server had not cached (↑) and output, thinking included (↓). The
 // label is teal, with a lighter band
 // sweeping across it left to right on its own, slower rhythm: the scanner
 // says "busy", the shimmer only adds a little life, and tying them
@@ -148,8 +149,12 @@ func (a *App) renderActivity(width int) []string {
 		line = sc.Render(scanAt, depth) + " " + line
 	}
 	meta := "  " + tui.FormatDuration(el.Truncate(100*time.Millisecond))
-	if n := a.turnOut + a.streamChars/4; el >= showTokensAfter && n > 0 {
-		meta += " · ↓ " + compactTokens(n) + " tokens"
+	if out := a.turnOut + a.streamChars/4; el >= showTokensAfter && (out > 0 || a.turnIn > 0) {
+		meta += " · "
+		if a.turnIn > 0 {
+			meta += "↑ " + compactTokens(a.turnIn) + " "
+		}
+		meta += "↓ " + compactTokens(out) + " tokens"
 	}
 	line += tui.Dim(meta + " · esc to interrupt")
 	return []string{"", tui.Truncate(line, width, "…")}

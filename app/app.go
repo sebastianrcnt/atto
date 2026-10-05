@@ -92,10 +92,13 @@ type App struct {
 	// usage, plus streamChars (text and thinking so far of the call in
 	// progress) at about four characters a token.
 	turnOut, streamChars int
-	lastEvent            time.Time
-	toolsRunning         int
-	now                  func() time.Time
-	verbRand             *rand.Rand
+	// turnIn counts the run's input tokens the server had not cached
+	// (as the status line's ↑): what each call added to the context.
+	turnIn       int
+	lastEvent    time.Time
+	toolsRunning int
+	now          func() time.Time
+	verbRand     *rand.Rand
 	// ctxTokens mirrors the agent's context estimate; updated from events so
 	// rendering never reads agent state while a turn runs.
 	ctxTokens int
@@ -646,7 +649,7 @@ func (a *App) start(activity string, fn func(context.Context, func(any)) error) 
 	a.busy, a.cancel = true, cancel
 	a.runStart, a.activity = a.clock(), activity
 	a.lastEvent, a.toolsRunning = a.runStart, 0
-	a.turnOut, a.streamChars = 0, 0
+	a.turnOut, a.streamChars, a.turnIn = 0, 0, 0
 	a.turnVerb = a.pickVerb()
 	if a.runKind == "turn" {
 		a.goal.BeginTurn()

@@ -299,6 +299,7 @@ func (a *App) onEvent(ev any) {
 		a.streamChars += len(e.Text)
 	case agent.StepEnd:
 		a.turnOut += e.Usage.CompletionTokens
+		a.turnIn += max(0, e.Usage.PromptTokens-e.Usage.CachedTokens-e.Usage.CacheWriteTokens)
 		a.streamChars = 0
 		a.ctxTokens = e.Context
 		a.usage.add(e.Usage)
