@@ -80,6 +80,12 @@ type Job struct {
 	Ended         *time.Time `json:"ended,omitempty"`
 	Monitor       *Monitor   `json:"monitor,omitempty"`
 	Notify        *Notify    `json:"notify,omitempty"`
+	// Args, if set, is run directly instead of Command through the shell;
+	// Command then only describes the job.
+	Args []string `json:"args,omitempty"`
+	// Quiet: a clean exit posts no event, for a command that tells the
+	// session how it went itself (a subagent turn).
+	Quiet bool `json:"quiet,omitempty"`
 }
 
 func (j Job) Kind() string {
@@ -226,6 +232,21 @@ func StartEnv(session, cwd, name, command string, env []string) (Job, error) {
 	return start(session, cwd, name, command, nil, nil, env)
 }
 
+// StartArgs is Start for a plain job that runs args directly, with no
+// shell in between, under the label name. With quiet, a clean exit posts
+// no event: the command reports itself.
+func StartArgs(session, cwd, name string, args []string, quiet bool) (Job, error) {
+	if len(args) == 0 {
+		return Job{}, fmt.Errorf("empty command")
+	}
+	id, dir, err := reserve(session)
+	if err != nil {
+		return Job{}, err
+	}
+	j := Job{ID: id, Session: session, Name: name, Command: strings.Join(args, " "), Cwd: cwd, Status: Starting, Started: time.Now(), Args: args, Quiet: quiet}
+	return launch(dir, j, nil)
+}
+
 // reserve checks that session may start another job and reserves its ID.
 func reserve(session string) (int, string, error) {
 	if session == "" {
@@ -262,6 +283,11 @@ func start(session, cwd, name, command string, mon *Monitor, notify *Notify, env
 		return Job{}, err
 	}
 	j := Job{ID: id, Session: session, Name: name, Command: command, Cwd: cwd, Status: Starting, Started: time.Now(), Monitor: mon, Notify: notify}
+	return launch(dir, j, env)
+}
+
+// launch saves the new job j in dir and starts its supervisor.
+func launch(dir string, j Job, env []string) (Job, error) {
 	if err := save(dir, j); err != nil {
 		return j, err
 	}
@@ -270,7 +296,7 @@ func start(session, cwd, name, command string, mon *Monitor, notify *Notify, env
 		return j, err
 	}
 	sup := exec.Command(exe, "_supervise", dir)
-	sup.Dir = cwd
+	sup.Dir = j.Cwd
 	sup.Env = env // nil: the caller's
 	shell.Detach(sup)
 	if err := sup.Start(); err != nil {
@@ -492,7 +518,7 @@ func finish(dir string, j Job, code int, detail string, killed bool) error {
 	if err := save(dir, j); err != nil {
 		return err
 	}
-	if !killed {
+	if !killed && !(j.Quiet && j.Status == Exited && code == 0) {
 		postEvent(j, detail)
 	}
 	return nil
@@ -502,6 +528,9 @@ func finish(dir string, j Job, code int, detail string, killed bool) error {
 // code (-2 if it could not start, -1 if killed) and an error detail.
 func run(ctx context.Context, dir string, j *Job, command string, out io.Writer, record bool) (int, string) {
 	cmd := shell.Command(ctx, command)
+	if len(j.Args) > 0 {
+		cmd = exec.CommandContext(ctx, j.Args[0], j.Args[1:]...)
+	}
 	cmd.Dir = j.Cwd
 	cmd.Env = append(os.Environ(), "TERM=dumb", "PAGER=cat", "GIT_PAGER=cat", "NO_COLOR=1")
 	cmd.Stdout, cmd.Stderr = out, out

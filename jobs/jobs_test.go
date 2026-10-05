@@ -148,3 +148,32 @@ func TestWaitWokenByUserInput(t *testing.T) {
 		t.Fatalf("why %s", why)
 	}
 }
+
+func TestStartArgsQuietExit(t *testing.T) {
+	s := setup(t)
+	// Run directly, no shell: the argument keeps its spaces and quotes.
+	j, err := StartArgs(s, t.TempDir(), "agent x", []string{"/bin/echo", `a "b" c`}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if j, _, _ = Wait(s, j.ID, 10*time.Second); j.Status != Exited || *j.ExitCode != 0 || j.Label() != "agent x" {
+		t.Fatalf("job %+v", j)
+	}
+	if out, _ := Tail(s, j.ID, 5); out != `a "b" c` {
+		t.Fatalf("output %q", out)
+	}
+	time.Sleep(200 * time.Millisecond)
+	if evs := events.Drain(s); len(evs) != 0 {
+		t.Fatalf("a quiet job's clean exit posts nothing: %+v", evs)
+	}
+	// A failure still does.
+	j, _ = StartArgs(s, t.TempDir(), "agent y", []string{"/bin/sh", "-c", "exit 4"}, true)
+	Wait(s, j.ID, 10*time.Second)
+	var evs []events.Event
+	for deadline := time.Now().Add(2 * time.Second); len(evs) == 0 && time.Now().Before(deadline); time.Sleep(20 * time.Millisecond) {
+		evs = events.Drain(s)
+	}
+	if len(evs) != 1 || !strings.Contains(evs[0].Text, "exited with code 4") {
+		t.Fatalf("events %+v", evs)
+	}
+}
