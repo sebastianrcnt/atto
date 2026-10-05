@@ -81,6 +81,17 @@ func TestBuiltinStatusCachedUntilInputsChange(t *testing.T) {
 		t.Error("effort: the status line did not change")
 	}
 	check("effort")
+	// The same counts, but a level mapped to nil: no levels left, no effort (#4).
+	x := "x"
+	a.agent.SetModel(config.ModelRef{Model: config.Model{ID: "m", Name: "Orca", ContextWindow: 262000, Cost: price, Efforts: []string{"low"}, EffortMap: map[string]*string{"low": &x}}})
+	a.agent.SetEffort("low")
+	check("mapped level")
+	got(160, 160) // cached at the width compared next
+	a.agent.SetModel(config.ModelRef{Model: config.Model{ID: "m", Name: "Orca", ContextWindow: 262000, Cost: price, Efforts: []string{"low"}, EffortMap: map[string]*string{"low": nil}}})
+	a.agent.SetEffort("low")
+	if g, f := got(160, 160), fresh(160, 160); g != f {
+		t.Errorf("after a level mapped to nil: cached\n%q\nfresh\n%q", g, f)
+	}
 
 	for what, change := range map[string]func(){
 		"usage":     func() { a.usage.add(provider.Usage{PromptTokens: 1000, CompletionTokens: 777, Cost: 1}) },

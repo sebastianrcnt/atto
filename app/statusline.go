@@ -360,7 +360,7 @@ func (a *App) builtinStatus(first, width int) []string {
 		first: first, width: width, effort: effort,
 		name: m.Model.DisplayName(), subscription: m.Provider.Subscription, priced: priced(m.Model),
 		ctxWindow: m.Model.ContextWindow, maxTokens: m.Model.MaxTokens,
-		reasoning: m.Model.Reasoning != nil && *m.Model.Reasoning, nEfforts: len(m.Model.Efforts), nEffortMap: len(m.Model.EffortMap),
+		reasoning: m.Model.Reasoning != nil && *m.Model.Reasoning, hasLevels: len(m.Model.Levels()) > 0,
 		usage: a.usage, ctxTokens: a.ctxTokens, sessName: a.sessName, mem: fmtBytes(rssBytes.Load()),
 		branch: a.gitBranch, cwd: a.cwd,
 	}
@@ -379,7 +379,7 @@ type statusKey struct {
 	subscription, priced  bool
 	ctxWindow, maxTokens  int
 	reasoning             bool
-	nEfforts, nEffortMap  int
+	hasLevels             bool // what buildStatus reads of the efforts
 	usage                 usageStats
 	ctxTokens             int
 	sessName, mem, branch string
