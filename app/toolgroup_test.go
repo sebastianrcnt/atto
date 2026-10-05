@@ -61,7 +61,7 @@ func TestToolGroupCollapsed(t *testing.T) {
 	out := runText(a, 100)
 	t.Logf("\n%s", out)
 
-	want := "▸ List files, Read main.go, Search for TODOs, Check git status · 1.0s · 1 failed"
+	want := "▸ 4 commands · 1.0s · 1 failed  List files, Read main.go, Search for TODOs, Check git status"
 	if !strings.Contains(out, want) {
 		t.Fatalf("summary line missing:\n%s", out)
 	}
@@ -85,7 +85,7 @@ func TestToolGroupBreaksOnText(t *testing.T) {
 	a.tr().Event(agent.StepEnd{})
 	runCalls(a, "b", exploreCalls[3:4]) // one call: as it always was
 	out := runText(a, 100)
-	if !strings.Contains(out, "▸ List files · 0.1s") || !strings.Contains(out, "$ cat main.go") {
+	if !strings.Contains(out, "▸ 1 command · 0.1s  List files") || !strings.Contains(out, "$ cat main.go") {
 		t.Fatalf("first run:\n%s", out)
 	}
 	if strings.Count(out, "▸") != 1 || !strings.Contains(out, "$ git status") {
@@ -106,7 +106,7 @@ func TestToolGroupRunning(t *testing.T) {
 	a.tr().Event(agent.ToolOutput{ID: "x", Chunk: "compiling\n"})
 	out := runText(a, 100)
 	t.Logf("\n%s", out)
-	if !strings.Contains(out, "▸ List files, Read main.go · 0.3s") {
+	if !strings.Contains(out, "▸ 2 commands · 0.3s  List files, Read main.go") {
 		t.Fatalf("summary so far:\n%s", out)
 	}
 	if !strings.Contains(out, "● Build · ") || !strings.Contains(out, "compiling") {
@@ -115,7 +115,7 @@ func TestToolGroupRunning(t *testing.T) {
 	// A call the model is still writing shows too.
 	a.tr().Event(agent.ToolEnd{ID: "x", Result: agent.BashResult{Duration: time.Second}})
 	a.tr().Event(agent.ToolDraft{Index: 0, Args: agent.BashArgs{Description: "Look"}})
-	if out := runText(a, 100); !strings.Contains(out, "▸ List files, Read main.go, Build · 1.3s") || !strings.Contains(out, "Look · writing") {
+	if out := runText(a, 100); !strings.Contains(out, "▸ 3 commands · 1.3s  List files, Read main.go, Build") || !strings.Contains(out, "Look · writing") {
 		t.Fatalf("pending call:\n%s", out)
 	}
 }
@@ -143,7 +143,7 @@ func TestToolGroupExpand(t *testing.T) {
 	lines := a.ui.Body.Render(width)
 	out := plainLines(lines)
 	t.Logf("\n%s", out)
-	if !strings.HasPrefix(tui.StripEscapes(lines[line]), "▾ List files") {
+	if !strings.HasPrefix(tui.StripEscapes(lines[line]), "▾ 4 commands") {
 		t.Fatalf("header %q", lines[line])
 	}
 	for _, c := range exploreCalls {
@@ -260,7 +260,7 @@ func TestToolGroupReasoning(t *testing.T) {
 	if n := strings.Count(out, "∴ Thought"); n != 2 { // before the run, and the trailing one
 		t.Fatalf("thinking lines %d:\n%s", n, out)
 	}
-	if !strings.Contains(out, "▸ List files · 0.1s") {
+	if !strings.Contains(out, "▸ 1 command · 0.1s  List files") {
 		t.Fatalf("no group:\n%s", out)
 	}
 }
@@ -279,7 +279,7 @@ func TestToolGroupThoughtsBetweenCalls(t *testing.T) {
 		t.Fatalf("%d children", n)
 	}
 	out := runText(a, 100)
-	if strings.Count(out, "▸") != 1 || strings.Contains(out, "Thought") || !strings.Contains(out, "▸ List files, Read main.go · 0.3s") {
+	if strings.Count(out, "▸") != 1 || strings.Contains(out, "Thought") || !strings.Contains(out, "▸ 2 commands · 0.3s  List files, Read main.go") {
 		t.Fatalf("collapsed:\n%s", out)
 	}
 	a.ui.Body.Click(summaryLine(t, a, 100))
@@ -299,8 +299,8 @@ func TestToolGroupThoughtsBetweenCalls(t *testing.T) {
 }
 
 // TestToolGroupWidths renders a group at several widths, with wide
-// characters: no line overflows, the summary says how many more calls
-// it left out, and the region fills the width.
+// characters: no line overflows, the summary leads with how many calls it
+// holds, and the region fills the width.
 func TestToolGroupWidths(t *testing.T) {
 	calls := append([]call{
 		{desc: "파일 목록 보기", cmd: "ls 디렉터리", out: "가나다라마바사", dur: time.Second},
@@ -319,11 +319,8 @@ func TestToolGroupWidths(t *testing.T) {
 		lines := a.ui.Body.Render(width)
 		check(lines)
 		head := tui.StripEscapes(lines[summaryLine(t, a, width)])
-		if width < 160 && !strings.Contains(head, "more") {
-			t.Errorf("width %d: %q does not say how many more", width, head)
-		}
-		if width == 160 && strings.Contains(head, "more") {
-			t.Errorf("width %d: %q left calls out", width, head)
+		if width >= 41 && !strings.Contains(head, fmt.Sprintf("%d commands", len(calls)-1)) {
+			t.Errorf("width %d: %q does not say how many", width, head)
 		}
 		a.ui.Body.Click(summaryLine(t, a, width))
 		lines = a.ui.Body.Render(width)
@@ -339,23 +336,21 @@ func TestToolGroupWidths(t *testing.T) {
 	}
 }
 
-func TestRunSummaryMore(t *testing.T) {
+func TestRunSummaryCount(t *testing.T) {
 	var calls []*toolBlock
 	for _, d := range []string{"Read main.go", "Search for TODOs", "List src", "Check git status", "Read a", "Read b", "Read c"} {
 		calls = append(calls, &toolBlock{args: agent.BashArgs{Description: d}, done: true})
 	}
 	got := tui.StripEscapes(runSummary(calls, runHeadKey{n: len(calls), dur: 12 * time.Second}, 80))
-	if want := "▸ Read main.go, Search for TODOs, List src, Check git status  +3 more · 12.0s"; got != want {
+	if want := "▸ 7 commands · 12.0s  Read main.go, Search for TODOs, List src, Check git statu…"; got != want {
 		t.Fatalf("got  %q\nwant %q", got, want)
 	}
 	got = tui.StripEscapes(runSummary(calls, runHeadKey{n: len(calls), dur: time.Second, failed: 2}, 200))
-	if !strings.HasSuffix(got, "Read c · 1.0s · 2 failed") {
-		t.Fatalf("%q", got)
+	if !strings.HasPrefix(got, "▸ 7 commands · 1.0s · 2 failed  Read main.go") || !strings.HasSuffix(got, "Read c") {
+		t.Fatalf("got %q", got)
 	}
-	// No description: the command's first line.
-	b := &toolBlock{args: agent.BashArgs{Command: "  ls -la\nwc -l"}}
-	if b.summary() != "ls -la" {
-		t.Fatalf("%q", b.summary())
+	if got := tui.StripEscapes(runSummary(calls[:1], runHeadKey{n: 1}, 80)); !strings.HasPrefix(got, "▸ 1 command · ") {
+		t.Fatalf("singular: %q", got)
 	}
 }
 

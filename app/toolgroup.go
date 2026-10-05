@@ -217,8 +217,9 @@ func (r *toolRun) Click(line int) bool {
 	return false
 }
 
-// headLine is the summary line: the descriptions of every call but the
-// last, as many as fit, then their total run time and how many failed.
+// headLine is the summary line for every call but the last: how many,
+// their total run time, how many failed, then their descriptions as far as
+// they fit.
 func (r *toolRun) headLine(width int) []string {
 	tools := r.tools()
 	sum := tools[:len(tools)-1]
@@ -243,32 +244,19 @@ func runSummary(calls []*toolBlock, key runHeadKey, width int) string {
 	if key.expanded {
 		mark = "▾ "
 	}
-	tail := tui.Dim(" · " + tui.FormatDuration(key.dur))
-	if key.failed > 0 {
-		tail += tui.Dim(" · ") + tui.FG(1, fmt.Sprintf("%d failed", key.failed))
+	noun := "commands"
+	if len(calls) == 1 {
+		noun = "command"
 	}
-	room := width - tui.VisibleWidth(mark) - tui.VisibleWidth(tail)
+	head := tui.Dim(fmt.Sprintf("%s%d %s · %s", mark, len(calls), noun, tui.FormatDuration(key.dur)))
+	if key.failed > 0 {
+		head += tui.Dim(" · ") + tui.FG(1, fmt.Sprintf("%d failed", key.failed))
+	}
 	descs := make([]string, len(calls))
 	for i, b := range calls {
 		descs[i] = b.summary()
 	}
-	text := strings.Join(descs, ", ")
-	if tui.VisibleWidth(text) > room {
-		// As many as fit, then how many more.
-		text = ""
-		for k := len(descs) - 1; k >= 1; k-- {
-			t := strings.Join(descs[:k], ", ") + fmt.Sprintf("  +%d more", len(descs)-k)
-			if tui.VisibleWidth(t) <= room {
-				text = t
-				break
-			}
-		}
-		if text == "" { // not even the first: cut it
-			more := fmt.Sprintf("  +%d more", len(descs)-1)
-			text = tui.Truncate(descs[0], max(1, room-len(more)), "…") + more
-		}
-	}
-	return tui.Truncate(tui.Dim(mark+text)+tail, width, "…")
+	return tui.Truncate(head+tui.Dim("  "+strings.Join(descs, ", ")), width, "…")
 }
 
 // --- the shaded region ---
