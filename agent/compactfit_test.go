@@ -14,6 +14,7 @@ import (
 
 	"github.com/sebastianrcnt/atto/config"
 	"github.com/sebastianrcnt/atto/provider"
+	"github.com/sebastianrcnt/atto/session"
 )
 
 func msgs(roles ...string) []provider.Message {
@@ -108,5 +109,45 @@ func TestCompactionRetriesWhenTheServerSaysTooLong(t *testing.T) {
 	}
 	if len(sizes) != 2 || sizes[1] >= sizes[0] || len(trimmed) == 0 {
 		t.Fatalf("request sizes %v, trimmed %v", sizes, trimmed)
+	}
+}
+
+// Notes that are cut off are written again, once; cut off twice, the
+// compaction fails and the conversation stays.
+func TestCompactionRewritesCutNotes(t *testing.T) {
+	for _, c := range []struct {
+		name    string
+		answers []string // content, finish_reason
+		fails   bool
+	}{
+		{"length, then whole", []string{"# Notes\n- a", "length", "# Notes\n- a\n- b", "stop"}, false},
+		{"heading, then whole", []string{"# Notes\n## Remain", "stop", "# Notes\n## Remain\n- b", "stop"}, false},
+		{"cut twice", []string{"# Notes\n- a", "length", "# Notes\n## Remain", "stop"}, true},
+	} {
+		var mu sync.Mutex
+		n := 0
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			mu.Lock()
+			i := n
+			n++
+			mu.Unlock()
+			text, _ := json.Marshal(c.answers[2*i])
+			fmt.Fprintf(w, "data: {\"choices\":[{\"delta\":{\"content\":%s},\"finish_reason\":%q}]}\n\ndata: [DONE]\n\n", text, c.answers[2*i+1])
+		}))
+		a := New(config.ModelRef{ProviderName: "t", Provider: config.Provider{BaseURL: srv.URL},
+			Model: config.Model{ID: "m", ContextWindow: 40000}}, "", os.TempDir())
+		a.messages = []provider.Message{{Role: "user", Content: "hi"}, {Role: "assistant", Content: "hello"}}
+		var saved []string
+		a.Record = func(e session.Entry) { saved = append(saved, e.Notes+"|"+e.Finish) }
+		err := a.compact(context.Background(), func(any) {}, true)
+		srv.Close()
+		switch {
+		case n != 2:
+			t.Errorf("%s: %d requests", c.name, n)
+		case c.fails && (err == nil || !strings.Contains(err.Error(), "cut off") || len(a.messages) != 2 || len(saved) != 0):
+			t.Errorf("%s: err %v, messages %d, saved %v", c.name, err, len(a.messages), saved)
+		case !c.fails && (err != nil || len(saved) != 1 || saved[0] != c.answers[2]+"|stop"):
+			t.Errorf("%s: err %v, saved %q", c.name, err, saved)
+		}
 	}
 }

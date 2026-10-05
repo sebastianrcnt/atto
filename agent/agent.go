@@ -1111,29 +1111,43 @@ func (a *Agent) compact(ctx context.Context, emit func(any), auto bool) error {
 	est := before + messageChars(prompt)/4
 	var res provider.Result
 	var err error
-	try := 0
-	for ; ; try++ {
-		// The conversation is at its limit by now, and one large tool result
-		// can take it past the point where the request plus a full-size
-		// answer fits: give the notes the room that is left, and when that
-		// is too little drop the oldest turns from the request (codex trims
-		// history the same way). The conversation itself is untouched.
-		need := compactRoom << try
-		if dropped := fitCompaction(&req, model.Model, est, need); dropped > 0 {
-			emit(CompactTrimmed{Messages: dropped})
+	try, sent := 0, 0
+	cut := ""
+	for again := 0; ; again++ {
+		for ; ; try++ {
+			// The conversation is at its limit by now, and one large tool result
+			// can take it past the point where the request plus a full-size
+			// answer fits: give the notes the room that is left, and when that
+			// is too little drop the oldest turns from the request (codex trims
+			// history the same way). The conversation itself is untouched.
+			need := compactRoom << try
+			if dropped := fitCompaction(&req, model.Model, est, need); dropped > 0 {
+				emit(CompactTrimmed{Messages: dropped})
+			}
+			sent++
+			res, err = client.Stream(ctx, req, provider.Handler{
+				OnText: func(s string) { emit(CompactDelta{s}) },
+			})
+			if err == nil || try >= 2 || !contextExceeded(err) || ctx.Err() != nil {
+				break
+			}
 		}
-		res, err = client.Stream(ctx, req, provider.Handler{
-			OnText: func(s string) { emit(CompactDelta{s}) },
-		})
-		if err == nil || try >= 2 || !contextExceeded(err) || ctx.Err() != nil {
+		// Notes cut off (the answer ran out, or ended in a call) would
+		// replace the conversation with half a handoff: write them again,
+		// once, and else leave the conversation as it is.
+		if cut = cutNotes(res); err != nil || cut == "" || again >= 1 {
 			break
 		}
+		emit(CompactDelta{"\n\n(the notes were cut off: writing them again)\n\n"})
 	}
 	// For /debug: the compaction request(s) and the turn's request before,
 	// to check that the compaction kept the server's prefix cache.
-	ai.PinRecentRequests("compaction", try+2)
+	ai.PinRecentRequests("compaction", sent+1)
 	if err != nil {
 		return fmt.Errorf("compaction failed: %w", err)
+	}
+	if cut != "" {
+		return fmt.Errorf("compaction failed: the handoff notes were cut off (%s), twice; the conversation is unchanged", cut)
 	}
 	notes := strings.TrimSpace(res.Message.Content)
 	if notes == "" {
@@ -1172,7 +1186,7 @@ func (a *Agent) compact(ctx context.Context, emit func(any), auto bool) error {
 	after, elapsed := a.ContextTokens(), time.Since(start)
 	if a.Record != nil {
 		a.Record(session.Entry{Type: session.TypeCompaction, Replacement: replacement, Notes: notes, TokensBefore: before,
-			TokensAfter: after, ElapsedMs: elapsed.Milliseconds(), Auto: auto})
+			TokensAfter: after, ElapsedMs: elapsed.Milliseconds(), Auto: auto, Finish: res.FinishReason})
 	}
 	emit(CompactEnd{Notes: notes, Before: before, After: after, Elapsed: elapsed})
 	return nil
@@ -1181,6 +1195,23 @@ func (a *Agent) compact(ctx context.Context, emit func(any), auto bool) error {
 // compactRoom is the least room a compaction request keeps for its answer:
 // the notes (CompactNoteWords) and the thinking before them.
 const compactRoom = 8192
+
+// cutNotes says how compaction notes were cut off, or "" when they are
+// whole: the answer ended at its token limit or in a tool call, or its
+// last line is a heading with nothing under it.
+func cutNotes(res provider.Result) string {
+	switch res.FinishReason {
+	case "length":
+		return "the answer reached its token limit"
+	case "tool_calls":
+		return "the model made a tool call"
+	}
+	notes := strings.TrimSpace(res.Message.Content)
+	if i := strings.LastIndexByte(notes, '\n'); strings.HasPrefix(notes[i+1:], "#") {
+		return "it ends with a heading"
+	}
+	return ""
+}
 
 // fitCompaction makes req, whose prompt is about est tokens, fit model's
 // context window with need tokens left to answer: it lowers MaxTokens to

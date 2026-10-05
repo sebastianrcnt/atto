@@ -106,6 +106,7 @@ type Entry struct {
 	TokensAfter  int                `json:"tokensAfter,omitempty"` // the estimate right after
 	ElapsedMs    int64              `json:"elapsedMs,omitempty"`   // how long writing the notes took
 	Auto         bool               `json:"auto,omitempty"`
+	Finish       string             `json:"finish,omitempty"` // how the notes' answer ended: stop, length...
 
 	// model / effort
 	Provider string `json:"provider,omitempty"`
