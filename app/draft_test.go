@@ -33,7 +33,7 @@ func TestPendingToolBlockBecomesRunning(t *testing.T) {
 	if !strings.Contains(got[1], "● Write file · writing…") || !strings.Contains(got[1], "$ cat > a <<'EOF' …") {
 		t.Fatalf("filled in:\n%s", got[1])
 	}
-	if strings.Contains(got[2], "writing") || !strings.Contains(got[2], " / 1m00s") || !strings.Contains(got[2], "● Write file · ") {
+	if strings.Contains(got[2], "writing") || !strings.Contains(got[2], " / 1m 00s") || !strings.Contains(got[2], "● Write file · ") {
 		t.Fatalf("running:\n%s", got[2])
 	}
 	if !strings.Contains(got[3], "✓ Write file") || strings.Count(got[3], "Write file") != 1 {

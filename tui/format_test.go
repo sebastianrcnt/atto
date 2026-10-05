@@ -12,8 +12,9 @@ func TestFormatDuration(t *testing.T) {
 		3 * time.Second:               "3.0s",
 		2900 * time.Millisecond:       "2.9s",
 		59900 * time.Millisecond:      "59.9s",
-		time.Minute:                   "1m00s",
-		2*time.Minute + 5*time.Second: "2m05s",
+		time.Minute:                   "1m 00s",
+		2*time.Minute + 5*time.Second: "2m 05s",
+		time.Hour + 5*time.Minute:     "1h 05m",
 	} {
 		if got := FormatDuration(d); got != want {
 			t.Errorf("%v: %q, want %q", d, got, want)

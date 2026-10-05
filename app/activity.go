@@ -10,7 +10,7 @@ import (
 
 // The activity line above the editor while a run is busy:
 //
-//	 Blorping…  ·  1m23s  ·  ↑ 8.1k  ↓ 1.2k tokens  ·  esc to interrupt
+//	 Blorping…  ·  1m 23s  ·  ↑ 8.1k  ↓ 1.2k tokens  ·  esc to interrupt
 //
 // With spinnerScanner, a scanner before the word sweeps a lit teal head
 // across seven cells and back, a fading trail behind it (tui.Scanner).
