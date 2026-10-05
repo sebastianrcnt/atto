@@ -24,7 +24,10 @@ func busyApp(t *testing.T, activity string, el time.Duration) (*App, *time.Time)
 	return a, &now
 }
 
-func activityText(a *App) string { return tui.StripEscapes(a.renderActivity(200)[1]) }
+// activityText is the line without its one-column margin.
+func activityText(a *App) string {
+	return strings.TrimPrefix(tui.StripEscapes(a.renderActivity(200)[1]), " ")
+}
 
 // The scanner moves a cell per step, from the elapsed time, whatever the
 // frame rate; in full repaint (a frame every 250ms) it has five cells and
@@ -86,7 +89,7 @@ func TestActivityColors16(t *testing.T) {
 	if strings.Contains(raw, "38;5;") || strings.Contains(raw, "38;2;") {
 		t.Errorf("16 colors: %q", raw)
 	}
-	if got := tui.StripEscapes(raw); !strings.HasPrefix(got, "=...... Thinking…") {
+	if got := tui.StripEscapes(raw); !strings.HasPrefix(got, " =...... Thinking…") {
 		t.Errorf("16 colors: %q", got)
 	}
 	a.ui.Colors = tui.Colors256
@@ -243,7 +246,8 @@ func BenchmarkRenderActivity(b *testing.B) {
 func TestActivityDefaultAndTokens(t *testing.T) {
 	a, now := busyApp(t, "Thinking", 0)
 	a.spinnerScan = false
-	if got := activityText(a); !strings.HasPrefix(got, "Thinking…  0ms") {
+	// A column of margin, then the word, set apart from the rest.
+	if got := tui.StripEscapes(a.renderActivity(200)[1]); got != " Thinking…  ·  0ms  ·  esc to interrupt" {
 		t.Fatalf("default line %q", got)
 	}
 	a.onEvent(agent.StepEnd{Usage: provider.Usage{PromptTokens: 50000, CachedTokens: 41900, CompletionTokens: 1000}})
@@ -252,7 +256,7 @@ func TestActivityDefaultAndTokens(t *testing.T) {
 		t.Fatalf("tokens before 30s: %q", got)
 	}
 	*now = a.runStart.Add(31 * time.Second)
-	if got := activityText(a); !strings.Contains(got, "· ↑ 8.1k ↓ 1.2k tokens · esc to interrupt") {
+	if got := activityText(a); !strings.Contains(got, "  ·  ↑ 8.1k  ↓ 1.2k tokens  ·  esc to interrupt") {
 		t.Fatalf("tokens: %q", got)
 	}
 	a.onEvent(agent.StepEnd{Usage: provider.Usage{CompletionTokens: 300}})

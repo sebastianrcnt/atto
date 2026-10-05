@@ -10,7 +10,7 @@ import (
 
 // The activity line above the editor while a run is busy:
 //
-//	Blorping…  1m23s · ↑ 8.1k ↓ 1.2k tokens · esc to interrupt
+//	 Blorping…  ·  1m23s  ·  ↑ 8.1k  ↓ 1.2k tokens  ·  esc to interrupt
 //
 // With spinnerScanner, a scanner before the word sweeps a lit teal head
 // across seven cells and back, a fading trail behind it (tui.Scanner).
@@ -148,14 +148,16 @@ func (a *App) renderActivity(width int) []string {
 	if a.spinnerScan {
 		line = sc.Render(scanAt, depth) + " " + line
 	}
-	meta := "  " + tui.FormatDuration(el.Truncate(100*time.Millisecond))
+	// A column of margin and wide separators, so the parts read apart.
+	const sep = "  ·  "
+	meta := sep + tui.FormatDuration(el.Truncate(100*time.Millisecond))
 	if out := a.turnOut + a.streamChars/4; el >= showTokensAfter && (out > 0 || a.turnIn > 0) {
-		meta += " · "
+		meta += sep
 		if a.turnIn > 0 {
-			meta += "↑ " + compactTokens(a.turnIn) + " "
+			meta += "↑ " + compactTokens(a.turnIn) + "  "
 		}
 		meta += "↓ " + compactTokens(out) + " tokens"
 	}
-	line += tui.Dim(meta + " · esc to interrupt")
+	line = " " + line + tui.Dim(meta+sep+"esc to interrupt")
 	return []string{"", tui.Truncate(line, width, "…")}
 }
