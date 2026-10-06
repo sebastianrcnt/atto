@@ -94,7 +94,8 @@ type Entry struct {
 	GitBranch     string `json:"gitBranch,omitempty"`     // branch checked out in Cwd when the session began ("HEAD" if detached)
 	// AgentOf is the ID of the session a subagent session works for (atto
 	// agent). Such sessions are left out of listings.
-	AgentOf string `json:"agentOf,omitempty"`
+	AgentOf  string `json:"agentOf,omitempty"`
+	External bool   `json:"external,omitempty"` // lightweight external orchestration parent
 
 	// message
 	Message    *provider.Message `json:"message,omitempty"`
@@ -187,19 +188,20 @@ type ToolMeta struct {
 // Writer appends entries to a session file. The file is created lazily on
 // the first entry so empty sessions leave nothing behind.
 type Writer struct {
-	mu      sync.Mutex
-	ID      string
-	Path    string
-	cwd     string
-	created time.Time
-	parent  string // ParentSession for the header
-	branch  string // GitBranch for the header
-	agentOf string // AgentOf for the header
-	leaf    string // ID of the last entry: the parent of the next one
-	hasLeaf bool   // leaf is known; else read from the file on open
-	f       *os.File
-	err     error
-	closed  bool // Close ran: later writes open the file, write and close it again
+	mu       sync.Mutex
+	ID       string
+	Path     string
+	cwd      string
+	created  time.Time
+	parent   string // ParentSession for the header
+	branch   string // GitBranch for the header
+	agentOf  string // AgentOf for the header
+	external bool
+	leaf     string // ID of the last entry: the parent of the next one
+	hasLeaf  bool   // leaf is known; else read from the file on open
+	f        *os.File
+	err      error
+	closed   bool // Close ran: later writes open the file, write and close it again
 	// readOnly, when set, is why nothing is written (see lock.go).
 	readOnly string
 }
@@ -236,8 +238,14 @@ func New(cwd string) *Writer {
 	return &Writer{ID: id, Path: path, cwd: cwd, created: now, branch: GitBranch(cwd)}
 }
 
-// NewSubagent is New for the session of a subagent working for session
-// parent.
+// NewExternal prepares a lightweight parent for external orchestration.
+func NewExternal(cwd string) *Writer {
+	w := New(cwd)
+	w.external = true
+	return w
+}
+
+// NewSubagent is New for the session of a subagent working for parent.
 func NewSubagent(cwd, parent string) *Writer {
 	w := New(cwd)
 	w.agentOf = parent
@@ -303,7 +311,7 @@ func (w *Writer) open() error {
 		}
 	}
 	if statErr != nil { // new file: write the header
-		return w.write(Entry{Type: TypeSession, Time: w.created, Version: Version, ID: w.ID, Cwd: w.cwd, ParentSession: w.parent, GitBranch: w.branch, AgentOf: w.agentOf})
+		return w.write(Entry{Type: TypeSession, Time: w.created, Version: Version, ID: w.ID, Cwd: w.cwd, ParentSession: w.parent, GitBranch: w.branch, AgentOf: w.agentOf, External: w.external})
 	}
 	return nil
 }
@@ -450,6 +458,7 @@ type Summary struct {
 	Size     int64  // file size in bytes
 	Running  int    // pid of the background process writing it; 0 if none
 	AgentOf  string // the session a subagent session works for
+	External bool
 }
 
 // List returns sessions, newest first. If cwd is non-empty only sessions
@@ -467,7 +476,7 @@ func List(cwd string, archived bool) ([]Summary, error) {
 			return nil
 		}
 		s, err := summarize(path)
-		if err != nil || (cwd != "" && !SameDir(s.Cwd, cwd)) || s.Preview == "" || s.AgentOf != "" {
+		if err != nil || (cwd != "" && !SameDir(s.Cwd, cwd)) || (s.Preview == "" && !s.External) || s.AgentOf != "" {
 			return nil
 		}
 		s.Archived = archived
@@ -497,7 +506,7 @@ func summarize(path string) (Summary, error) {
 	if err != nil {
 		return Summary{}, err
 	}
-	s := Summary{Path: path, ID: h.ID, Cwd: h.Cwd, Created: h.Time, Updated: h.Time, Branch: h.GitBranch, AgentOf: h.AgentOf}
+	s := Summary{Path: path, ID: h.ID, Cwd: h.Cwd, Created: h.Time, Updated: h.Time, Branch: h.GitBranch, AgentOf: h.AgentOf, External: h.External}
 	if st, err := os.Stat(path); err == nil {
 		s.Size = st.Size()
 	}
@@ -549,13 +558,18 @@ func Rename(path, name string) error {
 	return w.Err()
 }
 
-// Latest returns the most recently updated session for cwd.
+// Latest returns the most recently updated conversation for cwd, excluding
+// lightweight external parents.
 func Latest(cwd string) (Summary, bool) {
 	l, err := List(cwd, false)
-	if err != nil || len(l) == 0 {
-		return Summary{}, false
+	if err == nil {
+		for _, s := range l {
+			if !s.External {
+				return s, true
+			}
+		}
 	}
-	return l[0], true
+	return Summary{}, false
 }
 
 // Archive moves an active session file into the archive, keeping its

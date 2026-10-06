@@ -357,3 +357,106 @@ func TestAgentQueueBeyondLimit(t *testing.T) {
 }
 
 func sleepBriefly() { time.Sleep(50 * time.Millisecond) }
+
+func TestAgentExternalParent(t *testing.T) {
+	bodies := agentServer(t, func(int, string) string { return textAnswer("done") })
+	root := t.TempDir()
+	t.Chdir(root)
+	if err := os.Mkdir(filepath.Join(root, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	enableSubagents(t, "")
+	out, err := runAgent(t, "list")
+	if err != nil || !strings.HasPrefix(out, "external parent created: ") {
+		t.Fatalf("create: %q %v", out, err)
+	}
+	path, _, _ := externalParentPath()
+	b, _ := os.ReadFile(path)
+	parent := strings.TrimSpace(string(b))
+	hpath, _ := session.Find(parent)
+	h, entries, err := session.Load(hpath)
+	if err != nil || !h.External || len(entries) != 1 || entries[0].Name != "atto agent (external)" || len(bodies()) != 0 {
+		t.Fatalf("parent: %+v %+v %v", h, entries, err)
+	}
+	if _, ok := session.Latest(""); ok {
+		t.Fatal("external parent selected by continue")
+	}
+	list, _ := session.List("", false)
+	if len(list) != 1 || list[0].Name != "atto agent (external)" {
+		t.Fatalf("list: %+v", list)
+	}
+	child := filepath.Join(root, "child")
+	if err := os.Mkdir(child, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(child)
+	if out, err := runAgent(t, "list"); err != nil || out != "no subagents\n" {
+		t.Fatalf("reuse: %q %v", out, err)
+	}
+	if out, err := runAgent(t, "list", "-session", "explicit"); err != nil || out != "no subagents\n" {
+		t.Fatalf("explicit: %q %v", out, err)
+	}
+	if _, err := runAgent(t, "start", "a", "general", "task", "-m", "fake/m", "-effort", "high"); err != nil {
+		t.Fatal(err)
+	}
+	for _, cmd := range []string{"wait", "wait-any", "report"} {
+		args := []string{cmd, "a", "-json", "-timeout", "30s"}
+		out, err := runAgent(t, args...)
+		var r struct {
+			Name, Status, Session, Model, Message string
+			Turn                                  int
+			Duration                              float64
+			Tokens                                struct{ In, Cached, Out int }
+		}
+		if err != nil || json.Unmarshal([]byte(out), &r) != nil || r.Name != "a" || r.Status != "done" || r.Turn != 1 || r.Session == "" || r.Model != "fake/m" || r.Message != "done" || r.Duration <= 0 || r.Tokens.In != 100 || r.Tokens.Cached != 40 || r.Tokens.Out != 7 {
+			t.Fatalf("%s: %q %v", cmd, out, err)
+		}
+	}
+	st, _ := subagent.Load(parent, "a")
+	if st.Effort != "high" {
+		t.Fatalf("effort: %s", st.Effort)
+	}
+	if _, err := runAgent(t, "rm", "a"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("mapping retained: %v", err)
+	}
+	if p, err := session.Find(parent); err != nil || !isArchived(p) {
+		t.Fatalf("parent not archived: %s %v", p, err)
+	}
+	if out, err := runAgent(t, "list"); err != nil || !strings.Contains(out, "external parent created:") || strings.Contains(out, parent) {
+		t.Fatalf("new parent: %q %v", out, err)
+	}
+}
+
+func TestAgentExternalModelFlags(t *testing.T) {
+	agentServer(t, func(int, string) string { return textAnswer("ok") })
+	t.Chdir(t.TempDir())
+	enableSubagents(t, "")
+	for _, env := range []string{"ATTO_SESSION_ID", config.EnvSubagent} {
+		t.Setenv(env, "inside")
+		for _, flags := range [][]string{{"-m", "fake/m"}, {"-effort", "high"}, {"-m", ""}} {
+			args := append([]string{"start", "a", "general", "task", "-session", "explicit"}, flags...)
+			if _, err := runAgent(t, args...); err == nil || !strings.Contains(err.Error(), "external callers only") {
+				t.Fatalf("%s %v: %v", env, flags, err)
+			}
+		}
+		t.Setenv(env, "")
+	}
+	for _, flags := range [][]string{{"-m", "fake/nope"}, {"-m", "fake/small", "-effort", "high"}} {
+		if _, err := runAgent(t, append([]string{"start", "a", "general", "task", "-session", "explicit"}, flags...)...); err == nil {
+			t.Fatalf("accepted invalid flags %v", flags)
+		}
+	}
+	if _, err := runAgent(t, "start", "a", "general", "task", "-session", "explicit", "-m", "fake/small", "-effort", "low"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runAgent(t, "wait", "a", "-session", "explicit", "-timeout", "30s"); err != nil {
+		t.Fatal(err)
+	}
+	st, _ := subagent.Load("explicit", "a")
+	if st.Model != "fake/small" || st.Effort != "low" {
+		t.Fatalf("state: %+v", st)
+	}
+}

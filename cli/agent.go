@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -49,7 +50,13 @@ result and no more work for it, remove it with atto agent rm NAME.
 
 Subagents are off unless settings.json has "subagents": {"enabled": true};
 "maxConcurrent" (default 3) caps the turns running at once, more wait in
-a queue. Subagents can't start subagents of their own.`
+a queue. Subagents can't start subagents of their own.
+
+Every command accepts -session ID (default: $ATTO_SESSION_ID). Outside
+atto, without -session, a parent is created without a model call and reused
+for this project (git root, else cwd); the last rm archives it.
+start accepts -m provider/model and -effort LEVEL (external callers only).
+wait, wait-any and report accept -json: one object; duration is in seconds.`
 
 // RunAgent implements "atto agent".
 func RunAgent(args []string, out io.Writer) error {
@@ -61,13 +68,33 @@ func RunAgent(args []string, out io.Writer) error {
 	fs := newFlags("agent " + sub)
 	session := sessionFlag(fs)
 	timeout := fs.Duration("timeout", 0, "give up after this long")
+	model, effort := "", ""
+	if sub == "start" {
+		fs.StringVar(&model, "m", "", "model (external callers only)")
+		fs.StringVar(&effort, "effort", "", "effort (external callers only)")
+	}
+	jsonOut := false
+	if sub == "wait" || sub == "wait-any" || sub == "report" {
+		fs.BoolVar(&jsonOut, "json", false, "JSON report")
+	}
 	done := fs.Bool("done", false, "rm: every subagent that is not running or queued")
 	words, err := parseWords(fs, rest)
 	if err != nil {
 		return fmt.Errorf("%v\n%s", err, agentUsage)
 	}
-	if err := requireSession(*session); err != nil {
-		return err
+	override := false
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == "m" || f.Name == "effort" {
+			override = true
+		}
+	})
+	if override && (os.Getenv("ATTO_SESSION_ID") != "" || config.InSubagent()) {
+		return fmt.Errorf("-m and -effort are for external callers only; inside atto use presets")
+	}
+	switch sub {
+	case "start", "next", "steer", "wait", "wait-any", "report", "list", "ls", "stop", "rm", "presets":
+	default:
+		return fmt.Errorf("unknown subcommand %q\n%s", sub, agentUsage)
 	}
 	settings, err := config.LoadSettings()
 	if err != nil {
@@ -82,8 +109,30 @@ func RunAgent(args []string, out io.Writer) error {
 			return fmt.Errorf(`subagents are off. Only the user can turn them on: "subagents": {"enabled": true} in %s`, config.SettingsPath())
 		}
 	}
+	if *session == "" {
+		if config.InSubagent() {
+			return requireSession(*session)
+		}
+		parentOut := out
+		if jsonOut {
+			parentOut = os.Stderr
+		}
+		id, release, err := externalParent(parentOut)
+		if err != nil {
+			return err
+		}
+		*session = id
+		if sub == "start" || sub == "rm" {
+			defer release()
+		} else {
+			release()
+		}
+	}
 	if sub == "rm" {
-		return agentRemove(out, *session, words, *done)
+		if err := agentRemove(out, *session, words, *done); err != nil {
+			return err
+		}
+		return forgetExternalParent(*session)
 	}
 	name := ""
 	if sub != "list" && sub != "ls" && sub != "wait-any" && sub != "presets" {
@@ -102,7 +151,7 @@ func RunAgent(args []string, out io.Writer) error {
 		if len(words) < 2 {
 			return fmt.Errorf(`usage: atto agent start NAME PRESET "<task>" (presets: atto agent presets)`)
 		}
-		return agentStart(out, settings, *session, name, words[0], strings.TrimSpace(strings.Join(words[1:], " ")))
+		return agentStart(out, settings, *session, name, words[0], strings.TrimSpace(strings.Join(words[1:], " ")), model, effort)
 	case "next":
 		if text == "" {
 			return fmt.Errorf(`usage: atto agent next NAME "<message>"`)
@@ -138,7 +187,7 @@ func RunAgent(args []string, out io.Writer) error {
 		if err != nil {
 			return err
 		}
-		return agentWait(out, *session, []subagent.State{st}, *timeout)
+		return agentWait(out, *session, []subagent.State{st}, *timeout, jsonOut)
 	case "wait-any":
 		var cands []subagent.State
 		for _, s := range subagent.List(*session) {
@@ -151,13 +200,13 @@ func RunAgent(args []string, out io.Writer) error {
 				return err
 			}
 		}
-		return agentWait(out, *session, cands, *timeout)
+		return agentWait(out, *session, cands, *timeout, jsonOut)
 	case "report":
 		st, err := subagent.Load(*session, name)
 		if err != nil {
 			return err
 		}
-		fmt.Fprint(out, agentReport(st))
+		return writeAgentReport(out, st, jsonOut)
 	case "list", "ls":
 		return agentList(out, *session)
 	case "stop":
@@ -257,7 +306,7 @@ func contains(list []string, s string) bool {
 }
 
 // agentStart creates subagent name from preset and starts its first turn.
-func agentStart(out io.Writer, settings config.Settings, parent, name, preset, task string) error {
+func agentStart(out io.Writer, settings config.Settings, parent, name, preset, task, model, effortOverride string) error {
 	if task == "" {
 		return fmt.Errorf("give the subagent its task: atto agent start %s %s \"...\"", name, preset)
 	}
@@ -273,6 +322,12 @@ func agentStart(out io.Writer, settings config.Settings, parent, name, preset, t
 	_, models, err := core.Load()
 	if err != nil {
 		return err
+	}
+	if model != "" {
+		p.Model = model
+	}
+	if effortOverride != "" {
+		p.Effort = effortOverride
 	}
 	pm, pe := sessionModel(parent)
 	ref, effort, err := subagentModel(models, settings, p, pm, pe)
@@ -398,10 +453,9 @@ func subagentModel(models config.ModelsFile, settings config.Settings, p subagen
 
 // agentWait blocks until the first of cands that is running ends, then
 // prints its report.
-func agentWait(out io.Writer, parent string, cands []subagent.State, timeout time.Duration) error {
+func agentWait(out io.Writer, parent string, cands []subagent.State, timeout time.Duration, jsonOut bool) error {
 	if len(cands) == 1 && !cands[0].Latest().Status.Active() {
-		fmt.Fprint(out, agentReport(cands[0])) // already over
-		return nil
+		return writeAgentReport(out, cands[0], jsonOut) // already over
 	}
 	var running []subagent.State
 	for _, s := range cands {
@@ -416,8 +470,7 @@ func agentWait(out io.Writer, parent string, cands []subagent.State, timeout tim
 	for {
 		for _, s := range running {
 			if !s.Latest().Status.Active() {
-				fmt.Fprint(out, agentReport(s))
-				return nil
+				return writeAgentReport(out, s, jsonOut)
 			}
 		}
 		if timeout > 0 && time.Since(start) >= timeout {
@@ -469,6 +522,32 @@ func agentReport(st subagent.State) string {
 		b.WriteString("\n(no message)\n")
 	}
 	return b.String()
+}
+
+// writeAgentReport keeps the machine report independent of text formatting.
+func writeAgentReport(out io.Writer, st subagent.State, jsonOut bool) error {
+	if !jsonOut {
+		_, err := fmt.Fprint(out, agentReport(st))
+		return err
+	}
+	type tokens struct {
+		In     int `json:"in"`
+		Cached int `json:"cached"`
+		Out    int `json:"out"`
+	}
+	t := st.Latest()
+	return json.NewEncoder(out).Encode(struct {
+		Name     string          `json:"name"`
+		Status   subagent.Status `json:"status"`
+		Turn     int             `json:"turn"`
+		Duration float64         `json:"duration"`
+		Tokens   tokens          `json:"tokens"`
+		Cost     float64         `json:"cost,omitempty"`
+		Session  string          `json:"session"`
+		Model    string          `json:"model"`
+		Message  string          `json:"message"`
+		Error    string          `json:"error,omitempty"`
+	}{st.Name, t.Status, t.N, t.Duration().Seconds(), tokens{t.PromptTokens, t.CachedTokens, t.OutputTokens}, t.Cost, st.Session, st.Model, lastAssistant(st.Session), t.Error})
 }
 
 // lastAssistant is the text of the last assistant message on the
