@@ -244,6 +244,10 @@ type Agent struct {
 	steerMu  sync.Mutex
 	steers   []string
 	boundary []func() string
+	// inputNote goes with the next user message (SetInputNote).
+	inputNote string
+	// stopReq: end the running turn at its next step boundary (StopAtBoundary).
+	stopReq atomic.Bool
 
 	// DiscardPartial makes an interrupted model call leave nothing behind,
 	// instead of its streamed text (experimental: set when the run goes on
@@ -282,6 +286,30 @@ func (a *Agent) Steer(text string) {
 	a.steers = append(a.steers, text)
 	a.steerMu.Unlock()
 }
+
+// SetInputNote sets text that goes at the end of the next user message
+// (RunWithImages), after hooks have seen it: context atto adds about the
+// session's state, such as a goal that is not running. It applies once.
+func (a *Agent) SetInputNote(note string) {
+	a.steerMu.Lock()
+	a.inputNote = note
+	a.steerMu.Unlock()
+}
+
+func (a *Agent) takeInputNote() string {
+	a.steerMu.Lock()
+	defer a.steerMu.Unlock()
+	n := a.inputNote
+	a.inputNote = ""
+	return n
+}
+
+// StopAtBoundary ends the running turn at its next step boundary (after the
+// current tool calls, or when the model stops) as if the model had finished:
+// it returns no error, and steers not yet committed stay for DrainSteers.
+// Safe to call from any goroutine; a request no boundary reached before the
+// turn ended is dropped when the next turn starts.
+func (a *Agent) StopAtBoundary() { a.stopReq.Store(true) }
 
 // Unsteer takes back the last steer equal to text if it has not been
 // committed yet, and reports whether it did.
@@ -837,6 +865,7 @@ func (a *Agent) modelChangeNote() string {
 // bytes must be loaded, and saved with images.Save for the session to
 // resume with them.
 func (a *Agent) RunWithImages(ctx context.Context, input string, imgs []provider.Image, emit func(any)) (err error) {
+	note := a.takeInputNote()
 	if a.Extensions != nil {
 		a.Extensions.TurnStart(input)
 		defer func() { a.Extensions.TurnEnd(err) }()
@@ -863,7 +892,10 @@ func (a *Agent) RunWithImages(ctx context.Context, input string, imgs []provider
 			input += "\n\n" + o.Context
 		}
 	}
-	if note := a.modelChangeNote(); note != "" {
+	if n := a.modelChangeNote(); n != "" {
+		input += "\n\n" + n
+	}
+	if note != "" {
 		input += "\n\n" + note
 	}
 	if a.needsCompact() {
@@ -886,6 +918,7 @@ func (a *Agent) Continue(ctx context.Context, emit func(any)) error {
 // loop is the turn: model calls and tool calls until the model stops.
 func (a *Agent) loop(ctx context.Context, emit func(any)) error {
 	stopBlocks := 0 // Stop hook continuations in this turn
+	a.stopReq.Store(false)
 
 	for step := 1; ; step++ {
 		if a.MaxSteps > 0 && step > a.MaxSteps {
@@ -936,6 +969,9 @@ func (a *Agent) loop(ctx context.Context, emit func(any)) error {
 		emit(StepEnd{Usage: usage, Context: a.ContextTokens()})
 
 		if len(res.Message.ToolCalls) == 0 {
+			if a.stopReq.Swap(false) {
+				return nil
+			}
 			a.runBoundary()
 			if a.commitSteers(emit) {
 				continue
@@ -984,6 +1020,9 @@ func (a *Agent) loop(ctx context.Context, emit func(any)) error {
 		}
 		if stopTurn {
 			return ErrStoppedByHook
+		}
+		if a.stopReq.Swap(false) {
+			return nil
 		}
 		a.runBoundary()
 		a.commitSteers(emit)

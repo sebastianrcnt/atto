@@ -229,3 +229,59 @@ func TestUnsteer(t *testing.T) {
 		t.Fatalf("left %q", s)
 	}
 }
+
+func TestStopAtBoundaryEndsTheTurnWithoutError(t *testing.T) {
+	srv, seen := fakeServer(t, toolCall("echo hi"), text("never asked for"))
+	a := newTestAgent(srv.URL)
+	err := a.Run(context.Background(), "go", func(ev any) {
+		if _, ok := ev.(ToolStart); ok {
+			a.StopAtBoundary()
+			a.Steer("later")
+		}
+	})
+	if err != nil {
+		t.Fatalf("a stop is a normal end: %v", err)
+	}
+	if n := len(seen()); n != 1 {
+		t.Fatalf("%d requests; the turn should end after the tool calls", n)
+	}
+	if left := a.DrainSteers(); len(left) != 1 || left[0] != "later" {
+		t.Fatalf("an uncommitted steer stays for the front end: %v", left)
+	}
+}
+
+func TestStopRequestDoesNotOutliveItsTurn(t *testing.T) {
+	srv, seen := fakeServer(t, text("one"), toolCall("echo hi"), text("two"))
+	a := newTestAgent(srv.URL)
+	if err := a.Run(context.Background(), "a", func(any) {}); err != nil {
+		t.Fatal(err)
+	}
+	a.StopAtBoundary() // after the turn: no boundary to take it
+	if err := a.Run(context.Background(), "b", func(any) {}); err != nil {
+		t.Fatal(err)
+	}
+	if n := len(seen()); n != 3 {
+		t.Fatalf("the second turn ran %d requests, want its two", n-1)
+	}
+}
+
+func TestInputNoteGoesWithTheNextUserMessageOnly(t *testing.T) {
+	srv, seen := fakeServer(t, text("one"), text("two"))
+	a := newTestAgent(srv.URL)
+	a.SetInputNote("<note>")
+	for _, in := range []string{"first", "second"} {
+		if err := a.Run(context.Background(), in, func(any) {}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	reqs := seen()
+	if got := reqs[0][len(reqs[0])-1]["content"]; got != "first\n\n<note>" {
+		t.Fatalf("first: %q", got)
+	}
+	if got := reqs[1][len(reqs[1])-1]["content"]; got != "second" {
+		t.Fatalf("second: %q", got)
+	}
+	if got := reqs[1][1]["content"]; got != "first\n\n<note>" {
+		t.Fatalf("history keeps the note, so the prefix stays the same: %q", got)
+	}
+}
