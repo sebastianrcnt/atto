@@ -1,8 +1,10 @@
 package events
 
 import (
+	"fmt"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -177,5 +179,37 @@ func TestParseWhen(t *testing.T) {
 	}
 	if _, err := ParseWhen("soon", now); err == nil {
 		t.Fatal("want error")
+	}
+}
+
+func TestConcurrentDrainClaimsEachEventOnce(t *testing.T) {
+	t.Setenv("ATTO_DIR", t.TempDir())
+	for round := range 20 {
+		for i := range 40 {
+			if err := Push("s", Event{Text: fmt.Sprint(i)}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		start := make(chan struct{})
+		results := make(chan []Event, 2)
+		var wg sync.WaitGroup
+		for range 2 {
+			wg.Go(func() { <-start; results <- Drain("s") })
+		}
+		close(start)
+		wg.Wait()
+		close(results)
+		seen := make(map[string]bool)
+		for evs := range results {
+			for _, e := range evs {
+				if seen[e.Text] {
+					t.Fatalf("round %d: duplicate %s", round, e.Text)
+				}
+				seen[e.Text] = true
+			}
+		}
+		if len(seen) != 40 {
+			t.Fatalf("round %d: got %d events", round, len(seen))
+		}
 	}
 }

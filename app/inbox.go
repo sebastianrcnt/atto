@@ -53,10 +53,12 @@ func (a *App) watchInbox() {
 // pollInbox takes session s's events and hands them over (one tick of
 // watchInbox). Call it off the UI goroutine.
 func (a *App) pollInbox(s string) {
-	reload, evs := events.SplitReload(core.Poll(s))
+	taken := core.Poll(s)
+	reload, evs := events.SplitReload(taken)
 	nJobs, nTimers := jobs.ActiveCount(s), len(events.Timers(s))
 	a.ui.Do(func() {
 		if s != a.sess.ID {
+			events.Requeue(s, taken)
 			return // session switched; leave events for when it is resumed
 		}
 		a.jobCount, a.timerCount = nJobs, nTimers

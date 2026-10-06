@@ -128,8 +128,12 @@ func Drain(session string) []Event {
 	var out []Event
 	for _, n := range names {
 		p := filepath.Join(Dir(session), n)
-		data, err := os.ReadFile(p)
-		_ = os.Remove(p)
+		claimed := filepath.Join(Dir(session), "."+n+"-"+randID())
+		if os.Rename(p, claimed) != nil {
+			continue // another reader claimed it
+		}
+		data, err := os.ReadFile(claimed)
+		_ = os.Remove(claimed)
 		if err != nil {
 			continue
 		}
