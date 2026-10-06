@@ -417,3 +417,62 @@ func TestPeerUID(t *testing.T) {
 		t.Fatal("accepted another user's daemon")
 	}
 }
+
+func TestAttachAfterPaneExit(t *testing.T) {
+	a, b := net.Pipe()
+	defer b.Close()
+	p := &pane{exited: true, exitCode: 3, st: newStream()}
+	c := &client{conn: a}
+	done := make(chan bool, 1)
+	go func() { done <- p.attach(c) }()
+	typ, payload, err := readFrame(b)
+	if err != nil || typ != fExit || !strings.Contains(string(payload), `"code":3`) {
+		t.Fatalf("late attach: %c %s %v", typ, payload, err)
+	}
+	if <-done {
+		t.Fatal("attached to an exited pane")
+	}
+	if len(p.clients) != 0 {
+		t.Fatal("late client registered")
+	}
+}
+
+func TestMoveDoesNotRegisterDisconnectedClient(t *testing.T) {
+	a, b := net.Pipe()
+	c := &client{conn: a}
+	from := &pane{st: newStream(), info: Pane{ID: 1}, clients: []*client{c}, last: c}
+	to := &pane{st: newStream(), info: Pane{ID: 2}}
+	c.pane = from
+	d := &daemon{panes: map[int]*pane{1: from, 2: to}}
+	done := make(chan struct{})
+	go func() { d.move(c, from, "2"); close(done) }()
+	// The reset is in progress after removal from the old pane. The input
+	// reader observes the disconnect before the destination can attach.
+	var h [5]byte
+	if _, err := b.Read(h[:]); err != nil {
+		t.Fatal(err)
+	}
+	c.close()
+	b.Close()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("move blocked")
+	}
+	if len(to.clients) != 0 {
+		t.Fatal("closed client registered on destination")
+	}
+}
+
+func TestFailedAttachRemovesClient(t *testing.T) {
+	a, b := net.Pipe()
+	b.Close()
+	p := &pane{st: newStream()}
+	c := &client{conn: a}
+	if p.attach(c) {
+		t.Fatal("attach succeeded on closed connection")
+	}
+	if len(p.clients) != 0 {
+		t.Fatal("failed send left a client registered")
+	}
+}

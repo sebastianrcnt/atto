@@ -86,13 +86,15 @@ type pane struct {
 	cmd  *exec.Cmd
 	ptmx *os.File
 
-	mu      sync.Mutex
-	info    Pane
-	clients []*client
-	last    *client // the client that typed last: its size wins
-	st      *stream
-	size    Size
-	ready   bool // its atto handles SIGUSR1 (it said so with a marker)
+	mu       sync.Mutex
+	info     Pane
+	clients  []*client
+	last     *client // the client that typed last: its size wins
+	st       *stream
+	size     Size
+	exited   bool
+	exitCode int
+	ready    bool // its atto handles SIGUSR1 (it said so with a marker)
 }
 
 type client struct {
@@ -100,14 +102,26 @@ type client struct {
 	wmu  sync.Mutex
 	size Size // guarded by its pane's mu
 
-	pmu  sync.Mutex
-	pane *pane // the pane it shows
+	pmu    sync.Mutex
+	pane   *pane // the pane it shows
+	closed bool
 }
 
 func (c *client) current() *pane {
 	c.pmu.Lock()
 	defer c.pmu.Unlock()
 	return c.pane
+}
+
+func (c *client) close() {
+	c.pmu.Lock()
+	c.closed = true
+	p := c.pane
+	c.pmu.Unlock()
+	c.conn.Close()
+	if p != nil {
+		p.remove(c)
+	}
 }
 
 func (c *client) send(typ byte, payload []byte) error {
@@ -165,8 +179,9 @@ func (d *daemon) serve(conn net.Conn) {
 			fail("starting atto: %v", err)
 			return
 		}
-		p.attach(c)
-		d.read(c)
+		if p.attach(c) {
+			d.read(c)
+		}
 	case "attach":
 		p := d.find(h.Target)
 		if p == nil {
@@ -177,8 +192,9 @@ func (d *daemon) serve(conn net.Conn) {
 			}
 			return
 		}
-		p.attach(c)
-		d.read(c)
+		if p.attach(c) {
+			d.read(c)
+		}
 	default:
 		fail("unknown request %q", h.Op)
 	}
@@ -278,6 +294,11 @@ func (p *pane) pump() {
 		}
 	}
 	p.ptmx.Close()
+	p.mu.Lock()
+	p.exited, p.exitCode = true, code
+	clients := p.clients
+	p.clients = nil
+	p.mu.Unlock()
 	d := p.d
 	d.mu.Lock()
 	delete(d.panes, p.info.ID)
@@ -285,13 +306,9 @@ func (p *pane) pump() {
 		d.idle.Reset(d.idleAfter)
 	}
 	d.mu.Unlock()
-	p.mu.Lock()
-	clients := p.clients
-	p.clients = nil
-	p.mu.Unlock()
 	for _, c := range clients {
 		_ = c.sendJSON(fExit, Exit{Code: code})
-		c.conn.Close()
+		c.close()
 	}
 }
 
@@ -332,7 +349,7 @@ func (p *pane) output(b []byte) {
 	if len(out) > 0 {
 		for _, c := range clients {
 			if c.send(fOutput, out) != nil {
-				c.conn.Close() // its reader drops it
+				c.close()
 			}
 		}
 	}
@@ -377,33 +394,51 @@ func (d *daemon) move(c *client, from *pane, target string) {
 	from.mu.Lock()
 	reset := from.st.reset()
 	from.mu.Unlock()
-	_ = c.send(fOutput, []byte(reset+"\x1b[2J\x1b[H"))
+	if c.send(fOutput, []byte(reset+"\x1b[2J\x1b[H")) != nil {
+		c.close()
+		return
+	}
 	to.attach(c)
 }
 
 // attach shows the pane on c's terminal: the terminal modes the program
 // set, then a full repaint at c's size.
-func (p *pane) attach(c *client) {
+func (p *pane) attach(c *client) bool {
+	c.pmu.Lock()
+	if c.closed {
+		c.pmu.Unlock()
+		return false
+	}
 	p.mu.Lock()
+	if p.exited {
+		code := p.exitCode
+		p.mu.Unlock()
+		c.pmu.Unlock()
+		_ = c.sendJSON(fExit, Exit{Code: code})
+		c.close()
+		return false
+	}
 	p.info.Active = time.Now()
 	info := p.info
 	info.Clients = len(p.clients) + 1
 	restore := p.st.restore()
-	p.mu.Unlock()
-	_ = c.sendJSON(fAttached, info)
-	if restore != "" {
-		_ = c.send(fOutput, []byte(restore))
-	}
-	c.pmu.Lock()
 	c.pane = p
-	c.pmu.Unlock()
-	p.mu.Lock()
 	p.clients = append(p.clients, c)
 	p.last = c
 	size := c.size
+	err := c.sendJSON(fAttached, info)
+	if err == nil && restore != "" {
+		err = c.send(fOutput, []byte(restore))
+	}
 	p.mu.Unlock()
+	c.pmu.Unlock()
+	if err != nil {
+		c.close()
+		return false
+	}
 	p.resize(size)
 	p.redraw()
+	return true
 }
 
 // read takes c's input for the pane it shows until it leaves.
@@ -412,9 +447,11 @@ func (d *daemon) read(c *client) {
 		typ, b, err := readFrame(c.conn)
 		p := c.current()
 		if err != nil {
-			if p != nil {
-				p.detach(c, false)
-			}
+			c.close()
+			return
+		}
+		if p == nil {
+			c.close()
 			return
 		}
 		switch typ {
@@ -478,7 +515,7 @@ func (p *pane) detach(c *client, tell bool) {
 	if tell {
 		_ = c.sendJSON(fExit, Exit{Detached: true})
 	}
-	c.conn.Close()
+	c.close()
 }
 
 func (p *pane) resize(s Size) {
