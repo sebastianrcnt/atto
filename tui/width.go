@@ -180,7 +180,9 @@ func (sc *cellScanner) next() (cell, bool) {
 }
 
 // Truncate cuts s to at most width columns, appending tail (e.g. "…") when it
-// had to cut. Escape sequences are preserved and a Reset is appended on cut.
+// had to cut. Escape sequences are preserved, and a Reset is appended on cut
+// only when the kept text actually carries styles: a plain string stays plain,
+// so callers that write to a pipe do not print raw escapes.
 func Truncate(s string, width int, tail string) string {
 	if VisibleWidth(s) <= width {
 		return s
@@ -193,16 +195,22 @@ func Truncate(s string, width int, tail string) string {
 	b.Grow(len(s) + len(Reset) + len(tail))
 	sc := cellScanner{s: s}
 	w := 0
+	styled := false
 	for {
 		c, ok := sc.next()
 		if !ok || w+c.width > width-tw {
 			break
 		}
+		if c.esc != "" {
+			styled = true
+		}
 		b.WriteString(c.esc)
 		b.WriteString(c.text)
 		w += c.width
 	}
-	b.WriteString(Reset)
+	if styled {
+		b.WriteString(Reset)
+	}
 	b.WriteString(tail)
 	return b.String()
 }

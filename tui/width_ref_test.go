@@ -58,15 +58,21 @@ func oldTruncate(s string, width int, tail string) string {
 	cs, _ := oldCells(s)
 	var b strings.Builder
 	w := 0
+	styled := false
 	for _, c := range cs {
 		if w+c.width > width-tw {
 			break
+		}
+		if c.esc != "" {
+			styled = true
 		}
 		b.WriteString(c.esc)
 		b.WriteString(c.text)
 		w += c.width
 	}
-	b.WriteString(Reset)
+	if styled {
+		b.WriteString(Reset)
+	}
 	b.WriteString(tail)
 	return b.String()
 }

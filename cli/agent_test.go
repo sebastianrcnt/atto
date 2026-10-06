@@ -18,7 +18,6 @@ import (
 	"github.com/sebastianrcnt/atto/events"
 	"github.com/sebastianrcnt/atto/session"
 	"github.com/sebastianrcnt/atto/subagent"
-	"github.com/sebastianrcnt/atto/tui"
 )
 
 // agentServer is a fake model; answer gives the stream for the n-th
@@ -517,7 +516,10 @@ func TestAgentListTaskSummary(t *testing.T) {
 			if err := agentList(&out, c.name); err != nil {
 				t.Fatal(err)
 			}
-			lines := strings.Split(strings.TrimSpace(tui.StripEscapes(out.String())), "\n")
+			if strings.ContainsRune(out.String(), 0x1b) {
+				t.Fatalf("list carries escape sequences: %q", out.String())
+			}
+			lines := strings.Split(strings.TrimSpace(out.String()), "\n")
 			if len(lines) != 2 || !strings.HasSuffix(lines[1], "  "+c.want) {
 				t.Fatalf("list: %q, want task %q", out.String(), c.want)
 			}
