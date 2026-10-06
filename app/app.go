@@ -291,6 +291,7 @@ func Run(opts Options) error {
 		a.cmdResume("")
 	}
 
+	tui.OnPanic = writeCrash
 	if err := a.ui.Start(); err != nil {
 		return err
 	}

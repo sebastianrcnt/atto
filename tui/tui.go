@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"runtime"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"time"
@@ -274,7 +275,25 @@ func (t *TUI) SetFocus(c Component) {
 	}
 }
 
+// OnPanic, if set, hears a panic in the render loop (with its stack) after
+// the terminal is restored; the process then exits with status 2.
+var OnPanic func(v any, stack []byte)
+
 func (t *TUI) loop() {
+	defer func() {
+		if v := recover(); v != nil {
+			stack := debug.Stack()
+			if t.Mode == Fullscreen {
+				t.term.Write(t.leaveFullscreen())
+			}
+			t.term.Stop()
+			if OnPanic != nil {
+				OnPanic(v, stack)
+			}
+			fmt.Fprintf(os.Stderr, "atto: panic: %v\n%s", v, stack)
+			os.Exit(2)
+		}
+	}()
 	var last time.Time
 	for {
 		select {

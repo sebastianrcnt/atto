@@ -370,7 +370,11 @@ func (r *mdRenderer) table(rows [][]string, aligns []byte, width int) {
 				if k < len(wrapped[j]) {
 					c = wrapped[j][k]
 				}
-				gap := widths[j] - VisibleWidth(c)
+				if VisibleWidth(c) > widths[j] {
+					// A wide character can't wrap into a column one cell wide.
+					c = Truncate(c, widths[j], "")
+				}
+				gap := max(0, widths[j]-VisibleWidth(c))
 				a := byte('l')
 				if j < len(aligns) {
 					a = aligns[j]

@@ -91,3 +91,17 @@ func TestTableWithEmptyHeader(t *testing.T) {
 		t.Fatalf("got:\n%s", strings.Join(got, "\n"))
 	}
 }
+
+// A table never panics or overflows at any width, wide characters and
+// long words included.
+func TestTableAtEveryWidth(t *testing.T) {
+	md := "| 항목 | 상태 | 비고 |\n|---|:---:|---:|\n| 연료 시스템 | 완료 | aircraft_systems_fuel_management |\n| 지상 서비스 | 진행 중 | 🛫 ground |\n| x | y | z |"
+	for w := 1; w <= 80; w++ {
+		for _, l := range Markdown(md, w) {
+			// Below 4 columns a wide character can't fit; no panic is enough.
+			if vw := VisibleWidth(l); w >= 4 && vw > w {
+				t.Fatalf("width %d: line is %d wide: %q", w, vw, StripEscapes(l))
+			}
+		}
+	}
+}
