@@ -345,6 +345,14 @@ func sessionsDelete(out io.Writer, path string, yes bool) error {
 	if id == os.Getenv("ATTO_SESSION_ID") {
 		return fmt.Errorf("session %s is the one this command is running in", id)
 	}
+	if info, locked := session.LockedBy(path); locked {
+		return session.LockError(info)
+	}
+	release, err := session.Lock(path)
+	if err != nil {
+		return err
+	}
+	defer release()
 	active := jobs.ActiveCount(id)
 
 	h, entries, err := session.Load(path)
@@ -386,6 +394,11 @@ func sessionsDelete(out io.Writer, path string, yes bool) error {
 	}
 	if err := os.Remove(path); err != nil {
 		return err
+	}
+	for _, sidecar := range []string{session.LockPath(path), session.LogPath(path)} {
+		if err := os.Remove(sidecar); err != nil && !os.IsNotExist(err) {
+			fmt.Fprintf(out, "warning: %v\n", err)
+		}
 	}
 	for _, dir := range []string{jobs.Root(id), events.Dir(id)} {
 		if err := os.RemoveAll(dir); err != nil {
