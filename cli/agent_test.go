@@ -396,45 +396,48 @@ func TestAgentQueueBeyondLimit(t *testing.T) {
 func sleepBriefly() { time.Sleep(50 * time.Millisecond) }
 
 func TestAgentExternalParent(t *testing.T) {
-	bodies := agentServer(t, func(int, string) string { return textAnswer("done") })
+	agentServer(t, func(int, string) string { return textAnswer("done") })
 	root := t.TempDir()
 	t.Chdir(root)
 	if err := os.Mkdir(filepath.Join(root, ".git"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	enableSubagents(t, "")
-	out, err := runAgent(t, "list")
+	// Commands that only read create no parent.
+	path, _, _ := externalParentPath()
+	if out, err := runAgent(t, "list"); err != nil || out != "no agents\n" {
+		t.Fatalf("list before any agent: %q %v", out, err)
+	}
+	if _, err := runAgent(t, "report", "a"); err == nil {
+		t.Fatal("report without agents succeeded")
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("a read created a parent: %v", err)
+	}
+	out, err := runAgent(t, "start", "a", "general", "task", "-m", "fake/m", "-effort", "high")
 	if err != nil || !strings.HasPrefix(out, "external parent created: ") {
 		t.Fatalf("create: %q %v", out, err)
 	}
-	path, _, _ := externalParentPath()
 	b, _ := os.ReadFile(path)
 	parent := strings.TrimSpace(string(b))
 	hpath, _ := session.Find(parent)
 	h, entries, err := session.Load(hpath)
-	if err != nil || !h.External || len(entries) != 1 || entries[0].Name != "atto agent (external)" || len(bodies()) != 0 {
+	if err != nil || !h.External || len(entries) == 0 || entries[0].Name != "atto agent (external)" {
 		t.Fatalf("parent: %+v %+v %v", h, entries, err)
 	}
 	if _, ok := session.Latest(""); ok {
 		t.Fatal("external parent selected by continue")
-	}
-	list, _ := session.List("", false)
-	if len(list) != 1 || list[0].Name != "atto agent (external)" {
-		t.Fatalf("list: %+v", list)
 	}
 	child := filepath.Join(root, "child")
 	if err := os.Mkdir(child, 0o755); err != nil {
 		t.Fatal(err)
 	}
 	t.Chdir(child)
-	if out, err := runAgent(t, "list"); err != nil || out != "no agents\n" {
+	if out, err := runAgent(t, "list"); err != nil || !strings.Contains(out, "/root/a") || strings.Contains(out, "external parent created") {
 		t.Fatalf("reuse: %q %v", out, err)
 	}
 	if out, err := runAgent(t, "list", "-session", "explicit"); err != nil || out != "no agents\n" {
 		t.Fatalf("explicit: %q %v", out, err)
-	}
-	if _, err := runAgent(t, "start", "a", "general", "task", "-m", "fake/m", "-effort", "high"); err != nil {
-		t.Fatal(err)
 	}
 	for _, cmd := range []string{"wait", "wait-any", "report"} {
 		args := []string{cmd, "a", "-json", "-timeout", "30s"}
@@ -462,8 +465,11 @@ func TestAgentExternalParent(t *testing.T) {
 	if p, err := session.Find(parent); err != nil || !isArchived(p) {
 		t.Fatalf("parent not archived: %s %v", p, err)
 	}
-	if out, err := runAgent(t, "list"); err != nil || !strings.Contains(out, "external parent created:") || strings.Contains(out, parent) {
-		t.Fatalf("new parent: %q %v", out, err)
+	if out, err := runAgent(t, "list"); err != nil || out != "no agents\n" {
+		t.Fatalf("list after rm: %q %v", out, err)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("list after rm created a parent: %v", err)
 	}
 }
 

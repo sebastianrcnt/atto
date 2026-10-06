@@ -141,9 +141,17 @@ func RunAgent(args []string, out io.Writer) error {
 		if jsonOut {
 			parentOut = os.Stderr
 		}
-		id, release, err := externalParent(parentOut)
+		id, release, err := externalParent(parentOut, sub == "spawn")
 		if err != nil {
 			return err
+		}
+		if id == "" && sub != "roles" {
+			release()
+			if sub == "list" {
+				fmt.Fprintln(out, "no agents")
+				return nil
+			}
+			return errors.New("no agents started from this project (atto agent spawn starts one)")
 		}
 		*session = id
 		if sub == "spawn" || sub == "close" {

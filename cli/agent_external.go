@@ -35,7 +35,9 @@ func externalParentPath() (string, string, error) {
 }
 
 // externalParent serializes creation and start/rm against the project mapping.
-func externalParent(out io.Writer) (string, func(), error) {
+// Without create it only looks one up, and returns "" when there is none: a
+// command that reads (list, wait, report) has nothing to show without one.
+func externalParent(out io.Writer, create bool) (string, func(), error) {
 	path, root, err := externalParentPath()
 	if err != nil {
 		return "", nil, err
@@ -63,6 +65,9 @@ func externalParent(out io.Writer) (string, func(), error) {
 		}
 	} else if !os.IsNotExist(err) {
 		return fail(err)
+	}
+	if !create {
+		return "", release, nil
 	}
 	w := session.NewExternal(root)
 	w.Append(session.Entry{Type: session.TypeName, Name: "atto agent (external)"})
