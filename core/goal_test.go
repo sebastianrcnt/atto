@@ -423,3 +423,39 @@ func TestGoalDriverStateNote(t *testing.T) {
 		t.Fatal("a finished goal needs no note")
 	}
 }
+
+// An interrupt made to send the user's message at once (Replace) leaves the
+// goal active; the message's turn then holds it. A plain interrupt pauses.
+func TestGoalDriverReplace(t *testing.T) {
+	t.Setenv("ATTO_DIR", t.TempDir())
+	g, _ := goal.New("ship it")
+	d := GoalDriver{Session: "s", Goal: g}
+	d.Set(g)
+
+	d.BeginTurn() // a continuation, cut off before any tool ran
+	d.Replace()
+	if !d.EndTurn(context.Canceled) || g.Status != goal.Active || g.Note != "" {
+		t.Fatalf("a replaced turn leaves the goal active: %+v", g)
+	}
+	if d.Held() || g.IdleStreak != 0 || g.Turns != 1 {
+		t.Fatalf("held %v, idle streak %d, turns %d", d.Held(), g.IdleStreak, g.Turns)
+	}
+
+	d.BeginTurn() // the user's message
+	d.UserInput()
+	d.EndTurn(nil)
+	if !d.Held() || !d.Active() {
+		t.Fatal("the message's turn holds the goal")
+	}
+	d.Release()
+
+	// Replace is for one turn only, and only for an interrupt.
+	d.BeginTurn()
+	d.Replace()
+	d.EndTurn(nil)
+	d.BeginTurn()
+	d.EndTurn(context.Canceled)
+	if g.Status != goal.Paused || g.Note != goal.NoteInterrupted {
+		t.Fatalf("a plain interrupt still pauses: %+v", g)
+	}
+}

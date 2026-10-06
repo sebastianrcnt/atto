@@ -183,7 +183,10 @@ func (a *App) stashPending() {
 	for _, q := range a.queued {
 		texts, att = append(texts, q.text), append(att, q.att...)
 	}
-	a.queued, a.pendingSteers, a.queuePaused, a.sendSteersAfterInterrupt = nil, nil, false, false
+	if n := a.sendNow; n != nil {
+		texts, att = append(texts, n.text), append(att, n.att...)
+	}
+	a.queued, a.pendingSteers, a.queuePaused, a.sendSteersAfterInterrupt, a.sendNow = nil, nil, false, false, nil
 	if len(texts) > 0 {
 		a.restoreToEditor(texts, att...)
 	}

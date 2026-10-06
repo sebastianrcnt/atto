@@ -10,7 +10,7 @@ import (
 
 // The activity line above the editor while a run is busy:
 //
-//	 Blorping…  ·  1m 23s  ·  ↑ 8.1k  ↓ 1.2k tokens  ·  esc to interrupt
+//	 Blorping…  ·  1m 23s  ·  ↑ 8.1k  ↓ 1.2k tokens  ·  esc to interrupt  ·  ctrl+enter to send now
 //
 // With spinnerScanner, a scanner before the word sweeps a lit teal head
 // across seven cells and back, a fading trail behind it (tui.Scanner).
@@ -167,6 +167,10 @@ func (a *App) renderActivity(width int) []string {
 		}
 		meta += "↓ " + compactTokens(out) + " tokens"
 	}
-	line = " " + line + tui.Dim(meta+sep+"esc to interrupt")
+	hint := "esc to interrupt"
+	if a.runKind == "turn" {
+		hint += sep + "ctrl+enter to send now"
+	}
+	line = " " + line + tui.Dim(meta+sep+hint)
 	return []string{"", tui.Truncate(line, width, "…")}
 }

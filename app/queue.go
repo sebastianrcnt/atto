@@ -54,6 +54,32 @@ func (a *App) queueFromEditor() {
 	a.enqueue(text, att)
 }
 
+// sendNowFromEditor handles Ctrl+Enter: while a turn runs, the draft
+// interrupts it and goes out as a new turn, after the steers the turn has not
+// taken. Otherwise it is Enter, which also covers commands and "!" lines.
+func (a *App) sendNowFromEditor(text string, att []tui.Attachment) {
+	_, _, isShell := parseShell(text)
+	if !a.busy || a.runKind != "turn" || a.sendNow != nil || a.bgx.pending || a.noModel() ||
+		strings.HasPrefix(text, "/") || isShell {
+		a.submit(text, att)
+		return
+	}
+	if len(att) > 0 && !a.model().Model.Images() {
+		a.submit(text, att) // says images are not supported, keeps the draft
+		return
+	}
+	if text == "" && len(a.pendingSteers) == 0 {
+		return // nothing to send
+	}
+	a.ui.ScrollToBottom()
+	if text != "" {
+		a.sendNow = &queuedInput{text, att, a.fromRemote}
+	}
+	a.goal.Replace()
+	a.sendSteersAfterInterrupt = len(a.pendingSteers) > 0
+	a.cancel()
+}
+
 // editLastSteer pulls the last steer back into the editor if the turn has
 // not taken it yet.
 func (a *App) editLastSteer() bool {
@@ -118,6 +144,7 @@ func (a *App) afterRun(err error) {
 	}
 	a.runKind = ""
 	if id := a.pendingTree; id != "" {
+		a.dropSendNow()
 		sum := a.pendingSummary
 		a.pendingTree, a.pendingSummary = "", nil
 		a.moveTo(id, sum)
@@ -127,6 +154,7 @@ func (a *App) afterRun(err error) {
 		a.pendingResume = ""
 		a.agent.DrainSteers()
 		a.pendingSteers, a.sendSteersAfterInterrupt = nil, false
+		a.dropSendNow()
 		a.resume(p)
 		return
 	}
@@ -136,6 +164,24 @@ func (a *App) afterRun(err error) {
 	a.pendingSteers = nil
 	sendSteers := a.sendSteersAfterInterrupt
 	a.sendSteersAfterInterrupt = false
+	now := a.sendNow
+	a.sendNow = nil
+
+	if now != nil {
+		// Ctrl+Enter: the steers and the draft, in the order typed. A turn
+		// that failed instead keeps them in the editor, as for steers.
+		if err == nil || canceled {
+			for _, t := range leftover {
+				a.fromRemote = a.takeRemoteSteer(t) || a.fromRemote
+			}
+			a.fromRemote = now.remote || a.fromRemote
+			a.startTurn(strings.Join(append(leftover, now.text), "\n\n"), now.att)
+			a.fromRemote = false
+			return
+		}
+		a.restoreToEditor(append(leftover, now.text), now.att...)
+		leftover = nil
+	}
 
 	if len(leftover) > 0 {
 		// Steers that raced with the end of the turn, or that the user asked
@@ -164,6 +210,15 @@ func (a *App) afterRun(err error) {
 		return
 	}
 	a.maybeSendNextQueued()
+}
+
+// dropSendNow gives Ctrl+Enter's message back to the editor when the turn
+// it interrupted ended in a move to another session or point instead.
+func (a *App) dropSendNow() {
+	if n := a.sendNow; n != nil {
+		a.sendNow = nil
+		a.restoreToEditor([]string{n.text}, n.att...)
+	}
 }
 
 // notifyIdle sends the idle_prompt notification when a long turn has ended

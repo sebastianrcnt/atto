@@ -1,8 +1,10 @@
 package tui
 
 import (
+	"strconv"
 	"strings"
 	"time"
+	"unicode"
 	"unicode/utf8"
 )
 
@@ -84,7 +86,7 @@ func (p *inputParser) feed(data string) []string {
 			p.pending = s
 			return out
 		}
-		out = append(out, s[:n])
+		out = append(out, normalizeKey(s[:n]))
 		s = s[n:]
 	}
 	return out
@@ -153,10 +155,154 @@ func seqLen(s string) (int, bool) {
 	}
 }
 
+// ctrlEnter is how a Ctrl+Enter report (either encoding) is passed on.
+const ctrlEnter = "\x1b[13;5u"
+
+// decodeExtended reads a key report of the enhanced keyboard modes: xterm's
+// modifyOtherKeys, ESC [ 27 ; mod ; code ~, and the kitty protocol (also
+// tmux's extended-keys csi-u), ESC [ code ; mod u. It returns the code and
+// the modifiers (shift 1, alt 2, ctrl 4, super 8, ...). The kitty
+// caps/num-lock bits and any event-type or alternate-key subfields are dropped.
+func decodeExtended(data string) (code, mod int, ok bool) {
+	if len(data) < 4 || data[0] != 0x1b || data[1] != '[' {
+		return 0, 0, false
+	}
+	final := data[len(data)-1]
+	if final != 'u' && final != '~' {
+		return 0, 0, false
+	}
+	f := strings.Split(data[2:len(data)-1], ";")
+	if final == '~' {
+		if len(f) != 3 || f[0] != "27" {
+			return 0, 0, false
+		}
+		f = f[1:]
+		f[0], f[1] = f[1], f[0] // code first, as in the kitty form
+	}
+	field := func(s string) (int, bool) {
+		n, err := strconv.Atoi(strings.SplitN(s, ":", 2)[0])
+		return n, err == nil && n >= 0
+	}
+	if len(f) < 1 || len(f) > 3 {
+		return 0, 0, false
+	}
+	if code, ok = field(f[0]); !ok {
+		return 0, 0, false
+	}
+	mod = 1
+	if len(f) > 1 && f[1] != "" {
+		if mod, ok = field(f[1]); !ok || mod < 1 {
+			return 0, 0, false
+		}
+	}
+	return code, (mod - 1) &^ 0xc0, true
+}
+
+// ctrlByte is the control character the legacy encoding gives Ctrl+code.
+func ctrlByte(code int) (byte, bool) {
+	switch {
+	case code >= 'a' && code <= 'z':
+		return byte(code - 'a' + 1), true
+	case code >= 'A' && code <= 'Z':
+		return byte(code - 'A' + 1), true
+	}
+	switch code {
+	case ' ', '@':
+		return 0, true
+	case '\\':
+		return 0x1c, true
+	case ']':
+		return 0x1d, true
+	case '^':
+		return 0x1e, true
+	case '_', '/':
+		return 0x1f, true
+	}
+	return 0, false
+}
+
+// normalizeKey turns the reports of the enhanced keyboard modes (see
+// keyboardOn) back into the legacy bytes, so every key but Ctrl+Enter reads
+// the same whatever the terminal does: Ctrl+C may come as ESC [ 27 ; 5 ; 99 ~
+// or ESC [ 99 ; 5 u. Ctrl+Enter, which the legacy encoding cannot tell from
+// Enter, becomes ctrlEnter. Reports with no legacy form stay as they are.
+func normalizeKey(data string) string {
+	code, mod, ok := decodeExtended(data)
+	if !ok {
+		return data
+	}
+	shift, alt, ctrl := mod&1 != 0, mod&2 != 0, mod&4 != 0
+	if mod&^7 != 0 {
+		return data // super, hyper, meta
+	}
+	switch {
+	case ctrl && !alt && !shift && code == 13:
+		return ctrlEnter
+	case ctrl && !alt && !shift:
+		if b, ok := ctrlByte(code); ok {
+			return string(rune(b))
+		}
+	case alt && !ctrl:
+		switch code {
+		case 13:
+			if !shift {
+				return "\x1b\r"
+			}
+		case 127, 8:
+			if !shift {
+				return "\x1b\x7f"
+			}
+		default:
+			if r := textKey(code, shift); r != "" {
+				return "\x1b" + r
+			}
+		}
+	case !alt && !ctrl:
+		switch code {
+		case 27:
+			if !shift {
+				return "\x1b"
+			}
+		case 13: // Shift+Enter is Enter, as in the legacy encoding
+			return "\r"
+		case 9:
+			if shift {
+				return "\x1b[Z"
+			}
+			return "\t"
+		case 127, 8:
+			if !shift {
+				return "\x7f"
+			}
+		default:
+			if r := textKey(code, shift); r != "" {
+				return r
+			}
+		}
+	}
+	return data
+}
+
+// textKey is the text a printable key code types, with shift applied to
+// letters (the kitty code is the unshifted one). Empty for anything else.
+func textKey(code int, shift bool) string {
+	r := rune(code)
+	if code < 0x20 || code == 0x7f || !utf8.ValidRune(r) {
+		return ""
+	}
+	if shift {
+		r = unicode.ToUpper(r)
+	}
+	return string(r)
+}
+
 // Key names a decoded key sequence, e.g. "enter", "ctrl+c", "left", "alt+b".
 // Printable input returns "" — use the raw data instead.
 func Key(data string) string {
+	data = normalizeKey(data)
 	switch data {
+	case ctrlEnter:
+		return "ctrl+enter"
 	case "\r":
 		return "enter"
 	case "\n":

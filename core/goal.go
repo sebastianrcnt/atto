@@ -63,6 +63,7 @@ type GoalDriver struct {
 	counted, timing bool
 	lastFold        time.Time
 	userInput       bool // the running turn took user input (see UserInput)
+	replaced        bool // the running turn is being interrupted for a message of the user (see Replace)
 	held            bool // waiting for the user after a turn with user input
 }
 
@@ -194,6 +195,12 @@ func (d *GoalDriver) StateNote() string {
 // the turn about to begin): when it ends, the goal waits for the user.
 func (d *GoalDriver) UserInput() { d.userInput = true }
 
+// Replace notes that the running turn is being interrupted to make way for
+// a message the user sends at once: the interrupt does not pause the goal
+// (nor does the cut-off turn count as one without progress), and the
+// message's own turn puts the goal on hold, as UserInput does there.
+func (d *GoalDriver) Replace() { d.replaced = true }
+
 // Held reports whether the goal is active but waiting for the user to
 // continue it, after a turn that took user input.
 func (d *GoalDriver) Held() bool { return d.held && d.Active() }
@@ -253,13 +260,15 @@ func (d *GoalDriver) step(input, cached, output int) {
 }
 
 // EndTurn applies the stop conditions after a turn that ended with err.
-// An interrupt pauses the goal; user input in the turn puts an active goal
-// on hold. Returns true if the goal is still active (held or not).
+// An interrupt pauses the goal (unless it was a Replace); user input in the
+// turn puts an active goal on hold. Returns true if the goal is still active (held or not).
 func (d *GoalDriver) EndTurn(err error) bool {
 	d.Poll() // folds the turn's time
 	d.running = false
 	user := d.userInput // after Poll: a goal adopted from the model starts at once
 	d.userInput = false
+	replaced := d.replaced && errors.Is(err, context.Canceled)
+	d.replaced = false
 	g := d.Goal
 	if g == nil {
 		return false
@@ -267,6 +276,7 @@ func (d *GoalDriver) EndTurn(err error) bool {
 	wasActive := g.Status == goal.Active
 	var failed error
 	switch {
+	case replaced:
 	case errors.Is(err, context.Canceled):
 		if g.Status == goal.Active {
 			g.Status, g.Note = goal.Paused, goal.NoteInterrupted
@@ -274,7 +284,11 @@ func (d *GoalDriver) EndTurn(err error) bool {
 	case err != nil:
 		failed = err
 	}
-	g.TurnEnded(failed, d.tools)
+	if replaced {
+		g.Turns++ // cut off, so neither progress nor a lack of it
+	} else {
+		g.TurnEnded(failed, d.tools)
+	}
 	d.Set(g)
 	if wasActive && g.Status != goal.Active {
 		d.changed()

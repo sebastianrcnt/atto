@@ -120,6 +120,7 @@ atto -p -goal "make the tests pass"
 | `Enter` | send; while the agent works, steer it after its current step |
 | `Tab` | queue a message for when the agent finishes |
 | `Esc` | interrupt, or send pending steers now |
+| `Ctrl+Enter` | while the agent works, interrupt it and send the prompt (after pending steers) as a new turn at once; an active goal is not paused but waits for you after that turn. `Ctrl+G` does the same where the terminal can't tell `Ctrl+Enter` from `Enter` (atto asks for xterm modifyOtherKeys and the kitty keyboard protocol; Terminal.app, `screen`, the Windows console and tmux without `extended-keys on` don't send it) |
 | `Esc` `Esc` | on an empty prompt: open the session tree to go back to an earlier message and edit it |
 | `Shift+Tab` | cycle reasoning effort |
 | `Ctrl+T` | expand everything: thinking, command groups and every command's full output; again to fold it all back (or click one block) |

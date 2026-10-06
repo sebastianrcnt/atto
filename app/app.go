@@ -113,6 +113,7 @@ type App struct {
 	pendingSteers            []string
 	queued                   []queuedInput
 	sendSteersAfterInterrupt bool
+	sendNow                  *queuedInput // Ctrl+Enter's message, sent once the turn it interrupted ends
 	queuePaused              bool
 
 	// items makes the transcript's items from agent events and session
@@ -340,6 +341,7 @@ func (a *App) build() {
 	a.editor = tui.NewEditor(tui.FG(6, "› "))
 	a.editor.Rule = tui.Dim
 	a.editor.OnSubmit = a.submit
+	a.editor.OnSendNow = a.sendNowFromEditor
 	a.editor.OnPaste = a.pasteImagePath
 
 	// The command list sits above the input, as in Claude Code, so the

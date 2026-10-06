@@ -37,14 +37,17 @@ type span struct {
 	el         int // index into elems
 }
 
-// Editor is a multi-line prompt input. Enter submits; Alt+Enter or Ctrl+J
-// inserts a newline. Up/Down walk submission history when the buffer is a
+// Editor is a multi-line prompt input. Enter submits (Ctrl+Enter sends now);
+// Alt+Enter or Ctrl+J inserts a newline. Up/Down walk submission history when the buffer is a
 // single line.
 type Editor struct {
 	Prompt string
 	// OnSubmit receives the text, with large pastes expanded, and the
 	// attachments whose labels are still in it, in order.
 	OnSubmit func(text string, att []Attachment)
+	// OnSendNow, if set, receives what Ctrl+Enter (or its fallback, Ctrl+G)
+	// commits, in place of OnSubmit.
+	OnSendNow func(text string, att []Attachment)
 	// OnPaste, if set, sees pastes up to LargePaste characters first and
 	// returns true to consume one (e.g. an image path dropped on the
 	// terminal).
@@ -371,6 +374,14 @@ func (e *Editor) HandleInput(data string) {
 	case "enter":
 		text, att := e.Commit()
 		if e.OnSubmit != nil {
+			e.OnSubmit(text, att)
+		}
+	case "ctrl+enter", "ctrl+g":
+		text, att := e.Commit()
+		switch {
+		case e.OnSendNow != nil:
+			e.OnSendNow(text, att)
+		case e.OnSubmit != nil:
 			e.OnSubmit(text, att)
 		}
 	case "alt+enter", "ctrl+j":

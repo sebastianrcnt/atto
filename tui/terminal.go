@@ -32,6 +32,24 @@ type ProcessTerminal struct {
 	mu       sync.Mutex // serializes writes
 }
 
+// The terminal's enhanced keyboard modes, which make Ctrl+Enter differ from
+// Enter. Terminals without them ignore the requests (and send \r).
+//
+//   - xterm modifyOtherKeys level 2 (xterm, iTerm2, tmux with extended-keys,
+//     WezTerm, Ghostty, foot...). Level 1 spares Enter, Tab and Backspace, so
+//     Ctrl+Enter would stay a plain \r; level 2 reports every modified key as
+//     ESC [ 27 ; mod ; code ~, which normalizeKey maps back.
+//   - the kitty protocol's "disambiguate" flag (kitty, Ghostty, WezTerm,
+//     Alacritty, foot, iTerm2...), for terminals that only speak that: the
+//     reports are ESC [ code ; mod u, and Esc itself becomes ESC [ 27 u.
+//
+// Both are undone on Stop: the kitty flags were pushed, so they are popped;
+// ESC [ > 4 m returns modifyOtherKeys to the terminal's own setting.
+const (
+	keyboardOn  = "\x1b[>4;2m\x1b[>1u"
+	keyboardOff = "\x1b[<u\x1b[>4m"
+)
+
 func NewProcessTerminal() *ProcessTerminal {
 	return &ProcessTerminal{in: os.Stdin, out: os.Stdout}
 }
@@ -45,7 +63,7 @@ func (t *ProcessTerminal) Start(onInput func(string), onResize func()) error {
 	t.console = enableVT(t.in, t.out)
 	t.done = make(chan struct{})
 
-	t.Write("\x1b[?2004h") // bracketed paste
+	t.Write("\x1b[?2004h" + keyboardOn) // bracketed paste, Ctrl+Enter
 
 	t.wg.Go(func() {
 		watchResize(t, t.done, onResize)
@@ -82,7 +100,7 @@ func (t *ProcessTerminal) Stop() {
 	}
 	close(t.done)
 	t.wg.Wait()
-	t.Write("\x1b[0m\x1b[?2004l\x1b[?25h") // plain text, no paste mode, cursor on
+	t.Write("\x1b[0m" + keyboardOff + "\x1b[?2004l\x1b[?25h") // plain text, plain keys, no paste mode, cursor on
 	_ = term.Restore(int(t.in.Fd()), t.oldState)
 	restoreVT(t.console)
 	t.oldState = nil
