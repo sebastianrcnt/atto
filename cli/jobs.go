@@ -84,8 +84,19 @@ func RunJob(args []string, out io.Writer) error {
 	timeout := fs.Duration("timeout", 0, "give up after this long")
 	notify := fs.String("notify", "", "post an event for each output line matching this regexp")
 	notifyLimit := fs.Int("notify-limit", jobs.DefaultNotifyLimit, "stop notifying after this many events")
-	if err := fs.Parse(rest); err != nil {
-		return fmt.Errorf("%v\n%s", err, jobUsage)
+	var parseErr error
+	switch sub {
+	case "output", "log", "wait", "kill", "stop":
+		var pos []string
+		pos, parseErr = parseInterleaved(fs, rest)
+		if parseErr == nil {
+			parseErr = fs.Parse(append([]string{"--"}, pos...))
+		}
+	default:
+		parseErr = fs.Parse(rest)
+	}
+	if parseErr != nil {
+		return fmt.Errorf("%v\n%s", parseErr, jobUsage)
 	}
 	if err := requireSession(*session); err != nil {
 		return err
