@@ -563,3 +563,55 @@ func TestAgentTurnLeavesQuietMessages(t *testing.T) {
 		t.Fatalf("inbox %+v", evs)
 	}
 }
+
+func TestAgentTaskDuringFinalizationStartsSuccessor(t *testing.T) {
+	bodies := agentServer(t, func(int, string) string { return textAnswer("done") })
+	cwd := t.TempDir()
+	t.Chdir(cwd)
+	entered, release := make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	hook := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		once.Do(func() { close(entered); <-release })
+		io.WriteString(w, "{}")
+	}))
+	defer hook.Close()
+	defer func() {
+		select {
+		case <-release:
+		default:
+			close(release)
+		}
+	}()
+	raw := `{"subagents":{"enabled":true},"hooks":{"SessionEnd":[{"hooks":[{"type":"http","url":"` + hook.URL + `"}]}]}}`
+	if err := os.WriteFile(config.SettingsPath(), []byte(raw), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runAgent(t, "spawn", "a", "first", "-session", "root"); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _, _ = runAgent(t, "interrupt", "a", "-session", "root") }()
+	select {
+	case <-entered:
+	case <-time.After(20 * time.Second):
+		t.Fatal("SessionEnd not reached")
+	}
+	if len(bodies()) != 1 {
+		t.Fatal("first turn not finalized")
+	}
+	if out, err := runAgent(t, "task", "a", "second", "-session", "root"); err != nil || !strings.Contains(out, "takes the task") {
+		t.Fatalf("task: %s %v", out, err)
+	}
+	close(release)
+	deadline := time.Now().Add(20 * time.Second)
+	for time.Now().Before(deadline) {
+		st, err := subagent.Load("root", "a")
+		if err == nil && st.Turns == 2 && st.Latest().Status == subagent.Done {
+			if len(bodies()) != 2 || !strings.Contains(bodies()[1], "second") {
+				t.Fatalf("successor requests: %v", bodies())
+			}
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatal("task accepted during finalization had no successor")
+}

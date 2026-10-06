@@ -241,6 +241,15 @@ func RunAgent(args []string, out io.Writer) error {
 		if err != nil {
 			return err
 		}
+		release, err := subagent.LockTurn(st.Parent, st.Name)
+		if err != nil {
+			return err
+		}
+		defer release()
+		st, err = subagent.Load(st.Parent, st.Name)
+		if err != nil {
+			return err
+		}
 		from, to := subagent.PathOf(*session), subagent.PathOf(st.Session)
 		msg := subagent.Envelope(subagent.NewTask, from, to, text)
 		if t := st.Latest(); t.Status.Active() || args[0] == "steer" {
@@ -817,12 +826,30 @@ func RunAgentTurn(args []string, _ io.Writer) error {
 	case runErr != nil && !errors.Is(runErr, ErrPrintFailed):
 		t.Status, t.Error = subagent.Failed, runErr.Error()
 	}
+	releaseTurn, err := subagent.LockTurn(st.Parent, st.Name)
+	if err != nil {
+		return err
+	}
+	defer releaseTurn()
 	// The answer first: a wait that sees the turn over takes it from the
 	// inbox, so it is not delivered twice.
 	if err := events.Push(*parent, turnEvent(st, t)); err != nil {
 		return err
 	}
-	return subagent.SaveTurn(*parent, name, t)
+	if err := subagent.SaveTurn(*parent, name, t); err != nil {
+		return err
+	}
+	// Tasks accepted after the final poll need a successor, not an idle inbox.
+	_, evs := events.SplitReload(core.Poll(st.Session))
+	if !events.Wakes(evs) {
+		events.Requeue(st.Session, evs)
+		return nil
+	}
+	if err := startTurn(&st, events.Format(evs)); err != nil {
+		events.Requeue(st.Session, evs)
+		return err
+	}
+	return nil
 }
 
 // finalAnswerMax caps the answer a turn's end delivers; the rest is in

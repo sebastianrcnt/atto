@@ -223,7 +223,7 @@ func (s State) Latest() Turn {
 	case err != nil:
 		t.Status, t.Error = Failed, err.Error()
 	case j.Active():
-		if t.Status != Running {
+		if t.Status.Active() && t.Status != Running {
 			t.Status = Queued
 		}
 	case t.Status.Active(): // the process ended without saying how
