@@ -41,6 +41,10 @@ func TestMain(m *testing.M) {
 			os.Exit(0)
 		}
 	}
+	// Helper processes keep the environment supplied by their test.
+	for _, key := range []string{config.EnvAgent, config.EnvSubagent, "ATTO_SESSION_ID", config.EnvDir} {
+		os.Unsetenv(key)
+	}
 	os.Exit(m.Run())
 }
 
