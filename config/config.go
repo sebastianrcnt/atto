@@ -22,6 +22,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/sebastianrcnt/atto/fsutil"
 	"io/fs"
 	"maps"
 	"os"
@@ -391,22 +392,24 @@ func LoadSettings() (Settings, error) {
 // UpdateSettings sets the given top-level keys in settings.json, preserving
 // any other keys already present.
 func UpdateSettings(kv map[string]any) error {
-	raw := map[string]any{}
-	data, err := os.ReadFile(SettingsPath())
-	if err != nil && !errors.Is(err, fs.ErrNotExist) {
-		return err
-	}
-	if len(data) > 0 {
-		if err := json.Unmarshal(data, &raw); err != nil {
+	return fsutil.WithFileLock(SettingsPath(), func() error {
+		raw := map[string]any{}
+		data, err := os.ReadFile(SettingsPath())
+		if err != nil && !errors.Is(err, fs.ErrNotExist) {
 			return err
 		}
-	}
-	maps.Copy(raw, kv)
-	out, err := json.MarshalIndent(raw, "", "  ")
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(SettingsPath(), append(out, '\n'), 0o644)
+		if len(data) > 0 {
+			if err := json.Unmarshal(data, &raw); err != nil {
+				return err
+			}
+		}
+		maps.Copy(raw, kv)
+		out, err := json.MarshalIndent(raw, "", "  ")
+		if err != nil {
+			return err
+		}
+		return fsutil.WriteAtomic(SettingsPath(), append(out, '\n'), 0o600)
+	})
 }
 
 // Compaction overrides the tier-aware auto-compaction cap per provider/model.

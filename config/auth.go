@@ -9,7 +9,6 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"sync"
 	"time"
 
 	"github.com/sebastianrcnt/atto/auth"
@@ -72,6 +71,12 @@ func ResolvedKey(e AuthEntry) string {
 // updateAuth rewrites auth.json (mode 0600) after fn edits its raw entries,
 // so entries this version does not understand survive.
 func updateAuth(fn func(raw map[string]json.RawMessage) error) error {
+	return fsutil.WithFileLock(AuthPath(), func() error {
+		return updateAuthLocked(fn)
+	})
+}
+
+func updateAuthLocked(fn func(raw map[string]json.RawMessage) error) error {
 	raw := map[string]json.RawMessage{}
 	if data, err := os.ReadFile(AuthPath()); err == nil && len(bytes.TrimSpace(data)) > 0 {
 		if err := json.Unmarshal(bytes.TrimPrefix(data, []byte("\xef\xbb\xbf")), &raw); err != nil {
@@ -138,15 +143,19 @@ func DeviceID() (string, error) {
 	return id, os.WriteFile(path, []byte(id+"\n"), 0o600)
 }
 
-// oauthMu serializes refreshes within the process, so concurrent requests
-// (agents, subagents) do not spend the same refresh token twice.
-var oauthMu sync.Mutex
-
 // OAuthToken returns a valid access token for provider, refreshing and
 // persisting the credential when it is about to expire.
 func OAuthToken(ctx context.Context, provider string) (string, error) {
-	oauthMu.Lock()
-	defer oauthMu.Unlock()
+	var token string
+	err := fsutil.WithFileLock(AuthPath(), func() error {
+		var err error
+		token, err = oauthTokenLocked(ctx, provider)
+		return err
+	})
+	return token, err
+}
+
+func oauthTokenLocked(ctx context.Context, provider string) (string, error) {
 	entries, err := LoadAuth()
 	if err != nil {
 		return "", err
@@ -173,7 +182,12 @@ func OAuthToken(ctx context.Context, provider string) (string, error) {
 	if fresh.Extra == nil {
 		fresh.Extra = e.Extra
 	}
-	if err := SetOAuth(provider, fresh); err != nil {
+	fresh.Type = "oauth"
+	if err := updateAuthLocked(func(raw map[string]json.RawMessage) error {
+		b, err := json.Marshal(fresh)
+		raw[provider] = b
+		return err
+	}); err != nil {
 		return "", err
 	}
 	return fresh.Access, nil
