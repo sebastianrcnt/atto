@@ -8,12 +8,13 @@
 import { useState, type ReactNode } from "react";
 import { Chevron, Sparkle } from "./icons";
 
-export function Shimmer({ children }: { children: ReactNode }) {
+// Shimmer sweeps a lighter band (hi) across text in base.
+export function Shimmer({ children, base = "var(--ink-3)", hi = "var(--ink)" }: { children: ReactNode; base?: string; hi?: string }) {
   return (
     <span
       className="bg-clip-text font-medium whitespace-nowrap text-transparent"
       style={{
-        backgroundImage: "linear-gradient(90deg, var(--ink-3) 35%, var(--ink) 50%, var(--ink-3) 65%)",
+        backgroundImage: `linear-gradient(90deg, ${base} 35%, ${hi} 50%, ${base} 65%)`,
         backgroundSize: "200% 100%",
         animation: "shimmer-text 1.4s linear infinite",
       }}

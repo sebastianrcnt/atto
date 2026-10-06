@@ -3,7 +3,8 @@
 // THIRD_PARTY_NOTICES): the rounded field that focuses on a click
 // anywhere, and the ink send button that lights up once there is
 // something to send. Here it also attaches images, and while a turn runs
-// it steers, stops and moves a command to the background.
+// it steers, stops and moves a command to the background, beside the
+// activity line; the status line goes under it.
 
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { loadDraft, saveDraft } from "../storage";
@@ -40,6 +41,8 @@ export default function PromptBar({
   disabled,
   placeholder,
   toolbar,
+  activity,
+  footer,
   onSend,
   onStop,
   onBackground,
@@ -52,6 +55,9 @@ export default function PromptBar({
   placeholder: string;
   // the model and effort pickers, next to the attach button
   toolbar?: ReactNode;
+  // the activity line, left of Stop; the status line under the field
+  activity?: ReactNode;
+  footer?: ReactNode;
   onSend: (text: string, images: Pending[]) => Promise<boolean>;
   onStop: () => void;
   onBackground: () => void;
@@ -106,23 +112,26 @@ export default function PromptBar({
         if (e.dataTransfer?.files) add(e.dataTransfer.files);
       }}
     >
-      {(busy || canBackground) && (
+      {(busy || canBackground || activity) && (
         <div className="mb-2 flex items-center justify-end gap-2">
+          <div className="min-w-0 flex-1 pl-1">{activity}</div>
           {canBackground && (
             <button
               type="button"
+              aria-label="Background"
+              title="Move the running command to the background"
               onClick={onBackground}
-              className="flex h-9 items-center gap-1.5 rounded-control bg-surface px-3 text-[13px] font-medium text-ink-2 shadow-btn active:scale-[0.97]"
+              className="flex h-9 shrink-0 items-center gap-1.5 rounded-control bg-surface px-3 text-[13px] font-medium text-ink-2 shadow-btn active:scale-[0.97]"
             >
               <MoveDown size={14} />
-              Background
+              <span className="max-sm:hidden">Background</span>
             </button>
           )}
           {busy && (
             <button
               type="button"
               onClick={onStop}
-              className="flex h-9 items-center gap-1.5 rounded-control bg-surface px-3 text-[13px] font-medium text-ink shadow-btn active:scale-[0.97]"
+              className="flex h-9 shrink-0 items-center gap-1.5 rounded-control bg-surface px-3 text-[13px] font-medium text-ink shadow-btn active:scale-[0.97]"
             >
               <Stop size={12} />
               Stop
@@ -227,6 +236,7 @@ export default function PromptBar({
           </button>
         </div>
       </div>
+      {footer}
     </div>
   );
 }

@@ -12,11 +12,11 @@ const chevron = Array.from({ length: 9 }, (_, i) => {
   return (c + Math.abs(r - 1)) * 90;
 });
 
-function LoaderGrid() {
+export function LoaderGrid({ color = "var(--ink)" }: { color?: string }) {
   return (
     <span aria-hidden className="grid shrink-0 grid-cols-[repeat(3,4px)] gap-[1.5px]">
       {chevron.map((delay, i) => (
-        <span key={i} className="size-[4px] rounded-[1px] bg-ink" style={{ opacity: 0.15, animation: `pixel-on 650ms ease-in-out ${delay}ms infinite` }} />
+        <span key={i} className="size-[4px] rounded-[1px]" style={{ background: color, opacity: 0.15, animation: `pixel-on 650ms ease-in-out ${delay}ms infinite` }} />
       ))}
     </span>
   );

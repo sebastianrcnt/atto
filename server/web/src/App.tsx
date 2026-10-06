@@ -4,6 +4,7 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { OriginalToggle, Statuses, useDisplay } from "./components/BlockMeta";
 import ExtensionBar from "./components/ExtensionBar";
+import Activity from "./components/Activity";
 import ExtText from "./components/ExtText";
 import GoalBar, { type GoalAction } from "./components/GoalBar";
 import { ArrowDown, Bolt, Branch, Flag, Info, Layers, Menu, Plus, Radio, Target } from "./components/icons";
@@ -11,12 +12,14 @@ import Loading from "./components/Loading";
 import PromptBar, { type Pending } from "./components/PromptBar";
 import PromptSheet, { type Answer } from "./components/PromptSheet";
 import Thinking from "./components/Thinking";
+import StatusLine from "./components/StatusLine";
 import ToolGroup from "./components/ToolGroup";
 import ToolRow from "./components/ToolRow";
 import { Markdown } from "./markdown";
 import { Client, initialToken, saveToken, Unauthorized } from "./rpc";
 import { loadThreadId, saveThreadId } from "./storage";
 import { anchorShift, atBottom, firstBelow, nextFollow } from "./scroll";
+import { activity, Meter, status } from "./status";
 import { isRun, Transcript, type Row } from "./transcript";
 import type { ExtensionUI, GoalInfo, Item, Model, Notification, Prompt, ThreadInfo, ThreadSummary } from "./types";
 
@@ -182,7 +185,8 @@ export default function App() {
   const [extUi, setExtUi] = useState<ExtensionUI | null>(null);
   const [connected, setConnected] = useState(true);
   const [drawer, setDrawer] = useState(false);
-  const [busySince, setBusySince] = useState(Date.now());
+  // the running turn's time and tokens, for the activity line
+  const meter = useRef(new Meter()).current;
   const [newModel, setNewModel] = useState(""); // for the next thread/start
   const [, setTick] = useState(0);
   const store = useRef(new Transcript()).current;
@@ -258,20 +262,29 @@ export default function App() {
         if (n.method === "turn/completed" && !live) loadThreads();
         return;
       }
+      meter.lastEvent = Date.now();
       switch (n.method) {
         case "turn/started":
           setInfo((i) => (i ? { ...i, busy: true, turnId: p.turnId } : i));
-          setBusySince(Date.now());
+          meter.start({ startedAt: p.startedAt, verb: p.verb, inputTokens: 0, outputTokens: 0 }, Date.now());
           break;
         case "item/started":
         case "item/updated":
         case "item/completed":
           store.upsert(p.item);
+          if (p.item?.pending) meter.draft(p.item);
           redraw();
           break;
-        case "item/delta":
+        case "item/delta": {
+          const t = store.get(p.itemId)?.type;
+          if (t === "reasoning" || t === "agentMessage") meter.text(p.delta.length);
           store.delta(p.itemId, p.delta);
           redraw();
+          break;
+        }
+        case "thread/usage":
+          if (p.step) meter.step(p.step);
+          setInfo((i) => (i ? { ...i, usage: p.usage, contextTokens: p.contextTokens ?? i.contextTokens } : i));
           break;
         case "item/display":
           store.display(p.itemId, p.display || null);
@@ -328,7 +341,7 @@ export default function App() {
       setPrompt(t.prompt || null);
       setGoal(t.goal || null);
       setExtUi(t.extensionUi || null);
-      if (t.busy) setBusySince(Date.now());
+      if (t.busy) meter.start(t.turn, Date.now());
       if (!t.live) saveThreadId(t.threadId);
       followRef.current = true;
       setAway(false);
@@ -336,7 +349,7 @@ export default function App() {
       follow(t.eventId || 0);
       redraw();
     },
-    [store, follow, redraw],
+    [store, follow, redraw, meter],
   );
 
   const loadThreads = useCallback(() => {
@@ -567,10 +580,8 @@ export default function App() {
   const blocks = store.blocks();
   const busy = !!info?.busy;
   const last = store.last();
-  const streaming = last && last.status === "inProgress";
   const pickable = models.filter((m) => m.hasKey || m.id === info?.model);
   const title = info ? info.name || baseName(info.cwd) : "New conversation";
-  const pct = info?.contextWindow ? Math.min(100, Math.round((100 * info.contextTokens) / info.contextWindow)) : 0;
 
   const toolbar = (
     <>
@@ -673,7 +684,6 @@ export default function App() {
               {info && (
                 <div className="truncate text-[11.5px] text-ink-3">
                   {(live ? "terminal session · " : "") + shortPath(info.cwd)}
-                  {pct ? ` · context ${pct}%` : ""}
                 </div>
               )}
             </div>
@@ -704,7 +714,6 @@ export default function App() {
             {blocks.map((b, j) => (
               <Block key={j} rows={b} groups={groups} />
             ))}
-            {busy && !streaming && <Loading label="Working" since={busySince} />}
           </div>
         </div>
 
@@ -726,6 +735,8 @@ export default function App() {
             imagesOK={imagesOK}
             placeholder={live ? "Message the terminal session" : "Message atto"}
             toolbar={toolbar}
+            activity={busy && <Activity label={activity(last, store.running(), meter.verb)} meter={meter} running={store.running()} />}
+            footer={info && <StatusLine s={status(info)} />}
             onSend={send}
             onStop={() => info && client.call("turn/interrupt", { threadId: info.threadId }).catch(fail)}
             onBackground={() => info && client.call("turn/background", { threadId: info.threadId }).catch(fail)}

@@ -252,3 +252,34 @@ func TestFormat(t *testing.T) {
 		}
 	}
 }
+
+// The status line's parts and the activity line's meter (src/status.ts).
+func TestStatus(t *testing.T) {
+	vm := jsModule(t, "src/status.ts", "st")
+	// In order: the meter's checks build on each other.
+	for _, c := range []struct{ expr, want string }{
+		{`JSON.stringify(st.status({model: "p/m", modelName: "M", effort: "high", efforts: ["low", "high"], contextWindow: 200000, contextTokens: 150000, autoCompactLimit: 180000, priced: true, subscription: true,
+		  usage: {inputTokens: 50000, cachedInputTokens: 30000, cacheWriteTokens: 2000, outputTokens: 3400, cost: 0.1234, lastInputTokens: 1000, lastCachedInputTokens: 930}}))`,
+			`{"model":"M","effort":"high","pct":75,"context":"150.0k/200.0k","warn":true,"cache":"cache 93%","io":"↑18k ↓3.4k","writes":"W2k","cost":"≈$0.123"}`},
+		// No window, no prices, no usage: only the model.
+		{`JSON.stringify(st.status({model: "p/m", effort: "", contextTokens: 0}))`,
+			`{"model":"p/m","effort":"","pct":0,"context":"","warn":false,"cache":"","io":"","writes":"","cost":""}`},
+		// The meter: reported tokens, plus about a token per 4 characters
+		// streamed since the last report.
+		{`var m = new st.Meter(); m.start({startedAt: 1000, verb: "Blorping", inputTokens: 10, outputTokens: 5}, 2000);
+		 m.text(40); m.draft({id: "c", description: "abcd", command: "abcdefgh"}); m.draft({id: "c", description: "abcd", command: "abcd"});
+		 var a = m.out(); m.step({inputTokens: 1000, cachedInputTokens: 800, cacheWriteTokens: 100, outputTokens: 20});
+		 [a, m.out(), m.input, m.verb, m.startedAt].join(",")`, "17,25,110,Blorping,1000"},
+		{`[m.stall(2000 + 15000, false), m.stall(2000 + 17500, false), m.stall(2000 + 30000, false), m.stall(2000 + 30000, true)].join(",")`, "0,0.5,1,0"},
+		{`[st.activity({type: "compaction", status: "inProgress"}, false, "V"), st.activity({type: "commandExecution", pending: true}, false, "V"),
+		  st.activity({type: "reasoning"}, true, ""), st.activity({type: "agentMessage"}, false, "V")].join(",")`, "Compacting context,V,Working,Thinking"},
+	} {
+		v, err := vm.RunString(c.expr)
+		if err != nil {
+			t.Fatalf("%s: %v", c.expr, err)
+		}
+		if got := v.Export(); got != c.want {
+			t.Errorf("%s = %v, want %v", c.expr, got, c.want)
+		}
+	}
+}
