@@ -148,3 +148,32 @@ func TestWriterKindsDoNotAllowSameProcessTakeover(t *testing.T) {
 		})
 	}
 }
+
+func TestStaleTakeoverDoesNotRemoveFreshLock(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "s.jsonl")
+	if err := os.WriteFile(LockPath(path), []byte(`{"pid":2147483632}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	old := moveLock
+	t.Cleanup(func() { moveLock = old })
+	var firstRelease func()
+	moveLock = func(from, to string) error {
+		moveLock = old
+		var err error
+		firstRelease, err = Lock(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return old(from, to)
+	}
+	if release, err := Lock(path); !errors.Is(err, ErrLocked) {
+		if release != nil {
+			release()
+		}
+		t.Fatalf("second takeover: %v", err)
+	}
+	defer firstRelease()
+	if l, ok := LockedBy(path); !ok || l.PID != os.Getpid() {
+		t.Fatalf("fresh lock lost: %+v %v", l, ok)
+	}
+}

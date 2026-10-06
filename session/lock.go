@@ -1,6 +1,7 @@
 package session
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -43,6 +44,9 @@ func LogPath(path string) string { return strings.TrimSuffix(path, ".jsonl") + "
 // processAlive is a seam for tests; the real check is per platform.
 var processAlive = pidAlive
 
+// moveLock is a seam for takeover races in tests.
+var moveLock = os.Rename
+
 // LockedBy reads the session's lock. ok is false when there is none or it
 // is stale (its process is gone).
 func LockedBy(path string) (LockInfo, bool) {
@@ -50,6 +54,10 @@ func LockedBy(path string) (LockInfo, bool) {
 	if err != nil {
 		return LockInfo{}, false
 	}
+	return liveLock(b)
+}
+
+func liveLock(b []byte) (LockInfo, bool) {
 	var l LockInfo
 	if json.Unmarshal(b, &l) != nil || l.PID <= 0 || !processAlive(l.PID) {
 		return LockInfo{}, false
@@ -124,15 +132,52 @@ func lockAs(path string, pid int, kind string) (release func(), err error) {
 		if !errors.Is(err, os.ErrExist) {
 			return nil, err
 		}
-		if l, ok := LockedBy(path); ok {
+		stale, err := os.ReadFile(lp)
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		if l, ok := liveLock(stale); ok {
 			owned := l.PID == pid && (kind == KindTUI && l.Kind == KindTUI || kind == KindBackground && (l.Kind == KindBackground || l.Kind == ""))
 			if !owned {
 				return nil, LockError(l)
 			}
 		}
-		os.Remove(lp) // stale, ours, or unreadable
+		if err := retireLock(lp, stale); err != nil {
+			return nil, err
+		}
 	}
 	return nil, fmt.Errorf("could not lock %s", path)
+}
+
+// retireLock moves the checked lock aside before deciding whether to remove it.
+func retireLock(lp string, checked []byte) error {
+	f, err := os.CreateTemp(filepath.Dir(lp), ".lock-takeover-*")
+	if err != nil {
+		return err
+	}
+	moved := f.Name()
+	f.Close()
+	os.Remove(moved)
+	if err := moveLock(lp, moved); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		return err
+	}
+	b, err := os.ReadFile(moved)
+	if err != nil {
+		return err
+	}
+	if !bytes.Equal(b, checked) {
+		// Another contender replaced the lock. Restore it without replacing a winner.
+		if err := os.Link(moved, lp); err != nil && !errors.Is(err, os.ErrExist) {
+			return err
+		}
+	}
+	return os.Remove(moved)
 }
 
 // unlock removes the lock file if pid still owns it.
