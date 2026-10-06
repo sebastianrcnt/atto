@@ -12,7 +12,7 @@ import (
 )
 
 const historyUsage = `usage:
-  atto history grep [-i] [-max N] [-active] [-session ID] <regexp>   search the full transcript
+  atto history grep [-i] [-max N] [-active] [-session ID] <regexp>   search the full transcript (-max 0 = no cap)
   atto history show [-C N] [-full] [-session ID] <n>                 print entry #n (and N around it)
 
 The session defaults to $ATTO_SESSION_ID (set for commands atto runs),
@@ -32,12 +32,15 @@ func RunHistory(args []string, out io.Writer) error {
 	fs.SetOutput(io.Discard)
 	sessID := fs.String("session", os.Getenv("ATTO_SESSION_ID"), "session ID")
 	ignoreCase := fs.Bool("i", false, "case-insensitive")
-	maxHits := fs.Int("max", 40, "maximum matching lines")
+	maxHits := fs.Int("max", 40, "maximum matching lines (0 = no cap)")
 	ctxN := fs.Int("C", 0, "entries of context around #n")
 	full := fs.Bool("full", false, "do not truncate long entries")
 	activeOnly := fs.Bool("active", false, "search only the active branch")
 	if err := fs.Parse(rest); err != nil {
 		return fmt.Errorf("%v\n%s", err, historyUsage)
+	}
+	if *maxHits < 0 {
+		return fmt.Errorf("-max must not be negative (0 means no cap), got %d\n%s", *maxHits, historyUsage)
 	}
 
 	path, err := resolveSession(*sessID)
@@ -127,7 +130,7 @@ func historyGrep(out io.Writer, items []session.Item, re *regexp.Regexp, maxHits
 			if loc == nil {
 				continue
 			}
-			if hits >= maxHits {
+			if maxHits > 0 && hits >= maxHits {
 				fmt.Fprintf(out, "[stopped after %d matching lines; narrow the pattern or raise -max]\n", maxHits)
 				return nil
 			}

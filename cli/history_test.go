@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"fmt"
 	"io"
 	"strings"
 	"testing"
@@ -46,6 +47,39 @@ func TestHistoryGrepShow(t *testing.T) {
 	}
 	if err := RunHistory([]string{"show", "99"}, &out); err == nil {
 		t.Error("expected error for missing entry")
+	}
+}
+
+func TestHistoryGrepMax(t *testing.T) {
+	t.Setenv("ATTO_DIR", t.TempDir())
+	w := session.New("/w")
+	for i := range 5 {
+		w.Append(session.Entry{Type: session.TypeMessage, Message: &provider.Message{Role: "user", Content: fmt.Sprintf("match %d", i)}})
+	}
+	w.Close()
+	t.Setenv("ATTO_SESSION_ID", w.ID)
+
+	var out bytes.Buffer
+	if err := RunHistory([]string{"grep", "-max", "2", "match"}, &out); err != nil {
+		t.Fatal(err)
+	}
+	got := out.String()
+	if strings.Count(got, "user: match") != 2 || !strings.Contains(got, "[stopped after 2 matching lines; narrow the pattern or raise -max]") {
+		t.Errorf("-max 2:\n%s", got)
+	}
+
+	out.Reset()
+	if err := RunHistory([]string{"grep", "-max", "0", "match"}, &out); err != nil {
+		t.Fatal(err)
+	}
+	got = out.String()
+	if strings.Count(got, "user: match") != 5 || !strings.Contains(got, "5 matching lines in 5 entries") {
+		t.Errorf("-max 0 should print every match:\n%s", got)
+	}
+
+	out.Reset()
+	if err := RunHistory([]string{"grep", "-max", "-1", "match"}, &out); err == nil || !strings.Contains(err.Error(), "-max must not be negative") {
+		t.Errorf("-max -1 should be a usage error: %v", err)
 	}
 }
 
