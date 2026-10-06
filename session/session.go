@@ -20,6 +20,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -425,15 +426,21 @@ func Load(path string) (Entry, []Entry, error) {
 		return Entry{}, nil, err
 	}
 	defer f.Close()
-	sc := bufio.NewScanner(f)
-	sc.Buffer(make([]byte, 64*1024), 64*1024*1024)
+	r := bufio.NewReader(f)
 	var header Entry
 	var entries []Entry
-	for first := true; sc.Scan(); first = false {
+	for first := true; ; first = false {
+		line, err := r.ReadBytes('\n')
+		if err != nil && err != io.EOF {
+			return Entry{}, nil, err
+		}
+		if len(line) == 0 && err == io.EOF {
+			break
+		}
 		var e Entry
-		if err := json.Unmarshal(sc.Bytes(), &e); err != nil {
+		if parseErr := json.Unmarshal(line, &e); parseErr != nil {
 			if first {
-				return Entry{}, nil, fmt.Errorf("%s: invalid session header: %w", path, err)
+				return Entry{}, nil, fmt.Errorf("%s: invalid session header: %w", path, parseErr)
 			}
 			continue
 		}
@@ -446,11 +453,12 @@ func Load(path string) (Entry, []Entry, error) {
 		}
 		entries = append(entries, e)
 	}
+
 	if header.Type != TypeSession {
 		return Entry{}, nil, fmt.Errorf("%s: missing session header", path)
 	}
 	link(entries)
-	return header, entries, sc.Err()
+	return header, entries, nil
 }
 
 // Summary describes a stored session for the resume picker.
