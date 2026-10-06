@@ -8,8 +8,9 @@ import Activity from "./components/Activity";
 import ExtText from "./components/ExtText";
 import GoalBar, { type GoalAction } from "./components/GoalBar";
 import CommandMenu, { type Command } from "./components/CommandMenu";
-import { ArrowDown, Bolt, Branch, Flag, Info, Layers, Menu, More, Plus, Radio, Target, Terminal } from "./components/icons";
+import { ArrowDown, Bolt, Bot, Branch, Flag, Info, Layers, Menu, More, Plus, Radio, Target, Terminal } from "./components/icons";
 import JobsPanel, { active as jobActive } from "./components/JobsPanel";
+import SubagentsPanel, { busy as agentBusy } from "./components/SubagentsPanel";
 import Loading from "./components/Loading";
 import PendingList from "./components/PendingList";
 import PromptBar, { type Pending } from "./components/PromptBar";
@@ -24,7 +25,7 @@ import { loadThreadId, saveThreadId } from "./storage";
 import { anchorShift, atBottom, firstBelow, nextFollow } from "./scroll";
 import { activity, Meter, status } from "./status";
 import { isRun, Transcript, type Row } from "./transcript";
-import type { ExtensionUI, GoalInfo, Item, Job, Model, Notification, Prompt, ThreadInfo, ThreadSummary } from "./types";
+import type { ExtensionUI, GoalInfo, Item, Job, Model, Notification, Prompt, Subagent, ThreadInfo, ThreadSummary } from "./types";
 
 // --- items ---
 
@@ -192,9 +193,11 @@ export default function App() {
   const meter = useRef(new Meter()).current;
   const [newModel, setNewModel] = useState(""); // for the next thread/start
   const [menu, setMenu] = useState(false);
-  // What runs beside the turns (job/list), and the panel open.
+  // What runs beside the turns (job/list, subagent/list), and the panel
+  // open.
   const [jobs, setJobs] = useState<Job[]>([]);
-  const [panel, setPanel] = useState<"jobs" | null>(null);
+  const [agents, setAgents] = useState<Subagent[]>([]);
+  const [panel, setPanel] = useState<"jobs" | "agents" | null>(null);
   // text put back into the input (an undone turn's message)
   const [fill, setFill] = useState<{ text: string; n: number } | null>(null);
   const [, setTick] = useState(0);
@@ -342,7 +345,8 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [live],
   );
-  // refreshBg reads the thread's background jobs again.
+  // refreshBg reads the thread's background jobs and subagents again (a
+  // subagent's turn ending is an event too).
   const refreshBg = useCallback(() => {
     const id = infoRef.current?.threadId;
     if (!id) return;
@@ -350,14 +354,19 @@ export default function App() {
       .call<{ jobs: Job[] }>("job/list", { threadId: id })
       .then((r) => infoRef.current?.threadId === id && setJobs(r.jobs || []))
       .catch(() => {});
+    client
+      .call<{ subagents: Subagent[] }>("subagent/list", { threadId: id })
+      .then((r) => infoRef.current?.threadId === id && setAgents(r.subagents || []))
+      .catch(() => {});
   }, [client]);
   const threadId = info?.threadId;
   useEffect(() => {
     setJobs([]);
+    setAgents([]);
     refreshBg();
   }, [threadId, refreshBg]);
   // While something runs, or a panel is open, every few seconds.
-  const running = jobs.some(jobActive);
+  const running = jobs.some(jobActive) || agents.some(agentBusy);
   useEffect(() => {
     if (!running && !panel) return;
     const t = setInterval(refreshBg, 3000);
@@ -670,26 +679,40 @@ export default function App() {
   // What runs beside the turns: on the status line while it runs (as the
   // terminal's "● 2 jobs running"), in the menu while there is any.
   const nJobs = jobs.filter(jobActive).length;
-  const bgChips = nJobs > 0 && (
-    <button type="button" onClick={() => setPanel("jobs")} className="flex h-6 items-center gap-1 rounded-chip px-1.5 text-green hover:bg-hover">
-      <span className="size-1.5 rounded-full bg-green" /> {nJobs} {nJobs === 1 ? "job" : "jobs"}
-    </button>
+  const nAgents = agents.filter(agentBusy).length;
+  const bgChips = (nJobs > 0 || nAgents > 0) && (
+    <>
+      {nAgents > 0 && (
+        <button type="button" onClick={() => setPanel("agents")} className="flex h-6 items-center gap-1 rounded-chip px-1.5 text-accent-ink hover:bg-hover">
+          ◆ {nAgents} {nAgents === 1 ? "agent" : "agents"}
+        </button>
+      )}
+      {nJobs > 0 && (
+        <button type="button" onClick={() => setPanel("jobs")} className="flex h-6 items-center gap-1 rounded-chip px-1.5 text-green hover:bg-hover">
+          <span className="size-1.5 rounded-full bg-green" /> {nJobs} {nJobs === 1 ? "job" : "jobs"}
+        </button>
+      )}
+    </>
   );
-  const panels = jobs.length > 0 && (
+  const panelRow = (which: "jobs" | "agents", icon: any, label: string, detail: string) => (
     <button
       type="button"
       onClick={() => {
         setMenu(false);
-        setPanel("jobs");
+        setPanel(which);
       }}
       className="flex min-h-11 w-full items-center gap-3 rounded-control px-3 py-2 text-left transition-colors hover:bg-hover"
     >
-      <span className="flex size-5 shrink-0 items-center justify-center text-ink-2">
-        <Terminal size={16} />
-      </span>
-      <span className="min-w-0 flex-1 text-[14.5px] text-ink">Background jobs</span>
-      <span className="shrink-0 text-[12.5px] text-ink-3">{nJobs ? `${nJobs} running` : jobs.length}</span>
+      <span className="flex size-5 shrink-0 items-center justify-center text-ink-2">{icon}</span>
+      <span className="min-w-0 flex-1 text-[14.5px] text-ink">{label}</span>
+      <span className="shrink-0 text-[12.5px] text-ink-3">{detail}</span>
     </button>
+  );
+  const panels = (agents.length > 0 || jobs.length > 0) && (
+    <>
+      {agents.length > 0 && panelRow("agents", <Bot size={16} />, "Subagents", nAgents ? `${nAgents} working` : String(agents.length))}
+      {jobs.length > 0 && panelRow("jobs", <Terminal size={16} />, "Background jobs", nJobs ? `${nJobs} running` : String(jobs.length))}
+    </>
   );
 
   const toolbar = (
@@ -865,6 +888,9 @@ export default function App() {
           onEffort={setEffort}
           onClose={() => setMenu(false)}
         />
+      )}
+      {panel === "agents" && info && (
+        <SubagentsPanel client={client} threadId={info.threadId} agents={agents} view={(rows) => <Block rows={rows} groups={groups} />} onRefresh={refreshBg} onClose={() => setPanel(null)} />
       )}
       {panel === "jobs" && info && <JobsPanel client={client} threadId={info.threadId} jobs={jobs} onRefresh={refreshBg} onClose={() => setPanel(null)} fail={fail} />}
       {live && prompt && <PromptSheet key={prompt.id} prompt={prompt} onAnswer={answer} />}
