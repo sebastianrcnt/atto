@@ -92,6 +92,18 @@ func (p *inputParser) feed(data string) []string {
 	return out
 }
 
+const escapeWait = 30 * time.Millisecond
+
+func (p *inputParser) waitingEscape() bool { return p.paste == nil && p.pending == "\x1b" }
+
+func (p *inputParser) expireEscape() []string {
+	if !p.waitingEscape() {
+		return nil
+	}
+	p.pending = ""
+	return []string{"\x1b"}
+}
+
 // unbracketedPaste reports whether one read looks like pasted text that
 // arrived without bracketed-paste markers, as in the classic Windows
 // console: plain text with a line break followed by more text. Typing
@@ -113,7 +125,7 @@ func plainText(data string) bool {
 }
 
 // seqLen returns the length of the first key sequence in s and whether it is
-// complete. A lone ESC at the end of a read is treated as the Escape key.
+// complete. A lone ESC is held for the input loop's disambiguation timer.
 func seqLen(s string) (int, bool) {
 	if s[0] != 0x1b {
 		if !utf8.FullRuneInString(s) {
@@ -123,7 +135,7 @@ func seqLen(s string) (int, bool) {
 		return n, true
 	}
 	if len(s) == 1 {
-		return 1, true
+		return 0, false
 	}
 	switch s[1] {
 	case '[':
@@ -231,6 +243,18 @@ func normalizeKey(data string) string {
 	if !ok {
 		return data
 	}
+	if mapped, ok := kittyText[code]; ok {
+		code = mapped
+	}
+	if seq, ok := kittyNavigation[code]; ok {
+		if mod == 0 {
+			return "\x1b[" + seq
+		}
+		if prefix, ok := strings.CutSuffix(seq, "~"); ok {
+			return "\x1b[" + prefix + ";" + strconv.Itoa(mod+1) + "~"
+		}
+		return "\x1b[1;" + strconv.Itoa(mod+1) + seq
+	}
 	shift, alt, ctrl := mod&1 != 0, mod&2 != 0, mod&4 != 0
 	if mod&^7 != 0 {
 		return data // super, hyper, meta
@@ -283,11 +307,33 @@ func normalizeKey(data string) string {
 	return data
 }
 
+// Kitty's keypad reports use dedicated private-use codes, not text runes.
+var kittyText = map[int]int{
+	57399: '0', 57400: '1', 57401: '2', 57402: '3', 57403: '4',
+	57404: '5', 57405: '6', 57406: '7', 57407: '8', 57408: '9',
+	57409: '.', 57410: '/', 57411: '*', 57412: '-', 57413: '+',
+	57414: 13, 57415: '=', 57416: ',',
+}
+
+var kittyNavigation = map[int]string{
+	57417: "D", 57418: "C", 57419: "A", 57420: "B",
+	57421: "5~", 57422: "6~", 57423: "H", 57424: "F",
+	57425: "2~", 57426: "3~", 57427: "E",
+}
+
+func kittyFunctional(code int) string {
+	if code >= 57376 && code <= 57398 {
+		return "f" + strconv.Itoa(code-57376+13)
+	}
+	return map[int]string{57358: "capslock", 57359: "scrolllock", 57360: "numlock",
+		57361: "printscreen", 57362: "pause", 57363: "menu"}[code]
+}
+
 // textKey is the text a printable key code types, with shift applied to
 // letters (the kitty code is the unshifted one). Empty for anything else.
 func textKey(code int, shift bool) string {
 	r := rune(code)
-	if code < 0x20 || code == 0x7f || !utf8.ValidRune(r) {
+	if code < 0x20 || code == 0x7f || code >= 57344 && code <= 63743 || !utf8.ValidRune(r) {
 		return ""
 	}
 	if shift {
@@ -300,6 +346,19 @@ func textKey(code int, shift bool) string {
 // Printable input returns "" — use the raw data instead.
 func Key(data string) string {
 	data = normalizeKey(data)
+	if code, mod, ok := decodeExtended(data); ok {
+		if name := kittyFunctional(code); name != "" {
+			for _, m := range []struct {
+				bit  int
+				name string
+			}{{1, "shift+"}, {2, "alt+"}, {4, "ctrl+"}} {
+				if mod&m.bit != 0 {
+					name = m.name + name
+				}
+			}
+			return name
+		}
+	}
 	switch data {
 	case ctrlEnter:
 		return "ctrl+enter"
@@ -329,6 +388,10 @@ func Key(data string) string {
 		return "home"
 	case "\x1b[F", "\x1bOF", "\x1b[4~":
 		return "end"
+	case "\x1b[2~":
+		return "insert"
+	case "\x1b[E":
+		return "begin"
 	case "\x1b[3~":
 		return "delete"
 	case "\x1b[5~":

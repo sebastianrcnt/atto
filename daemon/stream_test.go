@@ -96,3 +96,24 @@ func TestConsumePaneToken(t *testing.T) {
 		t.Fatalf("marker %q", got)
 	}
 }
+
+func TestKeyboardStacksAreScreenLocal(t *testing.T) {
+	s := newStream()
+	feedAll(s, "\x1b[>2u\x1b[?1049h\x1b[>1u")
+	want := "\x1b[>2u\x1b[?1049h\x1b[>1u"
+	if got := s.restore(); got != want {
+		t.Fatalf("restore %q, want %q", got, want)
+	}
+	reset := s.reset()
+	if altPop, leave, mainPop := strings.Index(reset, "\x1b[<1u"), strings.Index(reset, "\x1b[?1049l"), strings.LastIndex(reset, "\x1b[<1u"); !(altPop < leave && leave < mainPop) {
+		t.Fatalf("screen-local reset order: %q", reset)
+	}
+	feedAll(s, "\x1b[<u\x1b[?1049l")
+	if got := s.restore(); got != "\x1b[>2u" {
+		t.Fatalf("main stack lost: %q", got)
+	}
+	feedAll(s, "\x1b[<u")
+	if got := s.restore(); got != "" {
+		t.Fatalf("main pop left flags: %q", got)
+	}
+}

@@ -184,6 +184,8 @@ func (t *TUI) Start() error {
 	}
 	if t.Mode == Fullscreen {
 		t.term.Write(t.enterFullscreen())
+	} else {
+		t.term.Write(kittyOn)
 	}
 	t.term.Write("\x1b[?25l")
 	t.started = true
@@ -205,11 +207,14 @@ func (t *TUI) Stop() {
 	close(t.done)
 	if t.Mode == Fullscreen {
 		t.term.Write(t.leaveFullscreen())
-	} else if n := len(t.prevLines); n > 0 {
-		var b strings.Builder
-		moveRows(&b, n-1-t.hwCursorRow)
-		b.WriteString("\r\n")
-		t.term.Write(b.String())
+	} else {
+		t.term.Write(kittyOff)
+		if n := len(t.prevLines); n > 0 {
+			var b strings.Builder
+			moveRows(&b, n-1-t.hwCursorRow)
+			b.WriteString("\r\n")
+			t.term.Write(b.String())
+		}
 	}
 	t.mu.Unlock()
 	t.term.Stop()
@@ -228,11 +233,13 @@ func (t *TUI) SetMode(m Mode) {
 		return
 	}
 	if m == Fullscreen {
+		t.term.Write(kittyOff)
 		t.term.Write(t.enterFullscreen())
 	} else {
 		// The main screen returns with the cursor where it was left; the
 		// first inline frame is drawn from there.
 		t.term.Write(t.leaveFullscreen())
+		t.term.Write(kittyOn)
 	}
 	t.sel, t.mouse = selection{}, mouseState{}
 	t.prevFrame, t.prevLines = nil, nil
@@ -285,6 +292,8 @@ func (t *TUI) loop() {
 			stack := debug.Stack()
 			if t.Mode == Fullscreen {
 				t.term.Write(t.leaveFullscreen())
+			} else {
+				t.term.Write(kittyOff)
 			}
 			t.term.Stop()
 			if OnPanic != nil {

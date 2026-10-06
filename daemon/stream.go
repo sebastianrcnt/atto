@@ -9,7 +9,7 @@ import (
 )
 
 // Marker is the OSC number atto in a pane uses to talk to the daemon
-// through its own output: ESC ] 7337 ; <command> [; args] BEL. The daemon
+// through its own output: ESC ] 7337 ; <token> ; <command> [; args] BEL. The daemon
 // takes these out of the stream; a terminal never sees them.
 const Marker = 7337
 
@@ -56,7 +56,7 @@ type stream struct {
 	pending []byte
 	modes   map[int]bool // DEC private modes; true = set
 	mok     int          // xterm modifyOtherKeys level
-	kitty   []int        // kitty keyboard flags pushed, innermost last
+	kitty   [2][]int     // keyboard stacks for the main and alternate screens
 }
 
 const (
@@ -143,6 +143,10 @@ func (s *stream) feed(b []byte) (out []byte, markers []string) {
 // csi notes the modes a control sequence sets: params are the bytes
 // between "ESC [" and the final byte.
 func (s *stream) csi(params string, final byte) {
+	k := &s.kitty[0]
+	if s.alt() {
+		k = &s.kitty[1]
+	}
 	switch {
 	case strings.HasPrefix(params, "?") && (final == 'h' || final == 'l'):
 		for p := range strings.SplitSeq(params[1:], ";") {
@@ -157,19 +161,19 @@ func (s *stream) csi(params string, final byte) {
 		}
 	case strings.HasPrefix(params, ">") && final == 'u':
 		f, _ := strconv.Atoi(params[1:])
-		s.kitty = append(s.kitty, f)
+		*k = append(*k, f)
 	case strings.HasPrefix(params, "<") && final == 'u':
 		n := 1
 		if params != "<" {
 			n, _ = strconv.Atoi(params[1:])
 		}
-		s.kitty = s.kitty[:max(0, len(s.kitty)-max(n, 1))]
+		*k = (*k)[:max(0, len(*k)-max(n, 1))]
 	case strings.HasPrefix(params, "=") && final == 'u':
 		f, _ := strconv.Atoi(strings.SplitN(params[1:], ";", 2)[0])
-		if len(s.kitty) == 0 {
-			s.kitty = append(s.kitty, f)
+		if len(*k) == 0 {
+			*k = append(*k, f)
 		} else {
-			s.kitty[len(s.kitty)-1] = f
+			(*k)[len(*k)-1] = f
 		}
 	}
 }
@@ -180,9 +184,13 @@ func (s *stream) alt() bool {
 }
 
 // restore is what puts a fresh terminal in the modes the program set: the
-// alternate screen first (entering it clears it), then the rest.
+// main-screen keyboard stack, then the alternate screen (entering it
+// clears it) and the rest.
 func (s *stream) restore() string {
 	var b strings.Builder
+	for _, f := range s.kitty[0] {
+		fmt.Fprintf(&b, "\x1b[>%du", f)
+	}
 	for _, m := range altScreens {
 		if s.modes[m] {
 			fmt.Fprintf(&b, "\x1b[?%dh", m)
@@ -200,8 +208,10 @@ func (s *stream) restore() string {
 	if s.mok != 0 {
 		fmt.Fprintf(&b, "\x1b[>4;%dm", s.mok)
 	}
-	for _, f := range s.kitty {
-		fmt.Fprintf(&b, "\x1b[>%du", f)
+	if s.alt() {
+		for _, f := range s.kitty[1] {
+			fmt.Fprintf(&b, "\x1b[>%du", f)
+		}
 	}
 	return b.String()
 }
@@ -211,7 +221,11 @@ func (s *stream) restore() string {
 func (s *stream) reset() string {
 	var b strings.Builder
 	b.WriteString("\x1b[0m")
-	if n := len(s.kitty); n > 0 {
+	k := s.kitty[0]
+	if s.alt() {
+		k = s.kitty[1]
+	}
+	if n := len(k); n > 0 {
 		fmt.Fprintf(&b, "\x1b[<%du", n)
 	}
 	if s.mok != 0 {
@@ -226,6 +240,11 @@ func (s *stream) reset() string {
 		if s.modes[m] {
 			fmt.Fprintf(&b, "\x1b[?%dl", m)
 			break
+		}
+	}
+	if s.alt() {
+		if n := len(s.kitty[0]); n > 0 {
+			fmt.Fprintf(&b, "\x1b[<%du", n)
 		}
 	}
 	b.WriteString("\x1b[?25h")

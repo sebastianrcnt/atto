@@ -331,7 +331,7 @@ func TestSetMode(t *testing.T) {
 	ui.RenderNow()
 	l.out.Reset()
 	ui.SetMode(Inline)
-	if got := l.out.String(); got != "\x1b[?1006l\x1b[?1002l\x1b[?1000l\x1b[?1049l" {
+	if got := l.out.String(); got != kittyOff+"\x1b[?1006l\x1b[?1002l\x1b[?1000l\x1b[?1049l"+kittyOn {
 		t.Fatalf("leaving fullscreen wrote %q", got)
 	}
 	ui.RenderNow()
@@ -344,7 +344,7 @@ func TestSetMode(t *testing.T) {
 
 	l.out.Reset()
 	ui.SetMode(Fullscreen)
-	if !strings.HasPrefix(l.out.String(), "\x1b[?1049h\x1b[?1000h\x1b[?1002h\x1b[?1006h") {
+	if !strings.HasPrefix(l.out.String(), kittyOff+"\x1b[?1049h\x1b[?1000h\x1b[?1002h\x1b[?1006h") {
 		t.Fatalf("entering fullscreen wrote %q", l.out.String())
 	}
 	ui.RenderNow()

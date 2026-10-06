@@ -7,6 +7,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"time"
 
 	"golang.org/x/term"
 )
@@ -46,8 +47,10 @@ type ProcessTerminal struct {
 // Both are undone on Stop: the kitty flags were pushed, so they are popped;
 // ESC [ > 4 m returns modifyOtherKeys to the terminal's own setting.
 const (
-	keyboardOn  = "\x1b[>4;2m\x1b[>1u"
-	keyboardOff = "\x1b[<u\x1b[>4m"
+	keyboardOn  = "\x1b[>4;2m"
+	keyboardOff = "\x1b[>4m"
+	kittyOn     = "\x1b[>1u"
+	kittyOff    = "\x1b[<u"
 )
 
 func NewProcessTerminal() *ProcessTerminal {
@@ -71,19 +74,25 @@ func (t *ProcessTerminal) Start(onInput func(string), onResize func()) error {
 
 	// The read loop is not joined on Stop: a blocking read on stdin cannot be
 	// interrupted portably, and the process exits shortly after anyway.
+	go readInput(t.in, t.done, runtime.GOOS == "windows", onInput)
+
+	return nil
+}
+
+// readInput owns the parser while a separate reader may block on stdin.
+// Its timer disambiguates Escape without requiring another read to arrive.
+func readInput(in io.Reader, done <-chan struct{}, bursts bool, onInput func(string)) {
+	reads := make(chan string)
 	go func() {
-		parser := &inputParser{bursts: runtime.GOOS == "windows"}
-		buf := make([]byte, 64*1024) // large, so a paste arrives in few reads
+		defer close(reads)
+		buf := make([]byte, 64*1024)
 		for {
-			n, err := t.in.Read(buf)
+			n, err := in.Read(buf)
 			if n > 0 {
 				select {
-				case <-t.done:
+				case reads <- string(buf[:n]):
+				case <-done:
 					return
-				default:
-				}
-				for _, ev := range parser.feed(string(buf[:n])) {
-					onInput(ev)
 				}
 			}
 			if err != nil {
@@ -91,7 +100,44 @@ func (t *ProcessTerminal) Start(onInput func(string), onResize func()) error {
 			}
 		}
 	}()
-	return nil
+	parser := &inputParser{bursts: bursts}
+	timer := time.NewTimer(escapeWait)
+	timer.Stop()
+	defer timer.Stop()
+	var timeout <-chan time.Time
+	ended := false
+	deliver := func(events []string) {
+		for _, ev := range events {
+			onInput(ev)
+		}
+	}
+	for {
+		select {
+		case <-done:
+			return
+		case data, ok := <-reads:
+			if !ok {
+				if !parser.waitingEscape() {
+					return
+				}
+				reads, ended = nil, true
+				continue
+			}
+			timer.Stop()
+			timeout = nil
+			deliver(parser.feed(data))
+			if parser.waitingEscape() {
+				timer.Reset(escapeWait)
+				timeout = timer.C
+			}
+		case <-timeout:
+			timeout = nil
+			deliver(parser.expireEscape())
+			if ended {
+				return
+			}
+		}
+	}
 }
 
 func (t *ProcessTerminal) Stop() {

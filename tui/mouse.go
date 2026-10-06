@@ -21,14 +21,14 @@ func (t *TUI) enterFullscreen() string {
 	if !t.NoMouse {
 		s += mouseOn
 	}
-	return s + "\x1b[2J"
+	return s + kittyOn + "\x1b[2J"
 }
 
 func (t *TUI) leaveFullscreen() string {
 	if t.NoMouse {
-		return "\x1b[?1049l"
+		return kittyOff + "\x1b[?1049l"
 	}
-	return mouseOff + "\x1b[?1049l"
+	return kittyOff + mouseOff + "\x1b[?1049l"
 }
 
 // mouseEvent is one decoded mouse report.

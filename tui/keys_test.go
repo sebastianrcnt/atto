@@ -132,3 +132,79 @@ func TestEditorSendNow(t *testing.T) {
 		t.Fatalf("newlines: %q", e.Text())
 	}
 }
+
+func TestPasteSplitAtEveryBoundary(t *testing.T) {
+	input := pasteStart + "hello\rworld" + pasteEnd
+	for split := 1; split < len(input); split++ {
+		p := &inputParser{}
+		e := NewEditor("> ")
+		submitted, interrupted := false, false
+		e.OnSubmit = func(string, []Attachment) { submitted = true }
+		deliver := func(events []string) {
+			for _, event := range events {
+				interrupted = interrupted || Key(event) == "escape"
+				e.HandleInput(event)
+			}
+		}
+		deliver(p.feed(input[:split]))
+		deliver(p.feed(input[split:]))
+		if interrupted || submitted || e.Text() != "hello\nworld" {
+			t.Fatalf("split %d: interrupted=%v submitted=%v text=%q", split, interrupted, submitted, e.Text())
+		}
+	}
+}
+
+func TestLoneEscapeNeedsDisambiguation(t *testing.T) {
+	p := &inputParser{}
+	if got := p.feed("\x1b"); len(got) != 0 {
+		t.Fatalf("early Escape: %q", got)
+	}
+	if got := p.expireEscape(); !slices.Equal(got, []string{"\x1b"}) {
+		t.Fatalf("expired Escape: %q", got)
+	}
+	if got := p.expireEscape(); len(got) != 0 {
+		t.Fatalf("duplicate Escape: %q", got)
+	}
+	p.feed("\x1b")
+	if got := p.feed("[A"); !slices.Equal(got, []string{"\x1b[A"}) {
+		t.Fatalf("fragmented arrow: %q", got)
+	}
+	p.feed("\x1b[")
+	if got := p.expireEscape(); len(got) != 0 {
+		t.Fatalf("incomplete CSI discarded: %q", got)
+	}
+}
+
+func TestKittyFunctionalKeys(t *testing.T) {
+	for input, want := range map[string]string{
+		"\x1b[57414u": "enter", "\x1b[57414;5u": "ctrl+enter",
+		"\x1b[57417u": "left", "\x1b[57417;5u": "word-left",
+		"\x1b[57426u": "delete", "\x1b[57423u": "home",
+		"\x1b[57376u": "f13", "\x1b[57398u": "f35",
+	} {
+		if got := Key(input); got != want {
+			t.Fatalf("Key(%q)=%q, want %q", input, got, want)
+		}
+	}
+	e := NewEditor("> ")
+	submitted, _ := submitter(e)
+	e.SetText("hello")
+	for _, event := range (&inputParser{}).feed("\x1b[57414u") {
+		e.HandleInput(event)
+	}
+	if *submitted != "hello" {
+		t.Fatalf("keypad enter submitted %q", *submitted)
+	}
+	e.SetText("")
+	for _, event := range (&inputParser{}).feed("\x1b[57400u\x1b[57413u\x1b[57401u") {
+		e.HandleInput(event)
+	}
+	if e.Text() != "1+2" {
+		t.Fatalf("keypad text %q", e.Text())
+	}
+	for code := 57344; code <= 63743; code++ {
+		if textKey(code, false) != "" {
+			t.Fatalf("functional code %d treated as text", code)
+		}
+	}
+}
