@@ -671,13 +671,20 @@ func superviseMonitor(ctx context.Context, dir string, j *Job, out io.Writer) (i
 	start := time.Now()
 	for n := 1; ; n++ {
 		var buf strings.Builder
-		runCtx, cancel := context.WithTimeout(ctx, max(every, time.Minute))
+		budget := max(every, time.Minute)
+		if m.Timeout > 0 {
+			budget = min(budget, max(0, m.Timeout-time.Since(start)))
+		}
+		runCtx, cancel := context.WithTimeout(ctx, budget)
 		code, _ := run(runCtx, dir, j, j.Command, &buf, false)
 		cancel()
 		output := buf.String()
 		fmt.Fprintf(out, "── check %d · %s · exit %d ──\n%s\n", n, time.Now().Format("15:04:05"), code, strings.TrimRight(output, "\n"))
 		if ctx.Err() != nil {
 			return -1, ""
+		}
+		if m.Timeout > 0 && time.Since(start) >= m.Timeout {
+			return 1, fmt.Sprintf("timed out after %s without the condition holding", m.Timeout) + "\n" + lastLines(output, eventTail)
 		}
 		var why string
 		switch {
@@ -697,10 +704,14 @@ func superviseMonitor(ctx context.Context, dir string, j *Job, out io.Writer) (i
 		if m.Timeout > 0 && time.Since(start) >= m.Timeout {
 			return 1, fmt.Sprintf("timed out after %s without the condition holding", m.Timeout) + "\n" + lastLines(output, eventTail)
 		}
+		wait := every
+		if m.Timeout > 0 {
+			wait = min(wait, max(0, m.Timeout-time.Since(start)))
+		}
 		select {
 		case <-ctx.Done():
 			return -1, ""
-		case <-time.After(every):
+		case <-time.After(wait):
 		}
 	}
 }
