@@ -105,3 +105,27 @@ func TestTableAtEveryWidth(t *testing.T) {
 		}
 	}
 }
+
+// A narrow terminal shrinks table columns to fit, but never below the
+// widest character a column holds: a two-column character in a cell one
+// column wide would be cut away. With no room even for that, the table is
+// drawn as "header: value" lines.
+func TestMarkdownTableNarrow(t *testing.T) {
+	src := "| ab | bc |\n|---|---|\n| 한 | xx |"
+	got := plain(Markdown(src, 10))
+	want := []string{
+		"┌────┬───┐",
+		"│ ab │ b │",
+		"│    │ c │",
+		"├────┼───┤",
+		"│ 한 │ x │",
+		"│    │ x │",
+		"└────┴───┘",
+	}
+	if strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("got:\n%s", strings.Join(got, "\n"))
+	}
+	if got := plain(Markdown(src, 9)); !slices.Equal(got, []string{"ab: 한", "bc: xx"}) {
+		t.Errorf("no room for a grid: got %q", got)
+	}
+}

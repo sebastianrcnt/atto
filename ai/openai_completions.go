@@ -1251,9 +1251,12 @@ func ConvertCompletionsMessages(model *Model, context TranscriptContext, compat 
 }
 
 // toolCallArguments are the arguments to replay: the model's own bytes
-// when known (atto), else pi's JSON.stringify of the parsed object.
+// when known (atto), else pi's JSON.stringify of the parsed object. Bytes
+// that aren't JSON (a model's broken call, kept as streamed) are replayed
+// as the parsed object instead: servers that parse the history reject
+// them, and every later request of the session would fail.
 func toolCallArguments(tc *ToolCall) string {
-	if tc.RawArguments != "" {
+	if tc.RawArguments != "" && json.Valid([]byte(tc.RawArguments)) {
 		return tc.RawArguments
 	}
 	b, _ := json.Marshal(tc.Arguments)

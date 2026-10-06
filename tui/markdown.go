@@ -294,7 +294,7 @@ func (r *mdRenderer) table(rows [][]string, aligns []byte, width int) {
 		ncol = max(ncol, len(row))
 	}
 	cells := make([][]string, len(rows))
-	natural := make([]int, ncol)
+	natural, narrowest := make([]int, ncol), make([]int, ncol)
 	for i, row := range rows {
 		cells[i] = make([]string, ncol)
 		for j := 0; j < ncol; j++ {
@@ -305,13 +305,20 @@ func (r *mdRenderer) table(rows [][]string, aligns []byte, width int) {
 				}
 			}
 			natural[j] = max(natural[j], VisibleWidth(cells[i][j]))
+			// narrowest[j] is the widest character the column holds: nothing
+			// is broken across cells, so a column narrower than that cannot
+			// show its text (a CJK or emoji character is two columns wide).
+			for _, l := range WrapHard(cells[i][j], 1) {
+				narrowest[j] = max(narrowest[j], VisibleWidth(l))
+			}
 		}
 	}
 
 	// Each column costs its width plus 3 ("│ " + " "), plus a final border.
 	avail := width - 3*ncol - 1
-	if avail < ncol {
-		// Too narrow for a grid: fall back to "header: value" lines.
+	if avail < ncol || sum(narrowest) > avail {
+		// No room for a grid, not even one wide enough for every character:
+		// fall back to "header: value" lines.
 		if !header {
 			for _, row := range cells {
 				r.emit(Wrap(strings.Join(row, " · "), width)...)
@@ -326,12 +333,15 @@ func (r *mdRenderer) table(rows [][]string, aligns []byte, width int) {
 		}
 		return
 	}
+	// Columns give up width one step at a time, but never go below their
+	// narrowest. Those minimums fit, as the check above made sure, so there is
+	// always a column left to take a step from, and no character ends up in a
+	// cell too narrow for it.
 	widths := append([]int(nil), natural...)
 	for sum(widths) > avail {
-		// Shrink the widest column one step at a time.
 		wi := 0
-		for j := range widths {
-			if widths[j] > widths[wi] {
+		for j, w := range widths {
+			if w > narrowest[j] && (widths[wi] == narrowest[wi] || w > widths[wi]) {
 				wi = j
 			}
 		}

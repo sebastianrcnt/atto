@@ -396,3 +396,22 @@ func TestOpenCodeSessionHeader(t *testing.T) {
 		t.Fatalf("headers %v", srv.header(0))
 	}
 }
+
+// A model's broken call (here with XML residue in a string) is replayed as
+// the object atto parsed from it: a server that parses the history would
+// reject the raw bytes, on every later request of the session.
+func TestToolCallArgumentsReplayValidJSON(t *testing.T) {
+	good := `{"command": "ls"}`
+	if got := toolCallArguments(&ToolCall{RawArguments: good, Arguments: ParseStreamingJSON(good)}); got != good {
+		t.Fatalf("valid bytes not kept: %s", got)
+	}
+	bad := `{"command": "cat > x.md <<'EOF'\n# x\nEOF</parameter></function>`
+	got := toolCallArguments(&ToolCall{RawArguments: bad, Arguments: ParseStreamingJSON(bad)})
+	var m map[string]any
+	if err := json.Unmarshal([]byte(got), &m); err != nil {
+		t.Fatalf("replayed %q: %v", got, err)
+	}
+	if !strings.HasPrefix(m["command"].(string), "cat > x.md") {
+		t.Fatalf("parsed args lost: %q", got)
+	}
+}
