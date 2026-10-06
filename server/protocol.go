@@ -9,7 +9,11 @@
 //
 // Requests:
 //
-//	initialize                                     → {name, version, protocolVersion, eventId, settings}
+//	initialize     {protocolVersions?, clientInfo?, capabilities?}
+//	               → {name, version, protocolVersion, serverInstanceId, eventId, settings}
+//	               protocolVersion is the newest revision both speak; none in
+//	               common is refused (error data reason unsupportedProtocol).
+//	               Errors may carry data {reason, retryable?}.
 //	               settings: what of settings.json clients follow
 //	               ({toolGroups}: false shows every command on its own)
 //	models/list                                    → {models: [{id, name, contextWindow, efforts, hasKey, images}]}
@@ -110,6 +114,7 @@ package server
 
 import (
 	"encoding/json"
+	"fmt"
 
 	"github.com/sebastianrcnt/atto/agent"
 	"github.com/sebastianrcnt/atto/config"
@@ -118,7 +123,17 @@ import (
 	"github.com/sebastianrcnt/atto/session"
 )
 
-const ProtocolVersion = 1
+// ProtocolVersion is the protocol revision this server speaks. Revision 2
+// adds connections with client IDs and event cursors, input IDs, the
+// session runtime's scheduling (queue, send-now, goals, user shell),
+// server-owned prompts and commands; revision 1 clients keep working
+// with the methods they know. A client lists the revisions it speaks in
+// initialize's protocolVersions; a server that shares none refuses it
+// with reason unsupportedProtocol.
+const ProtocolVersion = 2
+
+// MinProtocolVersion is the oldest revision still served.
+const MinProtocolVersion = 1
 
 type rpcRequest struct {
 	JSONRPC string          `json:"jsonrpc,omitempty"`
@@ -128,8 +143,40 @@ type rpcRequest struct {
 }
 
 type rpcError struct {
-	Code    int    `json:"code"`
-	Message string `json:"message"`
+	Code    int        `json:"code"`
+	Message string     `json:"message"`
+	Data    *ErrorData `json:"data,omitempty"`
+}
+
+// RPCError is a JSON-RPC error a request failed with.
+type RPCError = rpcError
+
+// ErrorData says why a request failed, for clients to act on rather
+// than parse the message.
+type ErrorData struct {
+	Reason    string `json:"reason"`
+	Retryable bool   `json:"retryable,omitempty"`
+	// CurrentRevision is the revision a stale request should have named.
+	CurrentRevision int `json:"currentRevision,omitempty"`
+}
+
+// Error reasons.
+const (
+	ReasonBusy                = "busy"
+	ReasonNoModel             = "noModel"
+	ReasonReadOnly            = "readOnly"
+	ReasonStalePrompt         = "stalePrompt"
+	ReasonAlreadyCommitted    = "alreadyCommitted"
+	ReasonRevisionConflict    = "revisionConflict"
+	ReasonOwnedElsewhere      = "ownedByLegacyWriter"
+	ReasonUnsupported         = "unsupportedCapability"
+	ReasonUnsupportedProtocol = "unsupportedProtocol"
+	ReasonNotFound            = "notFound"
+)
+
+// failure is a server error with a reason.
+func failure(reason, format string, args ...any) *rpcError {
+	return &rpcError{Code: codeServer, Message: fmt.Sprintf(format, args...), Data: &ErrorData{Reason: reason}}
 }
 
 type rpcResponse struct {

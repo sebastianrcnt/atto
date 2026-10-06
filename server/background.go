@@ -78,7 +78,7 @@ func background(method, sid string, p threadParams) (any, error) {
 		}
 		return map[string]any{"subagent": wireSubagent(st), "message": msg, "items": items}, nil
 	}
-	return nil, &rpcError{codeMethodNotFound, "unknown method " + method}
+	return nil, &rpcError{Code: codeMethodNotFound, Message: "unknown method " + method}
 }
 
 func wireJob(j jobs.Job) Job {

@@ -725,6 +725,41 @@ but persistent inbox/job state remains useful for recovery/external callers.
     profile downloads can contain sensitive context; decide access policy instead
     of exposing them on every bearer-linked session client.
 
+## 7. Decisions taken for the first implementation
+
+The open questions of §6 were answered as follows (2026-10-07); the code
+follows these, and later changes should update this section.
+
+1. **Detach, not stop.** Quit, `/clear` and switching sessions in a
+   frontend detach it. Execution goes on while a turn, queued input, an
+   active goal or a job is pending. A runtime with no clients and nothing
+   pending retires after a retention period: `sessionRetention` in
+   settings.json, default 10 minutes for daemon workers. The in-process
+   runtime (no daemon) uses retention 0 and keeps the old exit cleanup, so
+   a plain `atto` without the daemon behaves as before.
+2. **Unattended work goes on.** Timers, jobs and goals keep running in a
+   worker while it lives; a worker with an active goal, a running job or a
+   pending timer is not idle.
+3. **Prompts are server objects.** Extension questions, confirmations and
+   inputs (and the goal's own confirmations) are prompts the runtime owns
+   and broadcasts; the first valid answer wins. With no client attached a
+   prompt waits (no automatic answer). `ctx.hasUI` is true while any
+   interactive client is attached. A second prompt while one is open still
+   gets its default answer at once, as the TUI did.
+4. **Equal clients.** Every attached client may do everything; there are
+   no per-client roles.
+5. **PTY panes stay.** The daemon's panes and `atto attach` screen sharing
+   keep working; a pane's TUI becomes a client of a session worker, and
+   independent protocol clients come alongside.
+6. **Agent turns and print mode last** (phase H): see the notes in the
+   implementation status below.
+7. **Versioned protocol.** `initialize` negotiates the revision
+   (`protocolVersions`); a client and worker with none in common refuse
+   each other with reason `unsupportedProtocol`. Pending input is held in
+   worker memory only: a worker crash loses queued input that was not yet
+   started (documented gap; no journal).
+8. **Windows** keeps the in-process runtime; no durable transport.
+
 ## Source map
 
 Primary ownership/input: `app/app.go`, `queue.go`, `goal.go`, `inbox.go`,

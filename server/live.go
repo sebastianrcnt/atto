@@ -52,7 +52,7 @@ type Live interface {
 // NewLive makes a server for one live conversation. Its notifications
 // come from the front end through Publish.
 func NewLive(version string, live Live) *Server {
-	return &Server{Version: version, live: live, threads: map[string]*thread{}, Notify: func(string, map[string]any) {}, stop: make(chan struct{})}
+	return &Server{Version: version, live: live, threads: map[string]*thread{}, Notify: func(string, map[string]any) {}, stop: make(chan struct{}), instance: newInstanceID()}
 }
 
 // Publish sends a notification of the live thread to clients. The front
@@ -81,7 +81,7 @@ func (s *Server) liveCall(method string, p threadParams) (any, error) {
 		if err != nil {
 			return nil, err
 		}
-		return map[string]any{"name": "atto", "version": s.Version, "protocolVersion": ProtocolVersion, "live": true, "threadId": info.ID, "eventId": s.eventSeq(), "settings": clientSettings()}, nil
+		return s.initialize(p, map[string]any{"live": true, "threadId": info.ID})
 	case "models/list":
 		return s.listModels()
 	case "thread/list":
@@ -93,7 +93,7 @@ func (s *Server) liveCall(method string, p threadParams) (any, error) {
 			"threadId": info.ID, "name": info.Name, "cwd": info.Cwd, "loaded": true, "live": true,
 		}}}, nil
 	case "thread/start":
-		return nil, &rpcError{codeServer, "this is atto's live session: send /clear to start a new conversation"}
+		return nil, &rpcError{Code: codeServer, Message: "this is atto's live session: send /clear to start a new conversation"}
 	case "thread/read", "thread/resume":
 		var seq int64
 		info, err := l.Thread(true, func() { seq = s.eventSeq() })
@@ -149,7 +149,7 @@ func (s *Server) liveCall(method string, p threadParams) (any, error) {
 			return nil, err
 		}
 		if !l.Background() {
-			return nil, &rpcError{codeServer, "no command is running that can move to the background"}
+			return nil, &rpcError{Code: codeServer, Message: "no command is running that can move to the background"}
 		}
 		return nil, nil
 	case "thread/rollback":
@@ -184,7 +184,7 @@ func (s *Server) liveCall(method string, p threadParams) (any, error) {
 			return nil, err
 		}
 		if err := l.Unsteer(p.Input, p.Queued); err != nil {
-			return nil, &rpcError{codeServer, err.Error()}
+			return nil, &rpcError{Code: codeServer, Message: err.Error()}
 		}
 		return nil, nil
 	case "job/list", "job/output", "job/stop", "subagent/list", "subagent/read":
@@ -208,5 +208,5 @@ func (s *Server) liveCall(method string, p threadParams) (any, error) {
 		}
 		return nil, nil
 	}
-	return nil, &rpcError{codeMethodNotFound, "unknown method " + method}
+	return nil, &rpcError{Code: codeMethodNotFound, Message: "unknown method " + method}
 }

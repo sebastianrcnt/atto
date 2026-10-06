@@ -44,7 +44,7 @@ func (s *Server) rollback(p threadParams) (any, error) {
 	t.mu.Lock()
 	if t.busy {
 		t.mu.Unlock()
-		return nil, &rpcError{codeServer, "a turn is running; turn/interrupt first"}
+		return nil, &rpcError{Code: codeServer, Message: "a turn is running; turn/interrupt first"}
 	}
 	t.busy = true // no turn may start while the branch moves
 	t.mu.Unlock()
