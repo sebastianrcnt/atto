@@ -1108,6 +1108,7 @@ func (a *Agent) loop(ctx context.Context, emit func(any)) error {
 			return nil
 		}
 		stopTurn := false
+		truncatedTools := res.FinishReason == "length"
 		for i, tc := range res.Message.ToolCalls {
 			var content string
 			var imgs []provider.Image
@@ -1116,6 +1117,14 @@ func (a *Agent) loop(ctx context.Context, emit func(any)) error {
 				content = "[canceled by user]"
 				meta.Tool = &session.ToolMeta{Canceled: true, ExitCode: -1}
 				drafts.end(i, "")
+			} else if truncatedTools {
+				// A length stop may cut a tool call at any byte. Its arguments can
+				// still happen to be valid JSON, so never execute a call from the
+				// truncated assistant message; let the model issue it again.
+				msg := "tool call was not executed: the response hit the output token limit; re-issue the tool call with complete arguments"
+				content = "error: " + msg
+				meta.Tool = &session.ToolMeta{ExitCode: -1}
+				drafts.end(i, msg)
 			} else {
 				var stop bool
 				content, imgs, meta.Tool, stop = a.runTool(ctx, tc, i, drafts, emit)
