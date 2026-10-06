@@ -8,7 +8,8 @@ import Activity from "./components/Activity";
 import ExtText from "./components/ExtText";
 import GoalBar, { type GoalAction } from "./components/GoalBar";
 import CommandMenu, { type Command } from "./components/CommandMenu";
-import { ArrowDown, Bolt, Branch, Flag, Info, Layers, Menu, More, Plus, Radio, Target } from "./components/icons";
+import { ArrowDown, Bolt, Branch, Flag, Info, Layers, Menu, More, Plus, Radio, Target, Terminal } from "./components/icons";
+import JobsPanel, { active as jobActive } from "./components/JobsPanel";
 import Loading from "./components/Loading";
 import PendingList from "./components/PendingList";
 import PromptBar, { type Pending } from "./components/PromptBar";
@@ -23,7 +24,7 @@ import { loadThreadId, saveThreadId } from "./storage";
 import { anchorShift, atBottom, firstBelow, nextFollow } from "./scroll";
 import { activity, Meter, status } from "./status";
 import { isRun, Transcript, type Row } from "./transcript";
-import type { ExtensionUI, GoalInfo, Item, Model, Notification, Prompt, ThreadInfo, ThreadSummary } from "./types";
+import type { ExtensionUI, GoalInfo, Item, Job, Model, Notification, Prompt, ThreadInfo, ThreadSummary } from "./types";
 
 // --- items ---
 
@@ -191,6 +192,9 @@ export default function App() {
   const meter = useRef(new Meter()).current;
   const [newModel, setNewModel] = useState(""); // for the next thread/start
   const [menu, setMenu] = useState(false);
+  // What runs beside the turns (job/list), and the panel open.
+  const [jobs, setJobs] = useState<Job[]>([]);
+  const [panel, setPanel] = useState<"jobs" | null>(null);
   // text put back into the input (an undone turn's message)
   const [fill, setFill] = useState<{ text: string; n: number } | null>(null);
   const [, setTick] = useState(0);
@@ -268,6 +272,10 @@ export default function App() {
         return;
       }
       meter.lastEvent = Date.now();
+      // A command ended (it may have started a job), an event came (a job
+      // ended) or the turn did: see what runs beside it now.
+      if (n.method === "turn/completed" || n.method === "event" || (n.method === "item/completed" && (p.item?.type === "commandExecution" || p.item?.type === "event")))
+        refreshBg();
       switch (n.method) {
         case "turn/started":
           setInfo((i) => (i ? { ...i, busy: true, turnId: p.turnId } : i));
@@ -334,6 +342,28 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [live],
   );
+  // refreshBg reads the thread's background jobs again.
+  const refreshBg = useCallback(() => {
+    const id = infoRef.current?.threadId;
+    if (!id) return;
+    client
+      .call<{ jobs: Job[] }>("job/list", { threadId: id })
+      .then((r) => infoRef.current?.threadId === id && setJobs(r.jobs || []))
+      .catch(() => {});
+  }, [client]);
+  const threadId = info?.threadId;
+  useEffect(() => {
+    setJobs([]);
+    refreshBg();
+  }, [threadId, refreshBg]);
+  // While something runs, or a panel is open, every few seconds.
+  const running = jobs.some(jobActive);
+  useEffect(() => {
+    if (!running && !panel) return;
+    const t = setInterval(refreshBg, 3000);
+    return () => clearInterval(t);
+  }, [running, panel, refreshBg]);
+
   const onNoteRef = useRef(onNote);
   onNoteRef.current = onNote;
 
@@ -637,6 +667,31 @@ export default function App() {
   const pickable = models.filter((m) => m.hasKey || m.id === info?.model);
   const title = info ? info.name || baseName(info.cwd) : "New conversation";
 
+  // What runs beside the turns: on the status line while it runs (as the
+  // terminal's "● 2 jobs running"), in the menu while there is any.
+  const nJobs = jobs.filter(jobActive).length;
+  const bgChips = nJobs > 0 && (
+    <button type="button" onClick={() => setPanel("jobs")} className="flex h-6 items-center gap-1 rounded-chip px-1.5 text-green hover:bg-hover">
+      <span className="size-1.5 rounded-full bg-green" /> {nJobs} {nJobs === 1 ? "job" : "jobs"}
+    </button>
+  );
+  const panels = jobs.length > 0 && (
+    <button
+      type="button"
+      onClick={() => {
+        setMenu(false);
+        setPanel("jobs");
+      }}
+      className="flex min-h-11 w-full items-center gap-3 rounded-control px-3 py-2 text-left transition-colors hover:bg-hover"
+    >
+      <span className="flex size-5 shrink-0 items-center justify-center text-ink-2">
+        <Terminal size={16} />
+      </span>
+      <span className="min-w-0 flex-1 text-[14.5px] text-ink">Background jobs</span>
+      <span className="shrink-0 text-[12.5px] text-ink-3">{nJobs ? `${nJobs} running` : jobs.length}</span>
+    </button>
+  );
+
   const toolbar = (
     <>
       {pickable.length > 0 && (
@@ -787,7 +842,7 @@ export default function App() {
             fill={fill}
             above={info?.pending && <PendingList pending={info.pending} live={live} onTake={take} />}
             activity={busy && <Activity label={activity(last, store.running(), meter.verb)} meter={meter} running={store.running()} />}
-            footer={info && <StatusLine s={status(info)} />}
+            footer={info && <StatusLine s={status(info)} extra={bgChips} />}
             onSend={send}
             onStop={() => info && client.call("turn/interrupt", { threadId: info.threadId }).catch(fail)}
             onBackground={() => info && client.call("turn/background", { threadId: info.threadId }).catch(fail)}
@@ -804,12 +859,14 @@ export default function App() {
           model={info ? info.model : startModel}
           efforts={info?.efforts || []}
           effort={info?.effort || ""}
+          panels={panels || undefined}
           onCommand={command}
           onModel={(id) => (info ? setModel(id) : setNewModel(id))}
           onEffort={setEffort}
           onClose={() => setMenu(false)}
         />
       )}
+      {panel === "jobs" && info && <JobsPanel client={client} threadId={info.threadId} jobs={jobs} onRefresh={refreshBg} onClose={() => setPanel(null)} fail={fail} />}
       {live && prompt && <PromptSheet key={prompt.id} prompt={prompt} onAnswer={answer} />}
     </div>
   );
