@@ -20,6 +20,13 @@ var samples = map[string]any{
 	"goal_budget":            Goal{Objective: "obj", Used: 100, Budget: 100, Seconds: 9},
 	"goal_budget_lines":      Goal{Used: 1},
 	"goal_objective_updated": Goal{Objective: "obj", Used: 10},
+	"goal_budget_reminder":   Goal{Used: 150, Budget: 100},
+	"goal_budget_changed":    Goal{Used: 10, Budget: 100, Label: "paused"},
+	"goal_cleared":           nil,
+	"goal_paused":            Goal{},
+	"goal_state_waiting":     Goal{},
+	"goal_state_paused":      Goal{Label: "paused", Interrupted: true},
+	"goal_state_budget":      Goal{Used: 150, Budget: 100},
 }
 
 func TestEveryTemplateRenders(t *testing.T) {

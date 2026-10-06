@@ -1,0 +1,1 @@
+The goal is {{.Label}}{{if .Interrupted}} because the user interrupted it{{end}}. The user resumes it with /goal resume, or asks you to (atto goal resume). Do not do goal work in this turn unless the user asks you to resume it.
