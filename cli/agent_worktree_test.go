@@ -206,3 +206,37 @@ func TestWorktreeMentioned(t *testing.T) {
 		t.Errorf("worktree clause without one: %q", got)
 	}
 }
+
+func TestAgentCloseKeepsAncestorsOfFailedRemoval(t *testing.T) {
+	t.Setenv("ATTO_DIR", t.TempDir())
+	repo := gitRepo(t)
+	wt := filepath.Join(t.TempDir(), "child")
+	mustGit(t, repo, "worktree", "add", "-b", "child", wt)
+	mustGit(t, repo, "worktree", "lock", wt)
+	a := subagent.State{Parent: "root", Name: "a", Session: "a-session"}
+	b := subagent.State{Parent: a.Session, Name: "b", Session: "b-session", Repo: repo, Worktree: wt}
+	for _, s := range []subagent.State{a, b} {
+		if err := subagent.Save(s); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var out strings.Builder
+	if err := agentRemove(&out, "root", []string{"a"}, false, false); err == nil {
+		t.Fatal("locked worktree removal succeeded")
+	}
+	for _, s := range []subagent.State{a, b} {
+		if _, err := subagent.Load(s.Parent, s.Name); err != nil {
+			t.Fatalf("ancestor/child removed: %v", err)
+		}
+	}
+	if _, err := subagent.Resolve("root", "/root/a/b"); err != nil {
+		t.Fatal("child unreachable:", err)
+	}
+	mustGit(t, repo, "worktree", "unlock", wt)
+	if err := agentRemove(&out, "root", []string{"a"}, false, false); err != nil {
+		t.Fatal("retry:", err)
+	}
+	if len(subagent.List("root")) != 0 || len(subagent.List(a.Session)) != 0 {
+		t.Fatal("retry left state")
+	}
+}

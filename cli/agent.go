@@ -357,12 +357,18 @@ func agentRemove(out io.Writer, parent string, names []string, done, force bool)
 		}
 	}
 	for _, tree := range trees {
+		blocked := make(map[string]bool)
 		for _, s := range tree {
+			if blocked[s.Session] {
+				blocked[s.Parent] = true
+				continue
+			}
 			path := subagent.PathOf(s.Session)
 			if s.Worktree != "" {
 				line, err := removeWorktree(s, force)
 				if err != nil {
-					refused = append(refused, fmt.Sprintf("agent %s: removing its worktree: %v", path, err))
+					refused = append(refused, fmt.Sprintf("agent %s: removing its worktree: %v (ancestors kept)", path, err))
+					blocked[s.Parent] = true
 					continue
 				}
 				fmt.Fprintln(out, line)
