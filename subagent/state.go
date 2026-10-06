@@ -24,15 +24,22 @@ type State struct {
 	Session string `json:"session"` // its own session
 	Preset  string `json:"preset"`
 	// Instructions are the preset's, as they were when it started.
-	Instructions string    `json:"instructions,omitempty"`
-	Model        string    `json:"model"` // provider/id
-	Effort       string    `json:"effort,omitempty"`
-	Cwd          string    `json:"cwd"`
-	Task         string    `json:"task"` // the first message
-	Created      time.Time `json:"created"`
-	Turns        int       `json:"turns"`         // turns started
-	Prompt       string    `json:"prompt"`        // the latest turn's message
-	Job          int       `json:"job,omitempty"` // the parent's job running the latest turn
+	Instructions string `json:"instructions,omitempty"`
+	Model        string `json:"model"` // provider/id
+	Effort       string `json:"effort,omitempty"`
+	Cwd          string `json:"cwd"`
+	// Worktree, with -worktree: the git worktree it works in (Cwd is in
+	// it), on Branch, made from commit Base of the parent's repository
+	// Repo.
+	Worktree string    `json:"worktree,omitempty"`
+	Branch   string    `json:"branch,omitempty"`
+	Base     string    `json:"base,omitempty"`
+	Repo     string    `json:"repo,omitempty"`
+	Task     string    `json:"task"` // the first message
+	Created  time.Time `json:"created"`
+	Turns    int       `json:"turns"`         // turns started
+	Prompt   string    `json:"prompt"`        // the latest turn's message
+	Job      int       `json:"job,omitempty"` // the parent's job running the latest turn
 }
 
 // Status is where a subagent's latest turn is.

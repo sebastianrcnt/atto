@@ -440,6 +440,8 @@ func (a *Agent) Reload() (changed bool) {
 type Subagent struct {
 	Name, Preset string
 	Instructions string // the preset's
+	// Worktree and Branch: the git worktree it works in, with -worktree.
+	Worktree, Branch string
 }
 
 // subagentPart is the prompt's paragraph about subagents: for a subagent,
@@ -447,7 +449,7 @@ type Subagent struct {
 // subagents are enabled (nothing otherwise). It has no trailing newline.
 func subagentPart(sub *Subagent, enabled bool, presets []subagent.Preset) string {
 	if sub != nil {
-		return prompts.Render("subagent", prompts.Subagent{Name: sub.Name, Preset: sub.Preset, Instructions: sub.Instructions})
+		return prompts.Render("subagent", prompts.Subagent{Name: sub.Name, Preset: sub.Preset, Instructions: sub.Instructions, Worktree: sub.Worktree, Branch: sub.Branch})
 	}
 	if !enabled {
 		return ""

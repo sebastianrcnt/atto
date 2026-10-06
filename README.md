@@ -271,19 +271,22 @@ echo '{"query": "atto"}' | atto mcp call docs search -    # arguments from stdin
 **Subagents** (off by default) let the model hand self-contained work to a background child session, through its shell like everything else. Turn them on with `"subagents": {"enabled": true}` in `settings.json`; the system prompt then tells the model about them and to start them only when you ask.
 
 ```
-atto agent start NAME PRESET "<task>"   start one in the background; returns at once
+atto agent start NAME PRESET "<task>" [-worktree]
+                                        start one in the background; returns at once
 atto agent steer NAME "<message>"       add instructions to its running turn
 atto agent next NAME "<message>"        a follow-up turn when it is idle
 atto agent wait NAME [-timeout 10m]     block until its turn ends and print its report (exit 124 on timeout)
 atto agent wait-any [NAME...]           the first running one to finish
 atto agent report NAME                  its last message, status, duration, tokens (and ≈cost when the model has prices)
 atto agent list | stop NAME | presets
-atto agent rm NAME... | rm -done        remove finished ones; their sessions are archived
+atto agent rm NAME... | rm -done [-force]
+                                        remove finished ones; their sessions are archived
 ```
 
 - **From a normal shell**, every command accepts `-session ID`. Without it (and without `ATTO_SESSION_ID`), atto creates a lightweight parent without calling a model, prints its ID, and reuses it for the project (git root, else cwd). It is named `atto agent (external)` in session lists, is not picked by continue, and is archived and forgotten when `rm` removes its last subagent.
-- External callers can override a preset's model and effort on `start` with `-m provider/model -effort LEVEL`. These flags are refused in atto's model shell, including subagents; models remain limited to presets. `wait`, `wait-any` and `report` accept `-json` for one object with `name`, `status`, `turn`, `duration` (seconds), `tokens` (`in`, `cached`, `out`), optional `cost` (estimated USD), `session`, `model`, `message` and optional `error`. Parent-creation diagnostics go to stderr with `-json`; timeout still exits 124.
-- A subagent is its own session (in the parent's directory) that sees only the messages it is given, and the parent sees only its last message. Each turn runs headless as a job of the parent (`atto job list` shows `agent NAME`); when it ends the parent gets an `[atto event]` saying so. Its session is hidden from `atto resume` and `atto sessions`.
+- External callers can override a preset's model and effort on `start` with `-m provider/model -effort LEVEL`. These flags are refused in atto's model shell, including subagents; models remain limited to presets. `wait`, `wait-any` and `report` accept `-json` for one object with `name`, `status`, `turn`, `duration` (seconds), `tokens` (`in`, `cached`, `out`), optional `cost` (estimated USD), `session`, `model`, `message` and optional `error`, `worktree` and `branch`. Parent-creation diagnostics go to stderr with `-json`; timeout still exits 124.
+- A subagent is its own session (in the parent's directory, or its own worktree with `-worktree`) that sees only the messages it is given, and the parent sees only its last message. Each turn runs headless as a job of the parent (`atto job list` shows `agent NAME`); when it ends the parent gets an `[atto event]` saying so. Its session is hidden from `atto resume` and `atto sessions`.
+- **Worktrees.** `start -worktree` gives the subagent a git worktree of its own, so subagents editing files in parallel don't clobber each other or your checkout. It is made from the parent's `HEAD` (committed work only) on a new branch `atto/<parent session>/<name>` (start refuses if that branch exists), at `~/.atto/worktrees/<parent session>/<name>`: outside the project, so nothing shows up in its `git status` or searches, and short enough for Windows paths. The subagent works at the same place in it as the parent (its session's directory) and is told to commit there. It needs a git repository with a commit; the model may use it too, as it is isolation, not a model choice. `report`, `list` and `-json` show the worktree and branch. `rm` runs `git worktree remove` and keeps the branch, printing it and its new commits for you to merge; while the worktree has uncommitted changes `rm` refuses and lists them, unless `-force`. `rm -done` applies this per subagent: it removes the clean ones and reports the rest.
 - **Presets** fix a subagent's model, effort and instructions; the model can't choose them otherwise. The built-in `general` uses the parent's model and effort (or `subagents.model` / `subagents.effort` from `settings.json`) with generic worker instructions. Add presets as Markdown files in `~/.atto/agents/` or the project's `.atto/agents/` (the project wins on the same name, and either replaces the built-in `general`):
 
   ```markdown

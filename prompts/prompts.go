@@ -63,6 +63,7 @@ type System struct {
 // Subagent is the data of "subagent".
 type Subagent struct {
 	Name, Preset, Instructions string
+	Worktree, Branch           string // with -worktree
 }
 
 // Goal is the data of the goal_* templates.
