@@ -82,6 +82,7 @@ const ExtensionEvent = "extension "
 
 // StreamRetry reports a model request that failed and is sent again within
 // the turn: the reply streamed so far (if any) is dropped, not kept.
+// Context-overflow compaction has its own one-retry budget.
 type StreamRetry struct {
 	Attempt, Of int
 	Wait        time.Duration
@@ -1059,7 +1060,7 @@ func (a *Agent) loop(ctx context.Context, emit func(any)) error {
 		var drafts *draftTracker
 		var res provider.Result
 		var err error
-		for attempt, compacted := 1, false; ; attempt++ {
+		for attempt, compacted := 1, false; ; {
 			thinkStart, thinkEnd = time.Time{}, time.Time{}
 			drafts = &draftTracker{emit: emit}
 			h := provider.Handler{
@@ -1087,7 +1088,7 @@ func (a *Agent) loop(ctx context.Context, emit func(any)) error {
 			if ai.IsContextOverflow(err) && !compacted && len(a.messages) > 1 {
 				compacted = true
 				drafts.endAll()
-				emit(StreamRetry{Attempt: attempt, Of: streamRetries, Err: err.Error()})
+				emit(StreamRetry{Attempt: 1, Of: 1, Err: err.Error()})
 				if cerr := a.compact(ctx, emit, true); cerr != nil {
 					break
 				}
@@ -1111,6 +1112,7 @@ func (a *Agent) loop(ctx context.Context, emit func(any)) error {
 			if ctx.Err() != nil {
 				break
 			}
+			attempt++
 		}
 		var thinkMs int64
 		if !thinkStart.IsZero() {

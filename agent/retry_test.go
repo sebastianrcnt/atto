@@ -147,3 +147,34 @@ func TestTurnDoesNotRetryLongProviderDelay(t *testing.T) {
 		t.Fatalf("err %v, %d requests, %d retries", err, count(), retries)
 	}
 }
+
+func TestCompactionDoesNotConsumeStreamRetry(t *testing.T) {
+	noWait(t)
+	notes := sse(`{"choices":[{"delta":{"content":"notes"},"finish_reason":"stop"}]}`, "[DONE]")
+	replies := []func(http.ResponseWriter){status(400, "This model's maximum context length is 1000 tokens"), notes}
+	for range streamRetries {
+		replies = append(replies, status(503, "overloaded"))
+	}
+	replies = append(replies, okReply)
+	srv, count := scriptedServer(t, replies...)
+	a := newTestAgent(srv.URL)
+	a.messages = append(a.messages, provider.Message{Role: "user", Content: "earlier"},
+		provider.Message{Role: "assistant", Content: "earlier answer"})
+	var retries []StreamRetry
+	err := a.Run(context.Background(), "go", func(ev any) {
+		if r, ok := ev.(StreamRetry); ok {
+			retries = append(retries, r)
+		}
+	})
+	if err != nil || count() != streamRetries+3 || len(retries) != streamRetries+1 {
+		t.Fatalf("err %v, %d requests, retries %+v", err, count(), retries)
+	}
+	if retries[0].Attempt != 1 || retries[0].Of != 1 {
+		t.Fatalf("compaction retry: %+v", retries[0])
+	}
+	for i, r := range retries[1:] {
+		if r.Attempt != i+1 || r.Of != streamRetries {
+			t.Fatalf("ordinary retry %d: %+v", i, r)
+		}
+	}
+}
