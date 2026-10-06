@@ -210,9 +210,21 @@ type Saved struct {
 // Open loads a saved session and reopens its file for appending, on the
 // branch it was left on.
 func Open(path string) (Saved, *session.Writer, error) {
-	h, entries, err := session.Load(path)
+	s, err := Read(path)
 	if err != nil {
 		return Saved{}, nil, err
+	}
+	file := session.Resume(path, s.Header)
+	file.SetLeaf(session.Leaf(s.Entries))
+	return s, file, nil
+}
+
+// Read loads a saved session without opening it for writing: its entries
+// and the model, effort and name it uses now.
+func Read(path string) (Saved, error) {
+	h, entries, err := session.Load(path)
+	if err != nil {
+		return Saved{}, err
 	}
 	s := Saved{Header: h, Entries: entries}
 	for _, e := range entries {
@@ -227,9 +239,7 @@ func Open(path string) (Saved, *session.Writer, error) {
 			s.Name = e.Name
 		}
 	}
-	file := session.Resume(path, h)
-	file.SetLeaf(session.Leaf(entries))
-	return s, file, nil
+	return s, nil
 }
 
 // Branch is the active branch, which is what the agent restores.

@@ -10,6 +10,7 @@ import (
 
 	"github.com/sebastianrcnt/atto/config"
 	"github.com/sebastianrcnt/atto/events"
+	"github.com/sebastianrcnt/atto/session"
 )
 
 // contextDir is a project with an AGENTS file and a skill, in a fresh home
@@ -82,6 +83,27 @@ func TestContextCommand(t *testing.T) {
 	}
 	if err := RunContext([]string{"extra"}, &out); err == nil {
 		t.Fatal("arguments are an error")
+	}
+}
+
+// Inside a session, atto context shows the model and effort that session
+// uses, not the configured defaults.
+func TestContextShowsSessionModel(t *testing.T) {
+	proj := contextDir(t)
+	os.WriteFile(filepath.Join(os.Getenv(config.EnvDir), "models.json"), []byte(`{"providers":{"t":{"baseUrl":"http://127.0.0.1:9/v1","models":[{"id":"m"},{"id":"n"}]}}}`), 0o644)
+	w := session.New(proj)
+	w.Append(session.Entry{Type: session.TypeModel, Provider: "t", Model: "n"})
+	w.Append(session.Entry{Type: session.TypeEffort, Effort: "high"})
+	w.Close()
+	t.Setenv("ATTO_SESSION_ID", w.ID)
+	var out strings.Builder
+	if err := RunContext(nil, &out); err != nil {
+		t.Fatal(err)
+	}
+	for _, s := range []string{"model   n (t/n) · from the session", "effort  high · from the session"} {
+		if !strings.Contains(out.String(), s) {
+			t.Errorf("atto context lacks %q:\n%s", s, out.String())
+		}
 	}
 }
 

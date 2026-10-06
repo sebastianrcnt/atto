@@ -11,6 +11,7 @@ import (
 	"github.com/sebastianrcnt/atto/core"
 	"github.com/sebastianrcnt/atto/events"
 	"github.com/sebastianrcnt/atto/extensions"
+	"github.com/sebastianrcnt/atto/session"
 )
 
 const contextUsage = `usage: atto context [-json] [-m provider/id] [-effort level]
@@ -18,7 +19,8 @@ const contextUsage = `usage: atto context [-json] [-m provider/id] [-effort leve
 Shows what a session started in this directory loads: the AGENTS.md files
 and skills in its system prompt, the hooks, the extensions (found, not
 run: "ready" would load), the settings and models files, and the model
-and effort it would use, with where each came from.`
+and effort it would use, with where each came from. Run inside a session
+(ATTO_SESSION_ID), the model and effort are the ones that session uses.`
 
 // RunContext implements "atto context".
 func RunContext(args []string, out io.Writer) error {
@@ -37,11 +39,17 @@ func RunContext(args []string, out io.Writer) error {
 	if err != nil {
 		return err
 	}
-	ref, modelFrom, err := core.PickModelFrom(models, settings, *model, "")
+	var saved core.Saved // the running session's choices outrank the defaults
+	if id := os.Getenv("ATTO_SESSION_ID"); id != "" {
+		if path, err := session.Find(id); err == nil {
+			saved, _ = core.Read(path)
+		}
+	}
+	ref, modelFrom, err := core.PickModelFrom(models, settings, *model, saved.Model)
 	if err != nil && !errors.Is(err, core.ErrNoModels) {
 		return err
 	}
-	level, effortFrom := core.EffortFrom(settings, *effort, "")
+	level, effortFrom := core.EffortFrom(settings, *effort, saved.Effort)
 	ag := agent.New(ref, level, cwd)
 	_, src, err := core.LoadHooks(cwd)
 	if err != nil {
