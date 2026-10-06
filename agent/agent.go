@@ -847,9 +847,11 @@ func (a *Agent) tools() []provider.Tool {
 
 // request builds a request and returns the client to send it with.
 func (a *Agent) request(extra ...provider.Message) (provider.Streamer, provider.Request) {
-	model, effort := a.Current()
+	// Model, effort, transport and session routing are one configuration
+	// snapshot. SetModel may replace the client as well as the model, so
+	// reading them under separate locks can build a request from two models.
 	a.cfgMu.Lock()
-	client, sessID := a.client, a.sessID
+	model, effort, client, sessID := a.model, a.effort, a.client, a.sessID
 	a.cfgMu.Unlock()
 	msgs := make([]provider.Message, 0, len(a.messages)+len(extra)+1)
 	msgs = append(msgs, provider.Message{Role: "system", Content: a.SystemPrompt()})
