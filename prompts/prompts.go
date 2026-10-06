@@ -48,6 +48,7 @@ func Render(name string, data any) string {
 
 // System is the data of "system".
 type System struct {
+	NoGoals bool   // this frontend has no goal continuation driver
 	Kind    string // "powershell", "cmd", or anything else for bash
 	WinPS51 bool   // Windows PowerShell 5.1, which lacks && and ||
 	Tool    string // the shell tool's name

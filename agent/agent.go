@@ -190,7 +190,8 @@ type (
 )
 
 type Agent struct {
-	Cwd string
+	NoGoals bool // frontend has no goal continuation driver; set before SetStart
+	Cwd     string
 	// Shell runs the model's one tool: bash on Unix, PowerShell on Windows.
 	Shell shell.Shell
 
@@ -513,7 +514,7 @@ func (a *Agent) scan(start time.Time) (Sources, string) {
 		presets, _ = subagent.LoadPresets(subagent.Dirs(a.Cwd, projectRoot(a.Cwd)))
 	}
 	sub := subagentPart(a.Subagent, st.SubagentsEnabled(), presets)
-	prompt := buildPrompt(a.Cwd, a.Shell, start, sk, files, mcp, sub)
+	prompt := buildPrompt(a.Cwd, a.Shell, start, sk, files, mcp, sub, a.NoGoals)
 	var instr strings.Builder
 	writeInstructions(&instr, files)
 	return Sources{
@@ -1498,10 +1499,11 @@ func systemPrompt(cwd string, sh shell.Shell, start time.Time, sk []skills.Skill
 // sub is the paragraph about subagents (see subagentPart), "" for none.
 // The MCP server names are sorted, so the text depends on the
 // configuration alone.
-func buildPrompt(cwd string, sh shell.Shell, start time.Time, sk []skills.Skill, instr []instructionFile, mcp []string, sub string) string {
+func buildPrompt(cwd string, sh shell.Shell, start time.Time, sk []skills.Skill, instr []instructionFile, mcp []string, sub string, noGoals ...bool) string {
 	var b strings.Builder
 	name := sh.ToolName()
 	b.WriteString(prompts.Render("system", prompts.System{
+		NoGoals: len(noGoals) > 0 && noGoals[0],
 		Kind:    string(sh.Kind),
 		WinPS51: strings.EqualFold(strings.TrimSuffix(filepath.Base(sh.Path), ".exe"), "powershell"),
 		Tool:    name,

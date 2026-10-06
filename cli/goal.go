@@ -8,6 +8,7 @@ import (
 
 	"github.com/sebastianrcnt/atto/config"
 	"github.com/sebastianrcnt/atto/goal"
+	sessions "github.com/sebastianrcnt/atto/session"
 )
 
 const goalUsage = `usage:
@@ -42,6 +43,13 @@ func RunGoal(args []string, out io.Writer) error {
 		// replaces an unfinished goal.
 		if *session != os.Getenv("ATTO_SESSION_ID") {
 			return fmt.Errorf("-session can't be changed inside atto: a goal is reported from its own session")
+		}
+	}
+	if sub == "set" || sub == "resume" {
+		if path, err := sessions.Find(*session); err == nil {
+			if l, ok := sessions.LockedBy(path); ok && l.Kind == sessions.KindServer {
+				return fmt.Errorf("goals are not supported by the standalone server: use the terminal UI or atto -p for automatic goal continuation")
+			}
 		}
 	}
 	text := strings.TrimSpace(strings.Join(fs.Args(), " "))

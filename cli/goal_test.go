@@ -14,6 +14,7 @@ import (
 
 	"github.com/sebastianrcnt/atto/config"
 	"github.com/sebastianrcnt/atto/goal"
+	"github.com/sebastianrcnt/atto/session"
 )
 
 func TestGoalCommandInsideAgent(t *testing.T) {
@@ -226,5 +227,25 @@ func TestGoalSetRefusesCommandWords(t *testing.T) {
 	}
 	if g, _ := goal.Load("s1"); g != nil {
 		t.Fatalf("no goal from a command word: %+v", g)
+	}
+}
+
+func TestStandaloneGoalCreationRefused(t *testing.T) {
+	t.Setenv("ATTO_DIR", t.TempDir())
+	w := session.New(t.TempDir())
+	w.Append(session.Entry{Type: session.TypeName, Name: "standalone"})
+	w.Close()
+	release, err := session.LockKind(w.Path, session.KindServer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+	var out strings.Builder
+	err = RunGoal([]string{"set", "-session", w.ID, "do it"}, &out)
+	if err == nil || !strings.Contains(err.Error(), "not supported by the standalone server") {
+		t.Fatalf("set: %v", err)
+	}
+	if g, err := goal.Load(w.ID); err != nil || g != nil {
+		t.Fatalf("unsupported goal created: %+v %v", g, err)
 	}
 }

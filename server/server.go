@@ -448,6 +448,7 @@ func (s *Server) newThread(cwd string, model config.ModelRef, models config.Mode
 		s.notify(t, "extension/notify", map[string]any{"extension": ext, "message": text, "level": level})
 	}}})
 	t.mcp = core.LoadMCP(ag)
+	ag.NoGoals = true
 	core.Bind(ag, hk, file, start, true)
 	t.loaded = core.Collect(ag, src, modelFrom, effortFrom)
 	t.tr.IDPrefix = itemPrefix(t.id)

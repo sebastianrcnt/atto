@@ -60,3 +60,17 @@ func TestStandaloneServerHoldsWriterLease(t *testing.T) {
 		t.Fatal("lease not released:", err)
 	}
 }
+
+func TestStandalonePromptDoesNotAdvertiseGoals(t *testing.T) {
+	work := setup(t)
+	s := New("test", work)
+	defer s.Close()
+	got, err := s.startThread(threadParams{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	prompt := s.threads[got.(ThreadInfo).ID].agent.SystemPrompt()
+	if strings.Contains(prompt, "Goals:") || strings.Contains(prompt, "atto goal set") {
+		t.Fatal("standalone prompt advertises unsupported goals")
+	}
+}
