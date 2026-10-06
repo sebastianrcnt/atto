@@ -212,7 +212,7 @@ func (b *shellBlock) Render(width int) []string {
 
 // first is the command's first line.
 func (b *shellBlock) first() string {
-	first := strings.TrimSpace(b.cmd)
+	first := strings.TrimSpace(tui.StripControls(b.cmd))
 	if i := strings.IndexByte(first, '\n'); i >= 0 {
 		first = first[:i] + " …"
 	}

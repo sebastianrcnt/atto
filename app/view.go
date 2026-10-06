@@ -41,7 +41,7 @@ func (u *userBlock) Render(width int) []string {
 }
 
 func (u *userBlock) render(width int) []string {
-	lines := tui.Wrap(u.text, max(1, width-2))
+	lines := tui.Wrap(tui.StripControls(u.text), max(1, width-2))
 	top := ""
 	if u.remote {
 		top = tui.Dim("  from remote")
@@ -60,7 +60,7 @@ func (u *userBlock) render(width int) []string {
 // pinLine renders the one-line pinned form of a prompt.
 func (u *userBlock) pinLine(width int) string {
 	return u.pin.Render(width, u.text, func() []string {
-		text := strings.Join(strings.Fields(u.text), " ")
+		text := strings.Join(strings.Fields(tui.StripControls(u.text)), " ")
 		return []string{band(tui.Truncate(tui.FG(6, "› ")+text, width, "…"), width)}
 	})[0]
 }
@@ -91,7 +91,7 @@ type textKey struct {
 }
 
 func (t *textBlock) render(width int) []string {
-	lines := tui.Markdown(strings.TrimSpace(t.disp.shown(t.text.String())), max(1, width-2))
+	lines := tui.Markdown(strings.TrimSpace(tui.StripControls(t.disp.shown(t.text.String()))), max(1, width-2))
 	for i, l := range lines {
 		if i == 0 && !startsWithMarker(l) {
 			lines[i] = tui.Dim("• ") + l
@@ -254,7 +254,7 @@ func (t *thinkingBlock) render(width int) []string {
 }
 
 func (t *thinkingBlock) renderText(width int) []string {
-	text := strings.TrimSpace(t.disp.shown(t.text.String()))
+	text := strings.TrimSpace(tui.StripControls(t.disp.shown(t.text.String())))
 	has := text != "" // Wrap("") is one empty line
 	body := tui.Wrap(text, max(1, width-4))
 	style := func(s string) string { return tui.Dim(tui.Italic(s)) }
@@ -386,6 +386,7 @@ func commandRows(cmd string, width, n int) int {
 // wrapCommand is commandLines for one line of a script; only the first
 // line gets the "$".
 func wrapCommand(cmd string, width, limit int, first bool) []string {
+	cmd = tui.StripControls(cmd)
 	var wrapped []string
 	if limit > 0 { // one line more tells whether to cut
 		wrapped = tui.WrapFirst(cmd, max(1, width-4), limit+1)
@@ -422,7 +423,7 @@ func displayLines(raw string) []string {
 		if j := strings.LastIndexByte(l, '\r'); j >= 0 {
 			l = l[j+1:]
 		}
-		lines[i] = strings.TrimRight(strings.ReplaceAll(l, "\t", "   "), " ")
+		lines[i] = strings.TrimRight(strings.ReplaceAll(tui.StripControls(l), "\t", "   "), " ")
 	}
 	for len(lines) > 0 && lines[0] == "" {
 		lines = lines[1:]
@@ -449,7 +450,7 @@ func (b *toolBlock) status() (icon, status string) {
 		}
 		return tui.FG(3, "●"), s
 	case b.res.Err != nil:
-		return tui.FG(1, "✗"), tui.FG(1, b.res.Err.Error())
+		return tui.FG(1, "✗"), tui.FG(1, tui.StripControls(b.res.Err.Error()))
 	case b.res.Job > 0 && b.res.Background == agent.BackgroundRequested:
 		return tui.FG(6, "◐"), tui.FG(6, fmt.Sprintf("running in background (job %d)", b.res.Job))
 	case b.res.Job > 0:
@@ -485,7 +486,7 @@ func (b *toolBlock) head(width int) string {
 	icon, status := b.status()
 	// The command goes on its own line: next to the description it got cut
 	// off on narrow terminals.
-	desc := b.args.Description
+	desc := tui.StripControls(b.args.Description)
 	if desc == "" {
 		desc = "Preparing command"
 	}
@@ -497,12 +498,12 @@ func (b *toolBlock) head(width int) string {
 // line, and for a failed call the last output lines.
 func (b *toolBlock) line(width int) []string {
 	icon, status := b.status()
-	cmd := agent.FirstLine(b.args.Command)
+	cmd := tui.StripControls(agent.FirstLine(b.args.Command))
 	if strings.Contains(strings.TrimSpace(b.args.Command), "\n") {
 		cmd += " …"
 	}
 	head := icon + " "
-	if desc := strings.Join(strings.Fields(b.args.Description), " "); desc != "" {
+	if desc := strings.Join(strings.Fields(tui.StripControls(b.args.Description)), " "); desc != "" {
 		head += tui.Bold(desc) + tui.Dim(" · ") + tui.Dim(status) + tui.Dim("  $ "+cmd)
 	} else {
 		head += tui.Bold(cmd) + tui.Dim(" · ") + tui.Dim(status)
@@ -527,7 +528,7 @@ func (b *toolBlock) line(width int) []string {
 func (b *toolBlock) imageLines(width int) []string {
 	var out []string
 	for _, l := range b.images {
-		out = append(out, tui.Truncate(tui.Dim("  ▣ "+l), width, tui.Dim("…")))
+		out = append(out, tui.Truncate(tui.Dim("  ▣ "+tui.StripControls(l)), width, tui.Dim("…")))
 	}
 	return out
 }
@@ -645,7 +646,7 @@ func (c *compactBlock) render(width int) []string {
 	}
 	if c.running {
 		out := []string{tui.Dim("  ◇ Compacting context · writing handoff notes…")}
-		lines := tui.Wrap(strings.TrimSpace(c.notes.String()), max(1, width-4))
+		lines := tui.Wrap(strings.TrimSpace(tui.StripControls(c.notes.String())), max(1, width-4))
 		if len(lines) > thinkingPreviewLines {
 			lines = lines[len(lines)-thinkingPreviewLines:]
 		}
@@ -687,7 +688,7 @@ func (n *noticeBlock) Render(width int) []string {
 }
 
 func (n *noticeBlock) render(width int) []string {
-	lines := tui.Wrap(n.text, max(1, width-2))
+	lines := tui.Wrap(tui.StripControls(n.text), max(1, width-2))
 	for i, l := range lines {
 		lines[i] = "  " + n.style(l)
 	}

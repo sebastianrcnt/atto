@@ -247,6 +247,7 @@ func resumeArgs(args []string) []string {
 }
 
 func main() {
+	daemon.ConsumePaneToken()
 	update.Cleanup()
 	mcp.Version = update.Current()
 	// This binary serves `atto _shell`, so the agent's commands can run

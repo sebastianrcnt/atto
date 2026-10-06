@@ -83,7 +83,7 @@ func (e *Editor) Text() string { return string(e.buf) }
 // SetText replaces the buffer. Placeholders whose labels survive in s are
 // kept, and att adds attachments whose labels s contains.
 func (e *Editor) SetText(s string, att ...Attachment) {
-	e.buf = []rune(s)
+	e.buf = []rune(StripControls(s))
 	e.pos = len(e.buf)
 	for _, a := range att {
 		e.elems = append(e.elems, element{label: a.Label, att: &a, image: imageNumber(a.Label)})
@@ -103,6 +103,7 @@ func (e *Editor) AfterCursor() string { return string(e.buf[e.pos:]) }
 // Replace deletes del runes before the cursor and delAfter after it,
 // inserts s there and leaves the cursor cursor runes into s (completions).
 func (e *Editor) Replace(del, delAfter int, s string, cursor int) {
+	s = StripControls(s)
 	e.deleteRange(e.pos-del, e.pos+delAfter) // leaves the cursor at the gap
 	from := e.pos
 	e.insert(s)
@@ -219,7 +220,7 @@ func (e *Editor) snap(dir int) {
 }
 
 func (e *Editor) insert(s string) {
-	rs := []rune(s)
+	rs := []rune(StripControls(s))
 	e.buf = append(e.buf[:e.pos], append(rs, e.buf[e.pos:]...)...)
 	e.pos += len(rs)
 }
@@ -355,7 +356,7 @@ func (e *Editor) Commit() (string, []Attachment) {
 // paste inserts pasted text: large pastes become a placeholder, and
 // OnPaste may take the rest.
 func (e *Editor) paste(p string) {
-	p = strings.ReplaceAll(strings.ReplaceAll(p, "\r\n", "\n"), "\r", "\n")
+	p = StripControls(strings.ReplaceAll(strings.ReplaceAll(p, "\r\n", "\n"), "\r", "\n"))
 	if n := utf8.RuneCountInString(p); n > LargePaste {
 		e.insertElement(element{label: e.pasteLabel(n), paste: p})
 		return
@@ -512,7 +513,7 @@ func (e *Editor) Render(width int) []string {
 	if e.Title != "" && width > 12 {
 		// The title sits at the right end of the top rule, as Claude Code
 		// shows the session's name.
-		t := Truncate(e.Title, width/2, "…")
+		t := Truncate(StripControls(e.Title), width/2, "…")
 		top = border(strings.Repeat("─", max(1, width-VisibleWidth(t)-3))+" ") + FG(5, t) + border(" ─")
 	}
 	out := make([]string, 0, len(rows)+2)

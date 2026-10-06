@@ -41,6 +41,17 @@ func escapeLen(s string, i int) int {
 	}
 }
 
+// StripControls makes untrusted text safe to style and display. Newlines
+// and tabs are retained; terminal controls, including ESC, are not.
+func StripControls(s string) string {
+	return strings.Map(func(r rune) rune {
+		if r < 0x20 && r != '\n' && r != '\t' || r >= 0x7f && r <= 0x9f {
+			return -1
+		}
+		return r
+	}, s)
+}
+
 // StripEscapes removes all terminal escape sequences, keeping visible text.
 func StripEscapes(s string) string {
 	if strings.IndexByte(s, 0x1b) < 0 {

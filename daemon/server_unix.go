@@ -3,6 +3,8 @@
 package daemon
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -307,11 +309,16 @@ func (d *daemon) start(h Hello) (*pane, error) {
 	d.next++
 	id := d.next
 	d.mu.Unlock()
+	tokenBytes := make([]byte, 32)
+	if _, err := rand.Read(tokenBytes); err != nil {
+		return nil, err
+	}
+	token := hex.EncodeToString(tokenBytes)
 	cmd := exec.Command(d.exe, h.Args...)
 	cmd.Dir = h.Cwd
 	cmd.Env = append(slices.DeleteFunc(slices.Clone(h.Env), func(e string) bool {
-		return strings.HasPrefix(e, EnvPane+"=")
-	}), EnvPane+"="+strconv.Itoa(id))
+		return strings.HasPrefix(e, EnvPane+"=") || strings.HasPrefix(e, EnvPaneToken+"=")
+	}), EnvPane+"="+strconv.Itoa(id), EnvPaneToken+"="+token)
 	size := sane(h.Size)
 	ptmx, err := pty.StartWithSize(cmd, &pty.Winsize{Cols: uint16(size.Cols), Rows: uint16(size.Rows)})
 	if err != nil {
@@ -320,6 +327,7 @@ func (d *daemon) start(h Hello) (*pane, error) {
 	now := time.Now()
 	p := &pane{d: d, cmd: cmd, ptmx: ptmx, st: newStream(), size: size,
 		info: Pane{ID: id, PID: cmd.Process.Pid, Cwd: h.Cwd, Args: h.Args, Started: now, Active: now}}
+	p.st.token = token
 	d.mu.Lock()
 	d.panes[id] = p
 	d.idle.Stop()

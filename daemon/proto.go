@@ -28,6 +28,9 @@ const Proto = 2
 // EnvPane is set to a pane's ID in the environment of the atto it runs.
 const EnvPane = "ATTO_DAEMON_PANE"
 
+// EnvPaneToken authenticates the pane's UI markers and is consumed at startup.
+const EnvPaneToken = "ATTO_DAEMON_TOKEN"
+
 // Frame types. A frame is its type byte, the payload's length (uint32, big
 // endian) and the payload.
 const (

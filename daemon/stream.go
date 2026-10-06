@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"fmt"
+	"os"
 	"slices"
 	"strconv"
 	"strings"
@@ -13,8 +14,27 @@ import (
 const Marker = 7337
 
 // MarkerSeq is the escape sequence for a marker command.
+var paneToken string
+
+// ConsumePaneToken keeps the marker secret out of tools, hooks and extensions.
+// Call it before starting any application code or subprocesses.
+func ConsumePaneToken() {
+	paneToken = os.Getenv(EnvPaneToken)
+	_ = os.Unsetenv(EnvPaneToken)
+}
+
 func MarkerSeq(fields ...string) string {
-	return fmt.Sprintf("\x1b]%d;%s\x07", Marker, strings.Join(fields, ";"))
+	return markerSeq(paneToken, fields...)
+}
+
+func markerSeq(token string, fields ...string) string {
+	body := strings.Map(func(r rune) rune {
+		if r < 0x20 || r == 0x7f {
+			return -1
+		}
+		return r
+	}, strings.Join(fields, ";"))
+	return fmt.Sprintf("\x1b]%d;%s;%s\x07", Marker, token, body)
 }
 
 // decModes are the DEC private modes worth restoring on a terminal that
@@ -31,6 +51,7 @@ var altScreens = []int{47, 1047, 1049}
 // leaves can be put back. Escape sequences split across writes are held
 // until complete.
 type stream struct {
+	token   string
 	state   int // ground, esc, csi, osc, oscEsc
 	pending []byte
 	modes   map[int]bool // DEC private modes; true = set
@@ -95,7 +116,10 @@ func (s *stream) feed(b []byte) (out []byte, markers []string) {
 			if end > 0 {
 				body := string(s.pending[2 : len(s.pending)-end])
 				if m, ok := strings.CutPrefix(body, strconv.Itoa(Marker)+";"); ok {
-					markers = append(markers, m)
+					token, command, _ := strings.Cut(m, ";")
+					if s.token != "" && token == s.token {
+						markers = append(markers, command)
+					}
 				} else {
 					out = append(out, s.pending...)
 				}

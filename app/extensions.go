@@ -140,7 +140,7 @@ func (h *tuiHost) Ask(ext string, q extensions.Question, answer func(any)) {
 			answer(def())
 			return
 		}
-		title := q.Title + tui.Dim("  ("+ext+")")
+		title := tui.StripControls(q.Title) + tui.Dim("  ("+tui.StripControls(ext)+")")
 		switch q.Kind {
 		case "select", "confirm":
 			l := &tui.SelectList{Title: title}

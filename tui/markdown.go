@@ -10,6 +10,7 @@ import (
 // lists (nested, ordered/unordered, task items), blockquotes, rules and
 // tables. It is tolerant of incomplete input so it can render while streaming.
 func Markdown(src string, width int) []string {
+	src = StripControls(strings.ReplaceAll(src, "\r\n", "\n"))
 	width = max(width, 4)
 	r := &mdRenderer{width: width}
 	r.blocks(strings.Split(strings.ReplaceAll(src, "\r\n", "\n"), "\n"), width)
@@ -425,6 +426,7 @@ const (
 
 // inline renders emphasis, code spans, links and escapes.
 func inline(s string) string {
+	s = StripControls(s)
 	var b strings.Builder
 	for i := 0; i < len(s); {
 		c := s[i]

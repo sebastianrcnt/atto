@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"os"
 	"strings"
 	"testing"
 )
@@ -18,7 +19,8 @@ func feedAll(s *stream, chunks ...string) (string, []string) {
 
 func TestStreamMarkersSplitAcrossWrites(t *testing.T) {
 	s := newStream()
-	m := MarkerSeq("session", "abc", "my name")
+	s.token = "secret"
+	m := markerSeq("secret", "session", "abc", "my name")
 	out, ms := feedAll(s, "hi\x1b[1m", m[:5], m[5:12], m[12:]+"there\x1b]0;title\x07")
 	if out != "hi\x1b[1mthere\x1b]0;title\x07" {
 		t.Fatalf("out %q", out)
@@ -27,7 +29,7 @@ func TestStreamMarkersSplitAcrossWrites(t *testing.T) {
 		t.Fatalf("markers %q", ms)
 	}
 	// ST-terminated markers count too.
-	if _, ms := feedAll(s, "\x1b]7337;detach\x1b\\"); len(ms) != 1 || ms[0] != "detach" {
+	if _, ms := feedAll(s, "\x1b]7337;secret;detach\x1b\\"); len(ms) != 1 || ms[0] != "detach" {
 		t.Fatalf("ST marker %q", ms)
 	}
 }
@@ -59,5 +61,38 @@ func TestStreamPassesOtherBytes(t *testing.T) {
 	long := "\x1b]8;;" + strings.Repeat("x", maxSeq+10) + "\x07"
 	if out, _ := feedAll(s, long); out != long {
 		t.Fatal("a long OSC was not passed through whole")
+	}
+}
+
+func TestMarkersRequirePaneToken(t *testing.T) {
+	s := newStream()
+	s.token = "pane-secret"
+	for _, spoof := range []string{"\x1b]7337;detach\x07", markerSeq("other-pane", "new", "/tmp"), markerSeq("", "state", "working")} {
+		out, markers := feedAll(s, spoof)
+		if out != "" || len(markers) != 0 {
+			t.Fatalf("accepted unauthenticated marker: output %q markers %q", out, markers)
+		}
+	}
+	_, markers := feedAll(s, markerSeq("pane-secret", "state", "working"))
+	if len(markers) != 1 || markers[0] != "state;working" {
+		t.Fatalf("authenticated markers %q", markers)
+	}
+	// A client stream has no token and cannot interpret pane controls.
+	_, markers = feedAll(newStream(), markerSeq("pane-secret", "detach"))
+	if len(markers) != 0 {
+		t.Fatal("client stream accepted a marker")
+	}
+}
+
+func TestConsumePaneToken(t *testing.T) {
+	old := paneToken
+	defer func() { paneToken = old }()
+	t.Setenv(EnvPaneToken, "test-secret")
+	ConsumePaneToken()
+	if _, ok := os.LookupEnv(EnvPaneToken); ok {
+		t.Fatal("token left in child environment")
+	}
+	if got := MarkerSeq("ready"); got != markerSeq("test-secret", "ready") {
+		t.Fatalf("marker %q", got)
 	}
 }

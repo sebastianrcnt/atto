@@ -75,7 +75,7 @@ func (b *blockDisplay) setDisplay(ext, text string) bool {
 func (b *blockDisplay) header() string {
 	var out strings.Builder
 	for _, s := range b.state.Statuses {
-		out.WriteString(tui.Dim(" · " + s.Text))
+		out.WriteString(tui.Dim(" · " + tui.StripControls(s.Text)))
 	}
 	return out.String()
 }
@@ -86,7 +86,7 @@ func (b *blockDisplay) toggleLine(width int) string {
 	if !b.hasOverride() {
 		return ""
 	}
-	owner := b.state.Owner
+	owner := tui.StripControls(b.state.Owner)
 	what := "shown: " + owner + " (click or ctrl+o to show original)"
 	if b.showingOriginal() {
 		what = "original shown (click or ctrl+o to show " + owner + "'s)"

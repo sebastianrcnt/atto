@@ -43,7 +43,7 @@ func (b *extTextBlock) Render(width int) []string {
 }
 
 func (b *extTextBlock) render(width int) []string {
-	head := tui.FG(5, tui.Bold("±")) + " " + tui.Bold(b.title) + tui.Dim(" · "+b.ext)
+	head := tui.FG(5, tui.Bold("±")) + " " + tui.Bold(tui.StripControls(b.title)) + tui.Dim(" · "+tui.StripControls(b.ext))
 	out := []string{tui.Truncate(head, width, tui.Dim("…"))}
 	lines := textLines(b.text)
 	preview := b.preview
@@ -76,7 +76,7 @@ func (b *extTextBlock) render(width int) []string {
 // widened, line ends and trailing blank lines dropped. Leading spaces stay
 // (a diff's context lines start with one).
 func textLines(text string) []string {
-	lines := strings.Split(tui.StripEscapes(text), "\n")
+	lines := strings.Split(tui.StripControls(tui.StripEscapes(text)), "\n")
 	for i, l := range lines {
 		lines[i] = strings.ReplaceAll(strings.TrimRight(l, "\r"), "\t", "   ")
 	}

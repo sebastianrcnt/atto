@@ -32,6 +32,10 @@ func TestMain(m *testing.M) {
 }
 
 func helper() {
+	ConsumePaneToken()
+	if os.Getenv(EnvPaneToken) != "" {
+		panic("marker token leaked")
+	}
 	sigs := make(chan os.Signal, 1)
 	signal.Notify(sigs, syscall.SIGUSR1)
 	go func() {
