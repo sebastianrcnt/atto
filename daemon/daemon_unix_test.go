@@ -343,13 +343,16 @@ func TestDaemonKillStopAndErrors(t *testing.T) {
 }
 
 func TestProtocolMismatch(t *testing.T) {
+	if Proto <= 1 {
+		t.Fatal("pane switching and state require a new protocol version")
+	}
 	startDaemon(t, 5*time.Second)
 	c, err := dial(false)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer c.Close()
-	_ = writeJSON(c, fHello, Hello{Proto: Proto + 1, Op: "list"})
+	_ = writeJSON(c, fHello, Hello{Proto: 1, Op: "list"})
 	typ, b, err := readFrame(c)
 	if err != nil || typ != fError || !strings.Contains(string(b), "protocol") {
 		t.Fatalf("%c %s %v", typ, b, err)

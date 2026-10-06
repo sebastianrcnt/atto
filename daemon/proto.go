@@ -22,8 +22,8 @@ import (
 )
 
 // Proto is the client-daemon protocol version. A client meeting a daemon
-// of another version runs atto directly instead.
-const Proto = 1
+// of another version refuses the request and explains how to stop it.
+const Proto = 2
 
 // EnvPane is set to a pane's ID in the environment of the atto it runs.
 const EnvPane = "ATTO_DAEMON_PANE"
