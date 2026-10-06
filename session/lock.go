@@ -1,21 +1,19 @@
 package session
 
 import (
-	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 )
 
-// A session being written by a process that other atto processes must not
-// write to holds a lock file next to the session file: a run left in the
-// background (experimental, see app/background_exit.go), or a terminal
-// session that has it open. It names the process (pid and start time); a
-// lock whose process is gone is stale and ignored.
+// Session writer leases use OS advisory locks. The persistent lock file
+// holds diagnostic metadata only; its existence never implies ownership.
 
 // LockInfo is the content of a lock file.
 type LockInfo struct {
@@ -41,32 +39,55 @@ func LockPath(path string) string { return strings.TrimSuffix(path, ".jsonl") + 
 // LogPath is where a background run of the session at path logs.
 func LogPath(path string) string { return strings.TrimSuffix(path, ".jsonl") + ".bg.log" }
 
-// processAlive is a seam for tests; the real check is per platform.
-var processAlive = pidAlive
-var processStartTime = pidStartTime
+// heldLocks tracks compatible same-process acquisitions. Every release is
+// idempotent and refers to its own lease, so an old release cannot drop a
+// newer acquisition (including one acquired after the file was freed).
+var heldLocks = struct {
+	sync.Mutex
+	locks map[string]*heldLock
+}{locks: make(map[string]*heldLock)}
 
-// moveLock is a seam for takeover races in tests.
-var moveLock = os.Rename
-
-// LockedBy reads the session's lock. ok is false when there is none or it
-// is stale (its process is gone or its pid was reused).
-func LockedBy(path string) (LockInfo, bool) {
-	b, err := os.ReadFile(LockPath(path))
-	if err != nil {
-		return LockInfo{}, false
-	}
-	return liveLock(b)
+type heldLock struct {
+	file *os.File
+	info LockInfo
+	refs int
 }
 
-func liveLock(b []byte) (LockInfo, bool) {
+func lockKey(path string) (string, error) {
+	lp, err := filepath.Abs(LockPath(path))
+	if err != nil {
+		return "", err
+	}
+	// Resolve the directory, not the file: the file may not exist yet.
+	if dir, err := filepath.EvalSymlinks(filepath.Dir(lp)); err == nil {
+		lp = filepath.Join(dir, filepath.Base(lp))
+	}
+	return lp, nil
+}
+
+func readLockInfo(f *os.File) LockInfo {
 	var l LockInfo
-	if json.Unmarshal(b, &l) != nil || l.PID <= 0 || !processAlive(l.PID) {
+	b, _ := io.ReadAll(io.NewSectionReader(f, 0, 1<<20))
+	_ = json.Unmarshal(b, &l)
+	return l
+}
+
+// LockedBy probes the OS lock, not the metadata. Partial or unreadable
+// metadata must not make an actively held lease appear free.
+func LockedBy(path string) (LockInfo, bool) {
+	f, err := os.OpenFile(LockPath(path), os.O_RDWR, 0)
+	if errors.Is(err, os.ErrNotExist) {
 		return LockInfo{}, false
 	}
-	if started, ok := processStartTime(l.PID); ok && started.After(l.Started.Add(2*time.Second)) {
+	if err != nil {
+		return LockInfo{}, true
+	}
+	defer f.Close()
+	if err := tryFileLock(f); err == nil {
+		_ = unlockFile(f)
 		return LockInfo{}, false
 	}
-	return l, true
+	return readLockInfo(f), true
 }
 
 // LockError describes a locked session for the user.
@@ -92,103 +113,93 @@ func ReadOnlyMessage(l LockInfo) string {
 	return fmt.Sprintf("Running in background (pid %d) — read-only until it finishes", l.PID)
 }
 
-// Lock takes the session's lock for the calling process. It fails with
-// ErrLocked when another live process holds it; a stale lock is replaced.
-// The returned function releases it.
+// Lock takes the session's writer lease for the calling process.
 func Lock(path string) (release func(), err error) { return LockKind(path, KindRun) }
 
 // LockKind takes a writer lease for this frontend.
 func LockKind(path, kind string) (release func(), err error) { return lockAs(path, os.Getpid(), kind) }
 
-// LockFor takes the lock on behalf of the process with the given pid, so a
-// parent can hold a session for the background run it just started. That
-// process taking the lock itself then finds it its own.
+// LockFor takes a lease in the calling process, recording pid for messages.
+// The OS lease still belongs to the caller: background children must inherit
+// its open file, rather than acquiring a separate lock after spawning.
 func LockFor(path string, pid int) (release func(), err error) {
 	return lockAs(path, pid, KindBackground)
 }
 
-// LockTUI takes the lock for a terminal session: other terminals, runs and
-// clients are refused while it is held.
 func LockTUI(path string) (release func(), err error) {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil { // a new session's day may have no directory yet
-		return nil, err
-	}
 	return lockAs(path, os.Getpid(), KindTUI)
+}
+
+func writeLockInfo(f *os.File, info LockInfo) error {
+	body, err := json.Marshal(info)
+	if err != nil {
+		return err
+	}
+	if err := f.Truncate(0); err != nil {
+		return err
+	}
+	if _, err := f.WriteAt(body, 0); err != nil {
+		return err
+	}
+	return f.Sync()
+}
+
+// releaseLocked must be called with heldLocks held.
+func releaseLocked(key string, h *heldLock) func() {
+	h.refs++
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			heldLocks.Lock()
+			defer heldLocks.Unlock()
+			h.refs--
+			if h.refs == 0 {
+				if heldLocks.locks[key] == h {
+					delete(heldLocks.locks, key)
+				}
+				_ = unlockFile(h.file)
+				_ = h.file.Close()
+			}
+		})
+	}
 }
 
 func lockAs(path string, pid int, kind string) (release func(), err error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return nil, err
 	}
-	lp := LockPath(path)
-	body, _ := json.Marshal(LockInfo{PID: pid, Started: time.Now(), Kind: kind})
-	for range 3 {
-		f, err := os.OpenFile(lp, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
-		if err == nil {
-			_, werr := f.Write(body)
-			f.Close()
-			if werr != nil {
-				os.Remove(lp)
-				return nil, werr
-			}
-			return func() { unlock(lp, body) }, nil
-		}
-		if !errors.Is(err, os.ErrExist) {
-			return nil, err
-		}
-		stale, err := os.ReadFile(lp)
-		if errors.Is(err, os.ErrNotExist) {
-			continue
-		}
-		if err != nil {
-			return nil, err
-		}
-		if l, ok := liveLock(stale); ok {
-			owned := l.PID == pid && (kind == KindTUI && l.Kind == KindTUI || kind == KindBackground && (l.Kind == KindBackground || l.Kind == ""))
-			if !owned {
-				return nil, LockError(l)
-			}
-		}
-		if err := retireLock(lp, stale); err != nil {
-			return nil, err
-		}
-	}
-	return nil, fmt.Errorf("could not lock %s", path)
-}
-
-// retireLock moves the checked lock aside before deciding whether to remove it.
-func retireLock(lp string, checked []byte) error {
-	f, err := os.CreateTemp(filepath.Dir(lp), ".lock-takeover-*")
+	key, err := lockKey(path)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	moved := f.Name()
-	f.Close()
-	os.Remove(moved)
-	if err := moveLock(lp, moved); err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return nil
+	heldLocks.Lock()
+	defer heldLocks.Unlock()
+	if h := heldLocks.locks[key]; h != nil {
+		owned := h.info.PID == pid && (kind == KindTUI && h.info.Kind == KindTUI || kind == KindBackground && (h.info.Kind == KindBackground || h.info.Kind == ""))
+		if !owned {
+			return nil, LockError(h.info)
 		}
-		return err
+		return releaseLocked(key, h), nil
 	}
-	b, err := os.ReadFile(moved)
+	f, err := os.OpenFile(key, os.O_CREATE|os.O_RDWR, 0o644)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	if !bytes.Equal(b, checked) {
-		// Another contender replaced the lock. Restore it without replacing a winner.
-		if err := os.Link(moved, lp); err != nil && !errors.Is(err, os.ErrExist) {
-			return err
+	if err := tryFileLock(f); err != nil {
+		info := readLockInfo(f)
+		_ = f.Close()
+		if fileLockBusy(err) {
+			return nil, LockError(info)
 		}
+		return nil, fmt.Errorf("lock %s: %w", path, err)
 	}
-	return os.Remove(moved)
-}
-
-// unlock removes only the exact acquisition that returned this release function.
-func unlock(lp string, body []byte) {
-	b, err := os.ReadFile(lp)
-	if err != nil || !bytes.Equal(b, body) {
-		return
+	info := LockInfo{PID: pid, Started: time.Now(), Kind: kind}
+	if err := writeLockInfo(f, info); err != nil {
+		_ = unlockFile(f)
+		_ = f.Close()
+		return nil, err
 	}
-	_ = retireLock(lp, body)
+	h := &heldLock{file: f, info: info}
+	heldLocks.locks[key] = h
+	return releaseLocked(key, h), nil
 }

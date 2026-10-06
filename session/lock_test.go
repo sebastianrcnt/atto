@@ -1,11 +1,13 @@
 package session
 
 import (
-	"encoding/json"
+	"bufio"
 	"errors"
+	"fmt"
+	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -30,48 +32,8 @@ func TestLockAcquireRelease(t *testing.T) {
 	if _, ok := LockedBy(path); ok {
 		t.Fatal("released")
 	}
-	if _, err := os.Stat(LockPath(path)); !os.IsNotExist(err) {
+	if _, err := os.Stat(LockPath(path)); err != nil {
 		t.Fatalf("lock file left: %v", err)
-	}
-}
-
-func TestLockHeldByOtherProcess(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "s.jsonl")
-	if _, err := LockFor(path, 4242); err != nil {
-		t.Fatal(err)
-	}
-	old := processAlive
-	t.Cleanup(func() { processAlive = old })
-	processAlive = func(pid int) bool { return pid == 4242 }
-	if l, ok := LockedBy(path); !ok || l.PID != 4242 {
-		t.Fatalf("lock %+v %v", l, ok)
-	}
-	if _, err := Lock(path); !errors.Is(err, ErrLocked) {
-		t.Fatalf("a live holder refuses the lock: %v", err)
-	}
-	// Its process is gone: the lock is stale and replaced.
-	processAlive = func(int) bool { return false }
-	if _, ok := LockedBy(path); ok {
-		t.Fatal("stale lock ignored")
-	}
-	processAlive = old
-	path2 := path
-	release, err := LockFor(path2, os.Getpid())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if l, ok := LockedBy(path); !ok || l.PID != os.Getpid() {
-		t.Fatalf("lock %+v %v", l, ok)
-	}
-	release()
-}
-
-func TestPidAlive(t *testing.T) {
-	if !pidAlive(os.Getpid()) {
-		t.Fatal("this process is alive")
-	}
-	if pidAlive(0x7ffffff0) {
-		t.Fatal("no such process")
 	}
 }
 
@@ -157,93 +119,176 @@ func TestWriterKindsDoNotAllowSameProcessTakeover(t *testing.T) {
 	}
 }
 
-func TestStaleTakeoverDoesNotRemoveFreshLock(t *testing.T) {
+func TestUnlockedMetadataIsNotALock(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "s.jsonl")
-	if err := os.WriteFile(LockPath(path), []byte(`{"pid":2147483632}`), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	old := moveLock
-	t.Cleanup(func() { moveLock = old })
-	var firstRelease func()
-	moveLock = func(from, to string) error {
-		moveLock = old
-		var err error
-		firstRelease, err = Lock(path)
+	for _, body := range []string{`{"pid":2147483632}`, `{"pid":1,"kind":"tui"}`, `garbage`, ""} {
+		if err := os.WriteFile(LockPath(path), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if _, ok := LockedBy(path); ok {
+			t.Fatal("unlocked metadata treated as ownership")
+		}
+		release, err := Lock(path)
 		if err != nil {
 			t.Fatal(err)
 		}
-		return old(from, to)
+		release()
 	}
-	if release, err := Lock(path); !errors.Is(err, ErrLocked) {
-		if release != nil {
-			release()
+}
+
+// Re-exec the test binary: no Go registry state or cleanup can simulate OS
+// ownership across processes, especially abrupt process death.
+func TestLockProcessHelper(t *testing.T) {
+	mode := os.Getenv("ATTO_TEST_LOCK_MODE")
+	if mode == "" {
+		return
+	}
+	path := os.Getenv("ATTO_TEST_LOCK_PATH")
+	if mode == "race" {
+		_, _ = bufio.NewReader(os.Stdin).ReadString('\n')
+	}
+	release, err := LockKind(path, KindBackground)
+	if err != nil {
+		if errors.Is(err, ErrLocked) {
+			fmt.Println("busy")
+			os.Exit(0)
 		}
-		t.Fatalf("second takeover: %v", err)
-	}
-	defer firstRelease()
-	if l, ok := LockedBy(path); !ok || l.PID != os.Getpid() {
-		t.Fatalf("fresh lock lost: %+v %v", l, ok)
-	}
-}
-
-func TestLockPIDReuse(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "s.jsonl")
-	now := time.Now()
-	body, err := json.Marshal(LockInfo{PID: 4242, Started: now})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(LockPath(path), body, 0o644); err != nil {
-		t.Fatal(err)
-	}
-	oldAlive, oldStart := processAlive, processStartTime
-	t.Cleanup(func() { processAlive, processStartTime = oldAlive, oldStart })
-	processAlive = func(int) bool { return true }
-	for _, tc := range []struct {
-		name        string
-		start       time.Time
-		known, live bool
-	}{
-		{"original", now.Add(-time.Second), true, true},
-		{"granularity", now.Add(time.Second), true, true},
-		{"reused", now.Add(3 * time.Second), true, false},
-		{"unknown", time.Time{}, false, true},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			processStartTime = func(int) (time.Time, bool) { return tc.start, tc.known }
-			if _, ok := LockedBy(path); ok != tc.live {
-				t.Fatalf("live = %v, want %v", ok, tc.live)
-			}
-		})
-	}
-}
-
-func TestProcessStartTime(t *testing.T) {
-	start, ok := pidStartTime(os.Getpid())
-	if runtime.GOOS != "darwin" && runtime.GOOS != "linux" && runtime.GOOS != "windows" {
-		t.Skip("process start time unavailable")
-	}
-	if !ok || start.IsZero() || start.After(time.Now().Add(2*time.Second)) {
-		t.Fatalf("current process start: %v %v", start, ok)
-	}
-	// A parent's LockFor timestamp comes after the child started, so it remains live.
-	path := filepath.Join(t.TempDir(), "s.jsonl")
-	release, err := LockFor(path, os.Getpid())
-	if err != nil {
-		t.Fatal(err)
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(2)
 	}
 	defer release()
-	l, live := LockedBy(path)
-	if !live || l.Started.Before(start.Add(-2*time.Second)) {
-		t.Fatalf("parent lock: %+v %v", l, live)
-	}
-	second, err := LockFor(path, os.Getpid())
+	fmt.Println("held")
+	_, _ = bufio.NewReader(os.Stdin).ReadString('\n')
+}
+
+type lockChild struct {
+	cmd    *exec.Cmd
+	input  io.WriteCloser
+	output *bufio.Reader
+}
+
+func startLockChild(t *testing.T, path, mode string) *lockChild {
+	t.Helper()
+	cmd := exec.Command(os.Args[0], "-test.run=^TestLockProcessHelper$")
+	cmd.Env = append(os.Environ(), "ATTO_TEST_LOCK_MODE="+mode, "ATTO_TEST_LOCK_PATH="+path)
+	input, err := cmd.StdinPipe()
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer second()
+	output, err := cmd.StdoutPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd.Stderr = os.Stderr
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = input.Close(); _ = cmd.Process.Kill(); _ = cmd.Wait() })
+	return &lockChild{cmd, input, bufio.NewReader(output)}
+}
+func (c *lockChild) line(t *testing.T) string {
+	t.Helper()
+	result := make(chan string, 1)
+	go func() { line, _ := c.output.ReadString('\n'); result <- strings.TrimSpace(line) }()
+	select {
+	case line := <-result:
+		return line
+	case <-time.After(10 * time.Second):
+		t.Fatal("timed out waiting for child")
+		return ""
+	}
+}
+
+func TestLockHeldByOtherProcessAndKilled(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "s.jsonl")
+	c := startLockChild(t, path, "hold")
+	if got := c.line(t); got != "held" {
+		t.Fatalf("child: %s", got)
+	}
+	l, ok := LockedBy(path)
+	if !ok || l.PID != c.cmd.Process.Pid || l.Kind != KindBackground || l.Started.IsZero() {
+		t.Fatalf("lock: %+v %v", l, ok)
+	}
+	if _, err := Lock(path); !errors.Is(err, ErrLocked) {
+		t.Fatalf("contender: %v", err)
+	}
+	if err := c.cmd.Process.Kill(); err != nil {
+		t.Fatal(err)
+	}
+	_ = c.cmd.Wait()
+	if _, ok := LockedBy(path); ok {
+		t.Fatal("dead process still owns lock")
+	}
+	release, err := Lock(path)
+	if err != nil {
+		t.Fatal(err)
+	}
 	release()
-	if _, live := LockedBy(path); !live {
-		t.Fatal("parent release removed child's acquisition")
+}
+
+func TestLockCrossProcessRace(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "s.jsonl")
+	for i := range 50 {
+		a := startLockChild(t, path, "race")
+		b := startLockChild(t, path, "race")
+		_, _ = io.WriteString(a.input, "go\n")
+		_, _ = io.WriteString(b.input, "go\n")
+		al, bl := a.line(t), b.line(t)
+		if !(al == "held" && bl == "busy" || al == "busy" && bl == "held") {
+			t.Fatalf("race %d: %q %q", i, al, bl)
+		}
+		_ = a.input.Close()
+		_ = b.input.Close()
+		if err := a.cmd.Wait(); err != nil {
+			t.Fatal(err)
+		}
+		if err := b.cmd.Wait(); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func TestOwnedBackgroundRelock(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "s.jsonl")
+	old, err := LockFor(path, os.Getpid())
+	if err != nil {
+		t.Fatal(err)
+	}
+	newer, err := LockKind(path, KindBackground)
+	if err != nil {
+		t.Fatal(err)
+	}
+	old()
+	old()
+	if _, ok := LockedBy(path); !ok {
+		t.Fatal("old release dropped new lease")
+	}
+	newer()
+	last, err := LockKind(path, KindBackground)
+	if err != nil {
+		t.Fatal(err)
+	}
+	old()
+	newer()
+	if _, ok := LockedBy(path); !ok {
+		t.Fatal("old releases dropped subsequent acquisition")
+	}
+	last()
+}
+
+func TestHeldCorruptMetadataStillLocked(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "s.jsonl")
+	c := startLockChild(t, path, "hold")
+	if got := c.line(t); got != "held" {
+		t.Fatal(got)
+	}
+	if err := os.WriteFile(LockPath(path), []byte("{"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := LockedBy(path); !ok {
+		t.Fatal("partial metadata hides OS lock")
+	}
+	if _, err := Lock(path); !errors.Is(err, ErrLocked) {
+		t.Fatalf("partial metadata: %v", err)
 	}
 }

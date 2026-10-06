@@ -1,14 +1,15 @@
 package app
 
 import (
+	"bufio"
 	"context"
-	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/sebastianrcnt/atto/agent"
 	"github.com/sebastianrcnt/atto/config"
@@ -367,9 +368,24 @@ func TestSessionOpenInAnotherTerminal(t *testing.T) {
 		t.Fatalf("the new session is not held: %+v %v", l, ok)
 	}
 	path := saveSession(t, a.cwd, "earlier")
-	body, _ := json.Marshal(session.LockInfo{PID: os.Getppid(), Started: time.Now(), Kind: session.KindTUI}) // another atto, alive
-	if err := os.WriteFile(session.LockPath(path), body, 0o644); err != nil {
+	cmd := exec.Command(os.Args[0], "-test.run=^TestTerminalLockHelper$")
+	cmd.Env = append(os.Environ(), "ATTO_TEST_TERMINAL_LOCK="+path)
+	in, err := cmd.StdinPipe()
+	if err != nil {
 		t.Fatal(err)
+	}
+	out, err := cmd.StdoutPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd.Stderr = os.Stderr
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = in.Close(); _ = cmd.Process.Kill(); _ = cmd.Wait() })
+	line, err := bufio.NewReader(out).ReadString('\n')
+	if err != nil || line != "held\n" {
+		t.Fatalf("child: %q %v", line, err)
 	}
 	before := a.sess.Path
 	a.resume(path)
@@ -381,7 +397,10 @@ func TestSessionOpenInAnotherTerminal(t *testing.T) {
 	}
 
 	// Once the other has closed it, it opens here and the lock moves.
-	os.Remove(session.LockPath(path))
+	_ = in.Close()
+	if err := cmd.Wait(); err != nil {
+		t.Fatal(err)
+	}
 	a.resume(path)
 	if a.sess.Path != path {
 		t.Fatalf("not opened: %s", a.sess.Path)
@@ -396,4 +415,18 @@ func TestSessionOpenInAnotherTerminal(t *testing.T) {
 	if _, ok := session.LockedBy(path); ok {
 		t.Fatal("closing releases it")
 	}
+}
+
+func TestTerminalLockHelper(t *testing.T) {
+	path := os.Getenv("ATTO_TEST_TERMINAL_LOCK")
+	if path == "" {
+		return
+	}
+	release, err := session.LockTUI(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+	fmt.Println("held")
+	_, _ = bufio.NewReader(os.Stdin).ReadString('\n')
 }
