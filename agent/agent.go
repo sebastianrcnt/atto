@@ -1351,7 +1351,12 @@ func (a *Agent) viewed(dir string) (imgs []provider.Image, note string) {
 	}
 	for _, im := range imgs {
 		// Without its file a resumed session sends a note instead.
-		_ = images.Save(im)
+		if err := images.Save(im); err != nil {
+			if note != "" {
+				note += "\n"
+			}
+			note += fmt.Sprintf("[atto view: %s could not be saved and will not survive resume: %v]", images.ViewLabel(im), err)
+		}
 	}
 	return imgs, note
 }

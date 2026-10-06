@@ -140,3 +140,24 @@ func TestViewDirOnlyForForegroundCalls(t *testing.T) {
 		t.Fatalf("%s left behind: %v", d, err)
 	}
 }
+
+func TestViewedReportsSaveFailure(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("ATTO_DIR", root)
+	if err := os.WriteFile(images.Dir(), []byte("not a directory"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	a := viewAgent(t, "", "text", "image")
+	dir := t.TempDir()
+	im, err := images.ReadFile(filepath.Join(a.Cwd, "shot.png"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := images.Drop(dir, "shot.png", im); err != nil {
+		t.Fatal(err)
+	}
+	imgs, note := a.viewed(dir)
+	if len(imgs) != 1 || !strings.Contains(note, "shot.png") || !strings.Contains(note, "will not survive resume") {
+		t.Fatalf("save failure: %d images, %q", len(imgs), note)
+	}
+}
