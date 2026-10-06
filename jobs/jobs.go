@@ -275,10 +275,24 @@ func reserve(session string) (int, string, error) {
 	if session == "" {
 		return 0, "", fmt.Errorf("no session: run inside atto (ATTO_SESSION_ID) or pass --session")
 	}
+	release, err := lockReservations(session)
+	if err != nil {
+		return 0, "", err
+	}
+	defer release()
 	if ActiveCount(session) >= MaxRunning {
 		return 0, "", fmt.Errorf("%d jobs already running; stop some with `atto job kill <id>`", MaxRunning)
 	}
-	return newDir(session)
+	id, dir, err := newDir(session)
+	if err != nil {
+		return 0, "", err
+	}
+	// Count the reservation before another caller checks the limit.
+	if err := save(dir, Job{ID: id, Session: session, Status: Starting, Started: time.Now()}); err != nil {
+		_ = os.RemoveAll(dir)
+		return 0, "", err
+	}
+	return id, dir, nil
 }
 
 func start(session, cwd, name, command string, mon *Monitor, notify *Notify, env []string) (Job, error) {
