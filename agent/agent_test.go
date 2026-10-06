@@ -47,11 +47,13 @@ func fakeServer(t *testing.T, replies ...[]string) (*httptest.Server, func() [][
 	return srv, func() [][]map[string]any { mu.Lock(); defer mu.Unlock(); return seen }
 }
 
-func toolCall(cmd string) []string {
+func toolCall(cmd string) []string { return toolCallFinish(cmd, "tool_calls") }
+
+func toolCallFinish(cmd, reason string) []string {
 	args, _ := json.Marshal(map[string]string{"description": "test", "command": cmd})
 	a, _ := json.Marshal(string(args))
 	return []string{
-		fmt.Sprintf(`{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"c1","type":"function","function":{"name":"bash","arguments":%s}}]},"finish_reason":"tool_calls"}]}`, a),
+		fmt.Sprintf(`{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"c1","type":"function","function":{"name":"bash","arguments":%s}}]},"finish_reason":%q}]}`, a, reason),
 	}
 }
 
@@ -91,6 +93,35 @@ func TestRequestUsesOneModelSnapshot(t *testing.T) {
 			return
 		default:
 		}
+	}
+}
+
+func TestLengthTruncatedToolCallDoesNotRun(t *testing.T) {
+	srv, seen := fakeServer(t, toolCallFinish("echo should-not-run", "length"), text("done"))
+	a := newTestAgent(srv.URL)
+	starts := 0
+	if err := a.Run(context.Background(), "go", func(ev any) {
+		if _, ok := ev.(ToolStart); ok {
+			starts++
+		}
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if starts != 0 {
+		t.Fatalf("truncated tool call started %d times", starts)
+	}
+	reqs := seen()
+	if len(reqs) != 2 {
+		t.Fatalf("got %d requests, want the model to get one retry step", len(reqs))
+	}
+	found := false
+	for _, m := range reqs[1] {
+		if m["role"] == "tool" && strings.Contains(fmt.Sprint(m["content"]), "output token limit") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("second request has no truncation tool result: %v", reqs[1])
 	}
 }
 
