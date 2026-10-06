@@ -522,24 +522,23 @@ func (a *App) cmdSessions(string) {
 	a.openModal(p)
 }
 
-// requestResume switches to path at a turn boundary. A running turn keeps
-// its current session bindings until cancellation has finished, so its late
-// events and response cannot be recorded in the destination session.
+// requestResume switches to another session; the one open stays.
 func (a *App) requestResume(path string) {
-	if path == a.sess.Path {
-		return
+	if path != a.sess.Path {
+		a.resume(path)
 	}
+}
+
+// resume loads a session file, restores the agent and redraws the
+// transcript, then keeps appending to the same file. During a turn it waits
+// for the turn to stop first, whoever asks: the running turn keeps its
+// session until then, so its late events and reply can't land in the new one.
+func (a *App) resume(path string) {
 	if a.busy {
 		a.pendingResume = path
 		a.cancel()
 		return
 	}
-	a.resume(path)
-}
-
-// resume loads a session file, restores the agent and redraws the
-// transcript, then keeps appending to the same file.
-func (a *App) resume(path string) {
 	saved, file, err := core.Open(path)
 	if err != nil {
 		a.errorNotice(err)
