@@ -889,7 +889,7 @@ func TestGoalTransientErrorRetriesLater(t *testing.T) {
 		t.Fatalf("%+v pending=%v timer=%v", g, a.goal.Pending(), a.retryTimer)
 	}
 	got := strings.Join(strings.Fields(goalText(a)), " ")
-	if !strings.Contains(got, "Model error (400: Upstream request failed: Model is unavailable); retrying the goal in 10s (1/3).") ||
+	if !strings.Contains(got, "Model error (400: Upstream request failed: Model is unavailable); retrying the goal in 10s (1/6).") ||
 		strings.Contains(got, goalWaitingNotice) || strings.Contains(got, "stalled") {
 		t.Fatalf("notice:\n%s", got)
 	}

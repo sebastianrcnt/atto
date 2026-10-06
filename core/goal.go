@@ -31,8 +31,8 @@ import (
 // answer is not buried under more goal work. Goal continuations and events
 // are not user input.
 //
-// A turn that fails for a transient reason (a 5xx, a timeout, an unavailable
-// model: goal.IsTransient) does not stall the goal at once: the continuation
+// A turn that fails for a reason a retry might fix (goal.IsTransient: all
+// but what ai.IsPermanent rules out) does not stall the goal at once: the continuation
 // is retried after a growing delay (retryDelays), and only when those
 // retries fail too does the goal stall. The driver only says when (Pending);
 // the front end waits, so it stays responsive, and Run waits itself.
@@ -87,8 +87,10 @@ type GoalDriver struct {
 }
 
 // retryDelays are the waits before the retries of a goal turn that failed
-// for a transient reason; when the last retry fails the goal stalls.
-var retryDelays = []time.Duration{10 * time.Second, 30 * time.Second, 90 * time.Second}
+// for a transient reason; when the last retry fails the goal stalls. The
+// turn already retried its request (agent.streamRetries): these are the
+// goal's longer safety net, for an outage of minutes, not seconds.
+var retryDelays = []time.Duration{10 * time.Second, 30 * time.Second, time.Minute, 2 * time.Minute, 5 * time.Minute, 10 * time.Minute}
 
 // Retry is a goal turn that failed for a transient reason, to be tried again
 // at At: attempt Attempt of Of.

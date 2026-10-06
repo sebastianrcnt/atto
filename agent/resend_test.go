@@ -12,7 +12,7 @@ import (
 	"github.com/sebastianrcnt/atto/session"
 )
 
-// flakyServer answers the first request with a 400 and the rest with "ok",
+// flakyServer answers the first request with a 400 a retry cannot fix and the rest with "ok",
 // and records each request's messages.
 func flakyServer(t *testing.T) (*httptest.Server, func() [][]map[string]any) {
 	var mu sync.Mutex
@@ -27,7 +27,7 @@ func flakyServer(t *testing.T) (*httptest.Server, func() [][]map[string]any) {
 		first := len(seen) == 1
 		mu.Unlock()
 		if first {
-			http.Error(w, `{"error":{"message":"bad request"}}`, http.StatusBadRequest)
+			http.Error(w, `{"error":{"message":"invalid request: messages must not be empty"}}`, http.StatusBadRequest)
 			return
 		}
 		fmt.Fprint(w, `data: {"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}`+"\n\ndata: [DONE]\n\n")

@@ -244,6 +244,11 @@ func (b *Builder) apply(ev any, at time.Time) {
 		}
 	case agent.HookNotice:
 		b.add(Item{Kind: Hook, Status: Completed, HookEvent: e.Event, Text: e.Message, Blocked: e.Blocked})
+	case agent.StreamRetry:
+		// What streamed is not kept: it ends here, and the request goes again.
+		b.closeText(at)
+		b.step = nil
+		b.add(Item{Kind: Notice, Status: Completed, Text: retryNotice(e)})
 	case agent.CompactStart:
 		b.closeText(at)
 		b.compact = b.start(Item{Kind: Compaction, Status: InProgress, Auto: e.Auto})
@@ -624,4 +629,13 @@ func shownOutput(content string, t *session.ToolMeta) string {
 		return rest
 	}
 	return content
+}
+
+// retryNotice says why a model request is being sent again.
+func retryNotice(e agent.StreamRetry) string {
+	if e.Wait == 0 {
+		return fmt.Sprintf("The request no longer fits the context window (%s); compacting and sending it again.", e.Err)
+	}
+	return fmt.Sprintf("Model request failed (%s); retrying in %s (%d/%d). Any reply cut off above is not kept.",
+		e.Err, e.Wait.Round(100*time.Millisecond), e.Attempt, e.Of)
 }

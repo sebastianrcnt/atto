@@ -1,0 +1,132 @@
+package agent
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/sebastianrcnt/atto/provider"
+	"github.com/sebastianrcnt/atto/session"
+)
+
+// scriptedServer answers the n-th request with replies[n] (the last one
+// repeats): an HTTP status and body, or 200 and an SSE stream.
+func scriptedServer(t *testing.T, replies ...func(w http.ResponseWriter)) (*httptest.Server, func() int) {
+	var mu sync.Mutex
+	n := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		mu.Lock()
+		i := min(n, len(replies)-1)
+		n++
+		mu.Unlock()
+		replies[i](w)
+	}))
+	t.Cleanup(srv.Close)
+	return srv, func() int { mu.Lock(); defer mu.Unlock(); return n }
+}
+
+func status(code int, msg string) func(http.ResponseWriter) {
+	return func(w http.ResponseWriter) {
+		http.Error(w, fmt.Sprintf(`{"error":{"message":%q}}`, msg), code)
+	}
+}
+
+func sse(chunks ...string) func(http.ResponseWriter) {
+	return func(w http.ResponseWriter) {
+		for _, c := range chunks {
+			fmt.Fprint(w, "data: "+c+"\n\n")
+		}
+	}
+}
+
+// cutOff is a reply the provider drops mid-stream: text, no finish_reason.
+var cutOff = sse(`{"choices":[{"delta":{"content":"partial rep"}}]}`)
+
+var okReply = sse(`{"choices":[{"delta":{"content":"done"},"finish_reason":"stop"}]}`, "[DONE]")
+
+func noWait(t *testing.T) {
+	old := retryWait
+	retryWait = func(error, int, time.Duration) time.Duration { return time.Millisecond }
+	t.Cleanup(func() { retryWait = old })
+}
+
+// A reply cut off mid-stream, or a 5xx, is sent again within the turn, and
+// what streamed before the cut is not kept.
+func TestTurnRetriesPassingFailures(t *testing.T) {
+	noWait(t)
+	srv, count := scriptedServer(t, cutOff, status(503, "overloaded"), okReply)
+	a := newTestAgent(srv.URL)
+	var retries []StreamRetry
+	var rec []session.Entry
+	a.Record = func(e session.Entry) { rec = append(rec, e) }
+	err := a.Run(context.Background(), "go", func(ev any) {
+		if r, ok := ev.(StreamRetry); ok {
+			retries = append(retries, r)
+		}
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count() != 3 || len(retries) != 2 || retries[0].Attempt != 1 || retries[1].Attempt != 2 {
+		t.Fatalf("%d requests, retries %+v", count(), retries)
+	}
+	for _, e := range rec {
+		if e.Message != nil && e.Message.Role == "assistant" && e.Message.Content != "done" {
+			t.Fatalf("kept a cut-off reply: %q", e.Message.Content)
+		}
+	}
+}
+
+// A failure a retry cannot fix fails the turn at once.
+func TestTurnDoesNotRetryPermanentFailures(t *testing.T) {
+	noWait(t)
+	for _, reply := range []func(http.ResponseWriter){
+		status(401, "invalid api key"),
+		status(400, "invalid request: tools must be an array"),
+		status(402, "insufficient_quota"),
+	} {
+		srv, count := scriptedServer(t, reply, okReply)
+		a := newTestAgent(srv.URL)
+		if err := a.Run(context.Background(), "go", func(any) {}); err == nil || count() != 1 {
+			t.Fatalf("err %v after %d requests", err, count())
+		}
+	}
+}
+
+// Retries stop after streamRetries, and the turn fails with the last error.
+func TestTurnRetriesAreBounded(t *testing.T) {
+	noWait(t)
+	srv, count := scriptedServer(t, status(500, "boom"))
+	a := newTestAgent(srv.URL)
+	err := a.Run(context.Background(), "go", func(any) {})
+	if err == nil || !strings.Contains(err.Error(), "boom") || count() != streamRetries+1 {
+		t.Fatalf("err %v after %d requests", err, count())
+	}
+}
+
+// A request that no longer fits is compacted once and sent again.
+func TestTurnCompactsOnContextOverflow(t *testing.T) {
+	noWait(t)
+	notes := sse(`{"choices":[{"delta":{"content":"notes"},"finish_reason":"stop"}]}`, "[DONE]")
+	srv, count := scriptedServer(t, status(400, "This model's maximum context length is 1000 tokens"), notes, okReply)
+	a := newTestAgent(srv.URL)
+	a.messages = append(a.messages, provider.Message{Role: "user", Content: "earlier"},
+		provider.Message{Role: "assistant", Content: "earlier answer"})
+	compacted := false
+	err := a.Run(context.Background(), "go", func(ev any) {
+		if _, ok := ev.(CompactEnd); ok {
+			compacted = true
+		}
+	})
+	if err != nil || !compacted || count() != 3 {
+		t.Fatalf("err %v, compacted %v, %d requests", err, compacted, count())
+	}
+}

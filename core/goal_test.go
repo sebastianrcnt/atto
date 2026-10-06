@@ -72,8 +72,8 @@ func TestGoalDriverStops(t *testing.T) {
 	g.Status = goal.Active
 	d.Set(g)
 	d.BeginTurn()
-	d.EndTurn(errors.New("boom"))
-	if g.Status != goal.Blocked || !strings.Contains(g.Note, "boom") {
+	d.EndTurn(errors.New("401: invalid api key"))
+	if g.Status != goal.Blocked || !strings.Contains(g.Note, "invalid api key") {
 		t.Fatalf("failures block: %s %q", g.Status, g.Note)
 	}
 
@@ -495,43 +495,43 @@ func TestGoalDriverSteerNote(t *testing.T) {
 
 func fastRetries(t *testing.T) {
 	old := retryDelays
-	retryDelays = []time.Duration{time.Millisecond, 2 * time.Millisecond, 3 * time.Millisecond}
+	retryDelays = []time.Duration{time.Millisecond, 2 * time.Millisecond, 3 * time.Millisecond, 4 * time.Millisecond, 5 * time.Millisecond, 6 * time.Millisecond}
 	t.Cleanup(func() { retryDelays = old })
 }
 
 var errUnavailable = errors.New("400: Upstream request failed: Model is unavailable")
 
 // A transient failure retries the goal after a delay instead of stalling it;
-// the retries are told, run out after three, and then it stalls.
+// the retries are told, run out after six, and then it stalls.
 func TestGoalDriverRetriesTransientFailures(t *testing.T) {
 	t.Setenv("ATTO_DIR", t.TempDir())
 	g, _ := goal.New("ship it")
 	var told []Retry
 	d := GoalDriver{Session: "s", Goal: g, Retrying: func(r Retry) { told = append(told, r) }}
-	for i := 1; i <= 3; i++ {
+	for i := 1; i <= 6; i++ {
 		d.BeginTurn()
 		if !d.EndTurn(errUnavailable) || g.Status != goal.Active || g.FailStreak != 0 {
 			t.Fatalf("failure %d stalled the goal: %s %d", i, g.Status, g.FailStreak)
 		}
 		r := d.Pending()
-		if r == nil || r.Attempt != i || r.Of != 3 || len(told) != i {
+		if r == nil || r.Attempt != i || r.Of != 6 || len(told) != i {
 			t.Fatalf("failure %d: pending %+v, told %d", i, r, len(told))
 		}
 		if _, ok := d.Next(); !ok || d.Pending() != nil {
 			t.Fatal("the retry starts with Next")
 		}
 	}
-	if n := told[1].Notice(); !strings.Contains(n, "Model error (400: Upstream request failed: Model is unavailable); retrying the goal in") || !strings.HasSuffix(n, "(2/3).") {
+	if n := told[1].Notice(); !strings.Contains(n, "Model error (400: Upstream request failed: Model is unavailable); retrying the goal in") || !strings.HasSuffix(n, "(2/6).") {
 		t.Fatalf("notice %q", n)
 	}
 	d.BeginTurn()
 	if d.EndTurn(errUnavailable) || g.Status != goal.Blocked || d.Pending() != nil {
-		t.Fatalf("the fourth failure stalls: %s", g.Status)
+		t.Fatalf("the seventh failure stalls: %s", g.Status)
 	}
-	if !strings.Contains(g.Note, "after 3 retries") || !strings.Contains(g.Note, "unavailable") {
+	if !strings.Contains(g.Note, "after 6 retries") || !strings.Contains(g.Note, "unavailable") {
 		t.Fatalf("note %q", g.Note)
 	}
-	if len(told) != 3 {
+	if len(told) != 6 {
 		t.Fatalf("told %d", len(told))
 	}
 }
@@ -562,7 +562,7 @@ func TestGoalDriverRetryCountResets(t *testing.T) {
 
 func TestGoalDriverOtherFailuresStallAtOnce(t *testing.T) {
 	t.Setenv("ATTO_DIR", t.TempDir())
-	for i, err := range []error{errors.New("401: invalid api key"), errors.New("400: bad request"), errors.New("boom")} {
+	for i, err := range []error{errors.New("401: invalid api key"), errors.New("400: invalid request: tools must be an array"), errors.New("404: model not found")} {
 		g, _ := goal.New("ship it")
 		d := GoalDriver{Session: fmt.Sprint("other", i), Goal: g, Retrying: func(Retry) { t.Fatal("retried") }}
 		d.BeginTurn()

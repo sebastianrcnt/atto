@@ -418,6 +418,7 @@ func TestIsTransient(t *testing.T) {
 		errors.New(`Post "https://x/v1": EOF`),
 		errors.New("request failed: dial tcp 1.2.3.4:443: i/o timeout"),
 		errors.New("Stream ended without finish_reason"), // the provider cut the stream off
+		errors.New("boom"), // unknown: retried, as codex does
 		&ai.ProviderError{Status: 502, StatusText: "Bad Gateway"},
 		&ai.ProviderError{Status: 429, Body: "slow down"},
 		context.DeadlineExceeded,
@@ -429,7 +430,6 @@ func TestIsTransient(t *testing.T) {
 	for _, err := range []error{
 		nil,
 		context.Canceled,
-		errors.New("boom"),
 		errors.New("400: invalid request: messages must not be empty"),
 		errors.New("401: invalid api key"),
 		errors.New("403: forbidden, upstream says no"),

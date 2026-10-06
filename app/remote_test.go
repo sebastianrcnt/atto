@@ -54,7 +54,7 @@ func newRemoteModel(t *testing.T) *remoteModel {
 			<-r.Context().Done()
 			return
 		case last.Role == "user" && text == "fail":
-			http.Error(w, `{"error":{"message":"bad request"}}`, http.StatusBadRequest)
+			http.Error(w, `{"error":{"message":"invalid request"}}`, http.StatusBadRequest)
 			return
 		case last.Role == "user" && text == "tool":
 			fmt.Fprint(w, `data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"c1","type":"function","function":{"name":"bash","arguments":"{\"description\":\"Wait\",\"command\":\"sleep 30\"}"}}]},"finish_reason":"tool_calls"}]}`+"\n\n")

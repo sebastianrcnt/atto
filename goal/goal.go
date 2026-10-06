@@ -11,15 +11,12 @@
 package goal
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
-	"regexp"
-	"strconv"
 	"strings"
 	"time"
 
@@ -333,63 +330,15 @@ func (g *Goal) Indicator(seconds int64, held bool) string {
 	return ""
 }
 
-// usageLimit matches the provider errors that mean the account's usage or
-// quota is used up, as opposed to a transient failure.
-var usageLimit = regexp.MustCompile(`(?i)usage.?limit|insufficient_quota|quota exceeded|exceeded your current quota|out of (credits|budget)|available balance|billing`)
-
 // IsUsageLimit reports whether err is the provider saying the usage limit
-// was reached (codex's UsageLimitExceeded): a 402, or an error whose text
-// names a usage limit or quota. Plain rate limiting that the retries did
-// not clear is an ordinary failure.
-func IsUsageLimit(err error) bool {
-	if err == nil {
-		return false
-	}
-	var pe *ai.ProviderError
-	if errors.As(err, &pe) && pe.Status == 402 {
-		return true
-	}
-	return usageLimit.MatchString(err.Error())
-}
+// was reached (see ai.IsUsageLimit).
+func IsUsageLimit(err error) bool { return ai.IsUsageLimit(err) }
 
-// transientText matches the provider and network errors that pass by
-// themselves: an overloaded or unavailable model, a gateway or upstream
-// failure, a dropped connection, a timeout, a stream cut off before its end.
-var transientText = regexp.MustCompile(`(?i)unavailable|overloaded|upstream|bad gateway|gateway time-?out|time-?d? ?out|connection (reset|refused|closed|aborted)|reset by peer|broken pipe|unexpected eof|\beof\b|dial tcp|no such host|temporar|try again|too many requests|rate.?limit|server error|internal error|at capacity|stream ended`)
-
-// errStatus is the HTTP status an error carries: the provider's, or the one
-// atto's messages start with ("503: ...", "Upstream request failed (400): ...").
-func errStatus(err error) int {
-	if pe, ok := errors.AsType[*ai.ProviderError](err); ok {
-		return pe.Status
-	}
-	m := statusText.FindStringSubmatch(err.Error())
-	if m == nil {
-		return 0
-	}
-	n, _ := strconv.Atoi(m[1] + m[2])
-	return n
-}
-
-var statusText = regexp.MustCompile(`^(?:(\d{3})\b|[^(:]*\((\d{3})\):)`)
-
-// IsTransient reports whether err is a failure worth retrying shortly: HTTP
-// 5xx, 408 and 429 (a usage limit is not one), a timeout or a dropped
-// connection, or a message that says the model is unavailable or overloaded
-// (also under a 400, as some gateways answer). Other 4xx (auth, a bad
-// request) and an interrupt are not.
-func IsTransient(err error) bool {
-	if err == nil || IsUsageLimit(err) || errors.Is(err, context.Canceled) {
-		return false
-	}
-	switch st := errStatus(err); {
-	case st >= 500 || st == 408 || st == 429:
-		return true
-	case st >= 400 && st < 500 && st != 400 && st != 409:
-		return false
-	}
-	return errors.Is(err, context.DeadlineExceeded) || transientText.MatchString(err.Error())
-}
+// IsTransient reports whether a goal turn that failed with err is worth
+// trying again: anything ai.IsPermanent does not rule out (an interrupt, a
+// usage limit, a context overflow, auth, a rejected request, a policy
+// refusal), as codex retries. The turn's own retries (agent) already ran.
+func IsTransient(err error) bool { return err != nil && !ai.IsPermanent(err) }
 
 // Goal messages are wrapped as internal context, after codex's
 // <codex_internal_context>, so the model can tell them from the user's own

@@ -314,8 +314,10 @@ func (a *App) onEvent(ev any) {
 		a.toolsRunning = max(0, a.toolsRunning-1)
 	case agent.TextDelta:
 		a.streamChars += len(e.Text)
+		a.retried()
 	case agent.ReasoningDelta:
 		a.streamChars += len(e.Text)
+		a.retried()
 	case agent.StepEnd:
 		a.turnOut += e.Usage.CompletionTokens
 		a.draftChars = nil
@@ -326,12 +328,22 @@ func (a *App) onEvent(ev any) {
 		a.usage.lastCost = a.model().Model.Cost
 		a.statusTrigger()
 		a.remoteStep(e.Usage)
+	case agent.StreamRetry:
+		a.activity = "Retrying"
+		a.streamChars = 0
 	case agent.CompactStart:
 		a.activity = "Compacting context"
 	case agent.CompactEnd:
 		a.ctxTokens = e.After
 		a.activity = "Thinking"
 		a.notice("Long threads and repeated compactions can make the model less accurate. Start a new conversation (/clear) when you can.")
+	}
+}
+
+// retried puts the status back once a retried request streams again.
+func (a *App) retried() {
+	if a.activity == "Retrying" {
+		a.activity = "Thinking"
 	}
 }
 

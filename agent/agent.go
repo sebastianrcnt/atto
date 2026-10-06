@@ -80,6 +80,26 @@ type MCPServers interface {
 // ExtensionEvent prefixes the event of the notices extensions cause.
 const ExtensionEvent = "extension "
 
+// StreamRetry reports a model request that failed and is sent again within
+// the turn: the reply streamed so far (if any) is dropped, not kept.
+type StreamRetry struct {
+	Attempt, Of int
+	Wait        time.Duration
+	Err         string
+}
+
+// streamRetries is how many times a failed model request is sent again
+// within a turn before the turn fails (codex's stream_max_retries).
+// ai.IsPermanent failures are not retried; a context overflow is compacted
+// once instead.
+const streamRetries = 5
+
+// maxRetryWait caps a provider's Retry-After for these retries.
+const maxRetryWait = 5 * time.Minute
+
+// retryWait is ai.RetryWait; tests shorten it.
+var retryWait = ai.RetryWait
+
 // HookNotice reports something a hook did, for display.
 type HookNotice struct {
 	Event   string
@@ -1036,25 +1056,58 @@ func (a *Agent) loop(ctx context.Context, emit func(any)) error {
 			return ErrMaxSteps
 		}
 		var thinkStart, thinkEnd time.Time
-		drafts := &draftTracker{emit: emit}
-		h := provider.Handler{
-			OnToolCallStart: drafts.start,
-			OnToolCallDelta: drafts.delta,
-			OnReasoning: func(s string) {
-				if thinkStart.IsZero() {
-					thinkStart = time.Now()
+		var drafts *draftTracker
+		var res provider.Result
+		var err error
+		for attempt, compacted := 1, false; ; attempt++ {
+			thinkStart, thinkEnd = time.Time{}, time.Time{}
+			drafts = &draftTracker{emit: emit}
+			h := provider.Handler{
+				OnToolCallStart: drafts.start,
+				OnToolCallDelta: drafts.delta,
+				OnReasoning: func(s string) {
+					if thinkStart.IsZero() {
+						thinkStart = time.Now()
+					}
+					emit(ReasoningDelta{s})
+				},
+				OnText: func(s string) {
+					if !thinkStart.IsZero() && thinkEnd.IsZero() {
+						thinkEnd = time.Now()
+					}
+					emit(TextDelta{s})
+				},
+			}
+			client, req := a.request()
+			res, err = client.Stream(ctx, req, h)
+			if err == nil || ctx.Err() != nil {
+				break
+			}
+			// The request no longer fits: compact once and send it again.
+			if ai.IsContextOverflow(err) && !compacted && len(a.messages) > 1 {
+				compacted = true
+				drafts.endAll()
+				emit(StreamRetry{Attempt: attempt, Of: streamRetries, Err: err.Error()})
+				if cerr := a.compact(ctx, emit, true); cerr != nil {
+					break
 				}
-				emit(ReasoningDelta{s})
-			},
-			OnText: func(s string) {
-				if !thinkStart.IsZero() && thinkEnd.IsZero() {
-					thinkEnd = time.Now()
-				}
-				emit(TextDelta{s})
-			},
+				continue
+			}
+			if ai.IsPermanent(err) || attempt > streamRetries {
+				break
+			}
+			// Anything else may pass: drop what streamed and send it again.
+			drafts.endAll()
+			wait := retryWait(err, attempt, maxRetryWait)
+			emit(StreamRetry{Attempt: attempt, Of: streamRetries, Wait: wait, Err: err.Error()})
+			select {
+			case <-time.After(wait):
+			case <-ctx.Done():
+			}
+			if ctx.Err() != nil {
+				break
+			}
 		}
-		client, req := a.request()
-		res, err := client.Stream(ctx, req, h)
 		var thinkMs int64
 		if !thinkStart.IsZero() {
 			if thinkEnd.IsZero() {
@@ -1484,11 +1537,7 @@ func fitCompaction(req *provider.Request, m config.Model, est, need int) int {
 
 // contextExceeded reports whether err says the request didn't fit the
 // model's context window.
-func contextExceeded(err error) bool {
-	s := strings.ToLower(err.Error())
-	return strings.Contains(s, "context") && (strings.Contains(s, "exceed") || strings.Contains(s, "too long") ||
-		strings.Contains(s, "maximum") || strings.Contains(s, "no room"))
-}
+func contextExceeded(err error) bool { return ai.IsContextOverflow(err) }
 
 var shellToolNames = map[string]bool{"bash": true, "powershell": true, "shell": true, "cmd": true}
 
