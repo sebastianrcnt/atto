@@ -24,7 +24,13 @@ const startWait = 5 * time.Second
 // dial connects to the daemon; with start, it starts one if none runs.
 func dial(start bool) (net.Conn, error) {
 	sock := SocketPath()
-	c, err := net.Dial("unix", sock)
+	if err := privateDir(filepath.Dir(sock)); err != nil {
+		return nil, err
+	}
+	c, err := trustedDial(sock)
+	if errors.Is(err, errPeer) {
+		return nil, err
+	}
 	if err == nil || !start {
 		if err != nil {
 			return nil, fmt.Errorf("%w: %v", ErrUnavailable, err)
@@ -40,7 +46,10 @@ func dial(start bool) (net.Conn, error) {
 	}
 	deadline := time.Now().Add(startWait)
 	for {
-		c, err := net.Dial("unix", sock)
+		c, err := trustedDial(sock)
+		if errors.Is(err, errPeer) {
+			return nil, err
+		}
 		if err == nil {
 			return c, nil
 		}

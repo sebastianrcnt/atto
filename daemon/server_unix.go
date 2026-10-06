@@ -33,7 +33,7 @@ const writeWait = 5 * time.Second
 // stop). exe is the atto binary the panes run. It returns at once, with
 // no error, when another daemon already serves this atto dir.
 func Serve(exe string) error {
-	if err := os.MkdirAll(RunDir(), 0o700); err != nil {
+	if err := privateDir(RunDir()); err != nil {
 		return err
 	}
 	lock, err := os.OpenFile(filepath.Join(RunDir(), "daemon.lock"), os.O_CREATE|os.O_RDWR, 0o600)
@@ -45,7 +45,7 @@ func Serve(exe string) error {
 		return nil // another daemon has it
 	}
 	sock := SocketPath()
-	if err := os.MkdirAll(filepath.Dir(sock), 0o700); err != nil {
+	if err := privateDir(filepath.Dir(sock)); err != nil {
 		return err
 	}
 	_ = os.Remove(sock) // a dead daemon's: we hold the lock
