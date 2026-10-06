@@ -150,7 +150,7 @@ func save(dir string, j Job) error {
 	saveMu.Lock()
 	defer saveMu.Unlock()
 	data, _ := json.MarshalIndent(j, "", "  ")
-	return fsutil.WriteAtomic(filepath.Join(dir, "job.json"), data, 0o644)
+	return fsutil.WriteAtomic(filepath.Join(dir, "job.json"), data, 0o600)
 }
 
 func load(dir string) (Job, error) {
@@ -224,7 +224,7 @@ func ActiveCount(session string) int {
 
 // newDir reserves the next job ID by creating its directory.
 func newDir(session string) (int, string, error) {
-	if err := os.MkdirAll(Root(session), 0o755); err != nil {
+	if err := fsutil.PrivateDirs(config.Dir(), Root(session)); err != nil {
 		return 0, "", err
 	}
 	next := 1
@@ -233,7 +233,7 @@ func newDir(session string) (int, string, error) {
 	}
 	for ; ; next++ {
 		dir := dirOf(session, next)
-		if err := os.Mkdir(dir, 0o755); err == nil {
+		if err := os.Mkdir(dir, 0o700); err == nil {
 			return next, dir, nil
 		} else if !os.IsExist(err) {
 			return 0, "", err
@@ -553,11 +553,14 @@ func Supervise(dir string) error {
 	if !j.Active() { // killed before it started
 		return nil
 	}
-	logf, err := os.OpenFile(filepath.Join(dir, "output.log"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	logf, err := os.OpenFile(filepath.Join(dir, "output.log"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {
 		return err
 	}
 	defer logf.Close()
+	if err := fsutil.PrivateFile(logf); err != nil {
+		return err
+	}
 	out := &cappedFile{f: logf}
 	j.SupervisorPID = os.Getpid()
 

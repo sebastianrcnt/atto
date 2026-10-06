@@ -92,7 +92,7 @@ func updateAuthLocked(fn func(raw map[string]json.RawMessage) error) error {
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(Dir(), 0o755); err != nil {
+	if err := fsutil.PrivateDirs(Dir(), Dir()); err != nil {
 		return err
 	}
 	// Atomic so a crash never leaves a truncated credentials file.
@@ -137,7 +137,7 @@ func DeviceID() (string, error) {
 		return string(b[:36]), nil
 	}
 	id := auth.NewDeviceID()
-	if err := os.MkdirAll(Dir(), 0o755); err != nil {
+	if err := fsutil.PrivateDirs(Dir(), Dir()); err != nil {
 		return "", err
 	}
 	return id, os.WriteFile(path, []byte(id+"\n"), 0o600)

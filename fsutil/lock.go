@@ -8,7 +8,7 @@ import (
 // WithFileLock serializes mutations of path across processes. The sibling
 // lock file is persistent: unlinking it would let writers lock different files.
 func WithFileLock(path string, fn func() error) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+	if err := PrivateDirs(filepath.Dir(path), filepath.Dir(path)); err != nil {
 		return err
 	}
 	f, err := os.OpenFile(path+".lock", os.O_CREATE|os.O_RDWR, 0o600)
@@ -16,6 +16,9 @@ func WithFileLock(path string, fn func() error) error {
 		return err
 	}
 	defer f.Close()
+	if err := PrivateFile(f); err != nil {
+		return err
+	}
 	if err := lockFile(f); err != nil {
 		return err
 	}

@@ -91,7 +91,7 @@ func BinDir() string         { return filepath.Join(Dir(), "bin") }
 // Ensure creates the root and its subdirectories if missing.
 func Ensure() error {
 	for _, d := range []string{Dir(), SessionsDir(), ExtensionsDir(), PromptsDir(), SkillsDir(), ThemesDir(), BinDir()} {
-		if err := os.MkdirAll(d, 0o755); err != nil {
+		if err := fsutil.PrivateDirs(Dir(), d); err != nil {
 			return err
 		}
 	}

@@ -38,6 +38,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/sebastianrcnt/atto/fsutil"
 	"github.com/sebastianrcnt/atto/shell"
 )
 
@@ -260,9 +261,14 @@ func (h *host) detach(c hostControl) {
 		h.report(HostStatus{DetachError: err.Error()})
 		return
 	}
-	f, err := os.OpenFile(filepath.Join(dir, "output.log"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	f, err := os.OpenFile(filepath.Join(dir, "output.log"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {
 		_ = os.RemoveAll(dir)
+		h.report(HostStatus{DetachError: err.Error()})
+		return
+	}
+	if err := fsutil.PrivateFile(f); err != nil {
+		f.Close()
 		h.report(HostStatus{DetachError: err.Error()})
 		return
 	}

@@ -3,6 +3,7 @@ package jobs
 import (
 	"errors"
 	"fmt"
+	"github.com/sebastianrcnt/atto/config"
 	"github.com/sebastianrcnt/atto/fsutil"
 	"os"
 	"path/filepath"
@@ -16,7 +17,7 @@ func lockReservations(session string) (func(), error) {
 		return nil, fmt.Errorf("invalid session id")
 	}
 	root := Root(session)
-	if err := os.MkdirAll(root, 0o755); err != nil {
+	if err := fsutil.PrivateDirs(config.Dir(), root); err != nil {
 		return nil, err
 	}
 	path := filepath.Join(root, ".reserve.lock")

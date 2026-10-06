@@ -3,6 +3,8 @@ package session
 import (
 	"errors"
 	"fmt"
+	"github.com/sebastianrcnt/atto/config"
+	"github.com/sebastianrcnt/atto/fsutil"
 	"io"
 	"os"
 	"os/exec"
@@ -24,7 +26,7 @@ const (
 // leaves an existing TUI lease intact, or releases a freshly acquired one.
 // The child must call AdoptBackgroundLock before writing the session.
 func StartBackground(path string, cmd *exec.Cmd) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err := fsutil.PrivateDirs(config.Dir(), filepath.Dir(path)); err != nil {
 		return err
 	}
 	key, err := lockKey(path)
@@ -36,8 +38,12 @@ func StartBackground(path string, cmd *exec.Cmd) error {
 	h := heldLocks.locks[key]
 	fresh := h == nil
 	if fresh {
-		f, err := os.OpenFile(key, os.O_CREATE|os.O_RDWR, 0o644)
+		f, err := os.OpenFile(key, os.O_CREATE|os.O_RDWR, 0o600)
 		if err != nil {
+			return err
+		}
+		if err := fsutil.PrivateFile(f); err != nil {
+			f.Close()
 			return err
 		}
 		if err := tryFileLock(f); err != nil {

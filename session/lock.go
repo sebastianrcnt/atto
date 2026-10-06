@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/sebastianrcnt/atto/config"
+	"github.com/sebastianrcnt/atto/fsutil"
 	"io"
 	"os"
 	"path/filepath"
@@ -166,7 +168,7 @@ func releaseLocked(key string, h *heldLock) func() {
 }
 
 func lockAs(path string, pid int, kind string) (release func(), err error) {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err := fsutil.PrivateDirs(config.Dir(), filepath.Dir(path)); err != nil {
 		return nil, err
 	}
 	key, err := lockKey(path)
@@ -182,8 +184,12 @@ func lockAs(path string, pid int, kind string) (release func(), err error) {
 		}
 		return releaseLocked(key, h), nil
 	}
-	f, err := os.OpenFile(key, os.O_CREATE|os.O_RDWR, 0o644)
+	f, err := os.OpenFile(key, os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
+		return nil, err
+	}
+	if err := fsutil.PrivateFile(f); err != nil {
+		f.Close()
 		return nil, err
 	}
 	if err := tryFileLock(f); err != nil {

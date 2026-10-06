@@ -11,6 +11,7 @@ import (
 
 	"github.com/sebastianrcnt/atto/agent"
 	"github.com/sebastianrcnt/atto/core"
+	"github.com/sebastianrcnt/atto/fsutil"
 	"github.com/sebastianrcnt/atto/goal"
 	"github.com/sebastianrcnt/atto/session"
 	"github.com/sebastianrcnt/atto/shell"
@@ -278,6 +279,18 @@ func (a *App) leaveCore() int {
 	return core.Leave(a.sess.ID)
 }
 
+func openBackgroundLog(path string) (*os.File, error) {
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	if err != nil {
+		return nil, err
+	}
+	if err := fsutil.PrivateFile(f); err != nil {
+		f.Close()
+		return nil, err
+	}
+	return f, nil
+}
+
 // spawnContinue starts "atto _continue <id>" detached from this terminal,
 // its output going to the session's log file, and locks the session for it.
 func spawnContinue(id, path, cwd string) (int, string, error) {
@@ -286,7 +299,7 @@ func spawnContinue(id, path, cwd string) (int, string, error) {
 		return 0, "", err
 	}
 	log := session.LogPath(path)
-	f, err := os.OpenFile(log, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	f, err := openBackgroundLog(log)
 	if err != nil {
 		return 0, "", err
 	}

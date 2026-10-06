@@ -20,6 +20,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"github.com/sebastianrcnt/atto/fsutil"
 	"io"
 	"io/fs"
 	"os"
@@ -285,13 +286,18 @@ func (w *Writer) open() error {
 	if w.f != nil || w.err != nil {
 		return w.err
 	}
-	if err := os.MkdirAll(filepath.Dir(w.Path), 0o755); err != nil {
+	if err := fsutil.PrivateDirs(config.Dir(), filepath.Dir(w.Path)); err != nil {
 		w.err = err
 		return err
 	}
 	_, statErr := os.Stat(w.Path)
-	f, err := os.OpenFile(w.Path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	f, err := os.OpenFile(w.Path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {
+		w.err = err
+		return err
+	}
+	if err := fsutil.PrivateFile(f); err != nil {
+		f.Close()
 		w.err = err
 		return err
 	}
@@ -643,7 +649,7 @@ func move(path, fromRoot, toRoot string) (string, error) {
 	}
 	defer release()
 	dst := filepath.Join(toRoot, rel)
-	if err := os.MkdirAll(filepath.Dir(dst), 0o700); err != nil {
+	if err := fsutil.PrivateDirs(config.Dir(), filepath.Dir(dst)); err != nil {
 		return "", err
 	}
 	dstRelease, err := Lock(dst)

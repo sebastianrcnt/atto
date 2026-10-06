@@ -97,10 +97,10 @@ func randID() string {
 // writeAtomic writes data to path via a temp file and rename, so readers
 // never see a partial file.
 func writeAtomic(path string, data []byte) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err := fsutil.PrivateDirs(config.Dir(), filepath.Dir(path)); err != nil {
 		return err
 	}
-	return fsutil.WriteAtomic(path, data, 0o644)
+	return fsutil.WriteAtomic(path, data, 0o600)
 }
 
 // Push adds an event to a session's inbox.

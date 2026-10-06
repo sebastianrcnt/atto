@@ -4,6 +4,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"github.com/sebastianrcnt/atto/config"
 	"github.com/sebastianrcnt/atto/fsutil"
 	"os"
 	"path/filepath"
@@ -90,6 +91,9 @@ func AddRecurringTimer(session string, now time.Time, every time.Duration, count
 func timerLock(session string, fn func() error) error {
 	if !validSession(session) {
 		return fmt.Errorf("invalid session id")
+	}
+	if err := fsutil.PrivateDirs(config.Dir(), timerDir(session)); err != nil {
+		return err
 	}
 	return fsutil.WithFileLock(filepath.Join(timerDir(session), ".timers"), fn)
 }
