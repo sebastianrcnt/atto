@@ -7,7 +7,8 @@ import ExtensionBar from "./components/ExtensionBar";
 import Activity from "./components/Activity";
 import ExtText from "./components/ExtText";
 import GoalBar, { type GoalAction } from "./components/GoalBar";
-import { ArrowDown, Bolt, Branch, Flag, Info, Layers, Menu, Plus, Radio, Target } from "./components/icons";
+import CommandMenu, { type Command } from "./components/CommandMenu";
+import { ArrowDown, Bolt, Branch, Flag, Info, Layers, Menu, More, Plus, Radio, Target } from "./components/icons";
 import Loading from "./components/Loading";
 import PromptBar, { type Pending } from "./components/PromptBar";
 import PromptSheet, { type Answer } from "./components/PromptSheet";
@@ -188,6 +189,9 @@ export default function App() {
   // the running turn's time and tokens, for the activity line
   const meter = useRef(new Meter()).current;
   const [newModel, setNewModel] = useState(""); // for the next thread/start
+  const [menu, setMenu] = useState(false);
+  // text put back into the input (an undone turn's message)
+  const [fill, setFill] = useState<{ text: string; n: number } | null>(null);
   const [, setTick] = useState(0);
   const store = useRef(new Transcript()).current;
   const infoRef = useRef<ThreadInfo | null>(null);
@@ -506,8 +510,45 @@ export default function App() {
   const current = models.find((m) => m.id === (info ? info.model : startModel));
   const imagesOK = !!current?.images;
 
+  const newThread = async () => {
+    try {
+      const id = info?.model || startModel;
+      show(await client.call<ThreadInfo>("thread/start", id ? { model: id } : {}));
+      loadThreads();
+    } catch (e) {
+      fail(e);
+    }
+  };
+
+  // The menu's commands. The live session runs /clear itself (thread/start
+  // is atto serve's); compaction and rollback are the same call for both.
+  const command = async (c: Command) => {
+    if (c === "new") {
+      if (live) send("/clear", []);
+      else newThread();
+      return;
+    }
+    if (!info) return;
+    try {
+      if (c === "compact") {
+        await client.call("thread/compact", { threadId: info.threadId });
+        return;
+      }
+      const r = await client.call<ThreadInfo & { input?: string }>("thread/rollback", { threadId: info.threadId });
+      show(r);
+      if (r.input) setFill({ text: r.input, n: Date.now() });
+    } catch (e) {
+      fail(e);
+    }
+  };
+
   const send = async (text: string, images: Pending[]): Promise<boolean> => {
     const imgs = images.map(({ mimeType, data }) => ({ mimeType, data }));
+    // atto serve has no terminal to run these: do what it would.
+    if (!live && !images.length && /^\/(compact|clear|new)$/.test(text.trim())) {
+      command(text.trim() === "/compact" ? "compact" : "new");
+      return true;
+    }
     try {
       let t = info;
       if (!t) {
@@ -631,15 +672,7 @@ export default function App() {
               <span className="flex-1 text-[15px] font-semibold tracking-wide">atto</span>
               <button
                 type="button"
-                onClick={async () => {
-                  try {
-                    const id = info?.model || startModel;
-                    show(await client.call<ThreadInfo>("thread/start", id ? { model: id } : {}));
-                    loadThreads();
-                  } catch (e) {
-                    fail(e);
-                  }
-                }}
+                onClick={newThread}
                 className="flex h-9 items-center gap-1.5 rounded-control bg-surface px-3 text-[13px] font-medium shadow-btn active:scale-[0.97]"
               >
                 <Plus size={14} /> New
@@ -692,6 +725,9 @@ export default function App() {
                 <Radio size={12} /> live
               </span>
             )}
+            <button type="button" aria-label="Commands" title="Commands" onClick={() => setMenu(true)} className="-mr-1 flex size-10 shrink-0 items-center justify-center rounded-control text-ink-2 hover:bg-hover">
+              <More size={18} />
+            </button>
             <span title={connected ? "connected" : "reconnecting"} className={`size-2 shrink-0 rounded-full ${connected ? "bg-green" : "bg-orange"}`} style={connected ? undefined : { animation: "caret-blink 1s step-end infinite" }} />
           </div>
         </header>
@@ -735,6 +771,7 @@ export default function App() {
             imagesOK={imagesOK}
             placeholder={live ? "Message the terminal session" : "Message atto"}
             toolbar={toolbar}
+            fill={fill}
             activity={busy && <Activity label={activity(last, store.running(), meter.verb)} meter={meter} running={store.running()} />}
             footer={info && <StatusLine s={status(info)} />}
             onSend={send}
@@ -744,6 +781,21 @@ export default function App() {
           />
         </div>
       </main>
+      {menu && (
+        <CommandMenu
+          live={live}
+          busy={busy}
+          canUndo={store.list().some((it) => it.type === "userMessage")}
+          models={pickable}
+          model={info ? info.model : startModel}
+          efforts={info?.efforts || []}
+          effort={info?.effort || ""}
+          onCommand={command}
+          onModel={(id) => (info ? setModel(id) : setNewModel(id))}
+          onEffort={setEffort}
+          onClose={() => setMenu(false)}
+        />
+      )}
       {live && prompt && <PromptSheet key={prompt.id} prompt={prompt} onAnswer={answer} />}
     </div>
   );

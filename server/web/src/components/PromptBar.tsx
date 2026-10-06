@@ -43,6 +43,7 @@ export default function PromptBar({
   toolbar,
   activity,
   footer,
+  fill,
   onSend,
   onStop,
   onBackground,
@@ -58,6 +59,8 @@ export default function PromptBar({
   // the activity line, left of Stop; the status line under the field
   activity?: ReactNode;
   footer?: ReactNode;
+  // text to put back into the field, before what is there (n: a new one)
+  fill?: { text: string; n: number } | null;
   onSend: (text: string, images: Pending[]) => Promise<boolean>;
   onStop: () => void;
   onBackground: () => void;
@@ -77,6 +80,12 @@ export default function PromptBar({
     ta.style.height = Math.min(ta.scrollHeight, window.innerHeight * 0.4) + "px";
     saveDraft(text);
   }, [text]);
+
+  useEffect(() => {
+    if (!fill) return;
+    setText((cur) => (cur.trim() ? fill.text + "\n" + cur : fill.text));
+    ref.current?.focus();
+  }, [fill?.n]);
 
   const add = (files: Iterable<File>) => {
     if (!imagesOK) {

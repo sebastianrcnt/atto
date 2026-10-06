@@ -1,9 +1,9 @@
 {
-  "source": "95e1950d627f4030fb7dc4d042e55904b44f58f7927857fd4fe20c4c80cc2350",
+  "source": "728b659192c4b87d1aff8ed76eacaeacb1e55b944208961a79015079aef43aa7",
   "preact": "11.0.0",
   "tailwind": "v4.3.3",
   "assets": {
-    "app.css": "11606d27f21e",
-    "app.js": "b26eeb490d8e"
+    "app.css": "731517d8bb32",
+    "app.js": "cd4218f32195"
   }
 }

@@ -134,3 +134,32 @@ export const Radio = (p: P) => (
     <path d="M16.2 7.8a6 6 0 0 1 0 8.4M7.8 16.2a6 6 0 0 1 0-8.4M19 5a10 10 0 0 1 0 14M5 19A10 10 0 0 1 5 5" />
   </Svg>
 );
+export const More = (p: P) => (
+  <Svg {...p}>
+    <circle cx="5" cy="12" r="1" />
+    <circle cx="12" cy="12" r="1" />
+    <circle cx="19" cy="12" r="1" />
+  </Svg>
+);
+export const Undo = (p: P) => (
+  <Svg {...p}>
+    <path d="M9 14L4 9l5-5" />
+    <path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11" />
+  </Svg>
+);
+export const Bot = (p: P) => (
+  <Svg {...p}>
+    <rect x="4" y="8" width="16" height="12" rx="3" />
+    <path d="M12 8V4M9 13v1M15 13v1" />
+  </Svg>
+);
+export const Refresh = (p: P) => (
+  <Svg {...p}>
+    <path d="M20 11a8 8 0 0 0-14.5-4.5L4 8M4 4v4h4M4 13a8 8 0 0 0 14.5 4.5L20 16M20 20v-4h-4" />
+  </Svg>
+);
+export const Pencil = (p: P) => (
+  <Svg {...p}>
+    <path d="M4 20h4L19 9l-4-4L4 16v4zM13.5 6.5l4 4" />
+  </Svg>
+);
