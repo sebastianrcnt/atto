@@ -57,7 +57,7 @@ func paneApp(t *testing.T, on bool) (*App, *recTerm) {
 func TestPaneReportsSessionOnce(t *testing.T) {
 	a, rec := paneApp(t, true)
 	a.paneSync()
-	want := daemon.MarkerSeq("session", a.sess.ID, "")
+	want := daemon.MarkerSeq("session", a.sess.ID, "") + daemon.MarkerSeq("state", "idle")
 	if got := rec.take(); got != want {
 		t.Fatalf("first report %q, want %q", got, want)
 	}
@@ -70,6 +70,26 @@ func TestPaneReportsSessionOnce(t *testing.T) {
 	if got := rec.take(); got != daemon.MarkerSeq("session", a.sess.ID, "fix parser") {
 		t.Fatalf("rename report %q", got)
 	}
+
+	// A running turn, then a question, change the state it reports.
+	a.busy = true
+	a.paneSync()
+	if got := rec.take(); got != daemon.MarkerSeq("state", "working") {
+		t.Fatalf("busy report %q", got)
+	}
+	a.busy = false
+	a.cmdSessions("")
+	a.paneSync()
+	if got := rec.take(); got != daemon.MarkerSeq("state", "waiting") {
+		t.Fatalf("picker report %q", got)
+	}
+	a.closeModal()
+	a.cmdAgents("") // the center itself is not waiting for anything
+	a.paneSync()
+	if got := rec.take(); got != daemon.MarkerSeq("state", "idle") {
+		t.Fatalf("center report %q", got)
+	}
+	a.closeModal()
 
 	// Outside a pane, nothing is said.
 	b, rec := paneApp(t, false)

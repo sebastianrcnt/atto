@@ -316,6 +316,7 @@ func (a *App) resumeLocked(saved core.Saved, file *session.Writer, l session.Loc
 	a.setLiveSession("") // the run owns the session's inbox and timers
 	a.resetGoal()
 	a.recModel, a.recEffort, a.sessName = "", "", saved.Name
+	a.editor.Title = a.sessName
 	a.replay(saved.Branch())
 	a.notice("Opened %s read-only. ctrl+r reads it again.", saved.Header.ID)
 	a.statusTrigger()

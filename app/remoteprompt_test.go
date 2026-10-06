@@ -58,7 +58,7 @@ func TestRemotePromptKinds(t *testing.T) {
 		{"summarize branch", "select", "Summarize branch?", func() { a.askSummary("x") }, summaryPlain},
 		{"tree", "select", "Session tree", func() { a.cmdTree("") }, "user: first"},
 		{"fork", "select", "Fork from a message", func() { a.cmdFork("") }, "first"},
-		{"resume", "select", "Resume a session", func() { a.cmdResume("") }, "first"},
+		{"resume", "select", "Resume a session", func() { a.cmdSessions("") }, "first"},
 		{"exit menu", "select", "A task is still running", func() { a.exitMenu() }, "2. Run in background"},
 		{"mcp approval", "select", "MCP server srv", func() { a.askMCPApproval(mcp.Info{Name: "srv", Target: "srv --stdio"}) }, mcpAllowAll},
 		{"login method", "select", "Select authentication method", func() { a.cmdLogin("") }, loginAPIKey},

@@ -54,6 +54,8 @@ type Editor struct {
 	OnPaste func(text string) bool
 	// Rule styles the horizontal rules drawn above and below the input.
 	Rule func(string) string
+	// Title, if set, shows at the right end of the top rule.
+	Title string
 
 	buf     []rune
 	pos     int
@@ -506,8 +508,15 @@ func (e *Editor) Render(width int) []string {
 
 	indent := strings.Repeat(" ", promptW)
 	rule := border(strings.Repeat("─", width))
+	top := rule
+	if e.Title != "" && width > 12 {
+		// The title sits at the right end of the top rule, as Claude Code
+		// shows the session's name.
+		t := Truncate(e.Title, width/2, "…")
+		top = border(strings.Repeat("─", max(1, width-VisibleWidth(t)-3))+" ") + FG(5, t) + border(" ─")
+	}
 	out := make([]string, 0, len(rows)+2)
-	out = append(out, rule)
+	out = append(out, top)
 	for i, r := range rows {
 		lead := indent
 		if i == 0 {

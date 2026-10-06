@@ -409,6 +409,7 @@ func (a *App) newSession(reason string) {
 	a.setLiveSession(a.sess.ID)
 	a.resetGoal()
 	a.recModel, a.recEffort, a.sessName = "", "", ""
+	a.editor.Title = a.sessName
 	a.showLoaded()
 	a.statusTrigger()
 	a.remoteSwitched()
@@ -533,7 +534,7 @@ func (a *App) onInput(data string) bool {
 	case "left":
 		// As in codex: ← on an empty prompt opens the agent center.
 		if a.editor.Text() == "" {
-			a.openAgents()
+			a.openAgents(tabAll)
 			return true
 		}
 	case "ctrl+t":

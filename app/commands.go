@@ -35,7 +35,8 @@ func init() {
 		{"debug", "", "Save a heap profile and memory figures to ~/.atto/debug", (*App).cmdDebug},
 		{"login", "[provider]", "Sign in with an account or save an API key", (*App).cmdLogin},
 		{"logout", "[provider]", "Remove stored credentials", (*App).cmdLogout},
-		{"resume", "", "Resume a saved conversation", (*App).cmdResume},
+		{"resume", "", "Resume a saved conversation (the agent center's Inactive tab)", (*App).cmdResume},
+		{"sessions", "", "Pick, archive, rename or preview saved conversations", (*App).cmdSessions},
 		{"tree", "", "Go back to any point of the conversation (also esc esc)", (*App).cmdTree},
 		{"fork", "", "Start a new conversation from an earlier message", (*App).cmdFork},
 		{"name", "<name>", "Name this conversation", (*App).cmdName},
@@ -382,6 +383,7 @@ func (a *App) cmdQuit(string) { a.requestQuit() }
 // nameSession names the conversation (/name, and extensions).
 func (a *App) nameSession(name string) {
 	a.sessName = name
+	a.editor.Title = a.sessName
 	a.sess.Append(session.Entry{Type: session.TypeName, Name: name})
 	a.statusTrigger()
 	a.remoteUpdated()

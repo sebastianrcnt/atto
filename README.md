@@ -124,7 +124,7 @@ So closing the terminal, losing an SSH connection or `/detach` leaves the sessio
 atto attach            # the most recent session no terminal shows
 atto attach 3          # pane 3, or a session ID (a prefix will do)
 atto attach -l         # the running sessions: pane, session, name, directory
-atto agents            # the agent center on its own: pick a session, enter attaches
+atto agents            # the agent command center on its own: enter attaches or opens
 atto daemon kill 3     # end one, as closing its terminal used to
 atto daemon stop       # stop the daemon (-force: even with sessions running)
 ```
@@ -140,7 +140,7 @@ Leaving atto while a turn runs offers "Detach" instead of "Run in background". S
 | `Esc` | interrupt, or send pending steers now |
 | `Ctrl+Enter` | while the agent works, interrupt it and send the prompt (after pending steers) as a new turn at once; an active goal is not paused but waits for you after that turn. `Ctrl+G` does the same where the terminal can't tell `Ctrl+Enter` from `Enter` (atto asks for xterm modifyOtherKeys and the kitty keyboard protocol; Terminal.app, `screen`, the Windows console and tmux without `extended-keys on` don't send it) |
 | `Esc` `Esc` | on an empty prompt: open the session tree to go back to an earlier message and edit it |
-| `←` | on an empty prompt: the agent center (also `/agents`), as codex's agents view: every atto the daemon runs, with its directory, terminals and goal, and each one's subagents. `Enter` on another session shows it on this terminal (the daemon moves the terminal to that pane); `Enter` on a subagent shows its latest answer, read-only; `←` or `Esc` goes back |
+| `←` | on an empty prompt: the agent command center (also `/agents`), as codex's: every atto session, the daemon's running ones and the saved ones, grouped by project, with tabs (`Tab`/`Shift+Tab`) for All, Needs you (a question is open or a goal waits for you), Working, Ready and Inactive (saved), and the selected session's last message, project, branch and first prompt on the right. `→` or `Enter` goes to it: a running session's pane is shown on this terminal, a saved one opens in a new pane; `n` starts a new session in the selected one's project; `/` searches; `←` or `Esc` comes back. Run outside the daemon it resumes a saved session in place. Agents other agents started are not listed (see `atto agent list`) |
 | `Shift+Tab` | cycle reasoning effort |
 | `Ctrl+T` | expand everything: thinking, command groups and every command's full output; again to fold it all back (or click one block) |
 | `Ctrl+B` | move the running command to the background: it keeps running as a job (`/jobs`), the agent goes on and gets an `[atto event]` when it exits |
@@ -185,15 +185,16 @@ To use the terminal's own selection instead, hold the key that bypasses mouse re
 | `/reload` | read AGENTS.md, skills, hooks, extensions, MCP servers, `settings.json` and `models.json` again, keeping the conversation |
 | `/extensions [approve <name>]` | list extensions, or approve a project extension |
 | `/diff [--staged] [path]` | show what changed in the working tree: a summary, then the diff (a built-in extension, see `extensions/builtin/diff.ts`) |
-| `/resume` | resume a saved session |
+| `/resume` | resume a saved session: the agent command center on its Inactive tab |
+| `/sessions` | the session picker: search, this directory or all, archive (`ctrl+x`), rename (`ctrl+r`) and preview saved sessions |
 | `/tree` | go back to any point of the session; earlier branches are kept |
 | `/fork` | start a new session from an earlier message |
-| `/name` | name the session |
+| `/name` | name the session; the name shows at the right end of the input's top rule, as in Claude Code |
 | `/autorename` | have the current model name the session from what it is about |
 | `/archive` | archive the session and start a new one |
 | `/clear` | start a new session |
 | `/goal [<objective>\|clear\|edit\|pause\|resume]` | set or view the goal for a long-running task, as in codex: bare `/goal` (or `status`) shows it with the time and tokens used, `help` shows the usage, `edit` opens a prompt, a new objective asks before replacing an unfinished goal. The words help and status alone never become an objective. Clearing or pausing while a turn runs is told to the model. A message sent while the goal is waiting, paused, stalled or usage limited carries a short note saying so, so the model answers instead of resuming goal work; a message sent while a goal turn runs says the goal is still active. A turn that fails for a transient reason (a 5xx, a timeout, an unavailable model) is retried after 10s, 30s and 90s before the goal stalls; Esc, `/goal pause` and `/goal clear` end the wait. The status shows at the right of the status line ("Pursuing goal (14m)"), Esc pauses it, and opening a session with a paused or stalled goal asks whether to resume |
-| `/agents` | the agent center: every running atto session, its goal and subagents; switch this terminal to another session (as `←` on an empty prompt) |
+| `/agents` | the agent command center (as `←` on an empty prompt) |
 | `/detach` | leave the session running in the daemon and return to the shell; `atto attach` comes back |
 | `/remote [on [port]\|off]` | control this session from a phone or browser: serves atto's web client on port 7879 (or `"remote": {"port": N}` in `settings.json`), prints its link and a QR code, and marks messages sent from there "from remote"; `off` closes every connection and revokes the link |
 | `/jobs`, `/stop` | list or stop background jobs |
@@ -301,26 +302,32 @@ echo '{"query": "atto"}' | atto mcp call docs search -    # arguments from stdin
 - **Servers live in the session.** They start on first use and stay until the session ends, so a stateful server is not restarted per call. `atto mcp call` and `tools` run by the agent talk to the running atto over a Unix domain socket (`~/.atto/mcp/<session id>.json` holds its path and a random token, mode 0600; it works on Windows 10+ too). Run from a normal terminal, a server is started for that one command and stopped after. `/reload` (or `atto reload`) re-reads the files, keeps servers whose entry did not change and restarts those that did.
 - **Transparency.** The Loaded block and `atto context` list every server with its scope, transport, command or URL, and status (not started, running with N tools, failed with the reason, needs approval). The calls are ordinary shell commands, so they appear as normal tool blocks and a `PreToolUse` hook with matcher `Bash` can gate them (for example by looking for `atto mcp call github`). Extensions can use the same servers: `await atto.mcp.call(server, tool, args)` and `atto.mcp.tools(server?)`.
 
-**Subagents** (off by default) let the model hand self-contained work to a background child session, through its shell like everything else. Turn them on with `"subagents": {"enabled": true}` in `settings.json`; the system prompt then tells the model about them and to start them only when you ask.
+**Agents** (off by default) are atto sessions other agents start, as in codex's multi-agent mode: equally capable, with the same tools, each working in the background on what it is sent. The model starts and talks to them through its shell like everything else. Turn them on with `"agents": {"enabled": true}` in `settings.json` (the older `"subagents"` key works too); the system prompt then tells the model about them and to start them only when you ask.
 
 ```
-atto agent start NAME PRESET "<task>" [-worktree]
-                                        start one in the background; returns at once
-atto agent steer NAME "<message>"       add instructions to its running turn
-atto agent next NAME "<message>"        a follow-up turn when it is idle
-atto agent wait NAME [-timeout 10m]     block until its turn ends and print its report (exit 124 on timeout)
-atto agent wait-any [NAME...]           the first running one to finish
-atto agent report NAME                  its last message, status, duration, tokens (and ≈cost when the model has prices)
-atto agent list | stop NAME | presets
-atto agent rm NAME... | rm -done [-force]
-                                        remove finished ones; their sessions are archived
+atto agent spawn NAME "<task>" [-role R] [-worktree]
+                                    start one in the background; returns at once
+atto agent task AGENT "<text>"      a new task: a turn now if it is idle, else after its current step
+atto agent send AGENT "<text>"      a message that starts no turn: read after its current step,
+                                    or with its next turn
+atto agent wait [AGENT...] [-timeout 10m]
+                                    block until one of them finishes a turn (exit 124 on timeout)
+atto agent list                     the agents you started, and theirs, as a tree
+atto agent report AGENT             its last answer, status, duration, tokens (and ≈cost)
+atto agent interrupt AGENT          stop its running turn
+atto agent close AGENT... | close -done [-force]
+                                    remove agents you are done with, and theirs; sessions archived
+atto agent roles                    what -role picks from
 ```
 
-- **From a normal shell**, every command accepts `-session ID`. Without it (and without `ATTO_SESSION_ID`), atto creates a lightweight parent without calling a model, prints its ID, and reuses it for the project (git root, else cwd). It is named `atto agent (external)` in session lists, is not picked by continue, and is archived and forgotten when `rm` removes its last subagent.
-- External callers can override a preset's model and effort on `start` with `-m provider/model -effort LEVEL`. These flags are refused in atto's model shell, including subagents; models remain limited to presets. `wait`, `wait-any` and `report` accept `-json` for one object with `name`, `status`, `turn`, `duration` (seconds), `tokens` (`in`, `cached`, `out`), optional `cost` (estimated USD), `session`, `model`, `message` and optional `error`, `worktree` and `branch`. Parent-creation diagnostics go to stderr with `-json`; timeout still exits 124.
-- A subagent is its own session (in the parent's directory, or its own worktree with `-worktree`) that sees only the messages it is given, and the parent sees only its last message. Each turn runs headless as a job of the parent (`atto job list` shows `agent NAME`); when it ends the parent gets an `[atto event]` saying so. Its session is hidden from `atto resume` and `atto sessions`.
-- **Worktrees.** `start -worktree` gives the subagent a git worktree of its own, so subagents editing files in parallel don't clobber each other or your checkout. It is made from the parent's `HEAD` (committed work only) on a new branch `atto/<parent session>/<name>` (start refuses if that branch exists), at `~/.atto/worktrees/<parent session>/<name>`: outside the project, so nothing shows up in its `git status` or searches, and short enough for Windows paths. The subagent works at the same place in it as the parent (its session's directory) and is told to commit there. It needs a git repository with a commit; the model may use it too, as it is isolation, not a model choice. `report`, `list` and `-json` show the worktree and branch. `rm` runs `git worktree remove` and keeps the branch, printing it and its new commits for you to merge; while the worktree has uncommitted changes `rm` refuses and lists them, unless `-force`. `rm -done` applies this per subagent: it removes the clean ones and reports the rest.
-- **Presets** fix a subagent's model, effort and instructions; the model can't choose them otherwise. The built-in `general` uses the parent's model and effort (or `subagents.model` / `subagents.effort` from `settings.json`) with generic worker instructions. Add presets as Markdown files in `~/.atto/agents/` or the project's `.atto/agents/` (the project wins on the same name, and either replaces the built-in `general`):
+- **Trees and addresses.** Each agent has a path from the root of its tree: the session that started the first ones is `/root`, its agent `tests` is `/root/tests`, and that one's `lint` is `/root/tests/lint`. `AGENT` is a name you gave, a path below you (`tests/lint`), `..` for the agent that started you, or a full path (`/root`). `list` shows the paths.
+- **Messages.** What one agent sends another arrives wrapped in `<atto_internal_context source="agent">` with a `Message Type` (`NEW_TASK`, `MESSAGE` or `FINAL_ANSWER`), `From` and `To`. When an agent's turn ends, its final answer reaches the session that started it by itself (`FINAL_ANSWER`, cut at 8000 characters; `report` has all of it), and wakes it as a job's exit does. `task` starts a turn; `send` doesn't: a message to an idle session waits in its inbox for its next turn (a running one takes it after its current step, but a turn that has finished is not kept going for it). `wait` returns early when you send a message, so you are never stuck behind it.
+- **Nesting.** `agents.maxDepth` (default 1, as codex) is how deep trees may grow: at 1 only your session starts agents; at 2 they may start their own, and so on. An agent that may start agents is told how; one that may not is told to do the work itself. `agents.maxConcurrent` (default 3) caps the turns each session's agents run at once; the rest wait in a queue (`list` shows them `queued`). Closing an agent closes the agents below it.
+- **From a normal shell**, every command accepts `-session ID`. Without it (and without `ATTO_SESSION_ID`), atto creates a lightweight parent without calling a model, prints its ID, and reuses it for the project (git root, else cwd). It is named `atto agent (external)` in session lists, is not picked by continue, and is archived and forgotten when `close` removes its last agent.
+- External callers can set the model and effort on `spawn` with `-m provider/model -effort LEVEL`; in atto's model shell these flags are refused and models pick roles. `wait` and `report` accept `-json` for one object with `name`, `status`, `turn`, `duration` (seconds), `tokens` (`in`, `cached`, `out`), optional `cost` (estimated USD), `session`, `model`, `message` and optional `error`, `worktree` and `branch`.
+- An agent is its own session (in the parent's directory, or its own worktree with `-worktree`) that sees only what it is sent. Each turn runs headless as a job of the session that started it (`atto job list` shows `agent NAME`); an agent's own agents keep running when its turn ends. Agents' sessions are kept out of `atto resume`, `atto sessions` and the agent center: they belong to their session.
+- **Worktrees.** `spawn -worktree` gives the agent a git worktree of its own, so agents editing files in parallel don't clobber each other or your checkout. It is made from the parent's `HEAD` (committed work only) on a new branch `atto/<parent session>/<name>` (spawn refuses if that branch exists), at `~/.atto/worktrees/<parent session>/<name>`: outside the project, so nothing shows up in its `git status` or searches, and short enough for Windows paths. The agent works at the same place in it as the parent and is told to commit there. It needs a git repository with a commit. `report`, `list` and `-json` show the worktree and branch. `close` runs `git worktree remove` and keeps the branch, printing it and its new commits for you to merge; while the worktree has uncommitted changes `close` refuses and lists them, unless `-force`.
+- **Roles** set an agent's model, effort and instructions (`-role`, default `general`, which uses the parent's model and effort, or `agents.model` / `agents.effort` from `settings.json`). Add roles as Markdown files in `~/.atto/agents/` or the project's `.atto/agents/` (the project wins on the same name, and either replaces the built-in `general`):
 
   ```markdown
   ---
@@ -332,8 +339,8 @@ atto agent rm NAME... | rm -done [-force]
   Review the change you are given. Report bugs with file:line, most serious first.
   ```
 
-  The body is added to the subagent's system prompt; the names and descriptions are listed in the parent's. `atto context` shows them too.
-- `subagents.maxConcurrent` (default 3) caps the turns one session runs at once; the rest wait in a queue (`list` shows them `queued`). Subagents can't start subagents of their own (`ATTO_SUBAGENT` is set in their commands' environment).
+  The body is added to the agent's system prompt; the names and descriptions are listed for the sessions that may start agents. `atto context` shows them too.
+- The old command names still work: `start` (with `NAME PRESET "<task>"` too), `next`, `steer`, `wait-any`, `stop`, `rm`, `presets`.
 
 **Front end and back end are separate.** Both servers speak the same JSON-RPC protocol, built around threads, turns and items:
 
@@ -357,8 +364,8 @@ Everything lives in `~/.atto`. Set `ATTO_DIR` to move it.
 
 | Path | Contents |
 | --- | --- |
-| `settings.json` | default model and effort, renderer, `mouse`, `toolGroups` (`false`: no command groups), `spinnerVerbs` (the word the activity line shows while commands run, drawn once per turn: `en`, the default, made-up English verbs; `ko`, made-up Korean words, as `글벅거리는 중…`; `ko-literary`, Korean verbs; `off`, just `Working…`), `spinnerScanner` (`true`: a sweeping `▰▱` scanner before that word), status line, hooks, `updateCheck`, `doubleEscapeAction` (`tree`, `fork` or `none`), `branchSummary.skipPrompt`, `toolOutputTokenLimit` (how much of a command's output the model gets, default 10000 tokens; the middle is cut and the full output saved to a file, as in codex), `backgroundExit` (experimental: `false` turns off the exit menu that offers "Run in background" while a turn runs), `remote.port` (`/remote`'s port, default 7879), `daemon` (`false`: run the TUI directly instead of in a daemon pane), `extensions` (`disabled` names, handler `timeout` in seconds), `skills.disabled` (built-in skills to turn off), `subagents` (`enabled`, `maxConcurrent`, `model`, `effort`) |
-| `agents/` | subagent presets (`<name>.md`); `subagents/` holds the state of the subagents each session started |
+| `settings.json` | default model and effort, renderer, `mouse`, `toolGroups` (`false`: no command groups), `spinnerVerbs` (the word the activity line shows while commands run, drawn once per turn: `en`, the default, made-up English verbs; `ko`, made-up Korean words, as `글벅거리는 중…`; `ko-literary`, Korean verbs; `off`, just `Working…`), `spinnerScanner` (`true`: a sweeping `▰▱` scanner before that word), status line, hooks, `updateCheck`, `doubleEscapeAction` (`tree`, `fork` or `none`), `branchSummary.skipPrompt`, `toolOutputTokenLimit` (how much of a command's output the model gets, default 10000 tokens; the middle is cut and the full output saved to a file, as in codex), `backgroundExit` (experimental: `false` turns off the exit menu that offers "Run in background" while a turn runs), `remote.port` (`/remote`'s port, default 7879), `daemon` (`false`: run the TUI directly instead of in a daemon pane), `extensions` (`disabled` names, handler `timeout` in seconds), `skills.disabled` (built-in skills to turn off), `agents` (`enabled`, `maxDepth`, `maxConcurrent`, `model`, `effort`; the older `subagents` key works too) |
+| `agents/` | agent roles (`<name>.md`); `subagents/` holds the state of the agents each session started |
 | `mcp.json` | MCP servers (Claude Code's `.mcp.json` format); `mcp-approvals.json` holds approved project servers, `mcp/` the endpoints of running sessions |
 | `extensions/` | your extensions; `extension-approvals.json` holds approved project extensions, `extensions.log` their logs |
 | `models.json` | your providers and models |

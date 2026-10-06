@@ -455,9 +455,21 @@ func formatSize(n int64) string {
 	return fmt.Sprintf("%.1fGB", float64(n)/(k*k*k))
 }
 
-// cmdResume opens the session picker. It works mid-turn too: picking a
-// session interrupts the running turn and switches once it has stopped.
-func (a *App) cmdResume(string) {
+// cmdResume opens the agent center on its saved sessions (Inactive): the
+// center is where sessions are picked now.
+// A phone or browser (/remote) gets the picker, which it can show.
+func (a *App) cmdResume(arg string) {
+	if a.fromRemote {
+		a.cmdSessions(arg)
+		return
+	}
+	a.openAgents(tabInactive)
+}
+
+// cmdSessions opens the session picker, which also archives, renames and
+// previews saved sessions. It works mid-turn too: picking a session
+// interrupts the running turn and switches once it has stopped.
+func (a *App) cmdSessions(string) {
 	p := newResumePicker(a.cwd, a.sess.Path)
 	if items := p.list.Items; len(items) > 1 && items[0].Data.(session.Summary).Path == a.sess.Path {
 		p.list.Selected = 1 // the open session is first; default to the one before it
@@ -487,6 +499,7 @@ func (a *App) cmdResume(string) {
 			return session.Rename(s.Path, name)
 		}
 		a.sessName = name // the open session: its own writer keeps the file in order
+		a.editor.Title = a.sessName
 		a.sess.Append(session.Entry{Type: session.TypeName, Name: name})
 		a.statusTrigger()
 		return a.sess.Err()
@@ -546,6 +559,7 @@ func (a *App) resume(path string) {
 	a.ctxTokens = a.agent.ContextTokens()
 	a.usage.fromEntries(saved.Entries, a.models)
 	a.recModel, a.recEffort, a.sessName = "", "", saved.Name
+	a.editor.Title = a.sessName
 	if ref, ok := a.models.Find("", saved.Model); ok {
 		a.agent.SetModel(ref)
 		a.recModel = saved.Model

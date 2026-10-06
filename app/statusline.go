@@ -323,11 +323,10 @@ func joinStatus(b *strings.Builder, its []statusItem, sep string) {
 }
 
 // Drop levels, least important first, as pi's footer gives way: memory,
-// the session name, cache totals, cache hit rate, token totals, cost, the
+// cache totals, cache hit rate, token totals, cost, the
 // directory, the context size, the effort.
 const (
 	dropMem = iota + 1
-	dropName
 	dropCacheTotals
 	dropCacheRate
 	dropTokens
@@ -452,9 +451,7 @@ func (a *App) buildStatus(m config.ModelRef, effort string, first, width int) []
 		}
 		items = append(items, statusItem{text: tui.Dim(cost), drop: dropCost})
 	}
-	if a.sessName != "" {
-		items = append(items, statusItem{text: tui.FG(5, a.sessName), drop: dropName, right: true})
-	}
+
 	items = append(items, statusItem{text: tui.Dim(fmtBytes(rssBytes.Load())), drop: dropMem, right: true})
 	for i := range items {
 		items[i].w = tui.VisibleWidth(items[i].text)

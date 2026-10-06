@@ -74,9 +74,12 @@ type Pane struct {
 	Started time.Time `json:"started"`
 	Clients int       `json:"clients"`
 	// Session and Name are what its atto reports: the open session.
-	Session string    `json:"session,omitempty"`
-	Name    string    `json:"name,omitempty"`
-	Active  time.Time `json:"active"` // last input or attach
+	Session string `json:"session,omitempty"`
+	Name    string `json:"name,omitempty"`
+	// State is what its atto last said it is doing: working (a turn
+	// runs), waiting (it needs the user: a question, a held goal) or idle.
+	State  string    `json:"state,omitempty"`
+	Active time.Time `json:"active"` // last input or attach
 }
 
 // Exit ends an attachment.

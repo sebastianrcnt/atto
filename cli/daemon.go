@@ -142,21 +142,37 @@ func age(t time.Time) string {
 	return d.Round(time.Hour).String()
 }
 
-// RunAgents implements "atto agents": the agent center by itself, then the
-// pane picked, attached.
+// RunAgents implements "atto agents": the agent center by itself, then
+// what was picked, in a fresh process (the center's terminal reader may
+// still be blocked on stdin and would take the first keys): a running
+// session attached, a saved one opened, or a new one started, in the
+// daemon.
 func RunAgents(args []string, out io.Writer) error {
 	if len(args) > 0 {
-		return errors.New("usage: atto agents   (every atto the daemon runs; enter attaches)")
+		return errors.New("usage: atto agents   (every atto session, running or saved; enter opens it)")
 	}
-	id, err := app.RunAgents()
-	if err != nil || id == 0 {
+	pick, err := app.RunAgents()
+	if err != nil {
 		return err
 	}
-	// A fresh process attaches: the center's terminal reader may still be
-	// blocked on stdin and would take the first keys.
+	argv := []string{"atto"}
+	switch {
+	case pick.Pane > 0:
+		argv = append(argv, "attach", strconv.Itoa(pick.Pane))
+	case pick.Session != "":
+		argv = append(argv, "-session", pick.Session)
+	case pick.New:
+	default:
+		return nil
+	}
+	if pick.Cwd != "" {
+		if err := os.Chdir(pick.Cwd); err != nil {
+			return err
+		}
+	}
 	exe, err := os.Executable()
 	if err != nil {
 		return err
 	}
-	return syscall.Exec(exe, []string{"atto", "attach", strconv.Itoa(id)}, os.Environ())
+	return syscall.Exec(exe, argv, os.Environ())
 }

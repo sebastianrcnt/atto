@@ -39,7 +39,7 @@ func TestBuiltinStatusWidths(t *testing.T) {
 		}
 		return out
 	}
-	all := []string{"Orca", "11%", "31.0k/262.0k", "cache 85%", "↑12k", "↓3.4k", "W2k", "$0.123", "/work/proj (main)", "fix"}
+	all := []string{"Orca", "11%", "31.0k/262.0k", "cache 85%", "↑12k", "↓3.4k", "W2k", "$0.123", "/work/proj (main)"}
 	hasAll := func(width int) {
 		t.Helper()
 		s := strings.Join(rows(width), "\n")
@@ -56,11 +56,11 @@ func TestBuiltinStatusWidths(t *testing.T) {
 		t.Fatalf("width 160 takes one row: %q", r)
 	}
 	hasAll(160)
-	r := rows(100)
-	if len(r) != 2 || !strings.HasSuffix(r[0], "$0.123") || !strings.HasSuffix(r[1], "/work/proj (main) · fix · "+fmtBytes(rssBytes.Load())) || tui.VisibleWidth(r[1]) != 100 {
-		t.Fatalf("width 100: %q", r)
+	r := rows(90)
+	if len(r) != 2 || !strings.HasSuffix(r[0], "$0.123") || !strings.HasSuffix(r[1], "/work/proj (main) · "+fmtBytes(rssBytes.Load())) || tui.VisibleWidth(r[1]) != 90 {
+		t.Fatalf("width 90: %q", r)
 	}
-	hasAll(100)
+	hasAll(90)
 	// The left items that do not fit the first row start the second.
 	r = rows(70)
 	if len(r) != 2 || !strings.HasPrefix(r[1], " $0.123 ") || strings.Contains(r[0], "$0.123") {
@@ -74,7 +74,7 @@ func TestBuiltinStatusWidths(t *testing.T) {
 
 	// Only when two rows cannot hold them are items dropped, least
 	// important first.
-	order := []string{"fix", "W2k", "cache 85%", "↑12k", "$0.123", "proj (main)"}
+	order := []string{"W2k", "cache 85%", "↑12k", "$0.123", "proj (main)"}
 	prev := len(order)
 	for width := 160; width >= 20; width -= 2 {
 		r := rows(width)
@@ -104,7 +104,7 @@ func TestBuiltinStatusWidths(t *testing.T) {
 		prev = n
 	}
 	if s := strings.Join(rows(46), "\n"); strings.Contains(s, "fix") || !strings.Contains(s, "proj") {
-		t.Errorf("width 46 drops the name before the directory: %q", s)
+		t.Errorf("the name is on the input's rule, never here: %q", s)
 	}
 	if s := strings.Join(rows(24), "\n"); strings.Contains(s, "proj") || !strings.Contains(s, "11%") {
 		t.Errorf("width 24 keeps the bar over the directory: %q", s)
@@ -118,7 +118,7 @@ func TestBuiltinStatusFirstRowNarrower(t *testing.T) {
 	if len(r) != 2 || tui.VisibleWidth(r[0]) > 60 || tui.VisibleWidth(r[1]) != 120 {
 		t.Fatalf("%q", r)
 	}
-	if s := tui.StripEscapes(strings.Join(r, "\n")); !strings.Contains(s, "$0.123") || !strings.Contains(s, "fix") {
+	if s := tui.StripEscapes(strings.Join(r, "\n")); !strings.Contains(s, "$0.123") || !strings.Contains(s, "/work/proj") {
 		t.Fatalf("both rows hold everything: %q", s)
 	}
 }
@@ -135,8 +135,8 @@ func TestBuiltinStatusCJK(t *testing.T) {
 			}
 		}
 	}
-	if s := tui.StripEscapes(strings.Join(a.builtinStatus(80, 80), "\n")); !strings.Contains(s, "버그수정") || !strings.Contains(s, "프로젝트") {
-		t.Fatalf("width 80 shows the name and directory: %q", s)
+	if s := tui.StripEscapes(strings.Join(a.builtinStatus(80, 80), "\n")); strings.Contains(s, "버그수정") || !strings.Contains(s, "프로젝트") {
+		t.Fatalf("width 80 shows the directory, not the name (it is on the input's rule): %q", s)
 	}
 }
 

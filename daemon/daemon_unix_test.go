@@ -48,6 +48,12 @@ func helper() {
 			fmt.Print(MarkerSeq("detach"))
 		case f[0] == "switch" && len(f) == 2:
 			fmt.Print(MarkerSeq("switch", f[1]))
+		case f[0] == "state" && len(f) == 2:
+			fmt.Print(MarkerSeq("state", f[1]))
+		case f[0] == "new" && len(f) == 2:
+			fmt.Print(MarkerSeq("new", f[1]))
+		case f[0] == "open" && len(f) == 3:
+			fmt.Print(MarkerSeq("open", f[1], f[2]))
 		case f[0] == "session" && len(f) == 3:
 			fmt.Print(MarkerSeq("session", f[1], f[2]))
 		case f[0] == "exit" && len(f) == 2:
@@ -249,6 +255,51 @@ func TestDaemonSwitchMovesTheTerminal(t *testing.T) {
 	a.typ("still\n")
 	a.until(fOutput, "got still")
 	_ = Stop(true)
+}
+
+func TestDaemonStateNewAndOpen(t *testing.T) {
+	startDaemon(t, 300*time.Millisecond)
+	dir := t.TempDir()
+	a := open(t, Hello{Op: "new", Cwd: dir, Env: os.Environ()})
+	a.until(fOutput, "hello pane 1")
+	a.typ("state working\n")
+	a.typ("session s1 one\n")
+	waitList(t, func(ps []Pane) bool { return len(ps) == 1 && ps[0].State == "working" })
+
+	// new: a pane in that directory, shown on this terminal at once.
+	a.typ("new " + dir + "\n")
+	a.until(fAttached, `"id":2`)
+	a.until(fOutput, "hello pane 2")
+	ps, _ := List()
+	if len(ps) != 2 || ps[1].Cwd != dir || ps[1].Clients != 1 || ps[0].Clients != 0 {
+		t.Fatalf("after new: %+v", ps)
+	}
+	// open: a session already in a pane is shown there; another gets a
+	// new pane running atto -session.
+	a.typ("open s1 " + dir + "\n")
+	a.until(fAttached, `"id":1`)
+	a.typ("open s9 " + dir + "\n")
+	a.until(fAttached, `"id":3`)
+	ps, _ = List()
+	if len(ps) != 3 || strings.Join(ps[2].Args, " ") != "-session s9" {
+		t.Fatalf("after open: %+v", ps)
+	}
+	_ = Stop(true)
+}
+
+func waitList(t *testing.T, ok func([]Pane) bool) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		ps, _ := List()
+		if ok(ps) {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("list %+v", ps)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
 }
 
 func TestDaemonKillStopAndErrors(t *testing.T) {

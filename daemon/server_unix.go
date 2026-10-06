@@ -299,8 +299,9 @@ func (p *pane) output(b []byte) {
 	p.mu.Lock()
 	out, markers := p.st.feed(b)
 	clients := slices.Clone(p.clients)
-	var detach, move *client
+	var detach, move, spawnFor *client
 	target := ""
+	var spawn Hello
 	for _, m := range markers {
 		cmd, rest, _ := strings.Cut(m, ";")
 		switch cmd {
@@ -312,6 +313,19 @@ func (p *pane) output(b []byte) {
 			p.ready = true
 		case "switch":
 			move, target = p.last, rest
+		case "state":
+			p.info.State = rest
+		case "new", "open": // a new pane (on a saved session), shown at once
+			cwd, session := rest, ""
+			if cmd == "open" {
+				session, cwd, _ = strings.Cut(rest, ";")
+			}
+			spawnFor = p.last
+			spawn = Hello{Cwd: cwd, Env: p.cmd.Env}
+			if session != "" {
+				spawn.Args = []string{"-session", session}
+				target = session
+			}
 		}
 	}
 	p.mu.Unlock()
@@ -328,6 +342,29 @@ func (p *pane) output(b []byte) {
 	if move != nil {
 		p.d.move(move, p, target)
 	}
+	if spawnFor != nil {
+		p.d.spawnFor(spawnFor, p, spawn, target)
+	}
+}
+
+// spawnFor starts a pane for client c, which pane from showed, and moves
+// c there; a session already open in a pane is shown instead.
+func (d *daemon) spawnFor(c *client, from *pane, h Hello, session string) {
+	if session != "" {
+		if q := d.find(session); q != nil {
+			d.move(c, from, strconv.Itoa(q.info.ID))
+			return
+		}
+	}
+	from.mu.Lock()
+	h.Size = c.size
+	from.mu.Unlock()
+	q, err := d.start(h)
+	if err != nil {
+		_ = c.send(fOutput, fmt.Appendf(nil, "\r\natto: starting a pane: %v\r\n", err))
+		return
+	}
+	d.move(c, from, strconv.Itoa(q.info.ID))
 }
 
 // move shows another pane on c's terminal: from's modes are undone and the

@@ -96,7 +96,6 @@ func TestBuiltinStatusCachedUntilInputsChange(t *testing.T) {
 	for what, change := range map[string]func(){
 		"usage":     func() { a.usage.add(provider.Usage{PromptTokens: 1000, CompletionTokens: 777, Cost: 1}) },
 		"context":   func() { a.ctxTokens = 250000 },
-		"session":   func() { a.sessName = "another" },
 		"branch":    func() { a.gitBranch = "dev" },
 		"directory": func() { a.cwd = "/work/other" },
 		"model": func() {
