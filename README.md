@@ -340,6 +340,8 @@ go install ./cmd/atto          # this machine
 scripts/deploy.sh win linux    # other machines over ssh, no GitHub involved
 ```
 
+Enable the pre-commit checks (gofmt, vet, modernize, tidy, web dist) with `git config core.hooksPath .githooks`.
+
 The web client (`server/web`) is Preact and TypeScript styled with Tailwind; its built bundle in `server/web/dist` is committed, so `go build` needs nothing else. After changing `server/web/src`, run `go generate ./server/web` (it downloads the pinned Tailwind standalone CLI and Preact once, checking their SHA-256, and bundles with esbuild; no Node) and commit `dist/`; a test fails while `dist/` is stale.
 
 `scripts/deploy.sh` builds an edge binary of this checkout for each host's system and installs it where the install scripts would (`%LOCALAPPDATA%\Programs\atto` on Windows, `~/.local/bin` elsewhere), so `atto update` there keeps following edge. Its version ends in `.local`.

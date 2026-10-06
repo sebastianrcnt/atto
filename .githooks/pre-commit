@@ -1,0 +1,37 @@
+#!/bin/sh
+# atto's pre-commit checks. Enable once per clone with:
+#   git config core.hooksPath .githooks
+# They look at the working tree, so stash unstaged changes to check
+# exactly what is committed. Skip with git commit --no-verify.
+set -u
+cd "$(git rev-parse --show-toplevel)" || exit 1
+
+staged=$(git diff --cached --name-only --diff-filter=ACMR)
+[ -n "$staged" ] || exit 0
+fail=0
+bad() { printf 'pre-commit: %s\n' "$1" >&2; fail=1; }
+
+gofiles=$(printf '%s\n' "$staged" | grep '\.go$')
+if [ -n "$gofiles" ]; then
+	unformatted=$(printf '%s\n' "$gofiles" | xargs gofmt -l)
+	[ -z "$unformatted" ] || bad "not gofmt'd (run gofmt -w):
+$unformatted"
+fi
+
+if printf '%s\n' "$staged" | grep -qE '\.go$|^go\.(mod|sum)$'; then
+	go vet ./... || bad "go vet failed"
+
+	# modernize is pinned so the check doesn't drift with each x/tools release.
+	go run golang.org/x/tools/go/analysis/passes/modernize/cmd/modernize@v0.51.0 ./... ||
+		bad "modernize has suggestions (apply with: go run golang.org/x/tools/go/analysis/passes/modernize/cmd/modernize@v0.51.0 -fix ./...)"
+
+	go mod tidy -diff >/dev/null 2>&1 ||
+		bad "go.mod/go.sum are not tidy (run go mod tidy)"
+fi
+
+if printf '%s\n' "$staged" | grep -q '^server/web/'; then
+	go test -count=1 -run 'TestDistIsFresh' ./server/web >/dev/null ||
+		bad "server/web/dist is stale (run go generate ./server/web and stage dist/)"
+fi
+
+exit $fail
