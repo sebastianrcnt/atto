@@ -48,9 +48,10 @@ var heldLocks = struct {
 }{locks: make(map[string]*heldLock)}
 
 type heldLock struct {
-	file *os.File
-	info LockInfo
-	refs int
+	file        *os.File
+	info        LockInfo
+	refs        int
+	transferred bool
 }
 
 func lockKey(path string) (string, error) {
@@ -153,7 +154,7 @@ func releaseLocked(key string, h *heldLock) func() {
 			heldLocks.Lock()
 			defer heldLocks.Unlock()
 			h.refs--
-			if h.refs == 0 {
+			if h.refs == 0 && !h.transferred {
 				if heldLocks.locks[key] == h {
 					delete(heldLocks.locks, key)
 				}

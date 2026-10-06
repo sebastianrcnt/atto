@@ -238,17 +238,18 @@ func (a *App) backgroundAfterRun(err error) bool {
 // startBackgroundRun starts the detached run and, if it started, exits.
 func (a *App) startBackgroundRun() {
 	a.recordSettings()
-	a.closeSession() // every entry is already on disk; the run takes the lock
+	a.sess.Close() // flush entries, but retain the TUI lease until handoff
 	spawn := a.bgx.spawn
 	if spawn == nil {
 		spawn = spawnContinue
 	}
 	_, log, err := spawn(a.sess.ID, a.sess.Path, a.cwd)
 	if err != nil {
-		a.lockSession() // still ours
+		// The failed handoff retained our TUI lease.
 		a.errorNotice(fmt.Errorf("could not run in the background: %w", err))
 		return
 	}
+	a.closeSession() // old release cannot unlock the transferred lease
 	name := a.sessName
 	if name == "" {
 		name = a.sess.ID
@@ -294,11 +295,10 @@ func spawnContinue(id, path, cwd string) (int, string, error) {
 	cmd.Dir = cwd
 	cmd.Stdout, cmd.Stderr = f, f
 	shell.Detach(cmd)
-	if err := cmd.Start(); err != nil {
+	if err := session.StartBackground(path, cmd); err != nil {
 		return 0, "", err
 	}
 	pid := cmd.Process.Pid
-	_, _ = session.LockFor(path, pid) // before anyone can open the session for writing
 	_ = cmd.Process.Release()
 	return pid, log, nil
 }

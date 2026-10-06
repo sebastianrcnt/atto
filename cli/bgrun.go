@@ -36,7 +36,7 @@ func lockForRun(path string, background, writes bool) (release func(), err error
 		return func() {}, nil
 	}
 	if background {
-		return session.LockKind(path, session.KindBackground)
+		return session.AdoptBackgroundLock(path)
 	}
 	return session.Lock(path)
 }
