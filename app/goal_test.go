@@ -863,3 +863,32 @@ func TestGoalStateNoteAttachesToUserTurns(t *testing.T) {
 		t.Fatalf("continuation: %q", got[len(got)-1])
 	}
 }
+
+// A message the user sends while the goal's turn runs carries the note that
+// the goal is still active, for the model only.
+func TestGoalSteerNoteReachesTheModel(t *testing.T) {
+	url, last := requestLog(t)
+	a := treeApp(t)
+	a.agent.SetModel(config.ModelRef{ProviderName: "t", Provider: config.Provider{BaseURL: url}, Model: config.Model{ID: "m", ContextWindow: 100000}})
+	a.agent.SteerNote = a.goal.SteerNote
+	g, _ := goal.New("ship it")
+	a.goal.Set(g)
+	a.agent.Steer("what is the status?")
+	if err := a.agent.Run(context.Background(), g.Continuation(), func(any) {}); err != nil {
+		t.Fatal(err)
+	}
+	reqs := last() // the continuation, then the steer
+	if len(reqs) != 2 {
+		t.Fatalf("requests: %q", reqs)
+	}
+	if msg, note := goal.SplitNote(reqs[1]); msg != "what is the status?" || !strings.Contains(note, "not paused") {
+		t.Fatalf("%q", reqs[1])
+	}
+	a.agent.Steer(events.Prefix + "job done")
+	if err := a.agent.Run(context.Background(), "next", func(any) {}); err != nil {
+		t.Fatal(err)
+	}
+	if got := last(); got[len(got)-1] != events.Prefix+"job done" {
+		t.Fatalf("an event takes no note: %q", got[len(got)-1])
+	}
+}

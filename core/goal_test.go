@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/sebastianrcnt/atto/agent"
+	"github.com/sebastianrcnt/atto/events"
 	"github.com/sebastianrcnt/atto/goal"
 	"github.com/sebastianrcnt/atto/provider"
 	"github.com/sebastianrcnt/atto/session"
@@ -457,5 +458,36 @@ func TestGoalDriverReplace(t *testing.T) {
 	d.EndTurn(context.Canceled)
 	if g.Status != goal.Paused || g.Note != goal.NoteInterrupted {
 		t.Fatalf("a plain interrupt still pauses: %+v", g)
+	}
+}
+
+func TestGoalDriverSteerNote(t *testing.T) {
+	t.Setenv("ATTO_DIR", t.TempDir())
+	d := GoalDriver{Session: "s"}
+	if d.SteerNote("hello") != "" {
+		t.Fatal("no goal, no note")
+	}
+	g, _ := goal.New("ship it")
+	d.Set(g)
+	n := d.SteerNote("what is the status?")
+	if !goal.IsMessage(n) || !strings.Contains(n, "not paused") {
+		t.Fatalf("active: %q", n)
+	}
+	for _, text := range []string{events.Prefix + " job done", goal.ClearedMessage(), g.PausedMessage()} {
+		if d.SteerNote(text) != "" {
+			t.Fatalf("%q is not the user's", text)
+		}
+	}
+	g.Status = goal.Paused
+	d.Set(g)
+	if d.SteerNote("hi") != "" {
+		t.Fatal("a paused goal needs no running note")
+	}
+	g.Status = goal.Active
+	d.Set(g)
+	d.Release()
+	d.Restore(nil) // resuming a session brings no goal back
+	if d.SteerNote("hi") != "" {
+		t.Fatal("no goal after restore")
 	}
 }

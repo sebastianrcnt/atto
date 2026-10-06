@@ -298,6 +298,19 @@ func TestReplayHidesGoalStateNote(t *testing.T) {
 	}
 }
 
+// Steers are separate user messages; the running-goal note on one is hidden
+// on replay, and the steer stays the user's.
+func TestReplayHidesSteerNote(t *testing.T) {
+	var entries []session.Entry
+	for _, text := range []string{"Please pause the goal.", "What is the status?\n\n" + goal.SteerMessage()} {
+		entries = append(entries, session.Entry{Type: session.TypeMessage, Message: &provider.Message{Role: "user", Content: text}})
+	}
+	items := FromEntries("", entries)
+	if len(items) != 2 || items[0].Kind != User || items[1].Kind != User || items[0].Text != "Please pause the goal." || items[1].Text != "What is the status?" {
+		t.Fatalf("%+v", items)
+	}
+}
+
 // A command that moved to the background replays as such, without the
 // status line the model got.
 func TestReplayBackgroundedCall(t *testing.T) {

@@ -246,6 +246,11 @@ type Agent struct {
 	boundary []func() string
 	// inputNote goes with the next user message (SetInputNote).
 	inputNote string
+	// SteerNote, if set, gives text that goes at the end of a steer when it
+	// is committed ("" for none): context atto adds about the session's
+	// state, for the model only (the goal is running). It runs on the turn's
+	// goroutine, so it must be safe to call while the front end runs.
+	SteerNote func(steer string) string
 	// stopReq: end the running turn at its next step boundary (StopAtBoundary).
 	stopReq atomic.Bool
 
@@ -365,13 +370,22 @@ func (a *Agent) runBoundary() {
 	}
 }
 
-// commitSteers appends pending steers as a user message.
+// commitSteers appends pending steers, each as a user message of its own so
+// that what the user said keeps its boundaries (providers take consecutive
+// user messages).
 func (a *Agent) commitSteers(emit func(any)) bool {
 	s := a.DrainSteers()
 	if len(s) == 0 {
 		return false
 	}
-	a.appendMessage(provider.Message{Role: "user", Content: strings.Join(s, "\n\n")}, session.Entry{})
+	for _, text := range s {
+		if a.SteerNote != nil {
+			if n := a.SteerNote(text); n != "" {
+				text += "\n\n" + n
+			}
+		}
+		a.appendMessage(provider.Message{Role: "user", Content: text}, session.Entry{})
+	}
 	emit(SteerCommitted{s})
 	return true
 }

@@ -8,20 +8,21 @@ import (
 // samples is the data each template is rendered with; a new template
 // must be listed here.
 var samples = map[string]any{
-	"system":                 System{Kind: "powershell", WinPS51: true, Tool: "powershell", Sub: "SUB", MCP: "a, b", Cwd: "/w", OS: "linux", Arch: "amd64", Shell: "/bin/sh", Date: "2026-01-02"},
-	"bash_tool":              map[string]any{"Kind": "bash"},
-	"subagent":               Subagent{Name: "w1", Preset: "docs", Instructions: "Be brief."},
-	"subagent_parent":        map[string]any{"Presets": "Subagent presets:\n- docs"},
-	"compact":                map[string]any{"Words": 700},
-	"compact_prefix":         nil,
-	"branch_summary":         map[string]any{"Start": "X", "Words": 600, "Focus": "tests"},
-	"branch_summary_prefix":  nil,
-	"goal_continuation":      Goal{Objective: "obj", Turns: 2},
-	"goal_objective_updated": Goal{Objective: "obj"},
-	"goal_cleared":           nil,
-	"goal_paused":            Goal{},
-	"goal_state_waiting":     Goal{},
-	"goal_state_paused":      Goal{Label: "paused", Interrupted: true},
+	"system":                   System{Kind: "powershell", WinPS51: true, Tool: "powershell", Sub: "SUB", MCP: "a, b", Cwd: "/w", OS: "linux", Arch: "amd64", Shell: "/bin/sh", Date: "2026-01-02"},
+	"bash_tool":                map[string]any{"Kind": "bash"},
+	"subagent":                 Subagent{Name: "w1", Preset: "docs", Instructions: "Be brief."},
+	"subagent_parent":          map[string]any{"Presets": "Subagent presets:\n- docs"},
+	"compact":                  map[string]any{"Words": 700},
+	"compact_prefix":           nil,
+	"branch_summary":           map[string]any{"Start": "X", "Words": 600, "Focus": "tests"},
+	"branch_summary_prefix":    nil,
+	"goal_continuation":        Goal{Objective: "obj", Turns: 2},
+	"goal_objective_updated":   Goal{Objective: "obj"},
+	"goal_cleared":             nil,
+	"goal_paused":              Goal{},
+	"goal_state_waiting":       Goal{},
+	"goal_state_paused":        Goal{Label: "paused", Interrupted: true},
+	"goal_state_running_steer": nil,
 }
 
 func TestEveryTemplateRenders(t *testing.T) {

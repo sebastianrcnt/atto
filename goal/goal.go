@@ -435,8 +435,13 @@ func (g *Goal) StateMessage(held bool) string {
 	return wrap(prompts.Render(name, g.data()))
 }
 
+// SteerMessage is the note that goes with a message the user sends while an
+// active goal's turn runs, which models otherwise take for a paused goal.
+func SteerMessage() string { return wrap(prompts.Render("goal_state_running_steer", nil)) }
+
 // SplitNote separates a goal note appended to a user message (see
-// StateMessage) from the message; text without one comes back unchanged.
+// StateMessage, SteerMessage) from the message; text without one comes back
+// unchanged.
 func SplitNote(text string) (message, note string) {
 	i := strings.LastIndex(text, "\n\n"+OpenTag)
 	if i < 0 || !strings.HasSuffix(text, CloseTag) {

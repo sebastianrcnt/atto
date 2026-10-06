@@ -393,3 +393,13 @@ func TestUserChangeMessages(t *testing.T) {
 		}
 	}
 }
+
+func TestSteerMessage(t *testing.T) {
+	note := SteerMessage()
+	if !IsMessage(note) || !strings.Contains(note, "not paused") || strings.Count(note, ".") > 3 {
+		t.Fatalf("%q", note)
+	}
+	if msg, n := SplitNote("Why did it stop?\n\n" + note); msg != "Why did it stop?" || n != note {
+		t.Fatalf("split: %q %q", msg, n)
+	}
+}

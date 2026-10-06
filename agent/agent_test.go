@@ -285,3 +285,41 @@ func TestInputNoteGoesWithTheNextUserMessageOnly(t *testing.T) {
 		t.Fatalf("history keeps the note, so the prefix stays the same: %q", got)
 	}
 }
+
+// Steers typed during one step are committed as messages of their own, in
+// order, so what the user said keeps its boundaries; SteerCommitted still
+// lists the plain texts, and SteerNote's text rides at the end of a message.
+func TestSteersAreSeparateMessages(t *testing.T) {
+	srv, seen := fakeServer(t, text("first"), text("second"))
+	a := newTestAgent(srv.URL)
+	a.SteerNote = func(s string) string {
+		if s == "b?" {
+			return "NOTE"
+		}
+		return ""
+	}
+	a.Steer("a")
+	a.Steer("b?")
+	a.Steer("c")
+	var committed []string
+	if err := a.Run(context.Background(), "hi", func(ev any) {
+		if e, ok := ev.(SteerCommitted); ok {
+			committed = e.Texts
+		}
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(committed, "|") != "a|b?|c" {
+		t.Fatalf("committed %q", committed)
+	}
+	msgs := seen()[1]
+	var users []string
+	for _, m := range msgs {
+		if m["role"] == "user" {
+			users = append(users, m["content"].(string))
+		}
+	}
+	if want := "hi|a|b?\n\nNOTE|c"; strings.Join(users, "|") != want {
+		t.Fatalf("user messages %q, want %q", users, want)
+	}
+}

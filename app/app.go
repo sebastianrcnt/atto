@@ -245,6 +245,7 @@ func Run(opts Options) error {
 
 		clipboard: images.SystemClipboardImage,
 	}
+	ag.SteerNote = a.goal.SteerNote // a message sent while the goal runs says so
 	if opts.Inline || rendererMode(settings.Renderer) == tui.Inline {
 		a.ui.Mode = tui.Inline
 	}

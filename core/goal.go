@@ -4,9 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/sebastianrcnt/atto/agent"
+	"github.com/sebastianrcnt/atto/events"
 	"github.com/sebastianrcnt/atto/goal"
 	"github.com/sebastianrcnt/atto/session"
 )
@@ -65,6 +68,9 @@ type GoalDriver struct {
 	userInput       bool // the running turn took user input (see UserInput)
 	replaced        bool // the running turn is being interrupted for a message of the user (see Replace)
 	held            bool // waiting for the user after a turn with user input
+	// live mirrors that the goal is active, for SteerNote, which the agent
+	// calls from its turn's goroutine.
+	live atomic.Bool
 }
 
 func (d *GoalDriver) fail(err error) {
@@ -87,6 +93,7 @@ func (d *GoalDriver) Set(g *goal.Goal) {
 		d.track()
 	}
 	d.Goal = g
+	d.live.Store(running(g))
 	if g == nil {
 		_ = goal.Clear(d.Session)
 	} else {
@@ -189,6 +196,17 @@ func (d *GoalDriver) StateNote() string {
 		return ""
 	}
 	return d.Goal.StateMessage(d.Held())
+}
+
+// SteerNote is the note for a steer committed into a running turn (see
+// agent.SteerNote): a user's message, while the goal is active, is not about
+// a paused goal, whatever the model makes of its silence. Events and goal
+// messages take none. Safe to call from any goroutine.
+func (d *GoalDriver) SteerNote(text string) string {
+	if !d.live.Load() || strings.HasPrefix(text, events.Prefix) || goal.IsMessage(text) {
+		return ""
+	}
+	return goal.SteerMessage()
 }
 
 // UserInput notes that the user's own input went into the running turn (or
@@ -345,6 +363,7 @@ func (d *GoalDriver) Restore(entries []session.Entry) (paused bool) {
 		}
 	}
 	d.Goal = nil
+	d.live.Store(false)
 	d.Release()
 	if len(last) == 0 || string(last) == "null" {
 		_ = goal.Clear(d.Session)
@@ -360,5 +379,6 @@ func (d *GoalDriver) Restore(entries []session.Entry) (paused bool) {
 	}
 	_ = goal.Save(d.Session, &g)
 	d.Goal = &g
+	d.live.Store(running(&g))
 	return paused
 }

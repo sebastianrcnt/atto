@@ -237,8 +237,7 @@ func (b *Builder) apply(ev any, at time.Time) {
 		}
 		b.endTool(e.ID, res, r.Duration, e.Images...)
 	case agent.SteerCommitted:
-		// One item per message, as the server always sent them; the session
-		// holds them joined in one user message.
+		// One item per message, as the session holds them.
 		b.closeText(at)
 		for _, t := range e.Texts {
 			b.input(t, nil)
