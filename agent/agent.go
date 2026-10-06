@@ -171,7 +171,10 @@ type (
 	}
 	// SteerCommitted fires when steering messages are added to the
 	// conversation of the running turn.
-	SteerCommitted struct{ Texts []string }
+	SteerCommitted struct {
+		Texts []string
+		User  []bool // set by a front end that knows which steers the user sent
+	}
 	// CompactStart, CompactDelta and CompactEnd bracket a compaction.
 	CompactStart struct{ Auto bool }
 	CompactDelta struct{ Text string }
@@ -398,7 +401,7 @@ func (a *Agent) commitSteers(emit func(any)) bool {
 		}
 		a.appendMessage(provider.Message{Role: "user", Content: text}, session.Entry{})
 	}
-	emit(SteerCommitted{s})
+	emit(SteerCommitted{Texts: s})
 	return true
 }
 

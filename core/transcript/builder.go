@@ -239,8 +239,8 @@ func (b *Builder) apply(ev any, at time.Time) {
 	case agent.SteerCommitted:
 		// One item per message, as the session holds them.
 		b.closeText(at)
-		for _, t := range e.Texts {
-			b.input(t, nil)
+		for i, t := range e.Texts {
+			b.input(t, nil, i < len(e.User) && e.User[i])
 		}
 	case agent.HookNotice:
 		b.add(Item{Kind: Hook, Status: Completed, HookEvent: e.Event, Text: e.Message, Blocked: e.Blocked})
@@ -279,9 +279,11 @@ func (b *Builder) apply(ev any, at time.Time) {
 }
 
 // input adds the message sent to the model. Prefixes say who it is from.
-func (b *Builder) input(text string, imgs []provider.Image) {
+func (b *Builder) input(text string, imgs []provider.Image, user ...bool) {
 	it := Item{Kind: User, Status: Completed, Text: text}
 	switch {
+	case len(user) > 0 && user[0]:
+		it.Text, _ = goal.SplitNote(text)
 	case events.IsEvent(text):
 		it.Kind = Event
 	case goal.IsMessage(text):

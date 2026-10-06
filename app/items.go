@@ -2,6 +2,7 @@ package app
 
 import (
 	"errors"
+	"slices"
 	"strings"
 	"time"
 
@@ -264,17 +265,19 @@ func goalStatusBlock(g *goal.Goal) *infoBlock {
 func (a *App) onEvent(ev any) {
 	if e, ok := ev.(agent.SteerCommitted); ok {
 		n := 0 // the user's own steers, shown as pending until now
-		for _, t := range e.Texts {
-			if !isEvent(t) && !goal.IsMessage(t) {
+		e.User = make([]bool, len(e.Texts))
+		for j, text := range e.Texts {
+			if i := slices.Index(a.pendingSteers, text); i >= 0 {
+				e.User[j] = true
+				a.pendingSteers = slices.Delete(a.pendingSteers, i, i+1)
 				n++
 			}
 		}
-		a.pendingSteers = a.pendingSteers[min(n, len(a.pendingSteers)):]
 		if n > 0 {
 			a.goal.UserInput() // the goal waits for the user once this turn ends
 		}
 		a.steered = []string{}
-		a.tr().Event(ev)
+		a.tr().Event(e)
 		if len(a.steered) > 0 {
 			remote := false
 			for _, t := range a.steered {

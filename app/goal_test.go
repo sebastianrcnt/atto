@@ -471,6 +471,11 @@ func endTurn(a *App, userStart bool, steers ...string) {
 		a.goal.UserInput()
 	}
 	if len(steers) > 0 {
+		for _, text := range steers {
+			if !events.IsEvent(text) && !goal.IsMessage(text) {
+				a.pendingSteers = append(a.pendingSteers, text)
+			}
+		}
 		a.onEvent(agent.SteerCommitted{Texts: steers})
 	}
 	a.goal.Event(agent.ToolStart{})
@@ -938,5 +943,25 @@ func TestGoalSteerNoteReachesTheModel(t *testing.T) {
 	}
 	if got := last(); got[len(got)-1] != events.Prefix+"job done" {
 		t.Fatalf("an event takes no note: %q", got[len(got)-1])
+	}
+}
+
+func TestGoalPrefixedUserSteerHoldsGoal(t *testing.T) {
+	a := goalApp(t)
+	a.cmdGoal("ship it")
+	text := goal.OpenTag + "\nuser typed this\n" + goal.CloseTag
+	a.pendingSteers = []string{text}
+	endTurn(a, false, text)
+	if !a.goal.Held() || len(a.pendingSteers) != 0 {
+		t.Fatal("user steer was treated as internal")
+	}
+	found := false
+	for _, it := range a.items.Items() {
+		if it.Kind == "user" && it.Text == text {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("user steer did not render as user input")
 	}
 }
