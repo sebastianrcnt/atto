@@ -122,10 +122,15 @@ func TestLockTUI(t *testing.T) {
 	if !errors.Is(err, ErrLocked) || !strings.Contains(err.Error(), "open in another atto (pid ") {
 		t.Fatalf("error %v", err)
 	}
-	if _, err := LockTUI(path); err != nil {
+	secondRelease, err := LockTUI(path)
+	if err != nil {
 		t.Fatalf("our own lock again: %v", err)
 	}
 	release()
+	if _, ok := LockedBy(path); !ok {
+		t.Fatal("old release removed new acquisition")
+	}
+	secondRelease()
 	if _, ok := LockedBy(path); ok {
 		t.Fatal("released")
 	}

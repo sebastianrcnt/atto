@@ -127,7 +127,7 @@ func lockAs(path string, pid int, kind string) (release func(), err error) {
 				os.Remove(lp)
 				return nil, werr
 			}
-			return func() { unlock(lp, pid) }, nil
+			return func() { unlock(lp, body) }, nil
 		}
 		if !errors.Is(err, os.ErrExist) {
 			return nil, err
@@ -180,15 +180,11 @@ func retireLock(lp string, checked []byte) error {
 	return os.Remove(moved)
 }
 
-// unlock removes the lock file if pid still owns it.
-func unlock(lp string, pid int) {
+// unlock removes only the exact acquisition that returned this release function.
+func unlock(lp string, body []byte) {
 	b, err := os.ReadFile(lp)
-	if err != nil {
+	if err != nil || !bytes.Equal(b, body) {
 		return
 	}
-	var l LockInfo
-	if json.Unmarshal(b, &l) == nil && l.PID != pid {
-		return
-	}
-	os.Remove(lp)
+	_ = retireLock(lp, body)
 }
