@@ -175,3 +175,46 @@ func TestStatusNoUsageYet(t *testing.T) {
 		}
 	}
 }
+
+// The model's name carries its provider only when another provider offers
+// a model of the same name.
+func TestStatusModelNameShowsProviderOnCollision(t *testing.T) {
+	luna := config.Model{ID: "luna", Name: "GPT-6 Luna", ContextWindow: 262000}
+	models := config.ModelsFile{Providers: map[string]config.Provider{
+		"openai":      {Models: []config.Model{luna}},
+		"opencode-go": {Models: []config.Model{luna, {ID: "kimi", Name: "Kimi"}}},
+	}}
+	first := func(a *App) string { return tui.StripEscapes(a.builtinStatus(160, 160)[0]) }
+	for _, c := range []struct {
+		provider string
+		model    config.Model
+		want     string
+	}{
+		{"openai", luna, "◆ GPT-6 Luna · openai"},
+		{"opencode-go", luna, "◆ GPT-6 Luna · opencode-go"},
+		{"opencode-go", models.Providers["opencode-go"].Models[1], "◆ Kimi"},
+	} {
+		a := statusApp(t, nil)
+		a.models = models
+		a.agent.SetModel(config.ModelRef{ProviderName: c.provider, Model: c.model})
+		if got := first(a); !strings.HasPrefix(strings.TrimSpace(got), c.want+" ") {
+			t.Errorf("%s/%s: %q, want %q", c.provider, c.model.ID, got, c.want)
+		}
+		if h := a.headerModel(); h != strings.TrimPrefix(c.want, "◆ ") {
+			t.Errorf("%s/%s header: %q", c.provider, c.model.ID, h)
+		}
+	}
+
+	// The rows are kept between frames, but follow the name when the model
+	// (or the provider list) changes.
+	a := statusApp(t, nil)
+	a.models = models
+	a.agent.SetModel(config.ModelRef{ProviderName: "openai", Model: luna})
+	if got := first(a); !strings.Contains(got, "GPT-6 Luna · openai") {
+		t.Fatalf("before: %q", got)
+	}
+	a.models = config.ModelsFile{Providers: map[string]config.Provider{"openai": {Models: []config.Model{luna}}}}
+	if got := first(a); !strings.Contains(got, "◆ GPT-6 Luna ") || strings.Contains(got, "openai") {
+		t.Fatalf("after the other provider went: %q", got)
+	}
+}

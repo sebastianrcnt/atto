@@ -108,6 +108,7 @@ type thread struct {
 	ext       *extensions.Manager
 	mcp       *mcp.Manager
 	hookSrc   []config.HookSource
+	models    config.ModelsFile  // the configured models, for the names clients show
 	loaded    core.Loaded        // what it loaded, as of the last reload
 	tr        transcript.Builder // used by the running turn, or by restore while idle
 	items     []Item             // completed items
@@ -172,7 +173,7 @@ func (s *Server) Close() {
 func (t *thread) info() ThreadInfo {
 	m, effort := t.agent.Current()
 	info := ThreadInfo{ID: t.id, Cwd: t.cwd, Name: t.name, Effort: effort, ContextTokens: t.ctxTokens, Busy: t.busy, TurnID: t.turnID}
-	SetModel(&info, m)
+	SetModel(&info, m, t.models)
 	total := t.total
 	info.Usage = &total
 	if t.busy {
@@ -407,7 +408,7 @@ func (s *Server) listModels() (any, error) {
 	out := []map[string]any{}
 	for _, r := range models.List() {
 		out = append(out, map[string]any{
-			"id": r.ProviderName + "/" + r.Model.ID, "name": r.Model.DisplayName(),
+			"id": r.ProviderName + "/" + r.Model.ID, "name": models.DisplayName(r),
 			"contextWindow": r.Model.ContextWindow, "efforts": r.Model.Levels(), "hasKey": r.APIKey != "" || len(r.Provider.Env) == 0,
 			"images": r.Model.Images(),
 		})
@@ -417,12 +418,12 @@ func (s *Server) listModels() (any, error) {
 
 // newThread wires an agent, its hooks and a session file for cwd.
 // modelFrom and effortFrom say where model and effort came from.
-func (s *Server) newThread(cwd string, model config.ModelRef, effort string, file *session.Writer, start time.Time, modelFrom, effortFrom core.Origin) (*thread, error) {
+func (s *Server) newThread(cwd string, model config.ModelRef, models config.ModelsFile, effort string, file *session.Writer, start time.Time, modelFrom, effortFrom core.Origin) (*thread, error) {
 	ag, hk, src, err := core.NewAgentSources(cwd, model, effort)
 	if err != nil {
 		return nil, err
 	}
-	t := &thread{id: file.ID, cwd: cwd, agent: ag, sess: file, hooks: hk, hookSrc: src, blocks: blocks{}}
+	t := &thread{id: file.ID, cwd: cwd, models: models, agent: ag, sess: file, hooks: hk, hookSrc: src, blocks: blocks{}}
 	// Extensions show what they show to the clients (see threadHost);
 	// notices go to them as extension/notify, dialogs get their default
 	// answers, and sendMessage steers the thread's turn.
@@ -456,7 +457,7 @@ func (s *Server) startThread(p threadParams) (any, error) {
 	if st, err := os.Stat(cwd); err != nil || !st.IsDir() {
 		return nil, invalid("cwd %q is not a directory", cwd)
 	}
-	t, err := s.newThread(cwd, model, effort, session.New(cwd), time.Now(), modelFrom, effortFrom)
+	t, err := s.newThread(cwd, model, models, effort, session.New(cwd), time.Now(), modelFrom, effortFrom)
 	if err != nil {
 		return nil, err
 	}
@@ -512,7 +513,7 @@ func (s *Server) resumeThread(id string) (any, error) {
 		return nil, err
 	}
 	effort, effortFrom := core.EffortFrom(settings, "", saved.Effort)
-	t, err := s.newThread(saved.Header.Cwd, model, effort, file, saved.Header.Time, modelFrom, effortFrom)
+	t, err := s.newThread(saved.Header.Cwd, model, models, effort, file, saved.Header.Time, modelFrom, effortFrom)
 	if err != nil {
 		file.Close()
 		return nil, err
@@ -588,6 +589,7 @@ func (s *Server) setModel(p threadParams) (any, error) {
 	t.sess.Append(session.Entry{Type: session.TypeModel, Provider: model.ProviderName, Model: model.Model.ID})
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	t.models = models
 	return t.info(), nil
 }
 

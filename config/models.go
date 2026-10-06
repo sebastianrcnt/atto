@@ -12,6 +12,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"sync"
 
 	"github.com/sebastianrcnt/atto/ai"
 )
@@ -42,6 +43,17 @@ import (
 type ModelsFile struct {
 	Providers map[string]Provider `json:"providers"`
 	auth      map[string]AuthEntry
+	// names caches which display names more than one provider has (see
+	// DisplayName); nil in a ModelsFile not made by LoadModels, which then
+	// works the names out each time.
+	names *sharedNames
+}
+
+// sharedNames is the set of display names that models of more than one
+// provider have, worked out on first use.
+type sharedNames struct {
+	once sync.Once
+	set  map[string]bool
 }
 
 type Provider struct {
@@ -422,7 +434,7 @@ func LoadModels() (ModelsFile, error) {
 	if err != nil {
 		return user, err
 	}
-	out := ModelsFile{Providers: map[string]Provider{}, auth: auth}
+	out := ModelsFile{Providers: map[string]Provider{}, auth: auth, names: &sharedNames{}}
 	for name, p := range CatalogProviders() {
 		if _, configured := user.Providers[name]; configured || out.hasKey(name, p) {
 			out.Providers[name] = p
@@ -682,6 +694,41 @@ func (m ModelsFile) List() []ModelRef {
 		}
 	}
 	return out
+}
+
+// DisplayName is r's name as shown next to other models: its own name, and
+// when a model of that name is also offered by another provider, the provider
+// (its ID, as in /model's detail column), "GPT-6 Luna · opencode-go".
+func (m ModelsFile) DisplayName(r ModelRef) string {
+	name := r.Model.DisplayName()
+	if m.sharedNames()[name] {
+		return name + " · " + r.ProviderName
+	}
+	return name
+}
+
+func (m ModelsFile) sharedNames() map[string]bool {
+	if m.names == nil {
+		return m.findSharedNames()
+	}
+	m.names.once.Do(func() { m.names.set = m.findSharedNames() })
+	return m.names.set
+}
+
+func (m ModelsFile) findSharedNames() map[string]bool {
+	first := map[string]string{} // display name → the first provider with it
+	shared := map[string]bool{}
+	for provider, p := range m.Providers {
+		for _, mod := range p.Models {
+			name := mod.DisplayName()
+			if other, ok := first[name]; ok && other != provider {
+				shared[name] = true
+			} else if !ok {
+				first[name] = provider
+			}
+		}
+	}
+	return shared
 }
 
 // Find looks a model up by id, optionally qualified as "provider/id".

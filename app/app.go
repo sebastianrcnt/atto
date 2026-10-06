@@ -483,8 +483,8 @@ func (a *App) addHeader() {
 }
 
 func (a *App) headerModel() string {
-	if m := a.model().Model; m.ID != "" {
-		return m.DisplayName()
+	if m := a.model(); m.Model.ID != "" {
+		return a.models.DisplayName(m)
 	}
 	return "no model (/login)"
 }

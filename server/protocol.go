@@ -307,12 +307,13 @@ type ThreadInfo struct {
 	ExtensionUI *ExtensionUI `json:"extensionUi,omitempty"`
 }
 
-// SetModel fills in what a thread's info says of its model m.
-func SetModel(info *ThreadInfo, m config.ModelRef) {
+// SetModel fills in what a thread's info says of its model m; models is
+// the configured list, which says whether the name needs its provider.
+func SetModel(info *ThreadInfo, m config.ModelRef, models config.ModelsFile) {
 	if m.Model.ID != "" {
 		info.Model = m.ProviderName + "/" + m.Model.ID
 	}
-	info.ModelName, info.Efforts, info.ContextWindow = m.Model.DisplayName(), m.Model.Levels(), m.Model.ContextWindow
+	info.ModelName, info.Efforts, info.ContextWindow = models.DisplayName(m), m.Model.Levels(), m.Model.ContextWindow
 	info.AutoCompactLimit = agent.AutoCompactLimit(m.Model)
 	c := m.Model.Cost
 	info.Priced = c != nil && (c.Input > 0 || c.Output > 0 || c.CacheRead > 0 || c.CacheWrite > 0)

@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/sebastianrcnt/atto/config"
 	"github.com/sebastianrcnt/atto/jobs"
 	"github.com/sebastianrcnt/atto/provider"
 	"github.com/sebastianrcnt/atto/session"
@@ -93,6 +94,46 @@ func TestUsageAndTurnInfo(t *testing.T) {
 	r := call(t, s2, "thread/resume", map[string]any{"threadId": id})
 	if u := r["usage"].(map[string]any); u["inputTokens"].(float64) != 220 || u["outputTokens"].(float64) != 7 {
 		t.Fatalf("resumed totals %v", u)
+	}
+}
+
+// A model name that two providers share shows the provider, in thread info
+// and in models/list; other names stay.
+func TestModelNameShowsProviderOnCollision(t *testing.T) {
+	work := setup(t)
+	url := fakeModel(t)
+	models := `{"providers":{` +
+		`"fake":{"baseUrl":"` + url + `","models":[{"id":"luna","name":"GPT-6 Luna","contextWindow":1000},{"id":"m","contextWindow":1000}]},` +
+		`"other":{"baseUrl":"` + url + `","models":[{"id":"luna","name":"GPT-6 Luna","contextWindow":1000}]}}}`
+	if err := os.WriteFile(config.ModelsPath(), []byte(models), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s := New("test", work)
+	t.Cleanup(s.Close)
+	info := call(t, s, "thread/start", map[string]any{"model": "fake/luna"})
+	if info["modelName"] != "GPT-6 Luna · fake" || info["model"] != "fake/luna" {
+		t.Fatalf("colliding name: %v", info)
+	}
+	id := info["threadId"].(string)
+	if got := call(t, s, "thread/setModel", map[string]any{"threadId": id, "model": "other/luna"}); got["modelName"] != "GPT-6 Luna · other" {
+		t.Fatalf("after setModel: %v", got)
+	}
+	if got := call(t, s, "thread/setModel", map[string]any{"threadId": id, "model": "fake/m"}); got["modelName"] != "m" {
+		t.Fatalf("a name that is alone: %v", got)
+	}
+	names := map[string]string{}
+	for _, m := range call(t, s, "models/list", nil)["models"].([]any) {
+		m := m.(map[string]any)
+		names[m["id"].(string)] = m["name"].(string)
+	}
+	want := map[string]string{"fake/luna": "GPT-6 Luna · fake", "other/luna": "GPT-6 Luna · other", "fake/m": "m"}
+	if len(names) != len(want) {
+		t.Fatalf("models/list names %v", names)
+	}
+	for id, name := range want {
+		if names[id] != name {
+			t.Errorf("models/list %s: %q, want %q", id, names[id], name)
+		}
 	}
 }
 

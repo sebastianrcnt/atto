@@ -237,7 +237,7 @@ func (a *App) remoteInfo(r *remote) server.ThreadInfo {
 		ID: a.sess.ID, Cwd: a.cwd, Name: a.sessName, Effort: effort,
 		ContextTokens: a.ctxTokens, Busy: a.busy, TurnID: r.turnID, Live: true,
 	}
-	server.SetModel(&info, m)
+	server.SetModel(&info, m, a.models)
 	u := a.remoteUsage()
 	info.Usage = &u
 	if a.busy {

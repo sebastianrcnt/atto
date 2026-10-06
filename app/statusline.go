@@ -358,7 +358,7 @@ func (a *App) builtinStatus(first, width int) []string {
 	// often than frames are drawn, so keep them until it changes.
 	k := statusKey{
 		first: first, width: width, effort: effort,
-		name: m.Model.DisplayName(), subscription: m.Provider.Subscription, priced: priced(m.Model),
+		name: a.models.DisplayName(m), subscription: m.Provider.Subscription, priced: priced(m.Model),
 		ctxWindow: m.Model.ContextWindow, maxTokens: m.Model.MaxTokens,
 		reasoning: m.Model.Reasoning != nil && *m.Model.Reasoning, hasLevels: len(m.Model.Levels()) > 0,
 		usage: a.usage, ctxTokens: a.ctxTokens, sessName: a.sessName, mem: fmtBytes(rssBytes.Load()),
@@ -396,7 +396,7 @@ func (a *App) buildStatus(m config.ModelRef, effort string, first, width int) []
 	sep := tui.Dim(" · ")
 	u := &a.usage
 
-	items := []statusItem{{text: tui.FG(6, "◆ ") + m.Model.DisplayName()}}
+	items := []statusItem{{text: tui.FG(6, "◆ ") + a.models.DisplayName(m)}}
 	if effort != "" && len(m.Model.Levels()) > 0 {
 		items = append(items, statusItem{text: effortStyle(effort), drop: dropEffort})
 	}
