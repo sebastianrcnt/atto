@@ -123,7 +123,8 @@ func TestStdioTurn(t *testing.T) {
 		t.Fatalf("want method-not-found: %+v", r)
 	}
 
-	// A new server process resumes the thread from its session file.
+	// A new server process resumes after the previous writer closes.
+	s.Close()
 	s2 := New("test", work)
 	t.Cleanup(s2.Close)
 	resp := s2.Handle(context.Background(), []byte(`{"jsonrpc":"2.0","id":1,"method":"thread/resume","params":{"threadId":"`+id+`"}}`))

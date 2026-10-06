@@ -290,7 +290,7 @@ func TestBackgroundWaitsForMovedCommand(t *testing.T) {
 func TestReadOnlyLockedSession(t *testing.T) {
 	a := treeApp(t)
 	path := saveSession(t, a.cwd, "earlier")
-	release, err := session.Lock(path)
+	release, err := session.LockKind(path, session.KindBackground)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -346,7 +346,7 @@ func TestResumePickerMarksRunning(t *testing.T) {
 	if got := tui.StripEscapes(strings.Join(p.Render(100), "\n")); strings.Contains(got, "running") {
 		t.Fatalf("not running:\n%s", got)
 	}
-	release, err := session.Lock(path)
+	release, err := session.LockKind(path, session.KindBackground)
 	if err != nil {
 		t.Fatal(err)
 	}

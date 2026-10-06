@@ -130,3 +130,21 @@ func TestLockTUI(t *testing.T) {
 		t.Fatal("released")
 	}
 }
+
+func TestWriterKindsDoNotAllowSameProcessTakeover(t *testing.T) {
+	for _, kind := range []string{KindRun, KindServer} {
+		t.Run(kind, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "s.jsonl")
+			release, err := LockKind(path, kind)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer release()
+			for _, other := range []string{KindTUI, KindRun, KindServer, KindBackground} {
+				if _, err := LockKind(path, other); !errors.Is(err, ErrLocked) {
+					t.Fatalf("%s stole %s: %v", other, kind, err)
+				}
+			}
+		})
+	}
+}

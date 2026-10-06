@@ -221,3 +221,19 @@ func TestSessionsListMarksRunning(t *testing.T) {
 		t.Fatalf("json: %v\n%s", err, out.String())
 	}
 }
+
+func TestOrdinaryPrintHoldsWriterLease(t *testing.T) {
+	var path string
+	_, lockedDuring := continueServer(t, &path)
+	_, w := bgSession(t)
+	path = w.Path
+	if err := RunPrint(PrintOptions{Prompt: "continue", Resume: w.ID}); err != nil {
+		t.Fatal(err)
+	}
+	if !lockedDuring() {
+		t.Fatal("ordinary run had no writer lease")
+	}
+	if _, ok := session.LockedBy(path); ok {
+		t.Fatal("lease not released")
+	}
+}

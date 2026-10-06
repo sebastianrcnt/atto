@@ -28,3 +28,35 @@ func TestResumeRefusesLockedSession(t *testing.T) {
 		t.Fatalf("resume: %+v", resp)
 	}
 }
+
+func TestStandaloneServerHoldsWriterLease(t *testing.T) {
+	work := setup(t)
+	s := New("test", work)
+	defer s.Close()
+	got, err := s.startThread(threadParams{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := got.(ThreadInfo).ID
+	s.threads[id].sess.Append(session.Entry{Type: session.TypeName, Name: "test"})
+	path, err := session.Find(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	l, ok := session.LockedBy(path)
+	if !ok || l.Kind != session.KindServer {
+		t.Fatalf("lease: %+v %v", l, ok)
+	}
+	s2 := New("test", work)
+	defer s2.Close()
+	if _, err := s2.resumeThread(id); err == nil {
+		t.Fatal("second writer opened session")
+	}
+	if _, err := session.LockTUI(path); err == nil {
+		t.Fatal("terminal opened server session")
+	}
+	s.Close()
+	if _, err := s2.resumeThread(id); err != nil {
+		t.Fatal("lease not released:", err)
+	}
+}

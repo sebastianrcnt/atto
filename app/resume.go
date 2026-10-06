@@ -2,7 +2,6 @@ package app
 
 import (
 	"fmt"
-	"os"
 	"path/filepath"
 	"strings"
 
@@ -539,18 +538,27 @@ func (a *App) resume(path string) {
 		a.cancel()
 		return
 	}
+	l, locked := session.LockedBy(path)
+	background := locked && (l.Kind == "" || l.Kind == session.KindBackground)
+	var release func()
+	var err error
+	if !background {
+		release, err = session.LockTUI(path)
+		if err != nil {
+			a.errorNotice(err)
+			return
+		}
+	}
 	saved, file, err := core.Open(path)
 	if err != nil {
+		if release != nil {
+			release()
+		}
 		a.errorNotice(err)
 		return
 	}
-	if l, ok := session.LockedBy(path); ok && !(l.Kind == session.KindTUI && l.PID == os.Getpid()) { // not our own
-		if l.Kind == session.KindTUI { // open in another terminal: two writers would undo each other
-			file.Close()
-			a.errorNotice(session.LockError(l))
-			return
-		}
-		a.resumeLocked(saved, file, l) // left running in the background
+	if background {
+		a.resumeLocked(saved, file, l)
 		return
 	}
 	h := saved.Header
@@ -558,7 +566,7 @@ func (a *App) resume(path string) {
 	a.reset()
 	a.closeSession()
 	a.sess = file
-	a.lockSession()
+	a.unlock = release
 	core.Bind(a.agent, a.hooks, a.sess, h.Time, true) // the session's own date keeps the prefix cache
 	a.setLiveSession(h.ID)
 	a.sessionStartHook("resume")

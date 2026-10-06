@@ -20,11 +20,16 @@ import (
 type LockInfo struct {
 	PID     int       `json:"pid"`
 	Started time.Time `json:"started"`
-	Kind    string    `json:"kind,omitempty"` // "" a background run, KindTUI a terminal
+	Kind    string    `json:"kind,omitempty"` // empty for legacy background runs
 }
 
-// KindTUI marks the lock of a session open in atto's terminal UI.
-const KindTUI = "tui"
+// Writer kinds distinguish a detached continuation from other frontends.
+const (
+	KindTUI        = "tui"
+	KindRun        = "run"
+	KindServer     = "server"
+	KindBackground = "background"
+)
 
 // ErrLocked is wrapped by Lock when a live process holds the session.
 var ErrLocked = errors.New("session is running in the background")
@@ -57,6 +62,9 @@ func LockError(l LockInfo) error {
 	if l.Kind == KindTUI {
 		return openError(fmt.Sprintf("session is open in another atto (pid %d): continue it there (atto attach, if it runs in the daemon), or close it there first", l.PID))
 	}
+	if l.Kind == KindRun || l.Kind == KindServer {
+		return openError(fmt.Sprintf("session is being written by another atto (%s, pid %d): close it there first", l.Kind, l.PID))
+	}
 	return fmt.Errorf("%w (pid %d): wait for it to finish, then try again", ErrLocked, l.PID)
 }
 
@@ -75,12 +83,17 @@ func ReadOnlyMessage(l LockInfo) string {
 // Lock takes the session's lock for the calling process. It fails with
 // ErrLocked when another live process holds it; a stale lock is replaced.
 // The returned function releases it.
-func Lock(path string) (release func(), err error) { return LockFor(path, os.Getpid()) }
+func Lock(path string) (release func(), err error) { return LockKind(path, KindRun) }
+
+// LockKind takes a writer lease for this frontend.
+func LockKind(path, kind string) (release func(), err error) { return lockAs(path, os.Getpid(), kind) }
 
 // LockFor takes the lock on behalf of the process with the given pid, so a
 // parent can hold a session for the background run it just started. That
 // process taking the lock itself then finds it its own.
-func LockFor(path string, pid int) (release func(), err error) { return lockAs(path, pid, "") }
+func LockFor(path string, pid int) (release func(), err error) {
+	return lockAs(path, pid, KindBackground)
+}
 
 // LockTUI takes the lock for a terminal session: other terminals, runs and
 // clients are refused while it is held.
@@ -92,6 +105,9 @@ func LockTUI(path string) (release func(), err error) {
 }
 
 func lockAs(path string, pid int, kind string) (release func(), err error) {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return nil, err
+	}
 	lp := LockPath(path)
 	body, _ := json.Marshal(LockInfo{PID: pid, Started: time.Now(), Kind: kind})
 	for range 3 {
@@ -108,8 +124,11 @@ func lockAs(path string, pid int, kind string) (release func(), err error) {
 		if !errors.Is(err, os.ErrExist) {
 			return nil, err
 		}
-		if l, ok := LockedBy(path); ok && l.PID != pid {
-			return nil, LockError(l)
+		if l, ok := LockedBy(path); ok {
+			owned := l.PID == pid && (kind == KindTUI && l.Kind == KindTUI || kind == KindBackground && (l.Kind == KindBackground || l.Kind == ""))
+			if !owned {
+				return nil, LockError(l)
+			}
 		}
 		os.Remove(lp) // stale, ours, or unreadable
 	}

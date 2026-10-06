@@ -30,17 +30,15 @@ func RunContinue(args []string, _ io.Writer) error {
 	return RunPrint(PrintOptions{Resume: args[0], Format: "text", Verbose: true, Background: true})
 }
 
-// lockForRun guards a run that writes the session at path. A background
-// run takes the session's lock; any other run refuses a locked session
-// (unless it writes nothing) and holds nothing.
+// lockForRun holds the writer lease for the lifetime of a saved run.
 func lockForRun(path string, background, writes bool) (release func(), err error) {
+	if !writes {
+		return func() {}, nil
+	}
 	if background {
-		return session.Lock(path)
+		return session.LockKind(path, session.KindBackground)
 	}
-	if l, ok := session.LockedBy(path); ok && writes {
-		return nil, session.LockError(l)
-	}
-	return func() {}, nil
+	return session.Lock(path)
 }
 
 type bgMode int

@@ -108,6 +108,9 @@ type thread struct {
 	name      string
 	agent     *agent.Agent
 	sess      *session.Writer
+	release   func()
+	closing   bool
+	done      chan struct{}
 	hooks     *hooks.Runner
 	ext       *extensions.Manager
 	mcp       *mcp.Manager
@@ -139,6 +142,7 @@ func (s *Server) Close() {
 	defer s.mu.Unlock()
 	select {
 	case <-s.stop:
+		return
 	default:
 		close(s.stop)
 	}
@@ -146,10 +150,15 @@ func (s *Server) Close() {
 	for _, t := range s.threads {
 		core.Leave(t.id)
 		t.mu.Lock()
+		t.closing = true
+		done := t.done
 		if t.cancel != nil {
 			t.cancel()
 		}
 		t.mu.Unlock()
+		if done != nil {
+			<-done
+		}
 		if t.hooks != nil { // threads end together, so one slow hook costs little
 			ending.Go(func() {
 				t.hooks.SessionEnd(context.Background(), "other")
@@ -171,6 +180,9 @@ func (s *Server) Close() {
 	// Last: SessionEnd hooks and extensions may still write to the session.
 	for _, t := range s.threads {
 		t.sess.Close()
+		if t.release != nil {
+			t.release()
+		}
 	}
 }
 
@@ -423,12 +435,12 @@ func (s *Server) listModels() (any, error) {
 
 // newThread wires an agent, its hooks and a session file for cwd.
 // modelFrom and effortFrom say where model and effort came from.
-func (s *Server) newThread(cwd string, model config.ModelRef, models config.ModelsFile, effort string, file *session.Writer, start time.Time, modelFrom, effortFrom core.Origin) (*thread, error) {
+func (s *Server) newThread(cwd string, model config.ModelRef, models config.ModelsFile, effort string, file *session.Writer, release func(), start time.Time, modelFrom, effortFrom core.Origin) (*thread, error) {
 	ag, hk, src, err := core.NewAgentSources(cwd, model, effort)
 	if err != nil {
 		return nil, err
 	}
-	t := &thread{id: file.ID, cwd: cwd, models: models, agent: ag, sess: file, hooks: hk, hookSrc: src, blocks: blocks{}}
+	t := &thread{id: file.ID, cwd: cwd, models: models, agent: ag, sess: file, release: release, hooks: hk, hookSrc: src, blocks: blocks{}}
 	// Extensions show what they show to the clients (see threadHost);
 	// notices go to them as extension/notify, dialogs get their default
 	// answers, and sendMessage steers the thread's turn.
@@ -462,8 +474,15 @@ func (s *Server) startThread(p threadParams) (any, error) {
 	if st, err := os.Stat(cwd); err != nil || !st.IsDir() {
 		return nil, invalid("cwd %q is not a directory", cwd)
 	}
-	t, err := s.newThread(cwd, model, models, effort, session.New(cwd), time.Now(), modelFrom, effortFrom)
+	file := session.New(cwd)
+	release, err := session.LockKind(file.Path, session.KindServer)
 	if err != nil {
+		return nil, err
+	}
+	t, err := s.newThread(cwd, model, models, effort, file, release, time.Now(), modelFrom, effortFrom)
+	if err != nil {
+		file.Close()
+		release()
 		return nil, err
 	}
 	s.sessionStart(t, "startup")
@@ -500,9 +519,16 @@ func (s *Server) resumeThread(id string) (any, error) {
 	if err != nil {
 		return nil, invalid("%v", err)
 	}
-	if l, ok := session.LockedBy(path); ok { // running in the background
-		return nil, invalid("%v", session.LockError(l))
+	release, err := session.LockKind(path, session.KindServer)
+	if err != nil {
+		return nil, invalid("%v", err)
 	}
+	keep := false
+	defer func() {
+		if !keep {
+			release()
+		}
+	}()
 	saved, file, err := core.Open(path)
 	if err != nil {
 		return nil, err
@@ -518,11 +544,12 @@ func (s *Server) resumeThread(id string) (any, error) {
 		return nil, err
 	}
 	effort, effortFrom := core.EffortFrom(settings, "", saved.Effort)
-	t, err := s.newThread(saved.Header.Cwd, model, models, effort, file, saved.Header.Time, modelFrom, effortFrom)
+	t, err := s.newThread(saved.Header.Cwd, model, models, effort, file, release, saved.Header.Time, modelFrom, effortFrom)
 	if err != nil {
 		file.Close()
 		return nil, err
 	}
+	keep = true
 	t.name = saved.Name
 	t.restore(saved.Entries)
 	t.agent.SetLongContext(saved.LongContext)
@@ -625,10 +652,12 @@ func (s *Server) notify(t *thread, method string, params map[string]any) {
 // begin marks the thread busy and starts fn in the background.
 func (s *Server) begin(t *thread, fn func(ctx context.Context, emit func(any)) error) (string, error) {
 	t.mu.Lock()
-	if t.busy {
+	if t.busy || t.closing {
 		t.mu.Unlock()
 		return "", &rpcError{codeServer, "a turn is already running; use turn/steer or turn/interrupt"}
 	}
+	t.done = make(chan struct{})
+	done := t.done
 	t.turnSeq++
 	turnID := fmt.Sprintf("%s-t%d", t.id, t.turnSeq)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -643,6 +672,7 @@ func (s *Server) begin(t *thread, fn func(ctx context.Context, emit func(any)) e
 	t.tr.Handler = m.handler()
 	t.feed.Unlock()
 	go func() {
+		defer close(done)
 		err := fn(ctx, m.event)
 		m.closeOpen()
 		// A reload no step boundary reached runs now, while the thread is

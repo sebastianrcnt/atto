@@ -89,6 +89,7 @@ func TestUsageAndTurnInfo(t *testing.T) {
 	}
 
 	// A new server has the totals from the session file.
+	s.Close()
 	s2 := New("test", work)
 	t.Cleanup(s2.Close)
 	r := call(t, s2, "thread/resume", map[string]any{"threadId": id})

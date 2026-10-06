@@ -198,18 +198,22 @@ func RunPrint(o PrintOptions) error {
 		} else {
 			return fmt.Errorf("no previous session in this directory")
 		}
-		if saved, sess, err = core.Open(path); err != nil {
-			return err
-		}
 		release, err := lockForRun(path, o.Background, !o.NoSave)
 		if err != nil {
-			sess.Close()
 			return err
 		}
 		defer release()
+		if saved, sess, err = core.Open(path); err != nil {
+			return err
+		}
 		start, source = saved.Header.Time, "resume"
 	default:
 		sess = session.New(cwd)
+		release, err := lockForRun(sess.Path, o.Background, !o.NoSave)
+		if err != nil {
+			return err
+		}
+		defer release()
 	}
 	defer sess.Close()
 
