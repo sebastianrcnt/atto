@@ -43,12 +43,13 @@ func LogPath(path string) string { return strings.TrimSuffix(path, ".jsonl") + "
 
 // processAlive is a seam for tests; the real check is per platform.
 var processAlive = pidAlive
+var processStartTime = pidStartTime
 
 // moveLock is a seam for takeover races in tests.
 var moveLock = os.Rename
 
 // LockedBy reads the session's lock. ok is false when there is none or it
-// is stale (its process is gone).
+// is stale (its process is gone or its pid was reused).
 func LockedBy(path string) (LockInfo, bool) {
 	b, err := os.ReadFile(LockPath(path))
 	if err != nil {
@@ -60,6 +61,9 @@ func LockedBy(path string) (LockInfo, bool) {
 func liveLock(b []byte) (LockInfo, bool) {
 	var l LockInfo
 	if json.Unmarshal(b, &l) != nil || l.PID <= 0 || !processAlive(l.PID) {
+		return LockInfo{}, false
+	}
+	if started, ok := processStartTime(l.PID); ok && started.After(l.Started.Add(2*time.Second)) {
 		return LockInfo{}, false
 	}
 	return l, true

@@ -1,11 +1,14 @@
 package session
 
 import (
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/sebastianrcnt/atto/provider"
 )
@@ -180,5 +183,67 @@ func TestStaleTakeoverDoesNotRemoveFreshLock(t *testing.T) {
 	defer firstRelease()
 	if l, ok := LockedBy(path); !ok || l.PID != os.Getpid() {
 		t.Fatalf("fresh lock lost: %+v %v", l, ok)
+	}
+}
+
+func TestLockPIDReuse(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "s.jsonl")
+	now := time.Now()
+	body, err := json.Marshal(LockInfo{PID: 4242, Started: now})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(LockPath(path), body, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	oldAlive, oldStart := processAlive, processStartTime
+	t.Cleanup(func() { processAlive, processStartTime = oldAlive, oldStart })
+	processAlive = func(int) bool { return true }
+	for _, tc := range []struct {
+		name        string
+		start       time.Time
+		known, live bool
+	}{
+		{"original", now.Add(-time.Second), true, true},
+		{"granularity", now.Add(time.Second), true, true},
+		{"reused", now.Add(3 * time.Second), true, false},
+		{"unknown", time.Time{}, false, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			processStartTime = func(int) (time.Time, bool) { return tc.start, tc.known }
+			if _, ok := LockedBy(path); ok != tc.live {
+				t.Fatalf("live = %v, want %v", ok, tc.live)
+			}
+		})
+	}
+}
+
+func TestProcessStartTime(t *testing.T) {
+	start, ok := pidStartTime(os.Getpid())
+	if runtime.GOOS != "darwin" && runtime.GOOS != "linux" && runtime.GOOS != "windows" {
+		t.Skip("process start time unavailable")
+	}
+	if !ok || start.IsZero() || start.After(time.Now().Add(2*time.Second)) {
+		t.Fatalf("current process start: %v %v", start, ok)
+	}
+	// A parent's LockFor timestamp comes after the child started, so it remains live.
+	path := filepath.Join(t.TempDir(), "s.jsonl")
+	release, err := LockFor(path, os.Getpid())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+	l, live := LockedBy(path)
+	if !live || l.Started.Before(start.Add(-2*time.Second)) {
+		t.Fatalf("parent lock: %+v %v", l, live)
+	}
+	second, err := LockFor(path, os.Getpid())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer second()
+	release()
+	if _, live := LockedBy(path); !live {
+		t.Fatal("parent release removed child's acquisition")
 	}
 }

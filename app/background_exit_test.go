@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/sebastianrcnt/atto/agent"
 	"github.com/sebastianrcnt/atto/config"
@@ -366,7 +367,7 @@ func TestSessionOpenInAnotherTerminal(t *testing.T) {
 		t.Fatalf("the new session is not held: %+v %v", l, ok)
 	}
 	path := saveSession(t, a.cwd, "earlier")
-	body, _ := json.Marshal(session.LockInfo{PID: os.Getppid(), Kind: session.KindTUI}) // another atto, alive
+	body, _ := json.Marshal(session.LockInfo{PID: os.Getppid(), Started: time.Now(), Kind: session.KindTUI}) // another atto, alive
 	if err := os.WriteFile(session.LockPath(path), body, 0o644); err != nil {
 		t.Fatal(err)
 	}
