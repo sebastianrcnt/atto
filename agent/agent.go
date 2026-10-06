@@ -1121,7 +1121,7 @@ func (a *Agent) loop(ctx context.Context, emit func(any)) error {
 				// A length stop may cut a tool call at any byte. Its arguments can
 				// still happen to be valid JSON, so never execute a call from the
 				// truncated assistant message; let the model issue it again.
-				msg := "tool call was not executed: the response hit the output token limit; re-issue the tool call with complete arguments"
+				msg := "tool call was not executed: the response hit the output token limit; re-issue the tool call with complete arguments, and keep it shorter (split a long command or file write into several calls)"
 				content = "error: " + msg
 				meta.Tool = &session.ToolMeta{ExitCode: -1}
 				drafts.end(i, msg)
