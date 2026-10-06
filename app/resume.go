@@ -517,14 +517,24 @@ func (a *App) cmdSessions(string) {
 				return
 			}
 		}
-		if a.busy {
-			a.pendingResume = path
-			a.cancel()
-			return
-		}
-		a.resume(path)
+		a.requestResume(path)
 	}
 	a.openModal(p)
+}
+
+// requestResume switches to path at a turn boundary. A running turn keeps
+// its current session bindings until cancellation has finished, so its late
+// events and response cannot be recorded in the destination session.
+func (a *App) requestResume(path string) {
+	if path == a.sess.Path {
+		return
+	}
+	if a.busy {
+		a.pendingResume = path
+		a.cancel()
+		return
+	}
+	a.resume(path)
 }
 
 // resume loads a session file, restores the agent and redraws the
