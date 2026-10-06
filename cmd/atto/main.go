@@ -60,6 +60,7 @@ usage:
   atto extensions [list|approve <name>|types|docs]
                                     JavaScript/TypeScript extensions (docs: atto extensions docs)
   atto update [-check]              install the latest release
+  atto channel [stable|edge]        show or switch the release channel this build follows
   atto serve [-listen addr]         JSON-RPC over HTTP + SSE, with a web client
   atto app-server                   JSON-RPC over stdio (JSON lines)
 

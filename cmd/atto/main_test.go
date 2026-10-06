@@ -104,3 +104,24 @@ func TestNestedAllowsAgent(t *testing.T) {
 		t.Error("atto itself must stay refused")
 	}
 }
+
+// "atto -h" is the only place the subcommands are listed, so a new one that
+// is not mentioned there is invisible: every command a user can run must
+// appear in the usage text (hidden ones, "_foo", are deliberately not).
+func TestUsageListsEverySubcommand(t *testing.T) {
+	listed := map[string]bool{}
+	for f := range strings.FieldsSeq(strings.ReplaceAll(usage, "|", " ")) {
+		f = strings.Trim(f, "[]<>(),.:;?!/…")
+		if f != "" {
+			listed[strings.ToLower(f)] = true
+		}
+	}
+	for _, name := range subcommandNames() {
+		if strings.HasPrefix(name, "_") {
+			continue
+		}
+		if !listed[name] {
+			t.Errorf("subcommand %q is not in the usage text:\n%s", name, usage)
+		}
+	}
+}
