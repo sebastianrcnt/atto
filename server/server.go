@@ -88,11 +88,19 @@ func (s *Server) watchInbox() {
 				t.agent.Steer(text)
 				continue
 			}
-			_, _ = s.begin(t, func(ctx context.Context, emit func(any)) error {
-				emit(transcript.Input{Text: text})
-				return t.agent.Run(ctx, text, emit)
-			})
+			s.beginInboxTurn(t, evs)
 		}
+	}
+}
+
+// beginInboxTurn preserves the inbox if a concurrent request claimed the turn.
+func (s *Server) beginInboxTurn(t *thread, evs []events.Event) {
+	text := events.Format(evs)
+	if _, err := s.begin(t, func(ctx context.Context, emit func(any)) error {
+		emit(transcript.Input{Text: text})
+		return t.agent.Run(ctx, text, emit)
+	}); err != nil {
+		events.Requeue(t.id, evs)
 	}
 }
 
