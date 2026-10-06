@@ -707,6 +707,7 @@ func (a *App) start(activity string, fn func(context.Context, func(any)) error) 
 			a.remoteTurnCompleted(err)
 			a.afterRun(err)
 			a.remoteGoal()
+			a.remotePending()
 		})
 	}()
 }

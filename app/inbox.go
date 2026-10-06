@@ -67,6 +67,7 @@ func (a *App) pollInbox(s string) {
 		}
 		a.deliverEvents()
 		a.remoteGoal() // the time of a running turn, and reports from atto goal
+		a.remotePending()
 	})
 }
 

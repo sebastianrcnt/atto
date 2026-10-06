@@ -276,6 +276,7 @@ func (a *App) onEvent(ev any) {
 			a.add(&userBlock{text: strings.Join(a.steered, "\n\n"), remote: remote})
 		}
 		a.steered = nil
+		a.remotePending()
 		return
 	}
 	a.tr().Event(ev)
@@ -309,6 +310,7 @@ func (a *App) onEvent(ev any) {
 		a.ctxTokens = e.Context
 		a.usage.add(e.Usage)
 		a.statusTrigger()
+		a.remoteStep(e.Usage)
 	case agent.CompactStart:
 		a.activity = "Compacting context"
 	case agent.CompactEnd:

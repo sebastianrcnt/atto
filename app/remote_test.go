@@ -407,3 +407,72 @@ func TestRemoteTokenPerStart(t *testing.T) {
 		t.Fatal("/remote off twice")
 	}
 }
+
+// Pending steers show on the phone and can be taken back there; the last
+// turn can be rolled back from it as /tree would.
+func TestRemotePendingAndRollback(t *testing.T) {
+	model := newRemoteModel(t)
+	a := remoteApp(t, model)
+	runTurn(t, a, "first")
+	a.ui.Do(func() { a.cmdRemote("on") })
+	c := a.remoteClient(t)
+	read := c.must("thread/read", nil)
+	if read["modelName"] != "m" || read["usage"] == nil {
+		t.Fatalf("status line info %v", read)
+	}
+	eid, _ := read["eventId"].(float64)
+	ev := c.events(eid)
+
+	if r := c.must("turn/start", map[string]any{"input": "block"}); r["status"] != "started" {
+		t.Fatalf("turn/start %v", r)
+	}
+	if m, _ := until(t, ev, "turn/started", nil); m.Params["startedAt"] == nil {
+		t.Fatalf("turn/started %v", m.Params)
+	}
+	within(t, a, "the blocking request", func() bool { return model.blocks() == 1 })
+	c.must("turn/start", map[string]any{"input": "more"})
+	pending := func(want string) func(rmsg) bool {
+		return func(m rmsg) bool {
+			p, _ := m.Params["pending"].(map[string]any)
+			s, _ := p["steers"].([]any)
+			return fmt.Sprint(s) == want
+		}
+	}
+	until(t, ev, "turn/pending", pending("[more]"))
+	if p := c.must("thread/read", nil)["pending"].(map[string]any); fmt.Sprint(p["steers"]) != "[more]" {
+		t.Fatalf("thread/read pending %v", p)
+	}
+	c.must("turn/unsteer", map[string]any{"input": "more"})
+	until(t, ev, "turn/pending", pending("[]"))
+	if m := c.call("turn/unsteer", map[string]any{"input": "more"}); m.Error == nil {
+		t.Fatal("unsteered twice")
+	}
+	var steers []string
+	a.ui.Do(func() { steers = a.agent.DrainSteers() })
+	if len(steers) != 0 {
+		t.Fatalf("the agent still has %v", steers)
+	}
+
+	// Rolling back while busy is refused; once idle it goes back to before
+	// the last message, and gives it back.
+	if m := c.call("thread/rollback", nil); m.Error == nil || !strings.Contains(m.Error.Message, "running") {
+		t.Fatalf("rollback while busy: %+v", m.Error)
+	}
+	c.must("turn/interrupt", nil)
+	until(t, ev, "turn/completed", nil)
+	waitIdle(t, a)
+	r := c.must("thread/rollback", nil)
+	if r["input"] != "block" {
+		t.Fatalf("rollback input %v", r["input"])
+	}
+	until(t, ev, "thread/switched", nil)
+	var users []string
+	for _, it := range c.must("thread/read", nil)["items"].([]any) {
+		if m := it.(map[string]any); m["type"] == "userMessage" {
+			users = append(users, m["text"].(string))
+		}
+	}
+	if strings.Join(users, ",") != "first" {
+		t.Fatalf("user messages after rollback %v", users)
+	}
+}

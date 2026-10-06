@@ -9,7 +9,9 @@
 //
 // Requests:
 //
-//	initialize                                     → {name, version, protocolVersion, eventId}
+//	initialize                                     → {name, version, protocolVersion, eventId, settings}
+//	               settings: what of settings.json clients follow
+//	               ({toolGroups}: false shows every command on its own)
 //	models/list                                    → {models: [{id, name, contextWindow, efforts, hasKey, images}]}
 //	thread/start   {cwd?, model?, effort?}         → thread + context
 //	thread/resume  {threadId}                      → thread + items + context
@@ -29,10 +31,20 @@
 //	turn/steer     {threadId, input}               → {}
 //	turn/interrupt {threadId}                      → {}
 //	turn/background {threadId}                     → {}  (Ctrl+B: the running command becomes a job)
+//	turn/unsteer   {threadId, input, queued?}      → {}
+//	               takes back a pending steer (queued: a queued follow-up,
+//	               live sessions) not delivered yet; refused once it was
+//	job/list       {threadId}                      → {jobs: [Job]}  (the session's background jobs)
+//	job/output     {threadId, job, lines?}         → {output}  (the last lines, 200 by default)
+//	job/stop       {threadId, job}                 → {job}
+//	subagent/list  {threadId}                      → {subagents: [Subagent]}
+//	subagent/read  {threadId, name}                → {subagent, message, items}
+//	               a subagent's transcript (its own session), read only,
+//	               and its last message
 //
 // Notifications (all carry threadId):
 //
-//	turn/started   {turnId}
+//	turn/started   {turnId, startedAt, verb?}  (startedAt: Unix ms; verb: the word the terminal shows for "Working")
 //	item/started   {turnId, item}
 //	item/delta     {turnId, itemId, delta}
 //	item/updated   {turnId, item}  (a command the model is still writing, pending: its description and command so far; again when it starts running)
@@ -43,7 +55,14 @@
 //	extension/notify {extension, message, level}  (ctx.ui.notify)
 //	item/display   {itemId, blockId, display}  (what extensions show on a reasoning or agentMessage item changed; display null: shown as it is)
 //	extension/ui   {ui}  (the extensions' status items or widgets changed; see ExtensionUI)
+//	thread/usage   {usage, step, contextTokens}  (after each model response: the session's totals and that response's)
+//	turn/pending   {pending}  (pending steers or queued follow-ups changed; see PendingInput)
 //	turn/completed {turnId, status, error?, usage, contextTokens}
+//
+// thread/read and thread/resume carry what the status line shows: the
+// model's name and whether it is priced or on a subscription, the usage
+// totals (Usage), and while a turn runs the turn (TurnInfo), with the
+// pending input.
 //
 // Extensions shape what the client shows, as data only (text and a few
 // tokens such as lang: "diff"; never markup or code): a reasoning or
@@ -66,8 +85,9 @@
 //	events/reset   {eventId}  (no threadId: read the thread again)
 //
 // Live session (atto's /remote, see Live): the server has one thread, the
-// TUI's session. initialize says {live: true, threadId}; thread/start and
-// thread/rollback are refused; turn/start and turn/steer both send the
+// TUI's session. initialize says {live: true, threadId}; thread/start is
+// refused (send /clear); thread/rollback takes back the last turn as
+// /tree does, idle only; turn/start and turn/steer both send the
 // input as if typed in the terminal (a turn, a steer or a queued turn:
 // {status, turnId}). More notifications:
 //
@@ -91,7 +111,11 @@ package server
 import (
 	"encoding/json"
 
+	"github.com/sebastianrcnt/atto/agent"
+	"github.com/sebastianrcnt/atto/config"
 	"github.com/sebastianrcnt/atto/core"
+	"github.com/sebastianrcnt/atto/provider"
+	"github.com/sebastianrcnt/atto/session"
 )
 
 const ProtocolVersion = 1
@@ -244,6 +268,18 @@ type ThreadInfo struct {
 	Busy          bool     `json:"busy"`
 	TurnID        string   `json:"turnId,omitempty"`
 	Items         []Item   `json:"items,omitempty"`
+	// What the status line shows of the model (see SetModel): its name,
+	// the context size auto-compaction starts at, and whether it has
+	// prices (a cost) and is on a subscription (the cost only estimates).
+	ModelName        string `json:"modelName,omitempty"`
+	AutoCompactLimit int    `json:"autoCompactLimit,omitempty"`
+	Priced           bool   `json:"priced,omitempty"`
+	Subscription     bool   `json:"subscription,omitempty"`
+	// Usage is the session's token totals; Turn the running turn, and
+	// Pending the input it has not taken yet (nil when none).
+	Usage   *Usage        `json:"usage,omitempty"`
+	Turn    *TurnInfo     `json:"turn,omitempty"`
+	Pending *PendingInput `json:"pending,omitempty"`
 	// Context is set in thread/start and thread/resume results.
 	Context *core.Loaded `json:"context,omitempty"`
 	// EventID, in thread/read and thread/resume results over HTTP, is the
@@ -259,6 +295,115 @@ type ThreadInfo struct {
 	// ExtensionUI, in thread/read and thread/resume results, is what the
 	// extensions show around the input (nil when nothing).
 	ExtensionUI *ExtensionUI `json:"extensionUi,omitempty"`
+}
+
+// SetModel fills in what a thread's info says of its model m.
+func SetModel(info *ThreadInfo, m config.ModelRef) {
+	if m.Model.ID != "" {
+		info.Model = m.ProviderName + "/" + m.Model.ID
+	}
+	info.ModelName, info.Efforts, info.ContextWindow = m.Model.DisplayName(), m.Model.Levels(), m.Model.ContextWindow
+	info.AutoCompactLimit = agent.AutoCompactLimit(m.Model)
+	c := m.Model.Cost
+	info.Priced = c != nil && (c.Input > 0 || c.Output > 0 || c.CacheRead > 0 || c.CacheWrite > 0)
+	info.Subscription = m.Provider.Subscription
+}
+
+// Usage is token usage: a session's totals, or one model response's
+// (thread/usage's step). Input includes the cached and written tokens.
+type Usage struct {
+	InputTokens       int     `json:"inputTokens"`
+	CachedInputTokens int     `json:"cachedInputTokens"`
+	CacheWriteTokens  int     `json:"cacheWriteTokens,omitempty"`
+	OutputTokens      int     `json:"outputTokens"`
+	Cost              float64 `json:"cost,omitempty"` // US dollars; 0 without prices
+	// The latest response's input and how much of it was cached, for the
+	// cache hit rate (totals only).
+	LastInputTokens       int `json:"lastInputTokens,omitempty"`
+	LastCachedInputTokens int `json:"lastCachedInputTokens,omitempty"`
+}
+
+// Add counts one response's usage in the totals.
+func (u *Usage) Add(x provider.Usage) {
+	u.InputTokens += x.PromptTokens
+	u.CachedInputTokens += x.CachedTokens
+	u.CacheWriteTokens += x.CacheWriteTokens
+	u.OutputTokens += x.CompletionTokens
+	u.Cost += x.Cost
+	u.LastInputTokens, u.LastCachedInputTokens = x.PromptTokens, x.CachedTokens
+}
+
+// StepUsage is one response's usage in protocol form.
+func StepUsage(x provider.Usage) Usage {
+	return Usage{InputTokens: x.PromptTokens, CachedInputTokens: x.CachedTokens, CacheWriteTokens: x.CacheWriteTokens, OutputTokens: x.CompletionTokens, Cost: x.Cost}
+}
+
+// UsageOf totals the usage recorded in session entries.
+func UsageOf(entries []session.Entry) Usage {
+	var u Usage
+	for _, e := range entries {
+		if e.Usage != nil {
+			u.Add(*e.Usage)
+		}
+	}
+	return u
+}
+
+// TurnInfo is the running turn as the terminal's activity line shows it.
+type TurnInfo struct {
+	StartedAt int64 `json:"startedAt"` // Unix milliseconds
+	// Verb is the word shown for "Working" this turn (settings.json's
+	// spinnerVerbs; live sessions only).
+	Verb string `json:"verb,omitempty"`
+	// The turn's tokens so far: input the server had not cached, and
+	// output.
+	InputTokens  int `json:"inputTokens"`
+	OutputTokens int `json:"outputTokens"`
+}
+
+// PendingInput is input sent while a turn runs that it has not taken
+// yet: steers, which it takes after the running command (or when the
+// model stops), and in a live session follow-ups queued for after it.
+type PendingInput struct {
+	Steers []string `json:"steers"`
+	Queued []string `json:"queued,omitempty"`
+}
+
+// Job is a background job of the thread's session (package jobs).
+type Job struct {
+	ID       int    `json:"id"`
+	Label    string `json:"label"` // its name, or its command's first line
+	Kind     string `json:"kind"`  // job, monitor, job+notify, monitor+notify
+	Command  string `json:"command"`
+	Status   string `json:"status"` // starting, running, exited, killed, failed, lost
+	ExitCode *int   `json:"exitCode,omitempty"`
+	Error    string `json:"error,omitempty"`
+	// Started is Unix milliseconds; RuntimeMs how long it ran, or has run.
+	Started   int64 `json:"started"`
+	RuntimeMs int64 `json:"runtimeMs"`
+}
+
+// Subagent is a subagent of the thread's session (package subagent, atto
+// agent) with its latest turn.
+type Subagent struct {
+	Name     string `json:"name"`
+	Preset   string `json:"preset"`
+	Model    string `json:"model"`
+	Effort   string `json:"effort,omitempty"`
+	ThreadID string `json:"threadId"` // its own session
+	Task     string `json:"task"`     // the first message
+	Prompt   string `json:"prompt"`   // the latest turn's
+	// The latest turn: its number and status (idle, queued, running, done,
+	// failed or stopped), how long it ran, its error and its usage.
+	Turn         int     `json:"turn"`
+	Status       string  `json:"status"`
+	DurationMs   int64   `json:"durationMs,omitempty"`
+	Error        string  `json:"error,omitempty"`
+	InputTokens  int     `json:"inputTokens,omitempty"`
+	CachedTokens int     `json:"cachedInputTokens,omitempty"`
+	OutputTokens int     `json:"outputTokens,omitempty"`
+	Cost         float64 `json:"cost,omitempty"`
+	Created      int64   `json:"created"` // Unix milliseconds
 }
 
 // Prompt kinds.

@@ -19,6 +19,8 @@ func (t *thread) restore(entries []session.Entry) {
 	t.mu.Lock()
 	t.ctxTokens = t.agent.ContextTokens()
 	t.items, t.blocks = items, bl
+	t.total = UsageOf(branch)
+	t.steers = nil // Restore drops them
 	t.mu.Unlock()
 }
 
@@ -60,18 +62,26 @@ func (s *Server) rollback(p threadParams) (any, error) {
 	}{info, text}, nil
 }
 
-func (t *thread) rollback(n int) (string, error) {
-	_, entries, err := session.Load(t.sess.Path)
-	if err != nil {
-		return "", err
-	}
+// UserMessages are the messages the user sent on a branch: not inbox
+// events or compaction summaries. Rolling back n turns goes back to
+// before the n-th last.
+func UserMessages(branch []session.Entry) []session.Entry {
 	var users []session.Entry
-	for _, e := range session.Active(entries) {
+	for _, e := range branch {
 		if m := e.Message; e.Type == session.TypeMessage && m != nil && m.Role == "user" &&
 			!strings.HasPrefix(m.Content, events.Prefix) && !strings.HasPrefix(m.Content, agent.SummaryPrefix) {
 			users = append(users, e)
 		}
 	}
+	return users
+}
+
+func (t *thread) rollback(n int) (string, error) {
+	_, entries, err := session.Load(t.sess.Path)
+	if err != nil {
+		return "", err
+	}
+	users := UserMessages(session.Active(entries))
 	if n > len(users) {
 		return "", invalid("only %d user messages to roll back", len(users))
 	}

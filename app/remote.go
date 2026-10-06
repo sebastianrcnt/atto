@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -16,6 +17,7 @@ import (
 	"github.com/sebastianrcnt/atto/images"
 	"github.com/sebastianrcnt/atto/provider"
 	"github.com/sebastianrcnt/atto/server"
+	"github.com/sebastianrcnt/atto/session"
 	"github.com/sebastianrcnt/atto/tui"
 )
 
@@ -56,6 +58,8 @@ type remote struct {
 	notes   []remoteNote
 	// goal is the goal last published (goal/updated).
 	goal *server.GoalInfo
+	// pending is the pending input last published (turn/pending).
+	pending server.PendingInput
 }
 
 type remoteNote struct {
@@ -230,13 +234,62 @@ func (a *App) remoteStatus() string {
 func (a *App) remoteInfo(r *remote) server.ThreadInfo {
 	m, effort := a.agent.Current()
 	info := server.ThreadInfo{
-		ID: a.sess.ID, Cwd: a.cwd, Name: a.sessName, Effort: effort, Efforts: m.Model.Levels(),
-		ContextWindow: m.Model.ContextWindow, ContextTokens: a.ctxTokens, Busy: a.busy, TurnID: r.turnID, Live: true,
+		ID: a.sess.ID, Cwd: a.cwd, Name: a.sessName, Effort: effort,
+		ContextTokens: a.ctxTokens, Busy: a.busy, TurnID: r.turnID, Live: true,
 	}
-	if m.Model.ID != "" {
-		info.Model = m.ProviderName + "/" + m.Model.ID
+	server.SetModel(&info, m)
+	u := a.remoteUsage()
+	info.Usage = &u
+	if a.busy {
+		info.Turn = &server.TurnInfo{StartedAt: a.runStart.UnixMilli(), Verb: a.turnVerb, InputTokens: a.turnIn, OutputTokens: a.turnOut}
+	}
+	if p := a.pendingInput(); len(p.Steers)+len(p.Queued) > 0 {
+		info.Pending = &p
 	}
 	return info
+}
+
+// remoteUsage is the session's usage as the status line counts it.
+func (a *App) remoteUsage() server.Usage {
+	u := &a.usage
+	return server.Usage{
+		InputTokens: u.input, CachedInputTokens: u.cached, CacheWriteTokens: u.cacheWrite, OutputTokens: u.output, Cost: u.cost,
+		LastInputTokens: u.last.PromptTokens, LastCachedInputTokens: u.last.CachedTokens,
+	}
+}
+
+// remoteStep tells clients a model response ended: the session's totals
+// and the response's own usage (thread/usage).
+func (a *App) remoteStep(step provider.Usage) {
+	if a.remote == nil {
+		return
+	}
+	a.remotePublish("thread/usage", map[string]any{"usage": a.remoteUsage(), "step": server.StepUsage(step), "contextTokens": a.ctxTokens})
+}
+
+// pendingInput is what renderPending shows: steers not taken yet and
+// queued follow-ups.
+func (a *App) pendingInput() server.PendingInput {
+	p := server.PendingInput{Steers: append([]string{}, a.pendingSteers...)}
+	for _, q := range a.queued {
+		p.Queued = append(p.Queued, q.text)
+	}
+	return p
+}
+
+// remotePending publishes the pending input when it changed (turn/pending).
+// It runs where the footer draws it, so every change reaches clients.
+func (a *App) remotePending() {
+	r := a.remote
+	if r == nil {
+		return
+	}
+	p := a.pendingInput()
+	if slices.Equal(p.Steers, r.pending.Steers) && slices.Equal(p.Queued, r.pending.Queued) {
+		return
+	}
+	r.pending = p
+	a.remotePublish("turn/pending", map[string]any{"pending": p})
 }
 
 func (a *App) remotePublish(method string, params map[string]any) {
@@ -342,7 +395,7 @@ func (a *App) remoteTurnStarted() {
 	}
 	r.turnSeq++
 	r.turnID = fmt.Sprintf("%s-t%d", a.sess.ID, r.turnSeq)
-	a.remotePublish("turn/started", map[string]any{"turnId": r.turnID})
+	a.remotePublish("turn/started", map[string]any{"turnId": r.turnID, "startedAt": a.runStart.UnixMilli(), "verb": a.turnVerb})
 	a.remoteGoal()
 }
 
@@ -493,6 +546,7 @@ func (l remoteSession) Send(input string, imgs []provider.Image) (status, turnID
 		default:
 			status = "done" // a command that ran at once
 		}
+		a.remotePending()
 		return nil
 	})
 	return status, turnID, err
@@ -546,6 +600,62 @@ func (l remoteSession) SetEffort(level string) (server.ThreadInfo, error) {
 		return nil
 	})
 	return info, err
+}
+
+func (l remoteSession) Unsteer(input string, queued bool) error {
+	return l.do(func() error {
+		a := l.a
+		if queued {
+			for i := len(a.queued) - 1; i >= 0; i-- {
+				if a.queued[i].text == input {
+					a.queued = slices.Delete(a.queued, i, i+1)
+					a.remotePending()
+					return nil
+				}
+			}
+			return errors.New("that message is no longer queued: it has started")
+		}
+		i := slices.Index(a.pendingSteers, input)
+		if i < 0 || !a.agent.Unsteer(input) {
+			return errors.New("that message is no longer pending: the turn has taken it")
+		}
+		a.pendingSteers = slices.Delete(a.pendingSteers, i, i+1)
+		a.takeRemoteSteer(input)
+		a.remotePending()
+		return nil
+	})
+}
+
+// Rollback goes back to before the n-th last user message as picking it
+// in /tree does: the message goes to the editor when it is empty, and
+// clients follow the switch.
+func (l remoteSession) Rollback(n int) (string, error) {
+	var text string
+	err := l.do(func() error {
+		a := l.a
+		if a.busy {
+			return errors.New("a turn is running; turn/interrupt first")
+		}
+		if why := a.sess.ReadOnly(); why != "" {
+			return errors.New(why)
+		}
+		entries := a.loadSession()
+		users := server.UserMessages(session.Active(entries))
+		if n > len(users) {
+			return fmt.Errorf("only %d user messages to roll back", len(users))
+		}
+		target := users[len(users)-n]
+		leaf, t, ok := session.BranchPoint(entries, target.ID)
+		if !ok {
+			return errors.New("that message is no longer in the session")
+		}
+		// Not navigateTree: a message the model never answered is the leaf
+		// itself, which /tree calls "already at this point".
+		text = t
+		a.finishMove(entries, target.ID, leaf, text, nil)
+		return nil
+	})
+	return text, err
 }
 
 // takeRemoteSteer reports whether text was steered from the remote, and

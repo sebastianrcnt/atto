@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -116,6 +117,9 @@ type thread struct {
 	turnSeq   int
 	ctxTokens int
 	usage     provider.Usage // totals for the running turn
+	total     Usage          // the session's totals
+	turn      TurnInfo       // the running turn, for the activity line
+	steers    []string       // the user's steers the turn has not taken
 	// What the extensions show (see extui.go): on the blocks of the
 	// items, around the input, and how many text blocks they added.
 	blocks   blocks
@@ -173,11 +177,36 @@ func (s *Server) Close() {
 
 func (t *thread) info() ThreadInfo {
 	m, effort := t.agent.Current()
-	return ThreadInfo{
-		ID: t.id, Cwd: t.cwd, Name: t.name, Model: m.ProviderName + "/" + m.Model.ID, Effort: effort,
-		Efforts: m.Model.Levels(), ContextWindow: m.Model.ContextWindow, ContextTokens: t.ctxTokens,
-		Busy: t.busy, TurnID: t.turnID,
+	info := ThreadInfo{ID: t.id, Cwd: t.cwd, Name: t.name, Effort: effort, ContextTokens: t.ctxTokens, Busy: t.busy, TurnID: t.turnID}
+	SetModel(&info, m)
+	total := t.total
+	info.Usage = &total
+	if t.busy {
+		turn := t.turn
+		info.Turn = &turn
 	}
+	info.Pending = t.pending()
+	return info
+}
+
+// pending is the input the turn has not taken (nil when none). Call with
+// t.mu held.
+func (t *thread) pending() *PendingInput {
+	if len(t.steers) == 0 {
+		return nil
+	}
+	return &PendingInput{Steers: slices.Clone(t.steers)}
+}
+
+// pendingChanged tells clients what input is pending now.
+func (s *Server) pendingChanged(t *thread) {
+	t.mu.Lock()
+	p := t.pending()
+	t.mu.Unlock()
+	if p == nil {
+		p = &PendingInput{Steers: []string{}}
+	}
+	s.notify(t, "turn/pending", map[string]any{"pending": p})
 }
 
 // eventSeq is the ID of the latest event the HTTP transport published (0
@@ -249,6 +278,12 @@ type threadParams struct {
 	Index  *int    `json:"index"`
 	Text   *string `json:"text"`
 	Cancel bool    `json:"cancel"`
+	// turn/unsteer: a queued follow-up rather than a steer
+	Queued bool `json:"queued"`
+	// job/output, job/stop; subagent/read
+	Job   int    `json:"job"`
+	Lines int    `json:"lines"`
+	Name  string `json:"name"`
 }
 
 func (s *Server) call(ctx context.Context, method string, raw json.RawMessage) (any, error) {
@@ -261,7 +296,7 @@ func (s *Server) call(ctx context.Context, method string, raw json.RawMessage) (
 	}
 	switch method {
 	case "initialize":
-		return map[string]any{"name": "atto", "version": s.Version, "protocolVersion": ProtocolVersion, "eventId": s.eventSeq()}, nil
+		return map[string]any{"name": "atto", "version": s.Version, "protocolVersion": ProtocolVersion, "eventId": s.eventSeq(), "settings": clientSettings()}, nil
 	case "models/list":
 		return s.listModels()
 	case "thread/start":
@@ -301,7 +336,38 @@ func (s *Server) call(ctx context.Context, method string, raw json.RawMessage) (
 			return nil, invalid("input is required")
 		}
 		t.agent.Steer(p.Input)
+		t.mu.Lock()
+		t.steers = append(t.steers, p.Input)
+		t.mu.Unlock()
+		s.pendingChanged(t)
 		return nil, nil
+	case "turn/unsteer":
+		t, err := s.thread(p.ThreadID)
+		if err != nil {
+			return nil, err
+		}
+		if p.Queued {
+			return nil, invalid("only a live session queues follow-ups")
+		}
+		t.mu.Lock()
+		i := slices.Index(t.steers, p.Input)
+		t.mu.Unlock()
+		if i < 0 || !t.agent.Unsteer(p.Input) {
+			return nil, &rpcError{codeServer, "that message is no longer pending: the turn has taken it"}
+		}
+		t.mu.Lock()
+		if i = slices.Index(t.steers, p.Input); i >= 0 {
+			t.steers = slices.Delete(t.steers, i, i+1)
+		}
+		t.mu.Unlock()
+		s.pendingChanged(t)
+		return nil, nil
+	case "job/list", "job/output", "job/stop", "subagent/list", "subagent/read":
+		t, err := s.thread(p.ThreadID)
+		if err != nil {
+			return nil, err
+		}
+		return background(method, t.id, p)
 	case "turn/background":
 		// Ctrl+B: the running command moves to the background.
 		t, err := s.thread(p.ThreadID)
@@ -565,9 +631,11 @@ func (s *Server) begin(t *thread, fn func(ctx context.Context, emit func(any)) e
 	turnID := fmt.Sprintf("%s-t%d", t.id, t.turnSeq)
 	ctx, cancel := context.WithCancel(context.Background())
 	t.busy, t.turnID, t.cancel, t.usage = true, turnID, cancel, provider.Usage{}
+	t.turn = TurnInfo{StartedAt: time.Now().UnixMilli()}
+	started := t.turn.StartedAt
 	t.mu.Unlock()
 
-	s.notify(t, "turn/started", map[string]any{"turnId": turnID})
+	s.notify(t, "turn/started", map[string]any{"turnId": turnID, "startedAt": started})
 	m := &itemMapper{s: s, t: t, turnID: turnID}
 	t.feed.Lock()
 	t.tr.Handler = m.handler()

@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -30,6 +31,29 @@ type fakeLive struct {
 	items  []Item
 	// answers to the open prompt "p1"
 	answers []PromptAnswer
+	// steers taken back, and turns rolled back
+	unsteered []string
+	rolled    int
+}
+
+func (f *fakeLive) Unsteer(input string, queued bool) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if input != "also" {
+		return errors.New("that message is no longer pending")
+	}
+	f.unsteered = append(f.unsteered, fmt.Sprintf("%s %v", input, queued))
+	return nil
+}
+
+func (f *fakeLive) Rollback(n int) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.busy {
+		return "", errors.New("a turn is running")
+	}
+	f.rolled += n
+	return "go", nil
 }
 
 func (f *fakeLive) Answer(id string, ans PromptAnswer) error {
@@ -248,8 +272,29 @@ func TestLiveSessionProtocol(t *testing.T) {
 	if _, err := c.call("thread/start", nil); err == nil {
 		t.Fatal("thread/start should be refused")
 	}
-	if _, err := c.call("thread/rollback", map[string]any{}); err == nil {
-		t.Fatal("thread/rollback should be refused")
+	// Pending input goes back to the front end to take back.
+	c.must("turn/unsteer", map[string]any{"input": "also", "queued": true})
+	if _, err := c.call("turn/unsteer", map[string]any{"input": "taken"}); err == nil || !strings.Contains(err.Message, "no longer") {
+		t.Fatalf("turn/unsteer of a taken steer: %v", err)
+	}
+	// Rollback goes back as /tree does, and gives the message back.
+	if r := c.must("thread/rollback", map[string]any{}); r["input"] != "go" || r["threadId"] != "sess1" {
+		t.Fatalf("thread/rollback %v", r)
+	}
+	f.mu.Lock()
+	if strings.Join(f.unsteered, ",") != "also true" || f.rolled != 1 {
+		t.Fatalf("unsteered %v, rolled back %d", f.unsteered, f.rolled)
+	}
+	f.mu.Unlock()
+	// Jobs and subagents are the session's, read from files.
+	if r := c.must("job/list", map[string]any{}); len(r["jobs"].([]any)) != 0 {
+		t.Fatalf("job/list %v", r)
+	}
+	if r := c.must("subagent/list", map[string]any{}); len(r["subagents"].([]any)) != 0 {
+		t.Fatalf("subagent/list %v", r)
+	}
+	if _, ok := init["settings"].(map[string]any)["toolGroups"]; !ok {
+		t.Fatalf("initialize without settings: %v", init)
 	}
 
 	// Prompt answers go to the front end; malformed ones do not.

@@ -1,6 +1,8 @@
 package server
 
 import (
+	"slices"
+
 	"github.com/sebastianrcnt/atto/agent"
 	"github.com/sebastianrcnt/atto/core/transcript"
 	"github.com/sebastianrcnt/atto/extensions"
@@ -65,8 +67,28 @@ func (m *itemMapper) event(ev any) {
 		m.t.usage.PromptTokens += e.Usage.PromptTokens
 		m.t.usage.CachedTokens += e.Usage.CachedTokens
 		m.t.usage.CompletionTokens += e.Usage.CompletionTokens
+		m.t.total.Add(e.Usage)
+		m.t.turn.InputTokens += max(0, e.Usage.PromptTokens-e.Usage.CachedTokens-e.Usage.CacheWriteTokens)
+		m.t.turn.OutputTokens += e.Usage.CompletionTokens
 		m.t.ctxTokens = e.Context
+		total := m.t.total
 		m.t.mu.Unlock()
+		m.s.notify(m.t, "thread/usage", map[string]any{"usage": total, "step": StepUsage(e.Usage), "contextTokens": e.Context})
+	case agent.SteerCommitted:
+		// The user's steers it took are no longer pending (inbox events
+		// and extensions' messages are steers too, never listed).
+		m.t.mu.Lock()
+		n := len(m.t.steers)
+		for _, text := range e.Texts {
+			if i := slices.Index(m.t.steers, text); i >= 0 {
+				m.t.steers = slices.Delete(m.t.steers, i, i+1)
+			}
+		}
+		changed := len(m.t.steers) != n
+		m.t.mu.Unlock()
+		if changed {
+			m.s.pendingChanged(m.t)
+		}
 	case agent.HookNotice:
 		// Also as the notification clients had before hook items.
 		m.s.notify(m.t, "hook", map[string]any{"turnId": m.turnID, "event": e.Event, "message": e.Message, "blocked": e.Blocked})

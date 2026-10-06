@@ -210,6 +210,7 @@ func previewLines(text string, width int, style func(string) string) []string {
 }
 
 func (a *App) renderPending(width int) []string {
+	a.remotePending()
 	if len(a.pendingSteers) == 0 && len(a.queued) == 0 {
 		return nil
 	}
