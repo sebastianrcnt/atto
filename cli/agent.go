@@ -669,7 +669,7 @@ func agentList(out io.Writer, parent string) error {
 		if t.Duration() > 0 {
 			d = tui.FormatDuration(t.Duration())
 		}
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n", s.Name, s.Preset, s.Model, t.Status, d, tui.FirstLine(s.Task))
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n", s.Name, s.Preset, s.Model, t.Status, d, tui.Truncate(tui.FirstLine(s.Task), 60, "…"))
 	}
 	if err := tw.Flush(); err != nil {
 		return err

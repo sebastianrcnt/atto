@@ -18,6 +18,7 @@ import (
 	"github.com/sebastianrcnt/atto/events"
 	"github.com/sebastianrcnt/atto/session"
 	"github.com/sebastianrcnt/atto/subagent"
+	"github.com/sebastianrcnt/atto/tui"
 )
 
 // agentServer is a fake model; answer gives the stream for the n-th
@@ -458,5 +459,31 @@ func TestAgentExternalModelFlags(t *testing.T) {
 	st, _ := subagent.Load("explicit", "a")
 	if st.Model != "fake/small" || st.Effort != "low" {
 		t.Fatalf("state: %+v", st)
+	}
+}
+
+func TestAgentListTaskSummary(t *testing.T) {
+	t.Setenv(config.EnvDir, t.TempDir())
+	for _, c := range []struct {
+		name, task, want string
+	}{
+		{"short", "first line\nsecond line", "first line …"},
+		{"long", strings.Repeat("a", 80) + "\nhidden", strings.Repeat("a", 59) + "…"},
+		{"unicode", strings.Repeat("é", 80), strings.Repeat("é", 59) + "…"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			st := subagent.State{Name: c.name, Parent: c.name, Session: "s1", Task: c.task}
+			if err := subagent.Create(st); err != nil {
+				t.Fatal(err)
+			}
+			var out strings.Builder
+			if err := agentList(&out, c.name); err != nil {
+				t.Fatal(err)
+			}
+			lines := strings.Split(strings.TrimSpace(tui.StripEscapes(out.String())), "\n")
+			if len(lines) != 2 || !strings.HasSuffix(lines[1], "  "+c.want) {
+				t.Fatalf("list: %q, want task %q", out.String(), c.want)
+			}
+		})
 	}
 }
