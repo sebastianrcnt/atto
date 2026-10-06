@@ -29,7 +29,7 @@ func TestCompactTokens(t *testing.T) {
 }
 
 func TestBuiltinStatusWidths(t *testing.T) {
-	price := &ai.ModelCost{ModelCostRates: ai.ModelCostRates{Input: 1, Output: 2}}
+	price := &ai.ModelCost{Input: 1, Output: 2}
 	a := statusApp(t, price)
 
 	rows := func(width int) []string {
@@ -113,7 +113,7 @@ func TestBuiltinStatusWidths(t *testing.T) {
 
 // A goal indicator narrows only the first row.
 func TestBuiltinStatusFirstRowNarrower(t *testing.T) {
-	a := statusApp(t, &ai.ModelCost{ModelCostRates: ai.ModelCostRates{Output: 1}})
+	a := statusApp(t, &ai.ModelCost{Output: 1})
 	r := a.builtinStatus(60, 120)
 	if len(r) != 2 || tui.VisibleWidth(r[0]) > 60 || tui.VisibleWidth(r[1]) != 120 {
 		t.Fatalf("%q", r)
@@ -141,12 +141,12 @@ func TestBuiltinStatusCJK(t *testing.T) {
 }
 
 func TestStatusSubscriptionCostIsEstimate(t *testing.T) {
-	a := statusApp(t, &ai.ModelCost{ModelCostRates: ai.ModelCostRates{Output: 5}})
+	a := statusApp(t, &ai.ModelCost{Output: 5})
 	if s := tui.StripEscapes(strings.Join(a.builtinStatus(160, 160), "\n")); !strings.Contains(s, " $0.123") {
 		t.Errorf("pay-per-use cost: %q", s)
 	}
 	ref := config.ModelRef{ProviderName: "opencode-go", Provider: config.Provider{Subscription: true},
-		Model: config.Model{ID: "m", Name: "Orca", ContextWindow: 262000, Cost: &ai.ModelCost{ModelCostRates: ai.ModelCostRates{Output: 5}}}}
+		Model: config.Model{ID: "m", Name: "Orca", ContextWindow: 262000, Cost: &ai.ModelCost{Output: 5}}}
 	a.agent = agent.New(ref, "", t.TempDir())
 	if s := tui.StripEscapes(strings.Join(a.builtinStatus(160, 160), "\n")); !strings.Contains(s, "≈$0.123") {
 		t.Errorf("subscription cost is an estimate: %q", s)
@@ -159,7 +159,7 @@ func TestStatusCostOnlyWithPrices(t *testing.T) {
 	if s := tui.StripEscapes(strings.Join(a.builtinStatus(160, 160), "\n")); strings.Contains(s, "$") {
 		t.Errorf("a model without prices shows no cost: %q", s)
 	}
-	a = statusApp(t, &ai.ModelCost{ModelCostRates: ai.ModelCostRates{Output: 5}})
+	a = statusApp(t, &ai.ModelCost{Output: 5})
 	if s := tui.StripEscapes(strings.Join(a.builtinStatus(160, 160), "\n")); !strings.Contains(s, "$0.123") {
 		t.Errorf("a priced model shows the cost: %q", s)
 	}

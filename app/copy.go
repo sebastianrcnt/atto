@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"slices"
 	"strings"
 	"time"
 
@@ -125,8 +126,7 @@ func (a *App) cmdCopy(string) {
 
 // lastAnswer is the text of the last assistant answer in the transcript.
 func lastAnswer(children []tui.Component) string {
-	for i := len(children) - 1; i >= 0; i-- {
-		c := children[i]
+	for _, c := range slices.Backward(children) {
 		if g, ok := c.(gap); ok { // a.add wraps blocks in a gap
 			c = g.Component
 		}

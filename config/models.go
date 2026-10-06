@@ -297,9 +297,7 @@ func (r ModelRef) AIModel() ai.Model {
 	}
 	if len(m.SamplingParamsByThinkingLevel) > 0 {
 		am.SamplingParamsByThinkingLevel = ai.SamplingParamsByThinkingLevel{}
-		for k, v := range m.SamplingParamsByThinkingLevel {
-			am.SamplingParamsByThinkingLevel[k] = v
-		}
+		maps.Copy(am.SamplingParamsByThinkingLevel, m.SamplingParamsByThinkingLevel)
 	}
 	if len(m.Efforts) > 0 || (m.Reasoning == nil && len(levels) > 0) {
 		am.Efforts = levels

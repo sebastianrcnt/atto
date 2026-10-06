@@ -85,7 +85,7 @@ func TestEffortMapLikePi(t *testing.T) {
 		t.Fatalf("glm-5.3-flash should keep off: %v", fl.Levels())
 	}
 	// A user override changes one level and keeps the rest.
-	user := Model{ID: "deepseek-v4-pro", EffortMap: map[string]*string{"off": nil, "xhigh": str("max")}}
+	user := Model{ID: "deepseek-v4-pro", EffortMap: map[string]*string{"off": nil, "xhigh": new("max")}}
 	m := mergeModel(ds, user)
 	if got := strings.Join(m.Levels(), ","); got != "high,xhigh,max" {
 		t.Fatalf("merged levels %s", got)
@@ -132,9 +132,9 @@ func TestCatalogCost(t *testing.T) {
 		return Model{}
 	}
 	want := ai.ModelCost{
-		ModelCostRates: ai.ModelCostRates{Input: 2.5, Output: 15, CacheRead: 0.25},
+		Input: 2.5, Output: 15, CacheRead: 0.25,
 		// The tier lists no cache read: it keeps the base price.
-		Tiers: []ai.ModelCostTier{{InputTokensAbove: 272000, ModelCostRates: ai.ModelCostRates{Input: 5, Output: 22.5, CacheRead: 0.25}}},
+		Tiers: []ai.ModelCostTier{{InputTokensAbove: 272000, Input: 5, Output: 22.5, CacheRead: 0.25}},
 	}
 	if c := find("openai", "gpt-5.4").Cost; c == nil || !reflect.DeepEqual(*c, want) {
 		t.Fatalf("openai gpt-5.4 cost %+v", c)
@@ -147,7 +147,7 @@ func TestCatalogCost(t *testing.T) {
 		t.Fatalf("zen glm-5 cost %+v", c)
 	}
 	q := find("opencode-go", "qwen3.6-plus").Cost
-	if q == nil || len(q.Tiers) != 1 || q.Tiers[0] != (ai.ModelCostTier{InputTokensAbove: 200000, ModelCostRates: ai.ModelCostRates{Input: 2, Output: 6, CacheRead: 0.05, CacheWrite: 0.625}}) {
+	if q == nil || len(q.Tiers) != 1 || q.Tiers[0] != (ai.ModelCostTier{InputTokensAbove: 200000, Input: 2, Output: 6, CacheRead: 0.05, CacheWrite: 0.625}) {
 		t.Fatalf("context_over_200k becomes a tier: %+v", q)
 	}
 	if c := find("opencode-go", "nocost").Cost; c != nil {
@@ -175,7 +175,7 @@ func TestCatalogCost(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if r, _ := m.Find("opencode", "glm-5"); r.Model.Cost == nil || !reflect.DeepEqual(*r.Model.Cost, ai.ModelCost{ModelCostRates: ai.ModelCostRates{Input: 9, Output: 9}}) {
+	if r, _ := m.Find("opencode", "glm-5"); r.Model.Cost == nil || !reflect.DeepEqual(*r.Model.Cost, ai.ModelCost{Input: 9, Output: 9}) {
 		t.Fatalf("models.json cost: %+v", r.Model.Cost)
 	}
 	r, _ := m.Find("opencode-go", "qwen3.6-plus")

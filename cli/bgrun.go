@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"slices"
 
 	"github.com/sebastianrcnt/atto/config"
 	"github.com/sebastianrcnt/atto/core"
@@ -59,8 +60,8 @@ func bgPrepare(d *core.GoalDriver, saved core.Saved) bgMode {
 		d.Set(g)
 	}
 	branch := saved.Branch()
-	for i := len(branch) - 1; i >= 0; i-- {
-		if m := branch[i].Message; branch[i].Type == session.TypeMessage && m != nil {
+	for _, b := range slices.Backward(branch) {
+		if m := b.Message; b.Type == session.TypeMessage && m != nil {
 			if m.Role == "user" || m.Role == "tool" {
 				return bgResumeTurn
 			}

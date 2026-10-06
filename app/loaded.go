@@ -106,7 +106,7 @@ func (a *App) collect() core.Loaded {
 // was resumed.
 func (a *App) showLoaded() {
 	a.loaded = a.collect()
-	a.add(&loadedBlock{l: a.loaded, expander: expander{d: &a.details}})
+	a.add(&loadedBlock{l: a.loaded, d: &a.details})
 }
 
 // sourceReloaded is the source of the event that tells the model what an
@@ -176,7 +176,7 @@ func (a *App) applyReload(r core.Reloaded, err error) {
 	if a.sugList != nil { // skills may have changed
 		a.sugList.Items = commandItems(a.allCommands())
 	}
-	a.add(&loadedBlock{l: r.Loaded, reloaded: true, changes: r.Changes, note: r.PromptNote(), expander: expander{d: &a.details}})
+	a.add(&loadedBlock{l: r.Loaded, reloaded: true, changes: r.Changes, note: r.PromptNote(), d: &a.details})
 	a.statusTrigger()
 	a.askMCPApprovals() // a project server the reload found
 }

@@ -285,8 +285,7 @@ func (e *ext) rejection(v goja.Value) error {
 // jsError is an error from running script, as text: the message and
 // where it was thrown, in the original file.
 func jsError(err error) string {
-	var ex *goja.Exception
-	if errors.As(err, &ex) {
+	if ex, ok := errors.AsType[*goja.Exception](err); ok {
 		if o, ok := ex.Value().(*goja.Object); ok {
 			if st := o.Get("stack"); st != nil && !goja.IsUndefined(st) && st.String() != "" {
 				return cleanStack(st.String())

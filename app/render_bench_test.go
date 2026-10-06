@@ -49,14 +49,14 @@ func transcriptAppOn(tb testing.TB, term tui.Terminal, mode tui.Mode, fullRepain
 	}
 	for i := range 40 {
 		a.add(&userBlock{text: fmt.Sprintf("Please look at part %d of the code and fix what is wrong.", i)})
-		th := &thinkingBlock{expander: expander{d: &a.details}, done: true, dur: 3 * time.Second}
+		th := &thinkingBlock{d: &a.details, done: true, dur: 3 * time.Second}
 		th.text.WriteString(para(600))
 		a.add(th)
 		cmd := "go test ./..."
 		if i%10 == 0 {
 			cmd = "grep -rn " + strings.Repeat("pattern|", 2000) + "end ."
 		}
-		tool := &toolBlock{expander: expander{d: &a.details}, args: agent.BashArgs{Description: "Run the tests", Command: cmd}, done: true,
+		tool := &toolBlock{d: &a.details, args: agent.BashArgs{Description: "Run the tests", Command: cmd}, done: true,
 			res: agent.BashResult{Duration: 2 * time.Second}}
 		for j := range 30 {
 			tool.append(fmt.Sprintf("ok  \tgithub.com/x/y/pkg%d\t0.%03ds\n", j, j))
@@ -91,8 +91,7 @@ func BenchmarkRenderLongTranscript(b *testing.B) {
 			a := transcriptApp(b, m.mode, m.fullRepaint)
 			a.ui.RenderNow()
 			b.ReportAllocs()
-			b.ResetTimer()
-			for range b.N {
+			for b.Loop() {
 				a.runStart = a.runStart.Add(-a.ui.AnimationInterval()) // the next spinner frame
 				a.ui.RenderNow()
 			}
@@ -106,12 +105,12 @@ func BenchmarkRenderStreaming(b *testing.B) {
 	for _, m := range renderModes {
 		b.Run(m.name, func(b *testing.B) {
 			a := transcriptApp(b, m.mode, m.fullRepaint)
-			th := &thinkingBlock{expander: expander{d: &a.details}, start: time.Now()}
+			th := &thinkingBlock{d: &a.details, start: time.Now()}
 			a.add(th)
 			a.ui.RenderNow()
 			b.ReportAllocs()
-			b.ResetTimer()
-			for i := range b.N {
+			i := 0
+			for b.Loop() {
 				if th.text.Len() > 16<<10 { // a new block now and then: a typical length
 					th.text.Reset()
 				}
@@ -120,6 +119,7 @@ func BenchmarkRenderStreaming(b *testing.B) {
 					th.text.WriteString("\n")
 				}
 				a.ui.RenderNow()
+				i++
 			}
 		})
 	}

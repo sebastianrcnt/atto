@@ -158,7 +158,7 @@ func repoIgnores(root string) (prefix string, rules []ignoreRule) {
 	// The repository root's .gitignore and each one below it down to
 	// root's parent; root's own is read by the walk.
 	dir, base := repo, ""
-	for _, seg := range strings.Split(rel, "/") {
+	for seg := range strings.SplitSeq(rel, "/") {
 		rules = append(rules, readIgnore(filepath.Join(dir, ".gitignore"), base)...)
 		dir, base = filepath.Join(dir, seg), path.Join(base, seg)
 	}

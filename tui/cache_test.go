@@ -87,7 +87,7 @@ func TestLineMemoMatchesFresh(t *testing.T) {
 		full bool
 	}{{Fullscreen, false}, {Fullscreen, true}, {Inline, false}, {Inline, true}}
 	for _, m := range modes {
-		for seed := int64(0); seed < 40; seed++ {
+		for seed := range int64(40) {
 			rng := rand.New(rand.NewSource(seed))
 			r := newMemoRig(m.mode, m.full)
 			text := func() string {

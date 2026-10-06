@@ -4,7 +4,6 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
-	"sort"
 	"testing"
 	"time"
 
@@ -110,7 +109,7 @@ func TestBuiltinStartupCost(t *testing.T) {
 			runs = append(runs, time.Since(start))
 			m.Close()
 		}
-		sort.Slice(runs, func(i, j int) bool { return runs[i] < runs[j] })
+		slices.Sort(runs)
 		return runs[len(runs)/2]
 	}
 	with := timeLoads(`{"extensions":{"timeout":1}}`)

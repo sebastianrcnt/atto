@@ -213,8 +213,7 @@ func runHosted(ctx context.Context, sh shell.Shell, cwd string, env []string, se
 	w := &streamWriter{onOutput: onOutput}
 	h, err := jobs.StartHost(sh, cwd, env, args.Command, w)
 	if err != nil {
-		var se *jobs.StartError
-		if errors.As(err, &se) {
+		if se, ok := errors.AsType[*jobs.StartError](err); ok {
 			return BashResult{Err: se, ExitCode: -1, Duration: time.Since(start)}, true
 		}
 		return BashResult{}, false
@@ -336,8 +335,7 @@ func runDirect(ctx context.Context, sh shell.Shell, cwd string, env []string, ar
 		res.TimedOut = true
 		res.ExitCode = -1
 	case err != nil:
-		var ee *exec.ExitError
-		if errors.As(err, &ee) {
+		if ee, ok := errors.AsType[*exec.ExitError](err); ok {
 			res.ExitCode = ee.ExitCode()
 		} else if !errors.Is(err, exec.ErrWaitDelay) {
 			res.Err = err

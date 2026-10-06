@@ -122,7 +122,7 @@ func historyGrep(out io.Writer, items []session.Item, re *regexp.Regexp, maxHits
 	hits, entries := 0, 0
 	for _, it := range items {
 		matched := false
-		for _, line := range strings.Split(it.Text, "\n") {
+		for line := range strings.SplitSeq(it.Text, "\n") {
 			loc := re.FindStringIndex(line)
 			if loc == nil {
 				continue

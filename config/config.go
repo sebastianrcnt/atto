@@ -23,6 +23,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"maps"
 	"os"
 	"path/filepath"
 )
@@ -360,9 +361,7 @@ func UpdateSettings(kv map[string]any) error {
 			return err
 		}
 	}
-	for k, v := range kv {
-		raw[k] = v
-	}
+	maps.Copy(raw, kv)
 	out, err := json.MarshalIndent(raw, "", "  ")
 	if err != nil {
 		return err

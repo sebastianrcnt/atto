@@ -287,7 +287,7 @@ func (b *shellBlock) render(width int) []string {
 // shellItemStarted, shellItemDelta and shellItemCompleted follow the
 // builder's items for commands the user runs (see items.go).
 func (a *App) shellItemStarted(it *transcript.Item) {
-	b := &shellBlock{cmd: it.Command, exclude: it.Excluded, start: time.Now(), expander: expander{d: &a.details}}
+	b := &shellBlock{cmd: it.Command, exclude: it.Excluded, start: time.Now(), d: &a.details}
 	a.shellBlk = b
 	a.add(b)
 }

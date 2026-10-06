@@ -188,8 +188,8 @@ func TestHTTPAndSSE(t *testing.T) {
 	deadline := time.Now().Add(10 * time.Second)
 	for sc.Scan() && time.Now().Before(deadline) {
 		line := sc.Text()
-		if strings.HasPrefix(line, "id: ") {
-			lastID = strings.TrimPrefix(line, "id: ")
+		if after, ok := strings.CutPrefix(line, "id: "); ok {
+			lastID = after
 		}
 		if strings.HasPrefix(line, "data: ") && strings.Contains(line, `"turn/completed"`) {
 			break

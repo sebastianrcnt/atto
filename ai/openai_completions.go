@@ -6,6 +6,7 @@ package ai
 import (
 	"encoding/json"
 	"fmt"
+	"maps"
 	"net/http"
 	"regexp"
 	"slices"
@@ -204,9 +205,7 @@ func appendOpenAIReasoningDetail(details []map[string]any, d map[string]any) []m
 		}
 	}
 	c := make(map[string]any, len(d))
-	for k, v := range d {
-		c[k] = v
-	}
+	maps.Copy(c, d)
 	return append(details, c)
 }
 
@@ -648,9 +647,7 @@ func StreamSimpleOpenAICompletions(model *Model, context TranscriptContext, opti
 // completionsHeaders are the client's default headers (pi: createClient).
 func completionsHeaders(model *Model, sessionID string, compat ResolvedCompletionsCompat) map[string]string {
 	headers := map[string]string{}
-	for k, v := range model.Headers {
-		headers[k] = v
-	}
+	maps.Copy(headers, model.Headers)
 	if sessionID != "" && compat.SendSessionAffinityHeaders {
 		if compat.SessionAffinityFormat == "openrouter" {
 			headers["x-session-id"] = sessionID
@@ -672,9 +669,7 @@ func buildCompletionsParams(model *Model, context TranscriptContext, options *Op
 
 	params := map[string]any{}
 	// atto: ExtraBody first, so the named fields below win.
-	for k, v := range resolveExtraBody(model, options.thinkingLevel) {
-		params[k] = v
-	}
+	maps.Copy(params, resolveExtraBody(model, options.thinkingLevel))
 	params["model"] = model.ID
 	params["messages"] = messages
 	params["stream"] = true
@@ -848,9 +843,7 @@ func buildCompletionsParams(model *Model, context TranscriptContext, options *Op
 	if level == "" {
 		level = ThinkingOff
 	}
-	for k, v := range ResolveSamplingParams(model, level, options.SamplingParams) {
-		params[k] = v
-	}
+	maps.Copy(params, ResolveSamplingParams(model, level, options.SamplingParams))
 	return params
 }
 
@@ -999,9 +992,9 @@ func applyAnthropicCacheControl(messages []object, tools []object, cc *cacheCont
 	if len(tools) > 0 {
 		tools[len(tools)-1].set("cache_control", cc)
 	}
-	for i := len(messages) - 1; i >= 0; i-- {
-		if r, _ := messages[i].get("role"); r == "user" || r == "assistant" || r == "tool" {
-			if addCacheControlToTextContent(messages[i], cc) {
+	for _, message := range slices.Backward(messages) {
+		if r, _ := message.get("role"); r == "user" || r == "assistant" || r == "tool" {
+			if addCacheControlToTextContent(message, cc) {
 				return
 			}
 		}
@@ -1038,9 +1031,9 @@ func ConvertCompletionsMessages(model *Model, context TranscriptContext, compat 
 	normalizeToolCallID := func(id string, _ *Model, _ *AssistantMessage) string {
 		// Responses API ids look like "{call_id}|{item_id}", up to 450+
 		// characters; chat completions allows 40.
-		if i := strings.Index(id, "|"); i >= 0 {
-			callID := nonIDChars.ReplaceAllString(id[:i], "_")
-			itemID := nonIDChars.ReplaceAllString(id[i+1:], "_")
+		if before, after, ok := strings.Cut(id, "|"); ok {
+			callID := nonIDChars.ReplaceAllString(before, "_")
+			itemID := nonIDChars.ReplaceAllString(after, "_")
 			combined := callID
 			if itemID != "" {
 				combined = callID + "_" + itemID

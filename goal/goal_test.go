@@ -42,7 +42,7 @@ func TestStopConditions(t *testing.T) {
 	}
 
 	g, _ = New("x", 0)
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		g.TurnEnded(time.Second, nil, 0)
 	}
 	if g.Status != Blocked || !strings.Contains(g.Note, "no progress") {

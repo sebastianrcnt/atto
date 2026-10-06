@@ -6,6 +6,7 @@ package ai
 import (
 	"encoding/json"
 	"regexp"
+	"slices"
 	"strings"
 )
 
@@ -148,8 +149,8 @@ func partialParse(s string) (map[string]any, bool) {
 	closed := func(t string) string {
 		var b strings.Builder
 		b.WriteString(t)
-		for i := len(stack) - 1; i >= 0; i-- {
-			b.WriteByte(stack[i])
+		for _, c := range slices.Backward(stack) {
+			b.WriteByte(c)
 		}
 		return b.String()
 	}

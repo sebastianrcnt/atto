@@ -92,7 +92,7 @@ func TestCompactionRetriesWhenTheServerSaysTooLong(t *testing.T) {
 	defer srv.Close()
 	a := New(config.ModelRef{ProviderName: "t", Provider: config.Provider{BaseURL: srv.URL},
 		Model: config.Model{ID: "m", ContextWindow: 40000}}, "", os.TempDir())
-	for i := 0; i < 6; i++ {
+	for range 6 {
 		a.messages = append(a.messages,
 			provider.Message{Role: "user", Content: strings.Repeat("u", 8000)},
 			provider.Message{Role: "assistant", Content: strings.Repeat("a", 8000)})

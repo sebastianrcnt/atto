@@ -61,7 +61,7 @@ func (t *TUI) decorate(frame []string, gap, start, rows, total, width int) {
 	}
 	top, size := thumbGeometry(total, rows, start)
 	t.bar = scrollbar{on: true, col: width, rows: rows, size: size, top: top, total: total}
-	for k := 0; k < rows; k++ {
+	for k := range rows {
 		glyph := Dim(barTrack)
 		if k >= top && k < top+size {
 			glyph = barThumb

@@ -249,8 +249,7 @@ func main() {
 		sub := subcommands()[os.Args[1]]
 		if sub != nil {
 			if err := sub(os.Args[2:], os.Stdout); err != nil {
-				var code cli.ExitCode
-				if errors.As(err, &code) {
+				if code, ok := errors.AsType[cli.ExitCode](err); ok {
 					os.Exit(int(code))
 				}
 				if !errors.Is(err, cli.ErrSilent) {

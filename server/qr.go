@@ -34,7 +34,7 @@ func QRLines(size int, black func(x, y int) bool) []string {
 	var lines []string
 	for y := 0; y < n; y += 2 {
 		var b strings.Builder
-		for x := 0; x < n; x++ {
+		for x := range n {
 			top, bottom := light(x, y), y+1 < n && light(x, y+1)
 			switch {
 			case top && bottom:

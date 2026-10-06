@@ -146,26 +146,20 @@ func (s *Server) Close() {
 		}
 		t.mu.Unlock()
 		if t.hooks != nil { // threads end together, so one slow hook costs little
-			ending.Add(1)
-			go func() {
-				defer ending.Done()
+			ending.Go(func() {
 				t.hooks.SessionEnd(context.Background(), "other")
-			}()
+			})
 		}
 		if t.mcp != nil {
-			ending.Add(1)
-			go func() {
-				defer ending.Done()
+			ending.Go(func() {
 				_ = t.mcp.Close() // its servers end with the thread
-			}()
+			})
 		}
 		if t.ext != nil {
-			ending.Add(1)
-			go func() {
-				defer ending.Done()
+			ending.Go(func() {
 				t.ext.SessionEnd("other")
 				t.ext.Close()
-			}()
+			})
 		}
 	}
 	ending.Wait()

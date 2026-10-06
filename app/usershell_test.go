@@ -42,7 +42,7 @@ func TestParseShell(t *testing.T) {
 // waitShell waits for the command being run to finish.
 func waitShell(t *testing.T, a *App) {
 	t.Helper()
-	for i := 0; i < 500; i++ {
+	for range 500 {
 		running := true
 		a.ui.Do(func() { running = a.shell != nil })
 		if !running {

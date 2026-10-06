@@ -2,6 +2,7 @@ package shell
 
 import (
 	"errors"
+	"slices"
 	"testing"
 )
 
@@ -10,22 +11,15 @@ func TestDetect(t *testing.T) {
 	none := func(string) (string, error) { return "", errors.New("not found") }
 	onPath := func(names ...string) func(string) (string, error) {
 		return func(n string) (string, error) {
-			for _, x := range names {
-				if x == n {
-					return `C:\bin\` + n + ".exe", nil
-				}
+			if slices.Contains(names, n) {
+				return `C:\bin\` + n + ".exe", nil
 			}
 			return "", errors.New("not found")
 		}
 	}
 	existing := func(paths ...string) func(string) bool {
 		return func(p string) bool {
-			for _, x := range paths {
-				if x == p {
-					return true
-				}
-			}
-			return false
+			return slices.Contains(paths, p)
 		}
 	}
 

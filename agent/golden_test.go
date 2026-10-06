@@ -62,8 +62,6 @@ func goldenServer(t *testing.T) (*httptest.Server, func() ([]byte, http.Header))
 	return srv, func() ([]byte, http.Header) { mu.Lock(); defer mu.Unlock(); return body, hdr }
 }
 
-func str(s string) *string { return &s }
-
 // llamaRef is a local llama.cpp server configured the atto way: effort
 // travels in chat_template_kwargs through extraBody placeholders.
 func llamaRef(images bool) func(string) config.ModelRef {
@@ -96,7 +94,7 @@ func opencodeRef(url string) config.ModelRef {
 		},
 		Model: config.Model{
 			ID: "glm-5.3-flash", Efforts: []string{"off", "low", "medium", "high"},
-			EffortMap: map[string]*string{"off": str("none")}, ExtraBody: map[string]any{"reasoning_effort": "$effort"},
+			EffortMap: map[string]*string{"off": new("none")}, ExtraBody: map[string]any{"reasoning_effort": "$effort"},
 			ContextWindow: 200000, MaxTokens: 32768,
 		},
 	}
@@ -116,7 +114,7 @@ func responsesRef(images bool) func(string) config.ModelRef {
 	return func(url string) config.ModelRef {
 		m := config.Model{
 			ID: "gpt-5.2", Efforts: []string{"off", "low", "medium", "high", "xhigh"},
-			EffortMap: map[string]*string{"off": str("none")}, ContextWindow: 400000, MaxTokens: 32768,
+			EffortMap: map[string]*string{"off": new("none")}, ContextWindow: 400000, MaxTokens: 32768,
 		}
 		if images {
 			m.Input = []string{"text", "image"}

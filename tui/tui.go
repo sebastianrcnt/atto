@@ -527,7 +527,7 @@ func (t *TUI) doRender() {
 			offset = 1
 			b.WriteString("\x1b[1B")
 		}
-		for i := 0; i < extra; i++ {
+		for i := range extra {
 			b.WriteString("\r\x1b[2K")
 			if i < extra-1 {
 				b.WriteString("\x1b[1B")
@@ -596,7 +596,7 @@ func (t *TUI) doRender() {
 			finalRow = len(newLines) - 1
 		}
 		extra := len(prev) - len(newLines)
-		for i := 0; i < extra; i++ {
+		for range extra {
 			b.WriteString("\r\n\x1b[2K")
 		}
 		moveRows(&b, -extra)
@@ -660,7 +660,7 @@ func (t *TUI) doRenderFullscreen() {
 	// scroll to the body changed that.
 	var footer []string
 	var gap, avail, end, start int
-	for i := 0; i < 2; i++ {
+	for range 2 {
 		scrolled := t.scroll > 0
 		footer = t.pad(t.Footer.Render(inner))
 		if len(footer) > height {

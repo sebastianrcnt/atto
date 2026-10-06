@@ -91,7 +91,7 @@ func TestResumePickerFooterWraps(t *testing.T) {
 	p := newResumePicker(repoDir(t, "proj", "main"), "")
 	for _, w := range []int{40, 60, 100} {
 		var foot []string
-		for _, l := range strings.Split(plain(p, w), "\n") {
+		for l := range strings.SplitSeq(plain(p, w), "\n") {
 			if strings.Contains(l, " to ") || strings.Contains(l, "Type to") {
 				foot = append(foot, l)
 			}
@@ -118,7 +118,7 @@ func TestResumePickerFooterWraps(t *testing.T) {
 
 func TestResumePickerScrollMarkers(t *testing.T) {
 	t.Setenv("ATTO_DIR", t.TempDir())
-	for i := 0; i < 9; i++ {
+	for i := range 9 {
 		saveSession(t, "/w", "message "+string(rune('a'+i)))
 	}
 	p := newResumePicker("/w", "")
@@ -130,7 +130,7 @@ func TestResumePickerScrollMarkers(t *testing.T) {
 	if !strings.Contains(out, "\n↓ ") || strings.Contains(out, "↑") {
 		t.Fatalf("down arrow only at the top: %q", out)
 	}
-	for i := 0; i < 4; i++ {
+	for range 4 {
 		p.HandleInput("\x1b[B")
 	}
 	if out := plain(p, 80); !strings.Contains(out, "\n↑ ") || !strings.Contains(out, "\n↓ ") || !strings.Contains(out, "(5 of 9)") {

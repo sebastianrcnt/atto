@@ -95,7 +95,7 @@ func (v *vterm) put(r rune) {
 	if w == 0 {
 		return
 	}
-	for k := 0; k < w; k++ {
+	for k := range w {
 		c := v.c + k
 		if c >= v.w {
 			break

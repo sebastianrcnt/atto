@@ -36,7 +36,7 @@ func barCol(rows []string) string {
 
 func bodyLines(n int) []string {
 	var l []string
-	for i := 0; i < n; i++ {
+	for i := range n {
 		l = append(l, fmt.Sprintf("line %d", i))
 	}
 	return l

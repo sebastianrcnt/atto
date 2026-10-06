@@ -122,11 +122,9 @@ func (m *Manager) Reload() {
 	m.mu.Unlock()
 	var wg sync.WaitGroup
 	for _, e := range old {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			e.stop()
-		}()
+		})
 	}
 	wg.Wait()
 	m.publish()
@@ -435,11 +433,9 @@ func (m *Manager) AllTools(ctx context.Context) ([]ToolInfo, []ServerError, erro
 	results := make([]res, len(names))
 	var wg sync.WaitGroup
 	for i, n := range names {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			results[i].tools, results[i].err = m.Tools(ctx, n)
-		}()
+		})
 	}
 	wg.Wait()
 	var tools []ToolInfo
@@ -494,11 +490,9 @@ func (m *Manager) Close() error {
 	}
 	var wg sync.WaitGroup
 	for _, e := range es {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			e.stop()
-		}()
+		})
 	}
 	wg.Wait()
 	return nil

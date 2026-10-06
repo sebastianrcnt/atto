@@ -3,6 +3,7 @@ package app
 import (
 	"fmt"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -188,8 +189,8 @@ func samePlan(a, b []runPart) bool {
 }
 
 func (r *toolRun) lastTool() int {
-	for i := len(r.members) - 1; i >= 0; i-- {
-		if _, ok := r.members[i].(*toolBlock); ok {
+	for i, v := range slices.Backward(r.members) {
+		if _, ok := v.(*toolBlock); ok {
 			return i
 		}
 	}

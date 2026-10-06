@@ -55,10 +55,10 @@ func TestBlockCacheInvalidation(t *testing.T) {
 			func(b cachedBlock) { b.(*toolBlock).res.Job = 3 }},
 		{"tool: image attached", func() cachedBlock { return newTool(d, "atto view a.png", "", true) },
 			func(b cachedBlock) { b.(*toolBlock).images = []string{"a.png 3×2"} }},
-		{"tool: done, folds", func() cachedBlock { return &toolBlock{expander: expander{d: d}, args: agent.BashArgs{Command: "ls"}} },
+		{"tool: done, folds", func() cachedBlock { return &toolBlock{d: d, args: agent.BashArgs{Command: "ls"}} },
 			func(b cachedBlock) { b.(*toolBlock).done = true }},
 		{"tool: open", func() cachedBlock {
-			return &toolBlock{expander: expander{d: d}, args: agent.BashArgs{Command: "ls"}, done: true}
+			return &toolBlock{d: d, args: agent.BashArgs{Command: "ls"}, done: true}
 		},
 			func(b cachedBlock) { b.(*toolBlock).Click(0) }},
 		{"tool: click", func() cachedBlock { return newTool(d, "ls", many, true) },
@@ -156,13 +156,13 @@ func ctrlT(d *details) func(cachedBlock) {
 }
 
 func newThinking(d *details, text string, done bool) *thinkingBlock {
-	b := &thinkingBlock{expander: expander{d: d}, done: done, dur: time.Second}
+	b := &thinkingBlock{d: d, done: done, dur: time.Second}
 	b.text.WriteString(text)
 	return b
 }
 
 func newTool(d *details, cmd, output string, done bool) *toolBlock {
-	b := &toolBlock{expander: expander{d: d}, args: agent.BashArgs{Description: "Run", Command: cmd}, done: done,
+	b := &toolBlock{d: d, args: agent.BashArgs{Description: "Run", Command: cmd}, done: done,
 		start: time.Now(), timeout: time.Minute}
 	b.append(output)
 	if done {
@@ -172,19 +172,19 @@ func newTool(d *details, cmd, output string, done bool) *toolBlock {
 }
 
 func newCompact(d *details, notes string, running bool) *compactBlock {
-	b := &compactBlock{expander: expander{d: d}, running: running}
+	b := &compactBlock{d: d, running: running}
 	b.notes.WriteString(notes)
 	return b
 }
 
 func newSummary(d *details, text string, running bool) *summaryBlock {
-	b := &summaryBlock{expander: expander{d: d}, running: running}
+	b := &summaryBlock{d: d, running: running}
 	b.text.WriteString(text)
 	return b
 }
 
 func newShell(d *details, output string, done bool) *shellBlock {
-	b := &shellBlock{expander: expander{d: d}, cmd: "ls", done: done, start: time.Now()}
+	b := &shellBlock{d: d, cmd: "ls", done: done, start: time.Now()}
 	b.output.WriteString(output)
 	return b
 }
@@ -291,7 +291,7 @@ func TestActivityFrameWritesOneLine(t *testing.T) {
 
 // A done command shows the images atto view attached, folded or open.
 func TestToolBlockImages(t *testing.T) {
-	b := &toolBlock{expander: expander{d: &details{}}, args: agent.BashArgs{Description: "Look", Command: "atto view shot.png"},
+	b := &toolBlock{d: &details{}, args: agent.BashArgs{Description: "Look", Command: "atto view shot.png"},
 		done: true, images: []string{"shot.png 1136×1038"}}
 	if s := plainLines(b.Render(80)); !strings.Contains(s, "▣ shot.png 1136×1038") {
 		t.Fatalf("folded:\n%s", s)

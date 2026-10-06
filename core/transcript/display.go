@@ -1,5 +1,7 @@
 package transcript
 
+import "slices"
+
 // BlockDisplay is what extensions show on a reasoning or assistant block:
 // short statuses for its header (ctx.ui.setBlockStatus) and a text shown
 // in place of the block's own (ctx.ui.setBlockDisplay). It is display
@@ -40,7 +42,7 @@ func (b *BlockDisplay) SetStatus(ext, text string) bool {
 	if text == "" {
 		return false
 	}
-	b.Statuses = append(b.Statuses[:len(b.Statuses):len(b.Statuses)], BlockStatus{ext, text})
+	b.Statuses = append(slices.Clip(b.Statuses), BlockStatus{ext, text})
 	return true
 }
 

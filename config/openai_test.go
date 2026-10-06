@@ -150,7 +150,7 @@ func TestResponsesEfforts(t *testing.T) {
 	}
 	// models.json can still adjust one level.
 	e, em := responsesEfforts("gpt-5.2")
-	m := mergeModel(Model{Efforts: e, EffortMap: em}, Model{EffortMap: map[string]*string{"off": nil, "max": str("xhigh")}})
+	m := mergeModel(Model{Efforts: e, EffortMap: em}, Model{EffortMap: map[string]*string{"off": nil, "max": new("xhigh")}})
 	if got := strings.Join(m.Levels(), ","); got != "low,medium,high,xhigh,max" {
 		t.Fatalf("override: %s", got)
 	}

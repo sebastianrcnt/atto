@@ -46,11 +46,11 @@ func TestQRMatchesTheCode(t *testing.T) {
 		t.Fatalf("%d lines for %d modules", len(lines), n)
 	}
 	m := unblock(t, lines)
-	for y := 0; y < n; y++ {
+	for y := range n {
 		if len(m[y]) != n {
 			t.Fatalf("row %d is %d wide, want %d", y, len(m[y]), n)
 		}
-		for x := 0; x < n; x++ {
+		for x := range n {
 			quiet := x < QRQuiet || y < QRQuiet || x >= n-QRQuiet || y >= n-QRQuiet
 			want := quiet || !code.Black(x-QRQuiet, y-QRQuiet) // drawn = light
 			if m[y][x] != want {

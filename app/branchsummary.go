@@ -202,7 +202,7 @@ func (c *summaryBlock) render(width int) []string {
 func (a *App) summaryItem(it *transcript.Item, started bool, delta string) {
 	switch {
 	case started:
-		a.summaryBlk = &summaryBlock{running: true, expander: expander{d: &a.details}}
+		a.summaryBlk = &summaryBlock{running: true, d: &a.details}
 		a.add(a.summaryBlk)
 	case a.summaryBlk == nil:
 	case it.Status == transcript.InProgress:

@@ -245,7 +245,7 @@ func TestDiffBlockIsDisplayOnlyAndSurvivesResume(t *testing.T) {
 
 func TestExtTextRenderingIsGenericAndCached(t *testing.T) {
 	d := &details{}
-	b := &extTextBlock{expander: expander{d: d}, ext: "demo", title: "Report", text: "plain\n+not green\n\ttabbed\x1b[31m\n", lang: ""}
+	b := &extTextBlock{d: d, ext: "demo", title: "Report", text: "plain\n+not green\n\ttabbed\x1b[31m\n", lang: ""}
 	got := plainLines(b.Render(40))
 	if got != "± Report · demo\n  plain\n  +not green\n     tabbed" {
 		t.Errorf("plain text:\n%s", got)
@@ -257,7 +257,7 @@ func TestExtTextRenderingIsGenericAndCached(t *testing.T) {
 		t.Error("short text does not collapse")
 	}
 	// A preview of 2 of 5 lines.
-	b = &extTextBlock{expander: expander{d: d}, ext: "demo", title: "T", text: "1\n2\n3\n4\n5", preview: 2}
+	b = &extTextBlock{d: d, ext: "demo", title: "T", text: "1\n2\n3\n4\n5", preview: 2}
 	if got := plainLines(b.Render(40)); !strings.Contains(got, "  2\n    + 3 lines (click or ctrl+t to expand)") {
 		t.Errorf("preview:\n%s", got)
 	}
@@ -266,7 +266,7 @@ func TestExtTextRenderingIsGenericAndCached(t *testing.T) {
 		t.Errorf("expanded by ctrl+t:\n%s", got)
 	}
 	// A narrow width truncates lines.
-	long := &extTextBlock{expander: expander{d: d}, ext: "demo", title: "T", text: strings.Repeat("x", 100)}
+	long := &extTextBlock{d: d, ext: "demo", title: "T", text: strings.Repeat("x", 100)}
 	for _, l := range long.Render(30) {
 		if tui.VisibleWidth(l) > 30 {
 			t.Errorf("too wide: %q", l)

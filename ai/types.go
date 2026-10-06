@@ -12,6 +12,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"slices"
 )
 
 // Port of src/types.ts. Names and JSON field names match pi; TypeScript
@@ -489,10 +490,5 @@ type Model struct {
 
 // SupportsImages reports whether the model accepts image input.
 func (m *Model) SupportsImages() bool {
-	for _, in := range m.Input {
-		if in == "image" {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(m.Input, "image")
 }

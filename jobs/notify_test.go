@@ -63,7 +63,7 @@ func TestNotifierMatchesAndBatches(t *testing.T) {
 func TestNotifierCap(t *testing.T) {
 	c := &collector{}
 	n := testNotifier(c, "hit", 3, 10*time.Millisecond)
-	for i := 0; i < 6; i++ {
+	for range 6 {
 		n.Write([]byte("hit\n"))
 		time.Sleep(40 * time.Millisecond)
 	}
@@ -85,7 +85,7 @@ func TestNotifierTruncatesAndLimitsBatch(t *testing.T) {
 	c := &collector{}
 	n := testNotifier(c, "x", 0, time.Hour)
 	n.Write([]byte(strings.Repeat("x", 5000) + "\n"))
-	for i := 0; i < notifyLines+5; i++ {
+	for range notifyLines + 5 {
 		n.Write([]byte("x\n"))
 	}
 	n.Close()

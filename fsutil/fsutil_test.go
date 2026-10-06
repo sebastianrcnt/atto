@@ -67,14 +67,12 @@ func TestWriteAtomicConcurrent(t *testing.T) {
 	}
 	var wg sync.WaitGroup
 	for i, c := range contents {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			for range 20 {
 				// Windows can briefly refuse a rename while another
 				// writer holds the target open; retry like a caller would.
 				var err error
-				for try := 0; try < 50; try++ {
+				for range 50 {
 					if err = WriteAtomic(p, c, 0o644); err == nil {
 						break
 					}
@@ -84,7 +82,7 @@ func TestWriteAtomicConcurrent(t *testing.T) {
 					return
 				}
 			}
-		}()
+		})
 	}
 	wg.Wait()
 	got, err := os.ReadFile(p)

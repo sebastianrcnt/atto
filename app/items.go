@@ -86,7 +86,7 @@ func (a *App) itemStarted(it *transcript.Item) {
 	case transcript.Notice:
 		a.add(&noticeBlock{text: it.Text, style: tui.Dim})
 	case transcript.Reasoning:
-		a.thinking = &thinkingBlock{start: time.Now(), expander: expander{d: &a.details}}
+		a.thinking = &thinkingBlock{start: time.Now(), d: &a.details}
 		a.thinking.disp.orig.d = &a.origView
 		a.trackBlock(it, a.thinking)
 		if r := a.openRun(); r != nil { // between two calls, or after the last
@@ -101,19 +101,19 @@ func (a *App) itemStarted(it *transcript.Item) {
 		a.add(a.text)
 	case transcript.Tool:
 		b := &toolBlock{args: agent.BashArgs{Description: it.Description, Command: it.Command},
-			timeout: it.Timeout, pending: it.Pending, start: time.Now(), expander: expander{d: &a.details}}
+			timeout: it.Timeout, pending: it.Pending, start: time.Now(), d: &a.details}
 		if a.tools == nil {
 			a.tools = map[string]*toolBlock{}
 		}
 		a.tools[it.ID] = b
 		r := a.openRun()
 		if r == nil {
-			r = &toolRun{expander: expander{d: &a.details}, off: &a.noToolGroups}
+			r = &toolRun{d: &a.details, off: &a.noToolGroups}
 			a.add(r)
 		}
 		r.add(b)
 	case transcript.Compaction:
-		a.compact = &compactBlock{auto: it.Auto, running: true, expander: expander{d: &a.details}}
+		a.compact = &compactBlock{auto: it.Auto, running: true, d: &a.details}
 		a.add(a.compact)
 	case transcript.BranchSummary:
 		a.summaryItem(it, true, "")
@@ -231,7 +231,7 @@ func (a *App) itemCompleted(it *transcript.Item) {
 // eventTitles are the first lines of the events in a message.
 func eventTitles(text string) []string {
 	var out []string
-	for _, e := range strings.Split(strings.TrimPrefix(text, events.Prefix), "\n\n"+events.Prefix) {
+	for e := range strings.SplitSeq(strings.TrimPrefix(text, events.Prefix), "\n\n"+events.Prefix) {
 		out = append(out, tui.FirstLine(e))
 	}
 	return out

@@ -14,6 +14,7 @@ import (
 	"os/exec"
 	"regexp"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -115,12 +116,7 @@ func ConfigValueEnvVarNames(config string) []string {
 }
 
 func contains(xs []string, x string) bool {
-	for _, y := range xs {
-		if y == x {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(xs, x)
 }
 
 // ResolveConfigValue resolves a key or header value; ok is false when a

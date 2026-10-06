@@ -170,7 +170,7 @@ func encodeJSON(out io.Writer, v any) error {
 
 // firstLine is the first non-empty line of a description.
 func firstLine(s string) string {
-	for _, l := range strings.Split(s, "\n") {
+	for l := range strings.SplitSeq(s, "\n") {
 		if l = strings.TrimSpace(l); l != "" {
 			return l
 		}

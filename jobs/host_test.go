@@ -117,8 +117,7 @@ func TestHostDetachRefusedWithoutSession(t *testing.T) {
 func TestHostStartError(t *testing.T) {
 	setup(t)
 	_, err := StartHost(shell.Shell{Kind: shell.Bash, Path: "/nonexistent/bash"}, t.TempDir(), nil, "true", &syncBuf{})
-	var se *StartError
-	if !errors.As(err, &se) {
+	if _, ok := errors.AsType[*StartError](err); !ok {
 		t.Fatalf("want StartError, got %v", err)
 	}
 }

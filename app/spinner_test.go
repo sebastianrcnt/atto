@@ -234,7 +234,7 @@ func BenchmarkRenderActivity(b *testing.B) {
 	a.runStart, a.lastEvent = now, now
 	a.now = func() time.Time { return now }
 	b.ReportAllocs()
-	for range b.N {
+	for b.Loop() {
 		now = now.Add(33 * time.Millisecond)
 		a.renderActivity(120)
 	}

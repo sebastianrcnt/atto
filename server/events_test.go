@@ -70,7 +70,7 @@ func nextSSE(t *testing.T, ch <-chan sseEv) sseEv {
 }
 
 func publishN(s *Server, n int) {
-	for i := 0; i < n; i++ {
+	for i := range n {
 		s.Notify("test/n", map[string]any{"i": i})
 	}
 }
@@ -153,7 +153,7 @@ func TestBrokerKicksSlowSubscriber(t *testing.T) {
 // slowModel streams n words, one every delay.
 func slowModel(t *testing.T, n int, delay time.Duration) string {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		for i := 0; i < n; i++ {
+		for i := range n {
 			fmt.Fprintf(w, `data: {"choices":[{"delta":{"content":"w%d "}}]}`+"\n\n", i)
 			w.(http.Flusher).Flush()
 			time.Sleep(delay)
@@ -245,7 +245,7 @@ func TestReadWhileStreaming(t *testing.T) {
 func TestBrokerKeepsBytesBounded(t *testing.T) {
 	b := newBroker(10000)
 	big := strings.Repeat("x", keepBytes/4)
-	for i := 0; i < 20; i++ {
+	for range 20 {
 		b.publish(map[string]any{"text": big})
 	}
 	if b.bytes > keepBytes || len(b.ring) == 0 || len(b.ring) > 5 {

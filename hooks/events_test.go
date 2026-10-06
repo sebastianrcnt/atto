@@ -53,7 +53,7 @@ func readLines(t *testing.T, path string) []map[string]any {
 	t.Helper()
 	b, _ := os.ReadFile(path)
 	var out []map[string]any
-	for _, l := range strings.Split(strings.TrimSpace(string(b)), "\n") {
+	for l := range strings.SplitSeq(strings.TrimSpace(string(b)), "\n") {
 		if l = strings.TrimSpace(l); l == "" {
 			continue
 		}

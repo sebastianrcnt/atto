@@ -107,7 +107,7 @@ func oldWrap(text string, width int) []string {
 	}
 	var out []string
 	var st sgrState
-	for _, logical := range strings.Split(text, "\n") {
+	for logical := range strings.SplitSeq(text, "\n") {
 		out = append(out, oldWrapLine(logical, width, &st)...)
 	}
 	return out

@@ -599,8 +599,8 @@ func shownOutput(content string, t *session.ToolMeta) string {
 		return content
 	}
 	rest, last := "", content
-	if i := strings.LastIndexByte(content, '\n'); i >= 0 {
-		rest, last = content[:i], content[i+1:]
+	if before, after, found := strings.CutLast(content, "\n"); found {
+		rest, last = before, after
 	}
 	var ok bool
 	switch {

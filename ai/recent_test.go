@@ -9,7 +9,7 @@ import (
 )
 
 func TestRecentRequests(t *testing.T) {
-	for i := 0; i < keepRecent+3; i++ {
+	for i := range keepRecent + 3 {
 		recordRequest("u", []byte(fmt.Sprint(i)))
 	}
 	r := RecentRequests()
@@ -17,7 +17,7 @@ func TestRecentRequests(t *testing.T) {
 		t.Fatalf("ring: %d, first %s", len(r), r[0].Body)
 	}
 	PinRecentRequests("compaction", 2)
-	for i := 0; i < keepRecent; i++ {
+	for range keepRecent {
 		recordRequest("u", []byte("later"))
 	}
 	p := PinnedRequests()["compaction"]
@@ -46,7 +46,7 @@ func TestRecentRequestsByteCap(t *testing.T) {
 	// Random bytes do not compress, so each request is about 1 MiB.
 	rnd := make([]byte, 1<<20)
 	rand.New(rand.NewSource(1)).Read(rnd)
-	for i := 0; i < keepRecent; i++ {
+	for range keepRecent {
 		recordRequest("u", rnd)
 	}
 	recent.Lock()
@@ -77,7 +77,7 @@ func BenchmarkRecordRequest(b *testing.B) {
 	body := []byte(sb.String())
 	b.SetBytes(int64(len(body)))
 	b.ReportAllocs()
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		recordRequest("u", body)
 	}
 }

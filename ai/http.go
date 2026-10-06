@@ -57,8 +57,7 @@ func truncateErrorText(text string, maxChars int) string {
 // FormatProviderError renders an error for AssistantMessage.ErrorMessage:
 // "<status>: <body>", or "<prefix> (<status>): <body>" with a prefix.
 func FormatProviderError(err error, prefix string) string {
-	var pe *ProviderError
-	if errors.As(err, &pe) {
+	if pe, ok := errors.AsType[*ProviderError](err); ok {
 		body := truncateErrorText(strings.TrimSpace(pe.Body), MaxProviderErrorBodyChars)
 		if body == "" {
 			body = strings.TrimSpace(fmt.Sprintf("%d %s", pe.Status, pe.StatusText))

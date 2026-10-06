@@ -47,7 +47,7 @@ func TestRunBashCancel(t *testing.T) {
 
 func TestTruncateMiddle(t *testing.T) {
 	var b strings.Builder
-	for i := 0; i < 20000; i++ {
+	for i := range 20000 {
 		fmt.Fprintf(&b, "line %d\n", i)
 	}
 	out := truncateMiddle(b.String())

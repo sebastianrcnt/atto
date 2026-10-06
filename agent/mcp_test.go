@@ -29,9 +29,9 @@ func TestMCPLineIsDeterministicAndOnlyWhenConfigured(t *testing.T) {
 		t.Fatalf("line missing or misplaced:\n%s", a)
 	}
 	// The rest of the prompt is untouched: cutting the line out gives the plain prompt.
-	i := strings.Index(a, "MCP servers are available")
+	before, _, _ := strings.Cut(a, "MCP servers are available")
 	j := strings.Index(a, "Work autonomously")
-	if a[:i]+a[j:] != none {
+	if before+a[j:] != none {
 		t.Fatal("the MCP line changed more than itself")
 	}
 }

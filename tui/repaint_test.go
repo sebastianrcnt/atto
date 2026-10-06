@@ -79,7 +79,7 @@ func TestFullRepaintInlineRewritesViewport(t *testing.T) {
 	ui.FullRepaint = true
 	c := &lines{}
 	ui.Body.Add(c)
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		c.l = append(c.l, fmt.Sprintf("한글 %d", i))
 		ui.RenderNow()
 		assertTranscript(t, l.vterm, c.l, fmt.Sprintf("append %d", i))
@@ -142,11 +142,11 @@ func TestHangulStreaming(t *testing.T) {
 }
 
 func TestRandomOperationsFullRepaint(t *testing.T) {
-	for seed := int64(0); seed < 100; seed++ {
+	for seed := range int64(100) {
 		rng := rand.New(rand.NewSource(seed))
 		ui, v, c := setup(30, 3+rng.Intn(8))
 		ui.FullRepaint = true
-		for step := 0; step < 60; step++ {
+		for step := range 60 {
 			switch op := rng.Intn(6); {
 			case op < 2:
 				c.l = append(c.l, fmt.Sprintf("한%d글", step))

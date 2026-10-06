@@ -122,5 +122,5 @@ func (a *App) showText(ext, title, text string, o extensions.TextOptions) {
 
 // extTextStarted adds the block of an ext_text item, live and on replay.
 func (a *App) extTextStarted(it *transcript.Item) {
-	a.add(&extTextBlock{expander: expander{d: &a.details}, ext: it.Ext, title: it.Title, text: it.Text, lang: it.Lang, preview: it.Preview})
+	a.add(&extTextBlock{d: &a.details, ext: it.Ext, title: it.Title, text: it.Text, lang: it.Lang, preview: it.Preview})
 }

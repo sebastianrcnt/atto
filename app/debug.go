@@ -3,6 +3,7 @@ package app
 import (
 	"encoding/json"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -81,9 +82,7 @@ func memSummary(m *runtime.MemStats) string {
 // where a server's prefix cache stops helping.
 func writeRequests(dir string) error {
 	sets := map[string][]ai.SentRequest{"recent": ai.RecentRequests()}
-	for k, v := range ai.PinnedRequests() {
-		sets[k] = v
-	}
+	maps.Copy(sets, ai.PinnedRequests())
 	names := make([]string, 0, len(sets))
 	for k := range sets {
 		names = append(names, k)

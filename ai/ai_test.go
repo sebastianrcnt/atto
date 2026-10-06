@@ -162,7 +162,7 @@ func TestCompletionsErrors(t *testing.T) {
 	}))
 	defer block.Close()
 	ctx, cancel := context.WithCancel(context.Background())
-	s := StreamSimple(model(block.URL), ctxWithUser("x"), &SimpleStreamOptions{StreamOptions: StreamOptions{Context: ctx}})
+	s := StreamSimple(model(block.URL), ctxWithUser("x"), &SimpleStreamOptions{Context: ctx})
 	time.AfterFunc(50*time.Millisecond, cancel)
 	if _, msg = collect(s); msg.StopReason != StopAborted {
 		t.Fatalf("cancel: %+v", msg)
@@ -183,7 +183,7 @@ func TestResponsesStreamAndBody(t *testing.T) {
 	model := &Model{ID: "gpt-5.2", Api: ApiOpenAIResponses, Provider: "openai", BaseURL: srv.URL, Reasoning: true,
 		ThinkingLevelMap: ThinkingLevelMap{"off": &off}, Input: []string{"text"}, MaxTokens: 8}
 	types, msg := collect(StreamSimple(model, ctxWithUser("hi"), &SimpleStreamOptions{
-		StreamOptions: StreamOptions{APIKey: "sk-x", SessionID: "sess"}, Reasoning: "high",
+		APIKey: "sk-x", SessionID: "sess", Reasoning: "high",
 	}))
 	if got := strings.Join(types, " "); got != "start thinking_start thinking_delta thinking_end toolcall_start toolcall_delta toolcall_end done" {
 		t.Fatalf("events %s", got)
@@ -213,7 +213,7 @@ func TestResponsesStreamAndBody(t *testing.T) {
 	model.BaseURL = srv2.URL
 	c := ctxWithUser("hi")
 	c.Messages = append(c.Messages, msg, &ToolResultMessage{Role: "toolResult", ToolCallID: "call_1|fc_1", ToolName: "bash", Content: []Content{NewText("out")}})
-	_, msg2 := collect(StreamSimple(model, c, &SimpleStreamOptions{StreamOptions: StreamOptions{APIKey: "chatgpt-token"}, Reasoning: "off"}))
+	_, msg2 := collect(StreamSimple(model, c, &SimpleStreamOptions{APIKey: "chatgpt-token", Reasoning: "off"}))
 	if msg2.StopReason != StopLength {
 		t.Fatalf("incomplete: %+v", msg2)
 	}
@@ -234,7 +234,7 @@ func TestResponsesStreamAndBody(t *testing.T) {
 		t.Errorf("max_output_tokens dropped: %v", b2)
 	}
 	model.BaseURL = "https://api.openai.com/v1"
-	if p := buildResponsesParams(model, NormalizeContext(ctxWithUser("x")), &OpenAIResponsesOptions{StreamOptions: StreamOptions{APIKey: "oauth-token", MaxTokens: 100}}, GetResponsesCompat(model)); p["max_output_tokens"] != nil {
+	if p := buildResponsesParams(model, NormalizeContext(ctxWithUser("x")), &OpenAIResponsesOptions{APIKey: "oauth-token", MaxTokens: 100}, GetResponsesCompat(model)); p["max_output_tokens"] != nil {
 		t.Errorf("sign-in sent max_output_tokens")
 	}
 }
@@ -276,7 +276,7 @@ func TestCodexBodyAndHeaders(t *testing.T) {
 	model := &Model{ID: "gpt-5.3-codex", Api: ApiOpenAICodexResponses, Provider: "openai-codex", BaseURL: srv.URL, Reasoning: true}
 	c := ctxWithUser("hi")
 	c.Tools = []Tool{{Name: "bash", Description: "d", Parameters: json.RawMessage(`{"type":"object"}`)}}
-	_, msg := collect(StreamSimple(model, c, &SimpleStreamOptions{StreamOptions: StreamOptions{APIKey: fakeJWT("acct-1"), SessionID: "s1"}, Reasoning: "medium"}))
+	_, msg := collect(StreamSimple(model, c, &SimpleStreamOptions{APIKey: fakeJWT("acct-1"), SessionID: "s1", Reasoning: "medium"}))
 	if msg.StopReason != StopStop || msg.EndTurn == nil || !*msg.EndTurn || msg.Content[0].(*TextContent).TextSignature != `{"v":1,"id":"msg_1","phase":"final_answer"}` {
 		t.Fatalf("msg %+v", msg)
 	}
@@ -296,7 +296,7 @@ func TestCodexBodyAndHeaders(t *testing.T) {
 	if !strings.HasSuffix(resolveCodexURL(srv.URL), "/codex/responses") || resolveCodexURL("https://x/backend-api/codex") != "https://x/backend-api/codex/responses" {
 		t.Fatal("codex url")
 	}
-	if _, msg := collect(StreamSimple(model, c, &SimpleStreamOptions{StreamOptions: StreamOptions{APIKey: "not-a-jwt"}})); !strings.Contains(msg.ErrorMessage, "accountId") {
+	if _, msg := collect(StreamSimple(model, c, &SimpleStreamOptions{APIKey: "not-a-jwt"})); !strings.Contains(msg.ErrorMessage, "accountId") {
 		t.Fatalf("bad token: %+v", msg)
 	}
 }
@@ -391,7 +391,7 @@ func TestRegistryOverride(t *testing.T) {
 func TestOpenCodeSessionHeader(t *testing.T) {
 	srv := serve(t, 200, `{"choices":[{"delta":{"content":"x"},"finish_reason":"stop"}]}`)
 	model := &Model{ID: "glm", Api: ApiOpenAICompletions, Provider: "opencode-go", BaseURL: srv.URL}
-	collect(StreamSimple(model, ctxWithUser("x"), &SimpleStreamOptions{StreamOptions: StreamOptions{SessionID: "abc"}}))
+	collect(StreamSimple(model, ctxWithUser("x"), &SimpleStreamOptions{SessionID: "abc"}))
 	if srv.header(0).Get("x-opencode-session") != "abc" {
 		t.Fatalf("headers %v", srv.header(0))
 	}

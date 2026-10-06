@@ -73,11 +73,11 @@ func (b *blockDisplay) setDisplay(ext, text string) bool {
 
 // header is the statuses as a dim suffix (" · translating…"), "" when none.
 func (b *blockDisplay) header() string {
-	var out string
+	var out strings.Builder
 	for _, s := range b.state.Statuses {
-		out += tui.Dim(" · " + s.Text)
+		out.WriteString(tui.Dim(" · " + s.Text))
 	}
-	return out
+	return out.String()
 }
 
 // toggleLine is the line that flips between the override and the original:

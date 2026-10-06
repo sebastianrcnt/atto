@@ -606,8 +606,8 @@ func (l remoteSession) Unsteer(input string, queued bool) error {
 	return l.do(func() error {
 		a := l.a
 		if queued {
-			for i := len(a.queued) - 1; i >= 0; i-- {
-				if a.queued[i].text == input {
+			for i, v := range slices.Backward(a.queued) {
+				if v.text == input {
 					a.queued = slices.Delete(a.queued, i, i+1)
 					a.remotePending()
 					return nil

@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"slices"
 	"strings"
 	"syscall"
 	"text/tabwriter"
@@ -252,12 +253,7 @@ func parseWords(fs *flag.FlagSet, args []string) ([]string, error) {
 }
 
 func contains(list []string, s string) bool {
-	for _, x := range list {
-		if x == s {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(list, s)
 }
 
 // agentStart creates subagent name from preset and starts its first turn.
@@ -487,8 +483,8 @@ func lastAssistant(id string) string {
 		return ""
 	}
 	branch := session.Active(entries)
-	for i := len(branch) - 1; i >= 0; i-- {
-		if m := branch[i].Message; branch[i].Type == session.TypeMessage && m != nil && m.Role == "assistant" {
+	for _, b := range slices.Backward(branch) {
+		if m := b.Message; b.Type == session.TypeMessage && m != nil && m.Role == "assistant" {
 			if text := strings.TrimSpace(m.Content); text != "" {
 				return text
 			}

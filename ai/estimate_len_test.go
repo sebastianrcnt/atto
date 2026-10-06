@@ -22,8 +22,8 @@ func TestJSLenMatchesUTF16Encode(t *testing.T) {
 		}
 	}
 	// Every two-byte string, bare and after a truncated emoji prefix.
-	for a := 0; a < 256; a++ {
-		for b := 0; b < 256; b++ {
+	for a := range 256 {
+		for b := range 256 {
 			s := string([]byte{byte(a), byte(b)})
 			if jsLen(s) != jsLenOld(s) {
 				t.Fatalf("jsLen(%q) = %d, want %d", s, jsLen(s), jsLenOld(s))
@@ -41,7 +41,7 @@ var sink int
 func BenchmarkJSLen(b *testing.B) {
 	s := strings.Repeat("hello 한국어 😀 world\xff ", 5000)
 	b.ReportAllocs()
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		sink = jsLen(s)
 	}
 }
@@ -49,7 +49,7 @@ func BenchmarkJSLen(b *testing.B) {
 func BenchmarkJSLenOld(b *testing.B) {
 	s := strings.Repeat("hello 한국어 😀 world\xff ", 5000)
 	b.ReportAllocs()
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		sink = jsLenOld(s)
 	}
 }

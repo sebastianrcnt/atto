@@ -26,7 +26,7 @@ func newSelRig(t *testing.T, w, h int, body ...string) *selRig {
 	r.ui.FullRepaint = false
 	r.ui.now = func() time.Time { return r.clock }
 	r.ui.autoScrollEvery = time.Hour // tests step auto-scroll by hand
-	r.body = &clicky{lines: lines{l: body}}
+	r.body = &clicky{l: body}
 	r.ui.Body.Add(r.body)
 	r.ui.Footer.Add(&lines{l: []string{"foot"}})
 	r.ui.OnCopy = func(s string) { r.copied = append(r.copied, s) }
@@ -272,7 +272,7 @@ func TestSelectDedentsAndSkipsMargin(t *testing.T) {
 
 func TestSelectScrollDuringDrag(t *testing.T) {
 	var body []string
-	for i := 0; i < 20; i++ {
+	for i := range 20 {
 		body = append(body, fmt.Sprintf("line %d", i))
 	}
 	r := newSelRig(t, 20, 6, body...) // lines 15-19 visible, then the footer
@@ -380,7 +380,7 @@ func TestSelectionHighlightBothRepaintModes(t *testing.T) {
 
 func TestFooterClickWithSelection(t *testing.T) {
 	r := newSelRig(t, 20, 5, "abc")
-	foot := &clicky{lines: lines{l: []string{"button"}}}
+	foot := &clicky{l: []string{"button"}}
 	r.ui.Footer.Children = []Component{foot}
 	r.ui.RenderNow()
 	r.drag(1, 1, 3, 1)
@@ -393,7 +393,7 @@ func TestFooterClickWithSelection(t *testing.T) {
 
 func TestPinnedRowClick(t *testing.T) {
 	var body []string
-	for i := 0; i < 20; i++ {
+	for i := range 20 {
 		body = append(body, fmt.Sprintf("line %d", i))
 	}
 	r := newSelRig(t, 20, 6, body...)

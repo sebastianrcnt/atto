@@ -221,7 +221,7 @@ func TestToolGroupSettingOff(t *testing.T) {
 	// As blocks have always looked: each after a blank line.
 	var want []string
 	for _, c := range exploreCalls {
-		b := &toolBlock{expander: expander{d: &a.details}, args: agent.BashArgs{Description: c.desc, Command: c.cmd}, done: true,
+		b := &toolBlock{d: &a.details, args: agent.BashArgs{Description: c.desc, Command: c.cmd}, done: true,
 			res: agent.BashResult{ExitCode: c.exit, Duration: c.dur}}
 		if c.out != "" {
 			b.append(c.out)

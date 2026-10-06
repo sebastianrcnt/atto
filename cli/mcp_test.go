@@ -274,7 +274,7 @@ func TestMCPFromTheAgentShellSharesTheSessionsServer(t *testing.T) {
 
 	// Without the session (a normal terminal) each call starts the server for itself.
 	t.Setenv("ATTO_SESSION_ID", "")
-	for i := 0; i < 2; i++ {
+	for range 2 {
 		out, err := runMCP(t, "call", "fake", "count")
 		if err != nil || strings.TrimSpace(out) != "1" {
 			t.Fatalf("one-shot call: %q %v", out, err)

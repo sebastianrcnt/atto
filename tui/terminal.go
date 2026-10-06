@@ -47,11 +47,9 @@ func (t *ProcessTerminal) Start(onInput func(string), onResize func()) error {
 
 	t.Write("\x1b[?2004h") // bracketed paste
 
-	t.wg.Add(1)
-	go func() {
-		defer t.wg.Done()
+	t.wg.Go(func() {
 		watchResize(t, t.done, onResize)
-	}()
+	})
 
 	// The read loop is not joined on Stop: a blocking read on stdin cannot be
 	// interrupted portably, and the process exits shortly after anyway.

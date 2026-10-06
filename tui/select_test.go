@@ -7,7 +7,7 @@ import (
 
 func numbered(n int) []SelectItem {
 	var out []SelectItem
-	for i := 0; i < n; i++ {
+	for i := range n {
 		out = append(out, SelectItem{Label: "item" + string(rune('a'+i)), Detail: "d"})
 	}
 	return out
@@ -48,7 +48,7 @@ func TestSelectListWrapAndKeys(t *testing.T) {
 	if l.Selected != 0 {
 		t.Fatalf("down wraps to the first: %d", l.Selected)
 	}
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		l.HandleInput("\x1b[6~")
 	}
 	if l.Selected != 3 {

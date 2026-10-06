@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"math"
 	"net/http"
 	"regexp"
@@ -136,8 +137,7 @@ func StreamOpenAICodexResponses(model *Model, context TranscriptContext, options
 				if err == nil {
 					break
 				}
-				var pe *ProviderError
-				if errors.As(err, &pe) {
+				if pe, ok := errors.AsType[*ProviderError](err); ok {
 					if attempt < maxRetries && isRetryableCodexError(pe.Status, pe.Body) {
 						d := codexBaseDelay * time.Duration(math.Pow(2, float64(attempt)))
 						if ra, derr := retryDelay(pe, attempt, options.MaxRetryDelayMs); derr == nil && (pe.Headers.Get("retry-after") != "" || pe.Headers.Get("retry-after-ms") != "") {
@@ -445,12 +445,8 @@ func ExtractCodexAccountID(token string) (string, error) {
 
 func buildCodexSSEHeaders(initHeaders, additional map[string]string, accountID, sessionID string) map[string]string {
 	h := map[string]string{}
-	for k, v := range initHeaders {
-		h[k] = v
-	}
-	for k, v := range additional {
-		h[k] = v
-	}
+	maps.Copy(h, initHeaders)
+	maps.Copy(h, additional)
 	h["chatgpt-account-id"] = accountID
 	h["originator"] = CodexOriginator
 	h["OpenAI-Beta"] = "responses=experimental"

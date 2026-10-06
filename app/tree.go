@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"runtime"
+	"slices"
 	"strings"
 	"time"
 
@@ -145,8 +146,8 @@ func (p *treePicker) flatten(roots []*session.Node) {
 			p.byID[n.Entry.ID] = f
 		}
 		kids := order(n.Children)
-		for i := len(kids) - 1; i >= 0; i-- {
-			stack = append(stack, kids[i])
+		for _, kid := range slices.Backward(kids) {
+			stack = append(stack, kid)
 		}
 	}
 }
@@ -200,7 +201,7 @@ func (p *treePicker) passes(f *flatNode) bool {
 	}
 	if p.query != "" {
 		text := strings.ToLower(p.searchText(f.n))
-		for _, tok := range strings.Fields(strings.ToLower(p.query)) {
+		for tok := range strings.FieldsSeq(strings.ToLower(p.query)) {
 			if !strings.Contains(text, tok) {
 				return false
 			}
@@ -314,12 +315,12 @@ func (p *treePicker) layout() {
 		virtualRoot                         bool
 	}
 	var stack []item
-	for i := len(roots) - 1; i >= 0; i-- {
+	for i, root := range slices.Backward(roots) {
 		in := 0
 		if p.multipleRoots {
 			in = 1
 		}
-		stack = append(stack, item{roots[i], in, p.multipleRoots, p.multipleRoots, i == len(roots)-1, nil, p.multipleRoots})
+		stack = append(stack, item{root, in, p.multipleRoots, p.multipleRoots, i == len(roots)-1, nil, p.multipleRoots})
 	}
 	for len(stack) > 0 {
 		it := stack[len(stack)-1]
@@ -337,8 +338,8 @@ func (p *treePicker) layout() {
 			pos := max(0, p.displayIndent(it.indent)-1)
 			childGutters = append(append([]gutter(nil), it.gutters...), gutter{pos, !it.isLast})
 		}
-		for i := len(kids) - 1; i >= 0; i-- {
-			stack = append(stack, item{kids[i], childIndent, multi, multi, i == len(kids)-1, childGutters, false})
+		for i, kid := range slices.Backward(kids) {
+			stack = append(stack, item{kid, childIndent, multi, multi, i == len(kids)-1, childGutters, false})
 		}
 	}
 }
@@ -600,8 +601,8 @@ func (p *treePicker) entryText(n *session.Node) string {
 		}
 		switch m.Role {
 		case "user":
-			if strings.HasPrefix(m.Content, events.Prefix) {
-				return tui.FG(5, "[event]: ") + clip(oneLine(strings.TrimPrefix(m.Content, events.Prefix)), 200)
+			if after, ok := strings.CutPrefix(m.Content, events.Prefix); ok {
+				return tui.FG(5, "[event]: ") + clip(oneLine(after), 200)
 			}
 			return tui.FG(6, "user: ") + clip(oneLine(m.Content), 200)
 		case "assistant":
@@ -828,8 +829,8 @@ func (l *labelInput) HandleInput(data string) {
 	default:
 		if tui.Printable(data) {
 			l.text += data
-		} else if strings.HasPrefix(data, tui.PastePrefix) {
-			l.text += oneLine(strings.TrimPrefix(data, tui.PastePrefix))
+		} else if after, ok := strings.CutPrefix(data, tui.PastePrefix); ok {
+			l.text += oneLine(after)
 		}
 	}
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"maps"
 	"net"
 	"net/http"
 	"os"
@@ -43,9 +44,7 @@ func writeFile(t *testing.T, path, text string) {
 // fakeEntry is the JSON of a stdio server entry that runs the fake server.
 func fakeEntry(extraEnv map[string]string) string {
 	cmd, env := mcptest.Command()
-	for k, v := range extraEnv {
-		env[k] = v
-	}
+	maps.Copy(env, extraEnv)
 	c := ServerConfig{Command: cmd, Env: env}
 	data, _ := json.Marshal(c)
 	return string(data)
@@ -641,7 +640,7 @@ func TestConnectUsesTheSessionOrFallsBack(t *testing.T) {
 	if inSession || note != "" {
 		t.Fatalf("no session: %v %q", inSession, note)
 	}
-	for i := 0; i < 2; i++ {
+	for range 2 {
 		if got := callText(t, b, "fake", "count", "").Text; got != "1" {
 			t.Fatalf("fallback count = %s: every one-shot call starts the server", got)
 		}

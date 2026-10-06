@@ -302,11 +302,9 @@ func (m *Manager) Close() {
 	m.cmdVer.Add(1)
 	var wg sync.WaitGroup
 	for _, e := range exts {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			e.dispose()
-		}()
+		})
 	}
 	wg.Wait()
 }
@@ -405,7 +403,7 @@ func (m *Manager) log(name, msg string) {
 		return
 	}
 	defer f.Close()
-	for _, line := range strings.Split(strings.TrimRight(msg, "\n"), "\n") {
+	for line := range strings.SplitSeq(strings.TrimRight(msg, "\n"), "\n") {
 		fmt.Fprintf(f, "%s [%s] %s\n", time.Now().Format("2006-01-02 15:04:05"), name, line)
 	}
 }

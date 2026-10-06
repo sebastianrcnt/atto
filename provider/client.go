@@ -81,10 +81,8 @@ func (c *Client) stream(ctx context.Context, req Request, h Handler, streamed *b
 		headers[k] = v
 	}
 	opts := &ai.SimpleStreamOptions{
-		StreamOptions: ai.StreamOptions{
-			Context: ctx, APIKey: key, HTTPClient: c.HTTP, Headers: headers,
-			SessionID: req.SessionID, MaxTokens: req.MaxTokens, OnRequestBody: c.OnRequest,
-		},
+		Context: ctx, APIKey: key, HTTPClient: c.HTTP, Headers: headers,
+		SessionID: req.SessionID, MaxTokens: req.MaxTokens, OnRequestBody: c.OnRequest,
 		ToolChoice: req.ToolChoice,
 		Reasoning:  req.Effort,
 	}

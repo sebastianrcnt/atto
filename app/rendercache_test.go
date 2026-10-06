@@ -45,7 +45,7 @@ func TestAllCommandsCached(t *testing.T) {
 }
 
 func TestBuiltinStatusCachedUntilInputsChange(t *testing.T) {
-	price := &ai.ModelCost{ModelCostRates: ai.ModelCostRates{Input: 1, Output: 2}}
+	price := &ai.ModelCost{Input: 1, Output: 2}
 	a := statusApp(t, price)
 	// fresh is what an uncached call returns.
 	fresh := func(first, width int) string {
@@ -117,17 +117,17 @@ func TestBuiltinStatusCachedUntilInputsChange(t *testing.T) {
 }
 
 func BenchmarkBuiltinStatus(b *testing.B) {
-	a := statusApp(&testing.T{}, &ai.ModelCost{ModelCostRates: ai.ModelCostRates{Input: 1, Output: 2}})
+	a := statusApp(&testing.T{}, &ai.ModelCost{Input: 1, Output: 2})
 	b.Run("cached", func(b *testing.B) {
 		b.ReportAllocs()
-		for i := 0; i < b.N; i++ {
+		for b.Loop() {
 			a.builtinStatus(100, 100)
 		}
 	})
 	b.Run("rebuilt", func(b *testing.B) {
 		m, effort := a.agent.Current()
 		b.ReportAllocs()
-		for i := 0; i < b.N; i++ {
+		for b.Loop() {
 			a.buildStatus(m, effort, 100, 100)
 		}
 	})
@@ -136,7 +136,7 @@ func BenchmarkBuiltinStatus(b *testing.B) {
 func BenchmarkAllCommands(b *testing.B) {
 	a := statusApp(&testing.T{}, nil)
 	b.ReportAllocs()
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		a.allCommands()
 	}
 }

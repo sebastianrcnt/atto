@@ -28,11 +28,10 @@ func Find(id string) (string, error) {
 			}
 			// Files are <YYYYMMDD-HHMMSS>-<id>.jsonl.
 			base := strings.TrimSuffix(d.Name(), ".jsonl")
-			i := strings.LastIndex(base, "-")
-			if i < 0 {
+			_, full, ok := strings.CutLast(base, "-")
+			if !ok {
 				return nil
 			}
-			full := base[i+1:]
 			switch {
 			case full == id:
 				exact = path

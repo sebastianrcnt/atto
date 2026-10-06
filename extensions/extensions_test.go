@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -166,17 +167,13 @@ func (h *fakeHost) snapshot() hostState {
 
 func clone(m map[string]string) map[string]string {
 	out := map[string]string{}
-	for k, v := range m {
-		out[k] = v
-	}
+	maps.Copy(out, m)
 	return out
 }
 
 func cloneW(m map[string][]string) map[string][]string {
 	out := map[string][]string{}
-	for k, v := range m {
-		out[k] = v
-	}
+	maps.Copy(out, m)
 	return out
 }
 

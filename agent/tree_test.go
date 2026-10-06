@@ -99,7 +99,7 @@ func TestBranchKeepsPrefixBytes(t *testing.T) {
 	if len(before) != 6 || len(after) != 6 {
 		t.Fatalf("lengths %d %d", len(before), len(after))
 	}
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		if !bytes.Equal(before[i], after[i]) {
 			t.Fatalf("message %d differs:\n%s\n%s", i, before[i], after[i])
 		}

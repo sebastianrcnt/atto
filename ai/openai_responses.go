@@ -5,6 +5,7 @@ package ai
 
 import (
 	"fmt"
+	"maps"
 	"net/http"
 	"strings"
 )
@@ -113,9 +114,7 @@ func StreamOpenAIResponses(model *Model, context TranscriptContext, options *Ope
 				cacheSessionID = ""
 			}
 			headers := map[string]string{}
-			for k, v := range model.Headers {
-				headers[k] = v
-			}
+			maps.Copy(headers, model.Headers)
 			if cacheSessionID != "" {
 				switch compat.SessionAffinityFormat {
 				case "openrouter":
@@ -295,9 +294,7 @@ func buildResponsesParams(model *Model, context TranscriptContext, options *Open
 	if level == "" {
 		level = ThinkingOff
 	}
-	for k, v := range ResolveSamplingParams(model, level, options.SamplingParams) {
-		params[k] = v
-	}
+	maps.Copy(params, ResolveSamplingParams(model, level, options.SamplingParams))
 	return params
 }
 

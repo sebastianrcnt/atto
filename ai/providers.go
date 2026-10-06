@@ -3,7 +3,10 @@ package ai
 // Ported from pi (https://github.com/earendil-works/pi), Copyright (c) 2025
 // Mario Zechner, MIT License; see THIRD_PARTY_NOTICES.
 
-import "strings"
+import (
+	"maps"
+	"strings"
+)
 
 // Ports of the provider factories atto uses from src/providers/:
 // openai.ts, openai-codex.ts, opencode.ts, opencode-go.ts and
@@ -63,9 +66,7 @@ func withSessionHeader(o *StreamOptions) {
 		return
 	}
 	h := make(map[string]string, len(o.Headers)+1)
-	for k, v := range o.Headers {
-		h[k] = v
-	}
+	maps.Copy(h, o.Headers)
 	h[openCodeSessionHeader] = o.SessionID
 	o.Headers = h
 }

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -316,7 +317,7 @@ func catalogModel(cp catalogProvider, id string, m modelsDevModel) (Model, bool)
 	// think by default, so "off" must be sent explicitly as "none"
 	// (omitting the field still thinks).
 	mod.Efforts = []string{"off", "low", "medium", "high"}
-	mod.EffortMap = map[string]*string{"off": str("none")}
+	mod.EffortMap = map[string]*string{"off": new("none")}
 	mod.ExtraBody = map[string]any{"reasoning_effort": "$effort"}
 	if strings.HasPrefix(id, "kimi-k2.6") {
 		// Kimi K2.6 takes Anthropic-style thinking objects and rejects
@@ -331,15 +332,11 @@ func catalogModel(cp catalogProvider, id string, m modelsDevModel) (Model, bool)
 			match = id == exact
 		}
 		if (q.provider == "" || q.provider == provider) && match {
-			for k, v := range q.levels {
-				mod.EffortMap[k] = v
-			}
+			maps.Copy(mod.EffortMap, q.levels)
 		}
 	}
 	return mod, true
 }
-
-func str(s string) *string { return &s }
 
 // catalogEffortMaps are built-in effort mappings for catalog models, in
 // the same form users write in models.json (null = level unsupported);
@@ -350,10 +347,10 @@ var catalogEffortMaps = []struct {
 	levels           map[string]*string
 }{
 	// pi: DeepSeek V4 exposes high and max (Flash also low).
-	{"", "deepseek-v4", map[string]*string{"medium": nil, "max": str("max")}},
+	{"", "deepseek-v4", map[string]*string{"medium": nil, "max": new("max")}},
 	{"", "deepseek-v4-pro", map[string]*string{"low": nil}},
 	// pi: OpenCode Go GLM-5.2 takes only high and max.
-	{"opencode-go", "glm-5.2!", map[string]*string{"off": nil, "low": nil, "medium": nil, "max": str("max")}},
+	{"opencode-go", "glm-5.2!", map[string]*string{"off": nil, "low": nil, "medium": nil, "max": new("max")}},
 	// Verified on OpenCode Go 2026-10-05: these reject or ignore "none"
 	// (thinking-only), so "off" is unavailable. GLM-5.3 Flash can turn it off.
 	{"", "glm-5.3!", map[string]*string{"off": nil}},
@@ -380,7 +377,7 @@ func listedEfforts(m modelsDevModel) ([]string, map[string]*string) {
 		var effortMap map[string]*string
 		for _, v := range o.Values {
 			if v == "none" {
-				v, effortMap = "off", map[string]*string{"off": str("none")}
+				v, effortMap = "off", map[string]*string{"off": new("none")}
 			}
 			levels = append(levels, v)
 		}
@@ -425,7 +422,7 @@ func responsesEfforts(id string) ([]string, map[string]*string) {
 		levels = append(levels, "xhigh")
 	}
 	if levels[0] == "off" {
-		return levels, map[string]*string{"off": str("none")}
+		return levels, map[string]*string{"off": new("none")}
 	}
 	return levels, nil
 }

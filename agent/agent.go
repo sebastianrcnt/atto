@@ -288,8 +288,8 @@ func (a *Agent) Steer(text string) {
 func (a *Agent) Unsteer(text string) bool {
 	a.steerMu.Lock()
 	defer a.steerMu.Unlock()
-	for i := len(a.steers) - 1; i >= 0; i-- {
-		if a.steers[i] == text {
+	for i, v := range slices.Backward(a.steers) {
+		if v == text {
 			a.steers = append(a.steers[:i:i], a.steers[i+1:]...)
 			return true
 		}
@@ -818,8 +818,7 @@ func (a *Agent) modelChangeNote() string {
 	a.cfgMu.Lock()
 	cur := a.model.ProviderName + "/" + a.model.Model.ID
 	a.cfgMu.Unlock()
-	for i := len(a.messages) - 1; i >= 0; i-- {
-		m := a.messages[i]
+	for _, m := range slices.Backward(a.messages) {
 		if m.Role != "assistant" {
 			continue
 		}

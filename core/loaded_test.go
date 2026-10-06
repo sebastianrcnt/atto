@@ -173,8 +173,8 @@ func TestLoadedSummaryAndDetails(t *testing.T) {
 	}
 	for label, subs := range checks {
 		for _, s := range subs {
-			if strings.HasPrefix(s, "~/../") { // the ATTO_DIR is outside the home here
-				s = strings.TrimPrefix(s, "~/../")
+			if after, ok := strings.CutPrefix(s, "~/../"); ok { // the ATTO_DIR is outside the home here
+				s = after
 			}
 			if !strings.Contains(filepath.ToSlash(rows[label]), s) {
 				t.Errorf("%s: %q lacks %q", label, rows[label], s)

@@ -32,7 +32,7 @@ func assertTranscript(t *testing.T, v *vterm, want []string, step string) {
 
 func TestAppendDoesNotRedraw(t *testing.T) {
 	ui, v, c := setup(20, 5)
-	for i := 0; i < 30; i++ {
+	for i := range 30 {
 		c.l = append(c.l, fmt.Sprintf("line %d", i))
 		ui.RenderNow()
 		assertTranscript(t, v, c.l, fmt.Sprintf("append %d", i))
@@ -104,13 +104,13 @@ func TestCursorMarker(t *testing.T) {
 // TestRandomOperations checks the core invariant: whatever sequence of edits
 // happens, scrollback + screen always equals the rendered lines.
 func TestRandomOperations(t *testing.T) {
-	for seed := int64(0); seed < 200; seed++ {
+	for seed := range int64(200) {
 		rng := rand.New(rand.NewSource(seed))
 		w, h := 30, 3+rng.Intn(8)
 		ui, v, c := setup(w, h)
 		gen := 0
 		next := func() string { gen++; return fmt.Sprintf("l%d", gen) }
-		for step := 0; step < 60; step++ {
+		for step := range 60 {
 			switch op := rng.Intn(10); {
 			case op < 3: // append a few
 				for k := rng.Intn(4) + 1; k > 0; k-- {
@@ -255,8 +255,8 @@ func (c *clicky) Click(line int) bool { c.clicked = append(c.clicked, line); ret
 func TestFullscreenClick(t *testing.T) {
 	v := newVterm(20, 6)
 	ui := New(v)
-	a := &clicky{lines: lines{l: []string{"a0", "a1", "a2"}}}
-	b := &clicky{lines: lines{l: []string{"b0", "b1", "b2"}}}
+	a := &clicky{l: []string{"a0", "a1", "a2"}}
+	b := &clicky{l: []string{"b0", "b1", "b2"}}
 	ui.Body.Add(a, b)
 	ui.Footer.Add(&lines{l: []string{"footer"}})
 	ui.RenderNow() // 6 lines of body, 5 rows available: shows a1..b2

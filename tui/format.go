@@ -38,8 +38,8 @@ func FormatTokens(n int) string {
 
 // FirstLine is s up to its first newline, with " …" if it went on.
 func FirstLine(s string) string {
-	if i := strings.IndexByte(s, '\n'); i >= 0 {
-		return s[:i] + " …"
+	if before, _, ok := strings.Cut(s, "\n"); ok {
+		return before + " …"
 	}
 	return s
 }
