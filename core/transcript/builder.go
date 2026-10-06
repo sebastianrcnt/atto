@@ -292,6 +292,10 @@ func (b *Builder) input(text string, imgs []provider.Image) {
 		// arrives as the hook's notice, which this matches.
 		it.Kind, it.HookEvent, it.Blocked = Hook, "Stop", true
 		it.Text = strings.TrimPrefix(text, agent.StopHookPrefix)
+	default:
+		// A goal's state note rides at the end of the user's message, for
+		// the model only.
+		it.Text, _ = goal.SplitNote(text)
 	}
 	for _, im := range imgs {
 		im.Data = nil // the bytes stay in the image store

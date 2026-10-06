@@ -39,7 +39,7 @@ usage:
                                     manage saved sessions (atto sessions -h)
   atto history grep|show ...        search a session transcript
   atto job|monitor|timer|sleep ...  background jobs and wake-ups (atto job for details)
-  atto goal [complete|blocked|pause|set]  the session goal (or /goal, -goal)
+  atto goal [status|set|complete|...]  the session goal (or /goal, -goal)
   atto view <image>...              from the agent's shell: show the model an image file
   atto agent start|steer|next|wait|report|list|stop ...
                                     subagents: background child sessions (atto agent -h)

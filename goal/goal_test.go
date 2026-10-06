@@ -26,29 +26,29 @@ func TestBudgetCountsOnlyNewTokens(t *testing.T) {
 
 func TestStopConditions(t *testing.T) {
 	g, _ := New("x", 0)
-	g.TurnEnded(time.Second, nil, 2)
+	g.TurnEnded(nil, 2)
 	if g.Status != Active {
 		t.Fatal("a good turn keeps the goal going")
 	}
-	g.TurnEnded(time.Second, errors.New("boom"), 0) // codex: a failed turn stalls the goal
+	g.TurnEnded(errors.New("boom"), 0) // codex: a failed turn stalls the goal
 	if g.Status != Blocked || !strings.Contains(g.Note, "failed") {
 		t.Fatalf("a failure blocks: %+v", g)
 	}
 
 	g, _ = New("x", 0)
-	g.TurnEnded(time.Second, errors.New("429: You have hit your ChatGPT usage limit (plus plan)."), 1)
+	g.TurnEnded(errors.New("429: You have hit your ChatGPT usage limit (plus plan)."), 1)
 	if g.Status != UsageLimited || !strings.Contains(g.Note, "usage limit") {
 		t.Fatalf("a usage limit is not a failure: %+v", g)
 	}
 
 	g, _ = New("x", 0)
 	for range 3 {
-		g.TurnEnded(time.Second, nil, 0)
+		g.TurnEnded(nil, 0)
 	}
 	if g.Status != Blocked || !strings.Contains(g.Note, "no progress") {
 		t.Fatalf("idle turns block: %+v", g)
 	}
-	if g.Turns != 3 || g.Seconds != 3 {
+	if g.Turns != 3 {
 		t.Fatalf("accounting %+v", g)
 	}
 }
@@ -313,5 +313,81 @@ func TestOldGoalFilesLoad(t *testing.T) {
 	}
 	if g.Status.Label() != "limited by budget" || g.Indicator(0, false) != "Goal unmet (5.1K / 5K tokens)" {
 		t.Fatalf("%q %q", g.Status.Label(), g.Indicator(0, false))
+	}
+}
+
+func TestReservedWordsAreNotObjectives(t *testing.T) {
+	for _, w := range []string{"help", "Status", " budget ", "show", "clear", "edit", "pause", "resume"} {
+		if _, err := New(w, 0); err == nil || !Reserved(w) {
+			t.Errorf("%q: want an error, got %v", w, err)
+		}
+	}
+	for _, w := range []string{"help me ship", "fix the status page", "budget report"} {
+		if _, err := New(w, 0); err != nil {
+			t.Errorf("%q: %v", w, err)
+		}
+	}
+}
+
+func TestStateMessage(t *testing.T) {
+	g, _ := New("x", 100)
+	if g.StateMessage(false) != "" {
+		t.Fatal("an active goal that is running needs no note")
+	}
+	for _, c := range []struct {
+		status Status
+		note   string
+		held   bool
+		want   []string
+	}{
+		{Active, "", true, []string{"waiting for the user", "reply to this message"}},
+		{Paused, NoteInterrupted, false, []string{"paused because the user interrupted it", "/goal resume", "atto goal resume"}},
+		{Paused, "paused by the user", false, []string{"The goal is paused.", "/goal resume"}},
+		{Blocked, "stuck", false, []string{"stalled", "/goal resume"}},
+		{UsageLimited, "", false, []string{"usage limited", "/goal resume"}},
+		{BudgetLimited, "", false, []string{"token budget is used up", "/goal budget", "Do not continue goal work"}},
+	} {
+		g.Status, g.Note, g.TokensUsed = c.status, c.note, 150
+		got := g.StateMessage(c.held)
+		if !IsMessage(got) || !strings.HasSuffix(got, CloseTag) {
+			t.Errorf("%s: not wrapped: %q", c.status, got)
+		}
+		for _, w := range c.want {
+			if !strings.Contains(got, w) {
+				t.Errorf("%s: %q not in %q", c.status, w, got)
+			}
+		}
+	}
+	g.Status = Complete
+	if g.StateMessage(false) != "" {
+		t.Fatal("a finished goal needs no note")
+	}
+}
+
+func TestSplitNote(t *testing.T) {
+	g, _ := New("x", 0)
+	g.Status = Paused
+	note := g.StateMessage(false)
+	if msg, n := SplitNote("hello\n\nthere\n\n" + note); msg != "hello\n\nthere" || n != note {
+		t.Fatalf("split: %q %q", msg, n)
+	}
+	for _, text := range []string{"plain", g.Continuation(), "has <atto_internal_context source=\"goal\"> inline"} {
+		if msg, n := SplitNote(text); msg != text || n != "" {
+			t.Fatalf("%q: %q %q", text, msg, n)
+		}
+	}
+}
+
+func TestUserChangeMessages(t *testing.T) {
+	g, _ := New("x", 100)
+	g.TokensUsed, g.Status = 30, Paused
+	for _, c := range []struct{ got, want string }{
+		{ClearedMessage(), "do not set a new goal"},
+		{g.PausedMessage(), "paused the goal"},
+		{g.BudgetChangedMessage(), "token budget to 100 tokens (30 used). The goal is now paused. Do not do goal work"},
+	} {
+		if !IsMessage(c.got) || !strings.Contains(c.got, c.want) {
+			t.Errorf("%q not in %q", c.want, c.got)
+		}
 	}
 }

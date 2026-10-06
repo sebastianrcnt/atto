@@ -41,7 +41,7 @@ func init() {
 		{"name", "<name>", "Name this conversation", (*App).cmdName},
 		{"rename", "<name>", "Rename this conversation", (*App).cmdName},
 		{"archive", "", "Archive this conversation and start a new one", (*App).cmdArchive},
-		{"goal", "[objective|clear|edit|pause|resume]", "Set or view the goal for a long-running task", (*App).cmdGoal},
+		{"goal", "[objective|clear|edit|pause|resume|budget <n>]", "Set or view the goal for a long-running task", (*App).cmdGoal},
 		{"jobs", "", "List background jobs and monitors", (*App).cmdJobs},
 		{"stop", "", "Stop all background jobs", (*App).cmdStop},
 		{"timer", "<when> <msg>", "Wake the agent later (10m, 15:30)", (*App).cmdTimer},

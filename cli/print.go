@@ -283,7 +283,8 @@ func RunPrint(o PrintOptions) error {
 	// The goal lives here; from the file only the model's complete/blocked
 	// report is taken (see goal.Adopt). Its snapshot goes into the session
 	// once, at the end.
-	d := core.GoalDriver{Session: sess.ID, Steer: ag.Steer}
+	d := core.GoalDriver{Session: sess.ID, Steer: ag.Steer, Stop: ag.StopAtBoundary,
+		Notice: func(text string) { fmt.Fprintln(os.Stderr, "atto: "+text) }}
 	if o.Goal != "" {
 		budget := 0
 		if o.GoalBudget != "" {

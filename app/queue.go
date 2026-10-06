@@ -3,11 +3,12 @@ package app
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"time"
 
 	"github.com/sebastianrcnt/atto/events"
-
+	"github.com/sebastianrcnt/atto/goal"
 	"github.com/sebastianrcnt/atto/tui"
 )
 
@@ -130,7 +131,8 @@ func (a *App) afterRun(err error) {
 		return
 	}
 	canceled := errors.Is(err, context.Canceled)
-	leftover := a.agent.DrainSteers()
+	// Goal notes were for the turn that just ended: they never start one.
+	leftover := slices.DeleteFunc(a.agent.DrainSteers(), goal.IsMessage)
 	a.pendingSteers = nil
 	sendSteers := a.sendSteersAfterInterrupt
 	a.sendSteersAfterInterrupt = false

@@ -16,6 +16,7 @@ import (
 	"github.com/sebastianrcnt/atto/config"
 	"github.com/sebastianrcnt/atto/events"
 	"github.com/sebastianrcnt/atto/goal"
+	"github.com/sebastianrcnt/atto/provider"
 	"github.com/sebastianrcnt/atto/session"
 	"github.com/sebastianrcnt/atto/tui"
 )
@@ -49,7 +50,7 @@ func TestGoalBareShowsUsage(t *testing.T) {
 	a := goalApp(t)
 	a.cmdGoal("")
 	got := goalText(a)
-	if !strings.Contains(got, "Usage: /goal [<objective>|clear|edit|pause|resume]") || !strings.Contains(got, "No goal is currently set.") {
+	if !strings.Contains(got, "Usage: /goal [<objective>|clear|edit|pause|resume|budget <n>]") || !strings.Contains(got, "No goal is currently set.") {
 		t.Fatalf("no goal:\n%s", got)
 	}
 }
@@ -641,5 +642,240 @@ func TestGoalMessageTitle(t *testing.T) {
 		if got := goalMessageTitle(text); got != want {
 			t.Errorf("%.40q: %q, want %q", text, got, want)
 		}
+	}
+}
+
+func TestGoalReservedWordsMakeNoGoal(t *testing.T) {
+	a := goalApp(t)
+	for _, w := range []string{"help", "Help", "status", "budget", "show", "--help"} {
+		a.cmdGoal(w)
+		if a.goal.Goal != nil || a.modal != nil {
+			t.Fatalf("/goal %s made a goal or asked: %+v", w, a.goal.Goal)
+		}
+	}
+	if got := goalText(a); strings.Count(got, "Usage: /goal [<objective>") != 6 {
+		t.Fatalf("each shows the usage (no goal set):\n%s", got)
+	}
+
+	a.cmdGoal("ship it")
+	a.cmdGoal("status")
+	if got := goalText(a); !strings.Contains(got, "Objective: ship it") {
+		t.Fatalf("status shows the goal:\n%s", got)
+	}
+	a.cmdGoal("budget")
+	if got := goalText(a); !strings.Contains(got, "no token budget") {
+		t.Fatalf("budget alone shows the budget:\n%s", got)
+	}
+	a.cmdGoal("budget 50k")
+	a.cmdGoal("budget")
+	if got := goalText(a); !strings.Contains(got, "Goal budget: 50K (0 used)") {
+		t.Fatalf("budget alone shows the budget:\n%s", got)
+	}
+	a.cmdGoal("help")
+	if a.goal.Goal.Objective != "ship it" || a.modal != nil {
+		t.Fatalf("help leaves the goal: %+v", a.goal.Goal)
+	}
+	if strings.Count(goalText(a), "Usage: /goal [<objective>") != 7 {
+		t.Fatalf("help shows the usage with a goal too:\n%s", goalText(a))
+	}
+}
+
+func TestGoalBudgetRaiseHintsAtResume(t *testing.T) {
+	a := goalApp(t)
+	a.cmdGoal("ship it")
+	g := a.goal.Goal
+	g.Status, g.TokensUsed, g.Budget = goal.BudgetLimited, 60, 50
+	a.cmdGoal("budget 40") // still under usage: stays limited, no hint
+	if g.Status != goal.BudgetLimited || strings.Contains(goalText(a), "/goal resume to continue") {
+		t.Fatalf("%s\n%s", g.Status, goalText(a))
+	}
+	a.cmdGoal("budget 100")
+	if g.Status != goal.Paused || !strings.Contains(goalText(a), "Goal budget set to 100 (60 used). Use /goal resume to continue.") {
+		t.Fatalf("%s\n%s", g.Status, goalText(a))
+	}
+	a.cmdGoal("budget 200") // not limited any more: no hint
+	if strings.Count(goalText(a), "Use /goal resume to continue.") != 1 {
+		t.Fatalf("one hint:\n%s", goalText(a))
+	}
+}
+
+// A change the user makes to the goal while a turn runs is told to the model.
+func TestGoalChangesMidTurnSteerTheModel(t *testing.T) {
+	for _, c := range []struct {
+		cmd   string
+		setup func(*goal.Goal)
+		want  string
+	}{
+		{"clear", nil, "The user cleared the goal. Stop goal work"},
+		{"pause", nil, "The user paused the goal. Stop goal work"},
+		{"budget 5k", nil, "set the goal's token budget to 5000 tokens"},
+		{"budget 5k", func(g *goal.Goal) { g.Status, g.TokensUsed, g.Budget = goal.BudgetLimited, 100, 50 }, "The goal is now paused"},
+	} {
+		t.Run(c.cmd, func(t *testing.T) {
+			a := goalApp(t)
+			a.cmdGoal("ship it")
+			if c.setup != nil {
+				c.setup(a.goal.Goal)
+			}
+			a.busy, a.runKind = true, "turn"
+			a.goal.BeginTurn()
+			a.cmdGoal(c.cmd)
+			steers := a.agent.DrainSteers()
+			if len(steers) != 1 || !goal.IsMessage(steers[0]) || !strings.Contains(steers[0], c.want) {
+				t.Fatalf("want a goal note with %q, got %q", c.want, steers)
+			}
+		})
+	}
+
+	// Idle, or in a turn that is not a goal turn's (a compaction), nothing is steered.
+	a := goalApp(t)
+	a.cmdGoal("ship it")
+	a.cmdGoal("pause")
+	a.cmdGoal("clear")
+	if s := a.agent.DrainSteers(); len(s) != 0 {
+		t.Fatalf("idle: %q", s)
+	}
+	a.cmdGoal("ship it")
+	a.busy, a.runKind = true, "compact"
+	a.cmdGoal("clear")
+	if s := a.agent.DrainSteers(); len(s) != 0 {
+		t.Fatalf("compaction: %q", s)
+	}
+}
+
+// A goal note that raced with the end of the turn is dropped: it never
+// starts a turn of its own.
+func TestGoalNoteLeftAtTurnEndStartsNoTurn(t *testing.T) {
+	a := goalApp(t)
+	a.cmdGoal("ship it")
+	a.cmdGoal("clear")
+	a.agent.Steer(goal.ClearedMessage())
+	a.busy, a.runKind = true, "turn"
+	a.goal.BeginTurn()
+	a.busy = false
+	a.queuePaused = false
+	a.afterRun(nil)
+	if a.busy || len(a.agent.DrainSteers()) != 0 {
+		t.Fatal("the note started a turn")
+	}
+}
+
+// The turn is stopped, with the notice, at twice the budget.
+func TestGoalBudgetStopNotice(t *testing.T) {
+	a := goalApp(t)
+	a.cmdGoal("ship it")
+	a.goal.Goal.Budget = 100
+	a.busy, a.runKind = true, "turn"
+	a.goal.BeginTurn()
+	a.onEvent(agent.StepEnd{Usage: provider.Usage{PromptTokens: 120}})
+	if strings.Contains(goalText(a), "Goal budget exceeded") {
+		t.Fatal("not yet")
+	}
+	a.onEvent(agent.StepEnd{Usage: provider.Usage{PromptTokens: 100}})
+	if !strings.Contains(goalText(a), "Goal budget exceeded: stopped the turn.") {
+		t.Fatalf("\n%s", goalText(a))
+	}
+}
+
+// requestLog is a scripted model that records the last user message of each
+// request.
+func requestLog(t *testing.T) (url string, last func() []string) {
+	var mu sync.Mutex
+	var got []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Messages []struct{ Role, Content string } `json:"messages"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		mu.Lock()
+		got = append(got, body.Messages[len(body.Messages)-1].Content)
+		mu.Unlock()
+		fmt.Fprint(w, `data: {"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}`+"\n\n")
+		fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+	t.Cleanup(srv.Close)
+	return srv.URL, func() []string { mu.Lock(); defer mu.Unlock(); return append([]string(nil), got...) }
+}
+
+// A user message that starts a turn while the goal is not running by itself
+// carries a note on the goal's state; nothing else does.
+func TestGoalStateNoteAttachesToUserTurns(t *testing.T) {
+	url, last := requestLog(t)
+	a := treeApp(t)
+	a.agent.SetModel(config.ModelRef{ProviderName: "t", Provider: config.Provider{BaseURL: url}, Model: config.Model{ID: "m", ContextWindow: 100000}})
+	idle := func() {
+		t.Helper()
+		deadline := time.Now().Add(10 * time.Second)
+		for {
+			var busy bool
+			a.ui.Do(func() { busy = a.busy })
+			if !busy {
+				return
+			}
+			if time.Now().After(deadline) {
+				t.Fatal("turn did not finish")
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+	say := func(text string) string {
+		t.Helper()
+		before := len(last())
+		a.ui.Do(func() { a.startTurn(text, nil) })
+		idle()
+		got := last()
+		if len(got) != before+1 {
+			t.Fatalf("%d requests after %q, want %d", len(got), text, before+1)
+		}
+		return got[len(got)-1]
+	}
+	set := func(f func(g *goal.Goal)) {
+		a.ui.Do(func() {
+			g := a.goal.Goal
+			f(g)
+			a.goal.Set(g)
+		})
+	}
+
+	g, _ := goal.New("ship it", 100)
+	a.ui.Do(func() { a.goal.Set(g) })
+	if got := say("hi"); got != "hi" {
+		t.Fatalf("a running goal adds no note: %q", got)
+	}
+	// The user's turn held the goal: the next message is told it is waiting.
+	got := say("Thanks, that is fine.")
+	msg, note := goal.SplitNote(got)
+	if msg != "Thanks, that is fine." || !strings.Contains(note, "waiting for the user") || !goal.IsMessage(note) {
+		t.Fatalf("held: %q", got)
+	}
+
+	for _, c := range []struct {
+		name string
+		f    func(g *goal.Goal)
+		want string
+	}{
+		{"interrupted", func(g *goal.Goal) { g.Status, g.Note = goal.Paused, goal.NoteInterrupted }, "paused because the user interrupted it"},
+		{"stalled", func(g *goal.Goal) { g.Status, g.Note = goal.Blocked, "stuck" }, "stalled"},
+		{"budget", func(g *goal.Goal) { g.Status, g.TokensUsed = goal.BudgetLimited, 150 }, "token budget is used up"},
+	} {
+		set(c.f)
+		if _, note := goal.SplitNote(say("what now?")); !strings.Contains(note, c.want) {
+			t.Fatalf("%s: note %q", c.name, note)
+		}
+	}
+	set(func(g *goal.Goal) { g.Status = goal.Complete })
+	if got := say("and now?"); got != "and now?" {
+		t.Fatalf("a finished goal adds no note: %q", got)
+	}
+
+	// A goal continuation is not a user turn: no note, even for a held goal.
+	set(func(g *goal.Goal) { g.Status = goal.Active })
+	a.ui.Do(func() {
+		a.goal.Release()
+		a.continueGoal()
+	})
+	idle()
+	if got := last(); !goal.IsMessage(got[len(got)-1]) || strings.Count(got[len(got)-1], goal.OpenTag) != 1 {
+		t.Fatalf("continuation: %q", got[len(got)-1])
 	}
 }

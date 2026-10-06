@@ -38,6 +38,9 @@ const (
 	Complete      Status = "complete"       // reported by the model
 )
 
+// NoteInterrupted is the note of a goal paused by an interrupt (Esc).
+const NoteInterrupted = "interrupted"
+
 // MaxObjective bounds the objective (codex: 4,000 characters).
 const MaxObjective = 4000
 
@@ -101,11 +104,24 @@ func Clear(session string) error {
 	return err
 }
 
+// reserved are the words /goal and atto goal take as subcommands: a goal
+// whose whole objective is one of them is a typo, not a task.
+var reserved = map[string]bool{
+	"help": true, "status": true, "show": true, "budget": true,
+	"clear": true, "edit": true, "pause": true, "resume": true,
+}
+
+// Reserved reports whether text is just a subcommand word (any case).
+func Reserved(text string) bool { return reserved[strings.ToLower(strings.TrimSpace(text))] }
+
 // New creates an active goal.
 func New(objective string, budget int) (*Goal, error) {
 	objective = strings.TrimSpace(objective)
 	if objective == "" {
 		return nil, fmt.Errorf("the goal needs an objective")
+	}
+	if Reserved(objective) {
+		return nil, fmt.Errorf("%q is a goal command, not an objective", objective)
 	}
 	if len(objective) > MaxObjective {
 		return nil, fmt.Errorf("objective is %d characters; keep it under %d (put details in a file and point to it)", len(objective), MaxObjective)
@@ -169,9 +185,9 @@ func (g *Goal) Adopt(file *Goal) bool {
 }
 
 // TurnEnded records a finished turn and applies the stop conditions:
-// failures and turns without tool calls.
-func (g *Goal) TurnEnded(d time.Duration, failed error, toolCalls int) {
-	g.Seconds += int64(d.Seconds())
+// failures and turns without tool calls. The turn's time is not added
+// here: the driver accrues Seconds while the turn runs.
+func (g *Goal) TurnEnded(failed error, toolCalls int) {
 	g.Turns++
 	if g.Status != Active {
 		return
@@ -410,12 +426,14 @@ func escape(s string) string {
 // data is what the goal templates are filled from.
 func (g *Goal) data() prompts.Goal {
 	return prompts.Goal{
-		Objective: escape(g.Objective),
-		Turns:     g.Turns,
-		Used:      g.TokensUsed,
-		Budget:    g.Budget,
-		Remaining: max(0, g.Budget-g.TokensUsed),
-		Seconds:   g.Seconds,
+		Objective:   escape(g.Objective),
+		Turns:       g.Turns,
+		Used:        g.TokensUsed,
+		Budget:      g.Budget,
+		Remaining:   max(0, g.Budget-g.TokensUsed),
+		Seconds:     g.Seconds,
+		Label:       g.Status.Label(),
+		Interrupted: g.Note == NoteInterrupted,
 	}
 }
 
@@ -431,6 +449,57 @@ func (g *Goal) Continuation() string {
 // budget_limit template).
 func (g *Goal) BudgetMessage() string {
 	return wrap(prompts.Render("goal_budget", g.data()))
+}
+
+// BudgetReminderMessage tells the model, mid-turn, that it is still working
+// past the budget message and must wrap up (atto's own: codex sends the
+// budget message only once).
+func (g *Goal) BudgetReminderMessage() string {
+	return wrap(prompts.Render("goal_budget_reminder", g.data()))
+}
+
+// ClearedMessage, PausedMessage and BudgetChangedMessage tell the running
+// turn what the user just did to the goal, so it stops goal work (and does
+// not set a new goal) instead of finishing what the user cancelled.
+func ClearedMessage() string { return wrap(prompts.Render("goal_cleared", nil)) }
+
+func (g *Goal) PausedMessage() string { return wrap(prompts.Render("goal_paused", g.data())) }
+
+func (g *Goal) BudgetChangedMessage() string {
+	return wrap(prompts.Render("goal_budget_changed", g.data()))
+}
+
+// StateMessage is the note that goes with a message the user started a turn
+// with while the goal is not running by itself: waiting for the user (held),
+// paused, stalled, usage or budget limited. It tells the model to answer
+// the user instead of picking the goal work back up. Empty for a goal that
+// is running or finished.
+func (g *Goal) StateMessage(held bool) string {
+	var name string
+	switch g.Status {
+	case Active:
+		if !held {
+			return ""
+		}
+		name = "goal_state_waiting"
+	case Paused, Blocked, UsageLimited:
+		name = "goal_state_paused"
+	case BudgetLimited:
+		name = "goal_state_budget"
+	default:
+		return ""
+	}
+	return wrap(prompts.Render(name, g.data()))
+}
+
+// SplitNote separates a goal note appended to a user message (see
+// StateMessage) from the message; text without one comes back unchanged.
+func SplitNote(text string) (message, note string) {
+	i := strings.LastIndex(text, "\n\n"+OpenTag)
+	if i < 0 || !strings.HasSuffix(text, CloseTag) {
+		return text, ""
+	}
+	return text[:i], text[i+2:]
 }
 
 // ObjectiveUpdatedMessage tells the model, mid-turn, that the user edited

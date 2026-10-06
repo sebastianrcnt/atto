@@ -11,14 +11,16 @@ import (
 )
 
 const goalUsage = `usage:
-  atto goal                         show the session's goal
+  atto goal [status]                show the session's goal
   atto goal complete "<evidence>"   the goal is achieved (after verifying it)
   atto goal blocked "<reason>"      stalled: the same blocker for three goal turns in a row, needs the user
   atto goal pause "<why>"           only when the user explicitly asked to pause the goal
   atto goal resume "<why>"          only when the user explicitly asked to resume the goal
-  atto goal set [-budget 50k] "<objective>"   set a goal: only when the user explicitly asks for one;
-                                    never infer goals from ordinary tasks. -budget only if the user gave one.
-                                    Fails if an unfinished goal exists.`
+  atto goal set [-budget 50k] "<objective>"   set a goal: only when the user asked for one in their own
+                                    message; never infer goals from ordinary tasks, and never re-create a
+                                    goal the user cleared or completed. -budget only if the user gave one.
+                                    Fails if an unfinished goal exists.
+/goal ... commands are the user's, not shell commands.`
 
 // RunGoal implements "atto goal". The model uses complete/blocked from its
 // shell; the front end notices the change and stops continuing the goal.
@@ -51,7 +53,7 @@ func RunGoal(args []string, out io.Writer) error {
 	}
 
 	switch sub {
-	case "show":
+	case "show", "status":
 		if g == nil {
 			fmt.Fprintln(out, "no goal")
 			return nil

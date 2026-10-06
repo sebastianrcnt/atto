@@ -190,3 +190,43 @@ func TestRunPrintGoalUsageLimited(t *testing.T) {
 		t.Fatalf("a usage limit stops the loop: %d requests", n)
 	}
 }
+
+// "atto goal status" is bare "atto goal": models reach for it.
+func TestGoalStatusIsShow(t *testing.T) {
+	t.Setenv(config.EnvDir, t.TempDir())
+	t.Setenv("ATTO_SESSION_ID", "s1")
+	t.Setenv(config.EnvAgent, "1")
+	for _, args := range [][]string{nil, {"status"}} {
+		var out strings.Builder
+		if err := RunGoal(args, &out); err != nil || strings.TrimSpace(out.String()) != "no goal" {
+			t.Fatalf("%v without a goal: %v %q", args, err, out.String())
+		}
+	}
+	g, _ := goal.New("ship it", 100)
+	g.TokensUsed = 30
+	_ = goal.Save("s1", g)
+	var bare, status strings.Builder
+	if err := RunGoal(nil, &bare); err != nil {
+		t.Fatal(err)
+	}
+	if err := RunGoal([]string{"status"}, &status); err != nil || status.String() != bare.String() || !strings.Contains(status.String(), "ship it") {
+		t.Fatalf("status differs from bare: %v %q vs %q", err, status.String(), bare.String())
+	}
+	if !strings.Contains(goalUsage, "atto goal [status]") {
+		t.Fatal("usage lists status")
+	}
+}
+
+func TestGoalSetRefusesCommandWords(t *testing.T) {
+	t.Setenv(config.EnvDir, t.TempDir())
+	t.Setenv("ATTO_SESSION_ID", "s1")
+	t.Setenv(config.EnvAgent, "1")
+	for _, w := range []string{"help", "status", "budget"} {
+		if err := RunGoal([]string{"set", w}, io.Discard); err == nil || !strings.Contains(err.Error(), "not an objective") {
+			t.Fatalf("set %s: %v", w, err)
+		}
+	}
+	if g, _ := goal.Load("s1"); g != nil {
+		t.Fatalf("no goal from a command word: %+v", g)
+	}
+}

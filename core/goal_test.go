@@ -34,8 +34,8 @@ func TestGoalDriverBudget(t *testing.T) {
 		t.Fatalf("under budget: %v %d", steers, g.TokensUsed)
 	}
 	d.Event(step(80, 60, 40)) // 60 more: over
-	d.Event(step(80, 60, 40)) // no longer active: not counted, no second message
-	if len(steers) != 1 || !strings.Contains(steers[0], "budget") || g.Status != goal.BudgetLimited || g.TokensUsed != 110 {
+	d.Event(step(80, 60, 40)) // limited: still counted (60 + 60); a reminder, no second wrap-up
+	if len(steers) != 2 || !strings.Contains(steers[0], "reached its token budget") || !strings.Contains(steers[1], "still over") || g.Status != goal.BudgetLimited || g.TokensUsed != 170 {
 		t.Fatalf("budget: %v %s %d", steers, g.Status, g.TokensUsed)
 	}
 	if d.EndTurn(nil) || g.Turns != 1 || snaps != 1 {
@@ -131,15 +131,10 @@ func TestGoalDriverElapsedCountsTheRunningTurn(t *testing.T) {
 		t.Fatalf("idle: %d", d.Elapsed())
 	}
 	d.BeginTurn()
-	d.turnStart = d.turnStart.Add(-120 * time.Second) // two minutes into the turn
+	d.lastFold = d.lastFold.Add(-120 * time.Second) // two minutes into the turn
 	if n := d.Elapsed(); n < 180 || n > 182 {
 		t.Fatalf("running: %d", n)
 	}
-	g.Status = goal.Paused
-	if d.Elapsed() != 60 {
-		t.Fatalf("only an active goal counts the turn: %d", d.Elapsed())
-	}
-	g.Status = goal.Active
 	d.EndTurn(nil)
 	if n := d.Elapsed(); n < 180 || n > 182 { // the turn is now in Seconds, once
 		t.Fatalf("after the turn: %d", n)
@@ -296,5 +291,203 @@ func TestGoalDriverRestoreDropsHold(t *testing.T) {
 	d.EndTurn(nil)
 	if d.Held() {
 		t.Fatal("restoring a session starts clean")
+	}
+}
+
+// The time shown by the indicator, /goal and the completion notice is one
+// number: the turn's time up to the report is in Seconds when the goal is
+// announced, and the rest of the turn does not add to a finished goal.
+func TestGoalDriverTimeAgreesAtCompletion(t *testing.T) {
+	t.Setenv("ATTO_DIR", t.TempDir())
+	g, _ := goal.New("ship it", 0)
+	var announced int64 = -1
+	d := GoalDriver{Session: "s", Goal: g, Changed: func(g *goal.Goal) { announced = g.Seconds }}
+	d.BeginTurn()
+	d.lastFold = d.lastFold.Add(-20 * time.Second)
+	d.Event(agent.ToolStart{})
+	done := *g
+	done.Status, done.Note = goal.Complete, "done"
+	done.Updated = time.Now().Add(time.Second)
+	if err := goal.Save("s", &done); err != nil {
+		t.Fatal(err)
+	}
+	d.Poll()
+	if g.Status != goal.Complete || announced < 20 || announced > 21 || d.Elapsed() != g.Seconds {
+		t.Fatalf("at the report: status %s, announced %d, seconds %d, elapsed %d", g.Status, announced, g.Seconds, d.Elapsed())
+	}
+	d.lastFold = d.lastFold.Add(-10 * time.Second) // more time passes in the turn's summary
+	if d.Elapsed() != announced {
+		t.Fatalf("a finished goal stops counting: %d, announced %d", d.Elapsed(), announced)
+	}
+	d.EndTurn(nil)
+	if g.Seconds != announced {
+		t.Fatalf("after the turn: %d, announced %d", g.Seconds, announced)
+	}
+}
+
+// A user turn that begins with a paused goal is not part of the goal's time
+// or tokens.
+func TestGoalDriverUnrelatedTurnIsNotCounted(t *testing.T) {
+	t.Setenv("ATTO_DIR", t.TempDir())
+	g, _ := goal.New("ship it", 0)
+	g.Status = goal.Paused
+	d := GoalDriver{Session: "s", Goal: g}
+	d.BeginTurn()
+	d.lastFold = d.lastFold.Add(-30 * time.Second)
+	d.Event(step(100, 0, 10))
+	d.EndTurn(nil)
+	if g.Seconds != 0 || g.TokensUsed != 0 || d.Elapsed() != 0 {
+		t.Fatalf("%+v", g)
+	}
+}
+
+// The turn the goal was part of is accounted to its end, even after the
+// model completed the goal: its closing summary is the goal's too.
+func TestGoalDriverAccountsTheRestOfTheTurn(t *testing.T) {
+	t.Setenv("ATTO_DIR", t.TempDir())
+	g, _ := goal.New("ship it", 0)
+	d := GoalDriver{Session: "s", Goal: g}
+	d.BeginTurn()
+	d.Event(step(100, 0, 0))
+	done := *g
+	done.Status, done.Note = goal.Complete, "done"
+	done.Updated = time.Now().Add(time.Second)
+	_ = goal.Save("s", &done)
+	d.Event(step(10, 0, 5)) // the summary, after the report
+	if g.Status != goal.Complete || g.TokensUsed != 115 {
+		t.Fatalf("%s %d", g.Status, g.TokensUsed)
+	}
+}
+
+func TestGoalDriverBudgetRemindersAndHardStop(t *testing.T) {
+	t.Setenv("ATTO_DIR", t.TempDir())
+	g, _ := goal.New("ship it", 100)
+	var steers, notices []string
+	stops := 0
+	d := GoalDriver{Session: "s", Goal: g,
+		Steer:  func(s string) { steers = append(steers, s) },
+		Stop:   func() { stops++ },
+		Notice: func(s string) { notices = append(notices, s) },
+	}
+	d.BeginTurn()
+	d.Event(step(100, 0, 0)) // 100: budget used, wrap-up
+	if len(steers) != 1 || !strings.Contains(steers[0], "reached its token budget") || g.Status != goal.BudgetLimited {
+		t.Fatalf("wrap-up: %v %s", steers, g.Status)
+	}
+	d.Event(step(20, 0, 0)) // 120: under another quarter
+	if len(steers) != 1 {
+		t.Fatalf("no reminder yet: %v", steers)
+	}
+	d.Event(step(10, 0, 0)) // 130: a quarter past the wrap-up
+	if len(steers) != 2 || !strings.Contains(steers[1], "still over its token budget") || !goal.IsMessage(steers[1]) {
+		t.Fatalf("reminder: %v", steers)
+	}
+	d.Event(step(20, 0, 0)) // 150
+	d.Event(step(4, 0, 0))  // 154: not a quarter past the reminder
+	if len(steers) != 2 {
+		t.Fatalf("one reminder per quarter: %d", len(steers))
+	}
+	d.Event(step(21, 0, 0)) // 175: next reminder
+	if len(steers) != 3 || stops != 0 {
+		t.Fatalf("second reminder: %d steers, %d stops", len(steers), stops)
+	}
+	d.Event(step(30, 0, 0)) // 205: twice the budget
+	if stops != 1 || len(notices) != 1 || notices[0] != "Goal budget exceeded: stopped the turn." || len(steers) != 3 {
+		t.Fatalf("hard stop: %d stops, %v, %d steers", stops, notices, len(steers))
+	}
+	d.Event(step(30, 0, 0)) // the turn is already stopping: no second notice
+	if stops != 1 || len(notices) != 1 {
+		t.Fatalf("stops once: %d %v", stops, notices)
+	}
+	d.EndTurn(nil)
+	if g.TokensUsed != 235 || g.Status != goal.BudgetLimited {
+		t.Fatalf("%+v", g)
+	}
+
+	// The next turn starts clean: a user turn on the limited goal counts
+	// tokens but is not reminded or stopped (no wrap-up was sent in it).
+	steers, notices, stops = nil, nil, 0
+	d.BeginTurn()
+	d.Event(step(500, 0, 0))
+	if stops != 0 || len(steers) != 0 || len(notices) != 0 || g.TokensUsed != 735 {
+		t.Fatalf("user turn: %d %v %v %d", stops, steers, notices, g.TokensUsed)
+	}
+}
+
+// The model may still complete a budget limited goal, and the budget
+// handling then stops.
+func TestGoalDriverCompleteWhileBudgetLimited(t *testing.T) {
+	t.Setenv("ATTO_DIR", t.TempDir())
+	g, _ := goal.New("ship it", 100)
+	var steers []string
+	stops := 0
+	d := GoalDriver{Session: "s", Goal: g, Steer: func(s string) { steers = append(steers, s) }, Stop: func() { stops++ }}
+	d.BeginTurn()
+	d.Event(step(100, 0, 0))
+	done := *g
+	done.Status, done.Note = goal.Complete, "done"
+	done.Updated = time.Now().Add(time.Second)
+	_ = goal.Save("s", &done)
+	d.Event(step(500, 0, 0))
+	if g.Status != goal.Complete || stops != 0 || len(steers) != 1 {
+		t.Fatalf("%s, %d stops, %d steers", g.Status, stops, len(steers))
+	}
+}
+
+func TestGoalDriverTellsTheRunningTurn(t *testing.T) {
+	t.Setenv("ATTO_DIR", t.TempDir())
+	g, _ := goal.New("ship it", 0)
+	var steers []string
+	d := GoalDriver{Session: "s", Goal: g, Steer: func(s string) { steers = append(steers, s) }}
+	d.Tell(goal.ClearedMessage()) // no turn: nothing to tell
+	if len(steers) != 0 {
+		t.Fatalf("idle: %v", steers)
+	}
+	d.BeginTurn()
+	d.Set(nil)
+	d.Tell(goal.ClearedMessage())
+	g.Status = goal.Paused
+	d.Tell(g.PausedMessage())
+	if len(steers) != 2 || !strings.Contains(steers[0], "cleared the goal") || !strings.Contains(steers[1], "paused the goal") {
+		t.Fatalf("%q", steers)
+	}
+	d.EndTurn(nil)
+	d.Tell(goal.ClearedMessage())
+	if len(steers) != 2 {
+		t.Fatalf("after the turn: %v", steers)
+	}
+}
+
+func TestGoalDriverStateNote(t *testing.T) {
+	t.Setenv("ATTO_DIR", t.TempDir())
+	d := GoalDriver{Session: "s"}
+	if d.StateNote() != "" {
+		t.Fatal("no goal, no note")
+	}
+	g, _ := goal.New("ship it", 100)
+	d.Set(g)
+	if d.StateNote() != "" {
+		t.Fatal("a running goal needs no note")
+	}
+	d.BeginTurn()
+	d.UserInput()
+	d.Event(agent.ToolStart{})
+	d.EndTurn(nil) // held after the user's turn
+	if n := d.StateNote(); !strings.Contains(n, "waiting for the user") {
+		t.Fatalf("held: %q", n)
+	}
+	d.Release()
+	d.BeginTurn()
+	d.EndTurn(context.Canceled) // an interrupt pauses it
+	if n := d.StateNote(); g.Status != goal.Paused || !strings.Contains(n, "because the user interrupted it") {
+		t.Fatalf("interrupted: %s %q", g.Status, n)
+	}
+	g.Status = goal.BudgetLimited
+	if n := d.StateNote(); !strings.Contains(n, "token budget is used up") {
+		t.Fatalf("budget limited: %q", n)
+	}
+	g.Status = goal.Complete
+	if d.StateNote() != "" {
+		t.Fatal("a finished goal needs no note")
 	}
 }

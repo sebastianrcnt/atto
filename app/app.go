@@ -669,6 +669,8 @@ func (a *App) startTurn(text string, att []tui.Attachment) {
 		}
 	}
 	a.tr().Event(transcript.Input{Text: text, Images: imgs})
+	// A goal that is not running by itself says so, to this message only.
+	a.agent.SetInputNote(a.goal.StateNote())
 	a.goal.UserInput() // a turn the user started: the goal waits for them after it
 	a.runKind = "turn"
 	a.recordSettings()

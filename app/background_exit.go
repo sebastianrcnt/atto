@@ -140,7 +140,7 @@ func (a *App) cancelTask() {
 		return
 	}
 	if g := a.goal.Goal; g != nil && a.goal.Active() {
-		g.Status, g.Note = goal.Paused, "interrupted"
+		g.Status, g.Note = goal.Paused, goal.NoteInterrupted
 		a.goal.Set(g)
 		a.notice("Goal paused.")
 	}

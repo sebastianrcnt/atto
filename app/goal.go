@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 
 	"github.com/sebastianrcnt/atto/core"
@@ -23,6 +24,8 @@ func (a *App) resetGoal() {
 	a.goal = core.GoalDriver{
 		Session:  a.sess.ID,
 		Steer:    func(text string) { a.agent.Steer(text) },
+		Stop:     func() { a.agent.StopAtBoundary() },
+		Notice:   func(text string) { a.notice("%s", text) },
 		Snapshot: a.snapshotGoal,
 		Changed:  a.announceGoal,
 		Adopted:  a.goalInfo,
@@ -65,7 +68,7 @@ func (a *App) continueGoal() {
 const goalWaitingNotice = "Goal waiting for you — press enter on an empty prompt or /goal resume to continue."
 
 // goalUsage is codex's usage line for /goal.
-const goalUsage = "Usage: /goal [<objective>|clear|edit|pause|resume]"
+const goalUsage = "Usage: /goal [<objective>|clear|edit|pause|resume|budget <n>]"
 
 // infoBlock is codex's info message: a title after a bullet, and a dim hint
 // under it.
@@ -96,14 +99,29 @@ func (a *App) goalInfo(g *goal.Goal) {
 var errNoGoal = errors.New("No goal is currently set.")
 
 // cmdGoal: /goal [<objective>|clear|edit|pause|resume], as in codex, and
-// /goal budget <n> besides.
+// /goal budget <n> besides. A change to the goal while a turn runs is told
+// to the model (the turn would otherwise go on with the goal as it was).
+// The words help, status and budget alone are commands, never objectives.
 func (a *App) cmdGoal(arg string) {
 	arg = strings.TrimSpace(arg)
 	sub, rest, _ := strings.Cut(arg, " ")
 	a.goal.Poll()
 	g := a.goal.Goal
 	switch strings.ToLower(arg) {
-	case "", "show":
+	case "help", "-h", "--help":
+		a.add(&infoBlock{title: goalUsage})
+		return
+	case "budget":
+		switch {
+		case g == nil:
+			a.add(&infoBlock{title: goalUsage, hint: "No goal is currently set."})
+		case g.Budget > 0:
+			a.notice("Goal budget: %s (%s used). Change it with /goal budget <n>.", goal.Tokens(g.Budget), goal.Tokens(g.TokensUsed))
+		default:
+			a.notice("The goal has no token budget (%s used). Set one with /goal budget <n>.", goal.Tokens(g.TokensUsed))
+		}
+		return
+	case "", "show", "status":
 		if g == nil {
 			a.add(&infoBlock{title: goalUsage, hint: "No goal is currently set."})
 			return
@@ -116,6 +134,7 @@ func (a *App) cmdGoal(arg string) {
 			return
 		}
 		a.goal.Set(nil)
+		a.goal.Tell(goal.ClearedMessage())
 		a.add(&infoBlock{title: "Goal cleared"})
 		return
 	case "edit":
@@ -129,6 +148,7 @@ func (a *App) cmdGoal(arg string) {
 		if g.Status == goal.Active || g.Status == goal.Blocked || g.Status == goal.UsageLimited {
 			g.Status, g.Note = goal.Paused, "paused by the user"
 			a.goal.Set(g)
+			a.goal.Tell(g.PausedMessage())
 		}
 		a.goalInfo(g)
 		return
@@ -159,11 +179,17 @@ func (a *App) cmdGoal(arg string) {
 			return
 		}
 		g.Budget = b
-		if g.Status == goal.BudgetLimited && g.TokensUsed < b {
+		raised := g.Status == goal.BudgetLimited && g.TokensUsed < b
+		if raised {
 			g.Status, g.Note = goal.Paused, "budget raised"
 		}
 		a.goal.Set(g)
-		a.notice("Goal budget set to %s (%s used).", goal.Tokens(b), goal.Tokens(g.TokensUsed))
+		a.goal.Tell(g.BudgetChangedMessage())
+		msg := fmt.Sprintf("Goal budget set to %s (%s used).", goal.Tokens(b), goal.Tokens(g.TokensUsed))
+		if raised {
+			msg += " Use /goal resume to continue."
+		}
+		a.notice("%s", msg)
 		return
 	}
 	ng, err := goal.New(arg, 0)

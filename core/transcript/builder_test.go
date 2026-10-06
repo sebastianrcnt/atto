@@ -286,6 +286,18 @@ func TestReplayGoalMessages(t *testing.T) {
 	}
 }
 
+// The goal's state note rides at the end of the user's message for the
+// model; the replay shows the message alone.
+func TestReplayHidesGoalStateNote(t *testing.T) {
+	g, _ := goal.New("x", 0)
+	g.Status = goal.Paused
+	text := "Thanks, that is fine.\n\n" + g.StateMessage(false)
+	items := FromEntries("", []session.Entry{{Type: session.TypeMessage, Message: &provider.Message{Role: "user", Content: text}}})
+	if len(items) != 1 || items[0].Kind != User || items[0].Text != "Thanks, that is fine." {
+		t.Fatalf("%+v", items)
+	}
+}
+
 // A command that moved to the background replays as such, without the
 // status line the model got.
 func TestReplayBackgroundedCall(t *testing.T) {
