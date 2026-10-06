@@ -25,9 +25,11 @@ import (
 // before it exits.
 var idleExit = 2 * time.Second
 
-// writeWait bounds a write to a client; one that stalls longer is
-// dropped, so a frozen terminal can't hold the pane up.
+// writeWait bounds a write in a client's independent writer.
 const writeWait = 5 * time.Second
+
+const clientQueueBytes = 1 << 20
+const clientQueueFrames = 32
 
 // Serve runs the daemon in this process until its last pane ends (or
 // stop). exe is the atto binary the panes run. It returns at once, with
@@ -98,9 +100,14 @@ type pane struct {
 }
 
 type client struct {
-	conn net.Conn
-	wmu  sync.Mutex
-	size Size // guarded by its pane's mu
+	conn      net.Conn
+	wmu       sync.Mutex
+	queue     chan clientFrame
+	done      chan struct{}
+	queued    int
+	stopped   bool
+	finishing bool
+	size      Size // guarded by its pane's mu
 
 	pmu    sync.Mutex
 	pane   *pane // the pane it shows
@@ -118,17 +125,68 @@ func (c *client) close() {
 	c.closed = true
 	p := c.pane
 	c.pmu.Unlock()
+	c.wmu.Lock()
+	if !c.stopped {
+		c.stopped = true
+		if c.done != nil {
+			close(c.done)
+		}
+	}
+	c.wmu.Unlock()
 	c.conn.Close()
 	if p != nil {
 		p.remove(c)
 	}
 }
 
+type clientFrame struct {
+	typ     byte
+	payload []byte
+	last    bool
+}
+
 func (c *client) send(typ byte, payload []byte) error {
 	c.wmu.Lock()
 	defer c.wmu.Unlock()
-	_ = c.conn.SetWriteDeadline(time.Now().Add(writeWait))
-	return writeFrame(c.conn, typ, payload)
+	if c.stopped || c.finishing {
+		return net.ErrClosed
+	}
+	if c.queue == nil {
+		c.queue = make(chan clientFrame, clientQueueFrames)
+		c.done = make(chan struct{})
+		go c.write()
+	}
+	if c.queued+len(payload) > clientQueueBytes {
+		return errors.New("daemon: client output queue full")
+	}
+	f := clientFrame{typ, slices.Clone(payload), typ == fExit || typ == fError || typ == fList}
+	select {
+	case c.queue <- f:
+		c.queued += len(payload)
+		c.finishing = f.last
+		return nil
+	default:
+		return errors.New("daemon: client output queue full")
+	}
+}
+
+func (c *client) write() {
+	for {
+		select {
+		case <-c.done:
+			return
+		case f := <-c.queue:
+			_ = c.conn.SetWriteDeadline(time.Now().Add(writeWait))
+			err := writeFrame(c.conn, f.typ, f.payload)
+			c.wmu.Lock()
+			c.queued -= len(f.payload)
+			c.wmu.Unlock()
+			if err != nil || f.last {
+				c.close()
+				return
+			}
+		}
+	}
 }
 
 func (c *client) sendJSON(typ byte, v any) error {
@@ -145,8 +203,9 @@ func (d *daemon) serve(conn net.Conn) {
 	}
 	c := &client{conn: conn, size: h.Size}
 	fail := func(format string, args ...any) {
-		_ = c.send(fError, fmt.Appendf(nil, format, args...))
-		conn.Close()
+		if c.send(fError, fmt.Appendf(nil, format, args...)) != nil {
+			c.close()
+		}
 	}
 	if h.Proto != Proto {
 		fail("the running atto daemon speaks protocol %d, this atto %d: end its panes, then run atto daemon stop", Proto, h.Proto)
@@ -154,15 +213,17 @@ func (d *daemon) serve(conn net.Conn) {
 	}
 	switch h.Op {
 	case "list":
-		_ = c.sendJSON(fList, d.list())
-		conn.Close()
+		if c.sendJSON(fList, d.list()) != nil {
+			c.close()
+		}
 	case "stop":
 		if n := len(d.list()); n > 0 && !h.Force {
 			fail("%d pane(s) running; atto daemon stop -force ends them", n)
 			return
 		}
-		_ = c.sendJSON(fExit, Exit{})
-		conn.Close()
+		if c.sendJSON(fExit, Exit{}) != nil {
+			c.close()
+		}
 		d.ln.Close()
 	case "kill":
 		p := d.find(h.Target)
@@ -171,8 +232,9 @@ func (d *daemon) serve(conn net.Conn) {
 			return
 		}
 		p.hangup()
-		_ = c.sendJSON(fExit, Exit{})
-		conn.Close()
+		if c.sendJSON(fExit, Exit{}) != nil {
+			c.close()
+		}
 	case "new":
 		p, err := d.start(h)
 		if err != nil {
@@ -307,8 +369,9 @@ func (p *pane) pump() {
 	}
 	d.mu.Unlock()
 	for _, c := range clients {
-		_ = c.sendJSON(fExit, Exit{Code: code})
-		c.close()
+		if c.sendJSON(fExit, Exit{Code: code}) != nil {
+			c.close()
+		}
 	}
 }
 
@@ -378,7 +441,9 @@ func (d *daemon) spawnFor(c *client, from *pane, h Hello, session string) {
 	from.mu.Unlock()
 	q, err := d.start(h)
 	if err != nil {
-		_ = c.send(fOutput, fmt.Appendf(nil, "\r\natto: starting a pane: %v\r\n", err))
+		if c.send(fOutput, fmt.Appendf(nil, "\r\natto: starting a pane: %v\r\n", err)) != nil {
+			c.close()
+		}
 		return
 	}
 	d.move(c, from, strconv.Itoa(q.info.ID))
@@ -414,8 +479,9 @@ func (p *pane) attach(c *client) bool {
 		code := p.exitCode
 		p.mu.Unlock()
 		c.pmu.Unlock()
-		_ = c.sendJSON(fExit, Exit{Code: code})
-		c.close()
+		if c.sendJSON(fExit, Exit{Code: code}) != nil {
+			c.close()
+		}
 		return false
 	}
 	p.info.Active = time.Now()
@@ -513,9 +579,12 @@ func (p *pane) detach(c *client, tell bool) {
 		return
 	}
 	if tell {
-		_ = c.sendJSON(fExit, Exit{Detached: true})
+		if c.sendJSON(fExit, Exit{Detached: true}) != nil {
+			c.close()
+		}
+	} else {
+		c.close()
 	}
-	c.close()
 }
 
 func (p *pane) resize(s Size) {

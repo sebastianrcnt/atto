@@ -467,12 +467,84 @@ func TestMoveDoesNotRegisterDisconnectedClient(t *testing.T) {
 func TestFailedAttachRemovesClient(t *testing.T) {
 	a, b := net.Pipe()
 	b.Close()
-	p := &pane{st: newStream()}
+	p := &pane{st: newStream(), size: sane(Size{})}
 	c := &client{conn: a}
-	if p.attach(c) {
-		t.Fatal("attach succeeded on closed connection")
+	p.attach(c)
+	deadline := time.Now().Add(time.Second)
+	for {
+		p.mu.Lock()
+		n := len(p.clients)
+		p.mu.Unlock()
+		if n == 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("failed send left a client registered")
+		}
+		time.Sleep(time.Millisecond)
 	}
-	if len(p.clients) != 0 {
-		t.Fatal("failed send left a client registered")
+}
+
+func TestSlowClientDoesNotStallOutput(t *testing.T) {
+	slow, unread := net.Pipe()
+	defer unread.Close()
+	fast, reader := net.Pipe()
+	defer reader.Close()
+	a, b := &client{conn: slow}, &client{conn: fast}
+	p := &pane{st: newStream(), clients: []*client{a, b}}
+	a.pane, b.pane = p, p
+	defer a.close()
+	defer b.close()
+	received := make(chan string, 1)
+	go func() { _, payload, _ := readFrame(reader); received <- string(payload) }()
+	returned := make(chan struct{})
+	go func() { p.output([]byte("healthy")); close(returned) }()
+	select {
+	case <-returned:
+	case <-time.After(time.Second):
+		t.Fatal("output stalled on slow client")
+	}
+	select {
+	case got := <-received:
+		if got != "healthy" {
+			t.Fatalf("output %q", got)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("healthy client stalled")
+	}
+}
+
+func TestClientQueueOverflowDropsClient(t *testing.T) {
+	a, b := net.Pipe()
+	defer b.Close()
+	c := &client{conn: a}
+	p := &pane{st: newStream(), clients: []*client{c}}
+	c.pane = p
+	defer c.close()
+	// No reader drains this connection. The writer may hold one frame,
+	// but the rest must remain bounded and overflow must remove the client.
+	returned := make(chan struct{})
+	go func() {
+		for range clientQueueFrames + 2 {
+			p.output([]byte(strings.Repeat("x", 64<<10)))
+		}
+		close(returned)
+	}()
+	select {
+	case <-returned:
+	case <-time.After(time.Second):
+		t.Fatal("overflow blocked the pump")
+	}
+	p.mu.Lock()
+	n := len(p.clients)
+	p.mu.Unlock()
+	if n != 0 {
+		t.Fatal("overflow did not drop client")
+	}
+	c.wmu.Lock()
+	queued := c.queued
+	c.wmu.Unlock()
+	if queued > clientQueueBytes {
+		t.Fatalf("queue has %d bytes", queued)
 	}
 }
