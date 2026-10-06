@@ -43,8 +43,8 @@ func project(t *testing.T) (atto, repo, cwd string) {
 	writeFile(t, filepath.Join(cwd, "AGENTS.md"), strings.Repeat("x", 40*1024)) // over the cap
 	writeFile(t, filepath.Join(atto, "skills", "pdf", "SKILL.md"), "---\nname: pdf\ndescription: Work with PDFs\n---\nsteps")
 	writeFile(t, filepath.Join(atto, "skills", "nodesc", "SKILL.md"), "---\nname: nodesc\n---\nx")
-	writeFile(t, filepath.Join(repo, ".agents", "skills", "pdf", "SKILL.md"), "---\nname: pdf\ndescription: Another\n---\nx")
-	writeFile(t, filepath.Join(repo, ".agents", "skills", "hidden", "SKILL.md"), "---\nname: hidden\ndescription: By command\ndisable-model-invocation: true\n---\nx")
+	writeFile(t, filepath.Join(repo, ".atto", "skills", "pdf", "SKILL.md"), "---\nname: pdf\ndescription: Another\n---\nx")
+	writeFile(t, filepath.Join(repo, ".atto", "skills", "hidden", "SKILL.md"), "---\nname: hidden\ndescription: By command\ndisable-model-invocation: true\n---\nx")
 	writeFile(t, filepath.Join(atto, "settings.json"), `{"skills":{"disabled":["atto-extensions"]},"defaultProvider":"a","defaultModel":"two","hooks":{
 		"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"./check.sh --strict"}]}],
 		"Stop":[{"hooks":[{"type":"http","url":"http://127.0.0.1:9/stop"}]}]}}`)
@@ -104,7 +104,7 @@ func TestCollect(t *testing.T) {
 	}
 
 	if len(l.Skills) != 2 || l.Skills[0].Name != "pdf" || l.Skills[0].Dir != filepath.Join(atto, "skills") ||
-		l.Skills[1].Name != "hidden" || !l.Skills[1].Hidden || l.Skills[1].Dir != filepath.Join(repo, ".agents", "skills") {
+		l.Skills[1].Name != "hidden" || !l.Skills[1].Hidden || l.Skills[1].Dir != filepath.Join(repo, ".atto", "skills") {
 		t.Errorf("skills %+v", l.Skills)
 	}
 	var skipped []string

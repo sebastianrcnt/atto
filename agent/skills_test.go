@@ -30,7 +30,7 @@ func TestSystemPromptSkills(t *testing.T) {
 	base := a.system
 
 	write(t, filepath.Join(dir, "skills", "pdf", "SKILL.md"), "---\nname: pdf\ndescription: Work with PDFs\n---\nsteps")
-	write(t, filepath.Join(repo, ".agents", "skills", "hidden", "SKILL.md"), "---\nname: hidden\ndescription: Only by command\ndisable-model-invocation: true\n---\nx")
+	write(t, filepath.Join(repo, ".atto", "skills", "hidden", "SKILL.md"), "---\nname: hidden\ndescription: Only by command\ndisable-model-invocation: true\n---\nx")
 	a.SetStart(start)
 	loc := filepath.Join(dir, "skills", "pdf", "SKILL.md")
 	if !strings.HasPrefix(a.system, base) || !strings.Contains(a.system, "<location>"+loc+"</location>") || strings.Contains(a.system, "Only by command") {

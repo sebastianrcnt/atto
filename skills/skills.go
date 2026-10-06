@@ -33,19 +33,14 @@ type Skill struct {
 const Builtin = "builtin"
 
 // Dirs lists where skills are looked for, highest priority first (the first
-// skill of a name wins). userDir is ~/.atto/skills; the others are the
-// project's .atto/skills and the tool-neutral .agents/skills, in the project
-// and in the home directory. Like pi, other tools' own directories
-// (.claude/skills) are not read: what they hold is set up for that tool.
-func Dirs(userDir, root, home string) []string {
+// skill of a name wins): userDir (~/.atto/skills), then the project's
+// .atto/skills. Directories other tools read too (.agents/skills,
+// .claude/skills) are not: what they hold was installed for those tools,
+// and it would all go into atto's prompt.
+func Dirs(userDir, root string) []string {
 	dirs := []string{userDir}
 	if root != "" {
-		dirs = append(dirs,
-			filepath.Join(root, ".atto", "skills"),
-			filepath.Join(root, ".agents", "skills"))
-	}
-	if home != "" {
-		dirs = append(dirs, filepath.Join(home, ".agents", "skills"))
+		dirs = append(dirs, filepath.Join(root, ".atto", "skills"))
 	}
 	return dirs
 }

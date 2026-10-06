@@ -435,8 +435,7 @@ type Sources struct {
 
 // scan reads the files the system prompt is built from and builds it.
 func (a *Agent) scan(start time.Time) (Sources, string) {
-	home, _ := os.UserHomeDir()
-	dirs := skills.Dirs(config.SkillsDir(), projectRoot(a.Cwd), home)
+	dirs := skills.Dirs(config.SkillsDir(), projectRoot(a.Cwd))
 	sk, issues := skills.LoadIssues(dirs)
 	var disabled []string
 	st, _ := config.LoadSettings()
