@@ -432,6 +432,9 @@ func Load(path string) (Entry, []Entry, error) {
 	for first := true; sc.Scan(); first = false {
 		var e Entry
 		if err := json.Unmarshal(sc.Bytes(), &e); err != nil {
+			if first {
+				return Entry{}, nil, fmt.Errorf("%s: invalid session header: %w", path, err)
+			}
 			continue
 		}
 		if first {
@@ -442,6 +445,9 @@ func Load(path string) (Entry, []Entry, error) {
 			continue
 		}
 		entries = append(entries, e)
+	}
+	if header.Type != TypeSession {
+		return Entry{}, nil, fmt.Errorf("%s: missing session header", path)
 	}
 	link(entries)
 	return header, entries, sc.Err()
