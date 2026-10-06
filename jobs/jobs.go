@@ -515,15 +515,19 @@ type cappedFile struct {
 func (c *cappedFile) Write(p []byte) (int, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if room := maxLog - c.n; room > 0 {
+	room := maxLog - c.n
+	if room > 0 {
 		w, err := c.f.Write(p[:min(int64(len(p)), room)])
 		c.n += int64(w)
 		if err != nil {
 			return len(p), err
 		}
-	} else if !c.noticed {
+	}
+	if int64(len(p)) > room && !c.noticed {
 		c.noticed = true
-		_, _ = c.f.WriteString(fmt.Sprintf("\n[atto: output beyond %d MiB dropped]\n", maxLog>>20))
+		if _, err := c.f.WriteString(fmt.Sprintf("\n[atto: output beyond %d MiB dropped]\n", maxLog>>20)); err != nil {
+			return len(p), err
+		}
 	}
 	return len(p), nil
 }

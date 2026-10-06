@@ -26,3 +26,29 @@ func TestHeadLongLine(t *testing.T) {
 		t.Fatalf("head to EOF: %d bytes, %v", len(got), err)
 	}
 }
+
+func TestCappedFileNoticesFinalTruncatingWrite(t *testing.T) {
+	for _, room := range []int64{0, 4} {
+		f, err := os.CreateTemp(t.TempDir(), "output")
+		if err != nil {
+			t.Fatal(err)
+		}
+		c := cappedFile{f: f, n: maxLog - room}
+		if n, err := c.Write([]byte("abcdefgh")); n != 8 || err != nil {
+			t.Fatalf("write: %d, %v", n, err)
+		}
+		if _, err := c.Write([]byte("ignored")); err != nil {
+			t.Fatal(err)
+		}
+		if err := f.Close(); err != nil {
+			t.Fatal(err)
+		}
+		data, err := os.ReadFile(f.Name())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Count(string(data), "output beyond") != 1 || !strings.HasPrefix(string(data), "abcdefgh"[:room]) {
+			t.Fatalf("truncation notice: %q", data)
+		}
+	}
+}
