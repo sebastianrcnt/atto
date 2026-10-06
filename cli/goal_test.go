@@ -23,16 +23,16 @@ func TestGoalCommandInsideAgent(t *testing.T) {
 
 	// As codex's create_goal: a model sets a goal (when the user asks)
 	// but never replaces an unfinished one.
-	if err := RunGoal([]string{"set", "-budget", "50k", "port the parser"}, io.Discard); err != nil {
+	if err := RunGoal([]string{"set", "port the parser"}, io.Discard); err != nil {
 		t.Fatalf("set inside an agent: %v", err)
 	}
-	if got, _ := goal.Load("s1"); got == nil || got.Objective != "port the parser" || got.Budget != 50_000 || got.Status != goal.Active {
+	if got, _ := goal.Load("s1"); got == nil || got.Objective != "port the parser" || got.Status != goal.Active {
 		t.Fatalf("set: %+v", got)
 	}
 	if err := RunGoal([]string{"set", "rewrite everything"}, io.Discard); err == nil || !strings.Contains(err.Error(), "only the user can replace") {
 		t.Fatalf("replace inside an agent: %v", err)
 	}
-	g, _ := goal.New("ship it", 0)
+	g, _ := goal.New("ship it")
 	_ = goal.Save("s2", g)
 	if err := RunGoal([]string{"complete", "-session", "s2", "done"}, io.Discard); err == nil {
 		t.Fatal("another session's goal must be off limits")
@@ -53,7 +53,7 @@ func TestGoalResumeReport(t *testing.T) {
 	if err := RunGoal([]string{"resume", "the user asked"}, io.Discard); err == nil || !strings.Contains(err.Error(), "no goal") {
 		t.Fatalf("no goal: %v", err)
 	}
-	g, _ := goal.New("ship it", 0)
+	g, _ := goal.New("ship it")
 	_ = goal.Save("s1", g)
 	if err := RunGoal([]string{"resume", "x"}, io.Discard); err == nil || !strings.Contains(err.Error(), "active, not paused") {
 		t.Fatalf("an active goal does not resume: %v", err)
@@ -72,15 +72,13 @@ func TestGoalResumeReport(t *testing.T) {
 			t.Fatalf("%s: %+v %q", st, got, out.String())
 		}
 	}
-	for _, st := range []goal.Status{goal.BudgetLimited, goal.Complete} {
-		g.Status = st
-		_ = goal.Save("s1", g)
-		if err := RunGoal([]string{"resume", "x"}, io.Discard); err == nil {
-			t.Fatalf("a %s goal does not resume", st)
-		}
-		if got, _ := goal.Load("s1"); got.Status != st {
-			t.Fatalf("refusal changed the goal: %+v", got)
-		}
+	g.Status = goal.Complete
+	_ = goal.Save("s1", g)
+	if err := RunGoal([]string{"resume", "x"}, io.Discard); err == nil {
+		t.Fatal("a complete goal does not resume")
+	}
+	if got, _ := goal.Load("s1"); got.Status != goal.Complete {
+		t.Fatalf("refusal changed the goal: %+v", got)
 	}
 }
 
@@ -88,7 +86,7 @@ func TestGoalPauseReport(t *testing.T) {
 	t.Setenv(config.EnvDir, t.TempDir())
 	t.Setenv("ATTO_SESSION_ID", "s1")
 	t.Setenv(config.EnvAgent, "1")
-	g, _ := goal.New("ship it", 0)
+	g, _ := goal.New("ship it")
 	_ = goal.Save("s1", g)
 	if err := RunGoal([]string{"pause"}, io.Discard); err == nil {
 		t.Fatal("a reason is required")
@@ -103,13 +101,13 @@ func TestGoalPauseReport(t *testing.T) {
 	if err := RunGoal([]string{"pause", "again"}, io.Discard); err == nil || !strings.Contains(err.Error(), "paused, not active") {
 		t.Fatalf("only an active goal pauses: %v", err)
 	}
-	g.Status = goal.BudgetLimited
-	_ = goal.Save("s1", g)
-	if err := RunGoal([]string{"pause", "x"}, io.Discard); err == nil {
-		t.Fatal("a budget limit takes precedence over a pause")
+	if err := RunGoal([]string{"complete", "done"}, io.Discard); err == nil {
+		t.Fatal("a paused goal is not completed")
 	}
+	g.Status = goal.Active
+	_ = goal.Save("s1", g)
 	if err := RunGoal([]string{"complete", "done"}, io.Discard); err != nil {
-		t.Fatalf("a budget limited goal can still complete: %v", err)
+		t.Fatal(err)
 	}
 	var show strings.Builder
 	if err := RunGoal([]string{"show"}, &show); err != nil || !strings.Contains(show.String(), "status: complete") {
@@ -182,7 +180,7 @@ func TestRunPrintGoalStalls(t *testing.T) {
 
 func TestRunPrintGoalUsageLimited(t *testing.T) {
 	bodies := goalServer(t, 1, 429, `{"error":{"type":"usage_limit_reached","message":"You have hit your usage limit."}}`)
-	res := printGoal(t, PrintOptions{Goal: "ship it", GoalBudget: "50k"})
+	res := printGoal(t, PrintOptions{Goal: "ship it"})
 	if res.GoalStatus != "usage_limited" || !strings.Contains(res.Error, "usage limit") {
 		t.Fatalf("%+v", res)
 	}
@@ -202,7 +200,7 @@ func TestGoalStatusIsShow(t *testing.T) {
 			t.Fatalf("%v without a goal: %v %q", args, err, out.String())
 		}
 	}
-	g, _ := goal.New("ship it", 100)
+	g, _ := goal.New("ship it")
 	g.TokensUsed = 30
 	_ = goal.Save("s1", g)
 	var bare, status strings.Builder
@@ -221,7 +219,7 @@ func TestGoalSetRefusesCommandWords(t *testing.T) {
 	t.Setenv(config.EnvDir, t.TempDir())
 	t.Setenv("ATTO_SESSION_ID", "s1")
 	t.Setenv(config.EnvAgent, "1")
-	for _, w := range []string{"help", "status", "budget"} {
+	for _, w := range []string{"help", "status", "resume"} {
 		if err := RunGoal([]string{"set", w}, io.Discard); err == nil || !strings.Contains(err.Error(), "not an objective") {
 			t.Fatalf("set %s: %v", w, err)
 		}

@@ -76,7 +76,7 @@ func TestExitMenuOnlyWithRunningTurn(t *testing.T) {
 
 	// An active goal that will go on asks too.
 	a = treeApp(t)
-	g, _ := goal.New("ship it", 0)
+	g, _ := goal.New("ship it")
 	a.goal.Goal = g
 	a.requestQuit()
 	if quitting(a) || a.modal == nil {
@@ -219,7 +219,7 @@ func TestRunInBackgroundWhenTurnFinishedFirst(t *testing.T) {
 
 func TestRunInBackgroundKeepsGoal(t *testing.T) {
 	a, _, spawned := bgApp(t)
-	g, _ := goal.New("ship it", 5000)
+	g, _ := goal.New("ship it")
 	a.goal.Goal = g
 	a.goal.Snapshot = a.snapshotGoal
 	a.requestQuit()
@@ -242,7 +242,7 @@ func TestRunInBackgroundKeepsGoal(t *testing.T) {
 func TestRunInBackgroundIdleGoal(t *testing.T) {
 	a := treeApp(t)
 	a.bgx.spawn = func(id, path, cwd string) (int, string, error) { return 1, "log", nil }
-	g, _ := goal.New("ship it", 0)
+	g, _ := goal.New("ship it")
 	a.goal.Goal = g
 	a.requestQuit()
 	a.modal.HandleInput("2")
@@ -253,7 +253,7 @@ func TestRunInBackgroundIdleGoal(t *testing.T) {
 
 func TestCancelTaskPausesIdleGoal(t *testing.T) {
 	a := treeApp(t)
-	g, _ := goal.New("ship it", 0)
+	g, _ := goal.New("ship it")
 	a.goal.Goal = g
 	a.requestQuit()
 	a.modal.HandleInput("1")

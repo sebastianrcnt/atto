@@ -161,7 +161,7 @@ const (
 	ItemCommand    = "commandExecution"
 	ItemCompaction = "compaction"
 	ItemEvent      = "event" // [atto event]: a job exited, a timer fired, a monitor matched
-	ItemGoal       = "goal"  // atto_internal_context source="goal": a goal continuation or budget message for the model
+	ItemGoal       = "goal"  // atto_internal_context source="goal": a goal continuation or note for the model
 	ItemHook       = "hook"  // a hook's message, or what it blocked
 	ItemNotice     = "notice"
 	ItemGoalStatus = "goalStatus"
@@ -461,18 +461,17 @@ type PromptAnswer struct {
 // GoalInfo is the live session's goal as the terminal shows it.
 type GoalInfo struct {
 	Objective string `json:"objective"`
-	Status    string `json:"status"`      // active, paused, blocked, usage_limited, budget_limited, complete
-	Label     string `json:"statusLabel"` // the status as atto words it: "stalled", "limited by budget"
-	// Indicator is the status line's text ("Pursuing goal (12.5K / 50K)"),
+	Status    string `json:"status"`      // active, paused, blocked, usage_limited, complete
+	Label     string `json:"statusLabel"` // the status as atto words it: "stalled", "usage limited"
+	// Indicator is the status line's text ("Pursuing goal (14m)"),
 	// Summary the goal's usage summary.
 	Indicator string `json:"indicator"`
 	Summary   string `json:"summary"`
 	Note      string `json:"note,omitempty"`
-	// Tokens is "12.5K" or "12.5K / 50K"; Elapsed the time spent, with
+	// Tokens is "12.5K"; Elapsed the time spent, with
 	// the running turn ("14m").
 	Tokens     string `json:"tokens"`
 	TokensUsed int    `json:"tokensUsed"`
-	Budget     int    `json:"budget,omitempty"`
 	Elapsed    string `json:"elapsed"`
 	Seconds    int64  `json:"seconds"`
 	// Held: an active goal waiting for the user to continue it ("/goal

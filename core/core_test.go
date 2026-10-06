@@ -92,7 +92,7 @@ func TestEnvAndLeave(t *testing.T) {
 	if !slices.Contains(env, "ATTO_SESSION_ID=s1") || !slices.Contains(env, config.EnvAgent+"=1") {
 		t.Fatal(env)
 	}
-	g, _ := goal.New("x", 0)
+	g, _ := goal.New("x")
 	goal.Save("s1", g)
 	if Leave("s1") != 0 {
 		t.Fatal("no jobs to stop")

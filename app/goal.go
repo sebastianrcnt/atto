@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"strings"
 
 	"github.com/sebastianrcnt/atto/core"
@@ -24,8 +23,6 @@ func (a *App) resetGoal() {
 	a.goal = core.GoalDriver{
 		Session:  a.sess.ID,
 		Steer:    func(text string) { a.agent.Steer(text) },
-		Stop:     func() { a.agent.StopAtBoundary() },
-		Notice:   func(text string) { a.notice("%s", text) },
 		Snapshot: a.snapshotGoal,
 		Changed:  a.announceGoal,
 		Adopted:  a.goalInfo,
@@ -68,7 +65,7 @@ func (a *App) continueGoal() {
 const goalWaitingNotice = "Goal waiting for you — press enter on an empty prompt or /goal resume to continue."
 
 // goalUsage is codex's usage line for /goal.
-const goalUsage = "Usage: /goal [<objective>|clear|edit|pause|resume|budget <n>]"
+const goalUsage = "Usage: /goal [<objective>|clear|edit|pause|resume]"
 
 // infoBlock is codex's info message: a title after a bullet, and a dim hint
 // under it.
@@ -98,28 +95,17 @@ func (a *App) goalInfo(g *goal.Goal) {
 
 var errNoGoal = errors.New("No goal is currently set.")
 
-// cmdGoal: /goal [<objective>|clear|edit|pause|resume], as in codex, and
-// /goal budget <n> besides. A change to the goal while a turn runs is told
-// to the model (the turn would otherwise go on with the goal as it was).
-// The words help, status and budget alone are commands, never objectives.
+// cmdGoal: /goal [<objective>|clear|edit|pause|resume], as in codex. A
+// change to the goal while a turn runs is told to the model (the turn would
+// otherwise go on with the goal as it was). The words help and status alone
+// are commands, never objectives.
 func (a *App) cmdGoal(arg string) {
 	arg = strings.TrimSpace(arg)
-	sub, rest, _ := strings.Cut(arg, " ")
 	a.goal.Poll()
 	g := a.goal.Goal
 	switch strings.ToLower(arg) {
 	case "help", "-h", "--help":
 		a.add(&infoBlock{title: goalUsage})
-		return
-	case "budget":
-		switch {
-		case g == nil:
-			a.add(&infoBlock{title: goalUsage, hint: "No goal is currently set."})
-		case g.Budget > 0:
-			a.notice("Goal budget: %s (%s used). Change it with /goal budget <n>.", goal.Tokens(g.Budget), goal.Tokens(g.TokensUsed))
-		default:
-			a.notice("The goal has no token budget (%s used). Set one with /goal budget <n>.", goal.Tokens(g.TokensUsed))
-		}
 		return
 	case "", "show", "status":
 		if g == nil {
@@ -157,42 +143,14 @@ func (a *App) cmdGoal(arg string) {
 			a.errorNotice(errNoGoal)
 			return
 		}
-		switch {
-		case g.Status == goal.Paused || g.Status == goal.Blocked || g.Status == goal.UsageLimited || a.goal.Held():
+		if g.Status == goal.Paused || g.Status == goal.Blocked || g.Status == goal.UsageLimited || a.goal.Held() {
 			a.resumeGoal()
 			return
 		}
 		a.goalInfo(g)
-		if g.Status == goal.BudgetLimited {
-			a.notice("Raise the budget first with /goal budget <n>.")
-		}
 		return
 	}
-	if strings.EqualFold(sub, "budget") {
-		if g == nil {
-			a.errorNotice(errNoGoal)
-			return
-		}
-		b, err := goal.ParseBudget(rest)
-		if err != nil {
-			a.errorNotice(err)
-			return
-		}
-		g.Budget = b
-		raised := g.Status == goal.BudgetLimited && g.TokensUsed < b
-		if raised {
-			g.Status, g.Note = goal.Paused, "budget raised"
-		}
-		a.goal.Set(g)
-		a.goal.Tell(g.BudgetChangedMessage())
-		msg := fmt.Sprintf("Goal budget set to %s (%s used).", goal.Tokens(b), goal.Tokens(g.TokensUsed))
-		if raised {
-			msg += " Use /goal resume to continue."
-		}
-		a.notice("%s", msg)
-		return
-	}
-	ng, err := goal.New(arg, 0)
+	ng, err := goal.New(arg)
 	if err != nil {
 		a.errorNotice(err)
 		return
@@ -233,9 +191,6 @@ func goalSummaryLines(g *goal.Goal, held bool) []string {
 		tui.Dim("Objective: ") + g.Objective,
 		tui.Dim("Time used: ") + goal.FormatElapsed(g.Seconds),
 		tui.Dim("Tokens used: ") + goal.Tokens(g.TokensUsed),
-	}
-	if g.Budget > 0 {
-		lines = append(lines, tui.Dim("Token budget: ")+goal.Tokens(g.Budget))
 	}
 	hint := "Commands: /goal edit, /goal clear"
 	switch g.Status {
@@ -322,9 +277,9 @@ func (a *App) editGoal() {
 	a.openModal(labelModal{in})
 }
 
-// setObjective applies an edited objective. The goal keeps its budget and
-// usage and, as in codex, its status, except that a finished or budget
-// limited goal becomes active again.
+// setObjective applies an edited objective. The goal keeps its usage and,
+// as in codex, its status, except that a finished goal becomes active
+// again.
 func (a *App) setObjective(text string) {
 	g := a.goal.Goal
 	if g == nil {
@@ -335,13 +290,13 @@ func (a *App) setObjective(text string) {
 	if text == "" || text == g.Objective {
 		return
 	}
-	if _, err := goal.New(text, 0); err != nil { // the same checks
+	if _, err := goal.New(text); err != nil { // the same checks
 		a.errorNotice(err)
 		return
 	}
 	g.Objective = text
 	a.goal.Release() // an edit is the user steering the goal: no waiting
-	if g.Status == goal.BudgetLimited || g.Status == goal.Complete {
+	if g.Status == goal.Complete {
 		g.Status, g.Note, g.FailStreak, g.IdleStreak = goal.Active, "", 0, 0
 	}
 	a.goal.Set(g)

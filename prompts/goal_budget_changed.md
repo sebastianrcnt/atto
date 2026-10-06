@@ -1,1 +1,0 @@
-The user set the goal's token budget to {{if .Budget}}{{.Budget}} tokens ({{.Used}} used){{else}}none{{end}}. The goal is now {{.Label}}.{{if ne .Label "active"}} Do not do goal work in this turn unless the user asks.{{end}}

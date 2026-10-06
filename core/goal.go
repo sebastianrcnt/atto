@@ -12,11 +12,10 @@ import (
 )
 
 // GoalDriver keeps a session's goal going across turns, the same way in
-// every front end: each model call is accounted against the budget, the
-// model is told to wrap up (mid-turn) when the budget runs out, reminded as
-// it keeps going, and its turn stopped at twice the budget; its
-// complete/blocked/pause/resume reports are taken from the goal file, the stop
-// conditions apply when a turn ends and an interrupt pauses the goal.
+// every front end: each model call's tokens and the turn's time are
+// accounted to the goal, its complete/blocked/pause/resume reports are
+// taken from the goal file, the stop conditions apply when a turn ends and
+// an interrupt pauses the goal.
 //
 // It works event-driven, as the TUI uses it (BeginTurn, Event for every
 // agent event, EndTurn, then Next when idle), or as a loop (Run), as
@@ -30,25 +29,20 @@ import (
 //
 // The goal lives in memory; the goal file is how the model reports back
 // (atto goal complete|blocked|pause|resume), and only those reports are taken from it
-// (goal.Adopt), so editing the file cannot rewrite the objective or the
-// budget. The driver is not safe for concurrent use.
+// (goal.Adopt), so editing the file cannot rewrite the objective. The driver is not safe for concurrent use.
 type GoalDriver struct {
 	Session string     // session ID: names the goal file
 	Goal    *goal.Goal // nil when the session has none
 
-	// Steer delivers internal messages (the budget messages, what the user
-	// did to the goal) into the running turn.
+	// Steer delivers internal messages (what the user did to the goal) into
+	// the running turn.
 	Steer func(string)
-	// Stop, if set, ends the running turn at its next step boundary, as a
-	// normal stop (the turn is over budget); Notice, if set, tells the user.
-	Stop   func()
-	Notice func(string)
 	// Snapshot, if set, records the goal in the session file whenever it
 	// is saved (nil when cleared), so a resumed session gets it back.
 	Snapshot func(*goal.Goal)
 	// Changed, if set, is told when the goal's status changed by itself:
-	// the model reported, the budget ran out, a stop condition tripped or
-	// an interrupt paused it.
+	// the model reported, a stop condition tripped or an interrupt paused
+	// it.
 	Changed func(*goal.Goal)
 	// Adopted, if set, is told about a goal the model set with atto goal
 	// set (at the user's request, as codex's create_goal) or resumed with
@@ -57,15 +51,12 @@ type GoalDriver struct {
 	// Error, if set, receives failures to read or write the goal file.
 	Error func(error)
 
-	running    bool // a turn is in progress (BeginTurn..EndTurn)
-	tools      int  // tool calls in the current turn
-	budgetSent bool // budget message already steered into this turn
-	stopped    bool // the turn was stopped for exceeding the budget
-	mark       int  // tokens used when the budget message or reminder last went out
+	running bool // a turn is in progress (BeginTurn..EndTurn)
+	tools   int  // tool calls in the current turn
 	// counted: the goal is part of the running turn, so every model call of
 	// it is accounted, even once the goal is complete or paused. timing: the
-	// turn's time still adds to Seconds (until the goal stops being active
-	// or limited). lastFold is the time up to which it has been added.
+	// turn's time still adds to Seconds (until the goal stops being
+	// active). lastFold is the time up to which it has been added.
 	counted, timing bool
 	lastFold        time.Time
 	userInput       bool // the running turn took user input (see UserInput)
@@ -102,10 +93,8 @@ func (d *GoalDriver) Set(g *goal.Goal) {
 	}
 }
 
-// running reports whether g keeps accruing: it is active or limited by budget.
-func running(g *goal.Goal) bool {
-	return g != nil && (g.Status == goal.Active || g.Status == goal.BudgetLimited)
-}
+// running reports whether g keeps accruing: it is active.
+func running(g *goal.Goal) bool { return g != nil && g.Status == goal.Active }
 
 // track notes that the goal is part of the running turn.
 func (d *GoalDriver) track() {
@@ -116,7 +105,7 @@ func (d *GoalDriver) track() {
 
 // fold adds the running turn's whole seconds to the goal's time, so that
 // the indicator, /goal and the completion notice read one number. The time
-// stops once the goal is no longer active or limited (complete, paused...).
+// stops once the goal is no longer active (complete, paused...).
 func (d *GoalDriver) fold() {
 	if !d.running || !d.timing || d.Goal == nil {
 		return
@@ -171,7 +160,7 @@ func (d *GoalDriver) Poll() {
 func (d *GoalDriver) Active() bool { return d.Goal != nil && d.Goal.Status == goal.Active }
 
 // Tell steers an internal message into the running turn, if there is one:
-// what the user just did to the goal (cleared, paused, budget), which the
+// what the user just did to the goal (cleared, paused), which the
 // model cannot otherwise know.
 func (d *GoalDriver) Tell(msg string) {
 	if d.running && d.Steer != nil {
@@ -181,7 +170,7 @@ func (d *GoalDriver) Tell(msg string) {
 
 // StateNote is the note for a user message that starts a turn while the
 // goal is not running by itself (waiting for the user, paused, stalled,
-// limited); empty when there is none to give. Goal continuations and
+// usage limited); empty when there is none to give. Goal continuations and
 // events are not user turns and take none.
 func (d *GoalDriver) StateNote() string {
 	if d.Goal == nil {
@@ -205,13 +194,13 @@ func (d *GoalDriver) Release() { d.held, d.userInput = false, false }
 // BeginTurn starts counting a turn.
 func (d *GoalDriver) BeginTurn() {
 	d.lastFold, d.tools, d.running = time.Now(), 0, true
-	d.budgetSent, d.stopped, d.counted, d.timing = false, false, false, false
+	d.counted, d.timing = false, false
 	d.track()
 }
 
 // Elapsed is the goal's time in seconds including the running turn, as
 // codex's indicator counts it: the turn in progress adds to a goal that is
-// active or limited, and is in Seconds (once) from then on.
+// active, and is in Seconds (once) from then on.
 func (d *GoalDriver) Elapsed() int64 {
 	g := d.Goal
 	if g == nil {
@@ -235,17 +224,9 @@ func (d *GoalDriver) Event(ev any) {
 	}
 }
 
-// budgetStep is how much usage past the budget message (or the last
-// reminder) brings the next reminder: a quarter of the budget. At twice the
-// budget the turn is stopped.
-func budgetStep(budget int) int { return max(1, budget/4) }
-
-// step accounts a model call against the goal and, when the budget runs
-// out, tells the model to wrap up (mid-turn as in codex). A model that goes
-// on past that is reminded every quarter budget and stopped at twice the
-// budget, so it cannot work its way to completion on tokens it was refused.
-// A goal that is part of the turn is accounted to the turn's end, whatever
-// happens to it meanwhile (complete, paused, limited).
+// step accounts a model call to the goal. A goal that is part of the turn
+// is accounted to the turn's end, whatever happens to it meanwhile
+// (complete, paused).
 func (d *GoalDriver) step(input, cached, output int) {
 	d.Poll()
 	g := d.Goal
@@ -256,33 +237,8 @@ func (d *GoalDriver) step(input, cached, output int) {
 	if !d.counted {
 		return
 	}
-	exhausted := g.Account(input, cached, output)
+	g.Account(input, cached, output)
 	_ = goal.Save(d.Session, g) // the file follows memory; edits to it are dropped
-	if exhausted && !d.budgetSent {
-		d.budgetSent, d.mark = true, g.TokensUsed
-		if d.Steer != nil {
-			d.Steer(g.BudgetMessage())
-		}
-		d.changed()
-	}
-	if !d.budgetSent || g.Status != goal.BudgetLimited || g.Budget <= 0 || d.stopped {
-		return
-	}
-	switch {
-	case g.TokensUsed >= 2*g.Budget:
-		d.stopped = true
-		if d.Stop != nil {
-			d.Stop()
-		}
-		if d.Notice != nil {
-			d.Notice("Goal budget exceeded: stopped the turn.")
-		}
-	case g.TokensUsed-d.mark >= budgetStep(g.Budget):
-		d.mark = g.TokensUsed
-		if d.Steer != nil {
-			d.Steer(g.BudgetReminderMessage())
-		}
-	}
 }
 
 // EndTurn applies the stop conditions after a turn that ended with err.

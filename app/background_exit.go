@@ -182,7 +182,7 @@ func (a *App) backgroundEvent(ev any) {
 }
 
 // goalSnapshot records the goal as it is, so the background run takes up
-// its budget where it stands.
+// its usage where it stands.
 func (a *App) goalSnapshot() {
 	a.goal.Poll()
 	if g := a.goal.Goal; g != nil {

@@ -68,8 +68,8 @@ func (a *App) itemStarted(it *transcript.Item) {
 			}
 		}
 	case transcript.Goal:
-		// Live, continuing shows the goal's progress, and the budget running
-		// out is announced as a status change.
+		// Live, continuing shows the goal's progress; status changes are
+		// announced as such.
 		if a.replaying {
 			a.add(&eventBlock{title: goalMessageTitle(it.Text)})
 		}

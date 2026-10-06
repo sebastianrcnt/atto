@@ -280,7 +280,6 @@ func main() {
 	maxSteps := fs.Int("max-steps", 0, "print mode: stop after this many model calls")
 	noSave := fs.Bool("no-save", false, "print mode: do not save the run as a session")
 	goalObj := fs.String("goal", "", "print mode: keep working until this objective is done")
-	goalBudget := fs.String("goal-budget", "", "print mode: token budget for -goal, e.g. 200k")
 	var imagePaths stringList
 	fs.Var(&imagePaths, "image", "print mode: attach the image file at `path` (PNG, JPEG, GIF or WebP) to the prompt; repeatable.\nAn image piped to stdin is attached as well. The model must accept images")
 
@@ -310,7 +309,7 @@ func main() {
 			err = cli.RunPrint(cli.PrintOptions{
 				Prompt: prompt, Images: imgs, Model: *model, Effort: *effort, Format: *format, Partial: *partial,
 				Verbose: *verbose, MaxSteps: *maxSteps, Continue: *cont, Resume: *sessionID, NoSave: *noSave,
-				Goal: *goalObj, GoalBudget: *goalBudget,
+				Goal: *goalObj,
 			})
 		}
 	} else {

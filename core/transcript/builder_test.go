@@ -289,7 +289,7 @@ func TestReplayGoalMessages(t *testing.T) {
 // The goal's state note rides at the end of the user's message for the
 // model; the replay shows the message alone.
 func TestReplayHidesGoalStateNote(t *testing.T) {
-	g, _ := goal.New("x", 0)
+	g, _ := goal.New("x")
 	g.Status = goal.Paused
 	text := "Thanks, that is fine.\n\n" + g.StateMessage(false)
 	items := FromEntries("", []session.Entry{{Type: session.TypeMessage, Message: &provider.Message{Role: "user", Content: text}}})

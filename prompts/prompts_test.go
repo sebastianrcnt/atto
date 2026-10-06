@@ -16,17 +16,12 @@ var samples = map[string]any{
 	"compact_prefix":         nil,
 	"branch_summary":         map[string]any{"Start": "X", "Words": 600, "Focus": "tests"},
 	"branch_summary_prefix":  nil,
-	"goal_continuation":      Goal{Objective: "obj", Turns: 2, Used: 10, Budget: 100, Remaining: 90},
-	"goal_budget":            Goal{Objective: "obj", Used: 100, Budget: 100, Seconds: 9},
-	"goal_budget_lines":      Goal{Used: 1},
-	"goal_objective_updated": Goal{Objective: "obj", Used: 10},
-	"goal_budget_reminder":   Goal{Used: 150, Budget: 100},
-	"goal_budget_changed":    Goal{Used: 10, Budget: 100, Label: "paused"},
+	"goal_continuation":      Goal{Objective: "obj", Turns: 2},
+	"goal_objective_updated": Goal{Objective: "obj"},
 	"goal_cleared":           nil,
 	"goal_paused":            Goal{},
 	"goal_state_waiting":     Goal{},
 	"goal_state_paused":      Goal{Label: "paused", Interrupted: true},
-	"goal_state_budget":      Goal{Used: 150, Budget: 100},
 }
 
 func TestEveryTemplateRenders(t *testing.T) {
@@ -55,9 +50,8 @@ func TestRender(t *testing.T) {
 	}{
 		{"bash_tool", map[string]any{"Kind": "cmd"}, "Run a cmd.exe command in the working directory"},
 		{"compact", map[string]any{"Words": 700}, "Stay under 700 words."},
-		{"goal_continuation", Goal{Objective: "a &lt; b", Used: 5}, "<objective>\na &lt; b\n</objective>"},
-		{"goal_continuation", Goal{Used: 5}, "- Token budget: none\n- Tokens remaining: unbounded\n- Goal turns so far: 0"},
-		{"goal_continuation", Goal{Used: 5, Budget: 8, Remaining: 3}, "- Token budget: 8\n- Tokens remaining: 3\n"},
+		{"goal_continuation", Goal{Objective: "a &lt; b"}, "<objective>\na &lt; b\n</objective>"},
+		{"goal_continuation", Goal{Turns: 3}, "verified.\n\nGoal turns so far: 3\n\nUser messages:"},
 		{"system", System{Kind: "bash", Tool: "bash", Date: "d"}, `run "atto goal resume '<why>'" (never resume on your own)`},
 		{"subagent", Subagent{Name: "w", Preset: "p"}, `You are subagent "w" (preset p)`},
 	} {

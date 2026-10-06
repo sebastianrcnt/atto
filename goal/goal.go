@@ -1,8 +1,8 @@
 // Package goal keeps one persistent objective per session that drives work
 // across turns, after codex-rs's goals: while a goal is active, every time
 // the agent goes idle atto starts another turn with a continuation prompt,
-// until the model reports the goal complete or blocked, the token budget
-// runs out, or a stop condition trips.
+// until the model reports the goal complete or blocked, or a stop condition
+// trips.
 //
 // The goal lives in a file (~/.atto/goals/<session>.json) so the model can
 // update it from its shell (`atto goal complete "<evidence>"`) and the
@@ -30,12 +30,15 @@ import (
 type Status string
 
 const (
-	Active        Status = "active"
-	Paused        Status = "paused"         // by the user, or after an interrupt
-	Blocked       Status = "blocked"        // reported by the model, or a stop condition (codex: stalled)
-	UsageLimited  Status = "usage_limited"  // the provider's usage limit stopped a turn
-	BudgetLimited Status = "budget_limited" // token budget used up
-	Complete      Status = "complete"       // reported by the model
+	Active       Status = "active"
+	Paused       Status = "paused"        // by the user, or after an interrupt
+	Blocked      Status = "blocked"       // reported by the model, or a stop condition (codex: stalled)
+	UsageLimited Status = "usage_limited" // the provider's usage limit stopped a turn
+	Complete     Status = "complete"      // reported by the model
+
+	// legacyBudgetLimited was the status of a goal whose token budget ran
+	// out, before budgets were dropped; such a goal loads as paused.
+	legacyBudgetLimited Status = "budget_limited"
 )
 
 // NoteInterrupted is the note of a goal paused by an interrupt (Esc).
@@ -55,7 +58,6 @@ const (
 type Goal struct {
 	Objective  string    `json:"objective"`
 	Status     Status    `json:"status"`
-	Budget     int       `json:"budget,omitempty"` // tokens; 0 = no limit
 	TokensUsed int       `json:"tokensUsed"`
 	Seconds    int64     `json:"seconds"`
 	Note       string    `json:"note,omitempty"` // completion evidence or block reason
@@ -64,6 +66,20 @@ type Goal struct {
 	IdleStreak int       `json:"idleStreak,omitempty"`
 	Created    time.Time `json:"created"`
 	Updated    time.Time `json:"updated"`
+}
+
+// UnmarshalJSON reads a goal, taking one saved with a token budget (the
+// "budget" field is ignored) that ran out as paused, so the user can resume
+// it.
+func (g *Goal) UnmarshalJSON(data []byte) error {
+	type plain Goal
+	if err := json.Unmarshal(data, (*plain)(g)); err != nil {
+		return err
+	}
+	if g.Status == legacyBudgetLimited {
+		g.Status, g.Note = Paused, ""
+	}
+	return nil
 }
 
 func Path(session string) string { return filepath.Join(config.Dir(), "goals", session+".json") }
@@ -107,7 +123,7 @@ func Clear(session string) error {
 // reserved are the words /goal and atto goal take as subcommands: a goal
 // whose whole objective is one of them is a typo, not a task.
 var reserved = map[string]bool{
-	"help": true, "status": true, "show": true, "budget": true,
+	"help": true, "status": true, "show": true,
 	"clear": true, "edit": true, "pause": true, "resume": true,
 }
 
@@ -115,7 +131,7 @@ var reserved = map[string]bool{
 func Reserved(text string) bool { return reserved[strings.ToLower(strings.TrimSpace(text))] }
 
 // New creates an active goal.
-func New(objective string, budget int) (*Goal, error) {
+func New(objective string) (*Goal, error) {
 	objective = strings.TrimSpace(objective)
 	if objective == "" {
 		return nil, fmt.Errorf("the goal needs an objective")
@@ -127,33 +143,24 @@ func New(objective string, budget int) (*Goal, error) {
 		return nil, fmt.Errorf("objective is %d characters; keep it under %d (put details in a file and point to it)", len(objective), MaxObjective)
 	}
 	now := time.Now()
-	return &Goal{Objective: objective, Status: Active, Budget: budget, Created: now, Updated: now}, nil
+	return &Goal{Objective: objective, Status: Active, Created: now, Updated: now}, nil
 }
 
 // Account adds a model call's usage. Only new tokens count: cached input
-// is re-sent prefix, and counting it would exhaust any budget in a few
-// steps. Returns true if this call used up the budget.
-func (g *Goal) Account(input, cached, output int) bool {
+// is re-sent prefix.
+func (g *Goal) Account(input, cached, output int) {
 	g.TokensUsed += max(0, input-cached) + output
-	if g.Status == Active && g.Budget > 0 && g.TokensUsed >= g.Budget {
-		g.Status = BudgetLimited
-		g.Note = fmt.Sprintf("token budget of %s used", Tokens(g.Budget))
-		return true
-	}
-	return false
 }
 
 // Adopt takes the model's status report from the goal file (atto goal
 // complete|blocked|pause|resume). The front end keeps the goal in memory and
 // accepts only that transition, so editing the file cannot change the
-// objective, the budget or the usage. Returns true if the status changed.
+// objective or the usage. Returns true if the status changed.
 //
-// As in codex's update_goal, complete and blocked also apply to a goal
-// whose budget ran out, while pausing (only at the user's request) applies
-// to an active goal only: a budget limit takes precedence. Resuming (also
-// only at the user's request) makes a paused, stalled or usage limited goal
-// active again, as the user's /goal resume does, with a fresh stall audit;
-// a budget limited goal stays the user's to raise.
+// Complete, blocked and pause (only at the user's request) apply to an
+// active goal. Resuming (also only at the user's request) makes a paused,
+// stalled or usage limited goal active again, as the user's /goal resume
+// does, with a fresh stall audit.
 func (g *Goal) Adopt(file *Goal) bool {
 	if file == nil {
 		return false
@@ -167,16 +174,12 @@ func (g *Goal) Adopt(file *Goal) bool {
 		}
 		g.Status, g.Note, g.FailStreak, g.IdleStreak = Active, "", 0, 0
 		return true
-	case Active, BudgetLimited:
+	case Active:
 	default:
 		return false
 	}
 	switch file.Status {
-	case Complete, Blocked:
-	case Paused:
-		if g.Status != Active {
-			return false
-		}
+	case Complete, Blocked, Paused:
 	default:
 		return false
 	}
@@ -214,13 +217,9 @@ func (g *Goal) TurnEnded(failed error, toolCalls int) {
 	g.IdleStreak = 0
 }
 
-// Usage is "12.5K / 50K tokens · 14m" (or without the budget).
+// Usage is "12.5K tokens · 14m".
 func (g *Goal) Usage() string {
-	s := Tokens(g.TokensUsed)
-	if g.Budget > 0 {
-		s += " / " + Tokens(g.Budget)
-	}
-	s += " tokens"
+	s := Tokens(g.TokensUsed) + " tokens"
 	if g.Seconds > 0 {
 		s += " · " + FormatElapsed(g.Seconds)
 	}
@@ -293,29 +292,24 @@ func (s Status) Label() string {
 		return "stalled"
 	case UsageLimited:
 		return "usage limited"
-	case BudgetLimited:
-		return "limited by budget"
 	case Complete:
 		return "complete"
 	}
 	return string(s)
 }
 
-// Summary is codex's goal_usage_summary: "Objective: … Time: 2m. Tokens:
-// 63.9K/50K." (time only once some is used, tokens only with a budget).
+// Summary is codex's goal_usage_summary: "Objective: … Time: 2m." (time
+// only once some is used).
 func (g *Goal) Summary() string {
 	parts := []string{"Objective: " + g.Objective}
 	if g.Seconds > 0 {
 		parts = append(parts, "Time: "+FormatElapsed(g.Seconds)+".")
 	}
-	if g.Budget > 0 {
-		parts = append(parts, fmt.Sprintf("Tokens: %s/%s.", Tokens(g.TokensUsed), Tokens(g.Budget)))
-	}
 	return strings.Join(parts, " ")
 }
 
 // Indicator is the status indicator, worded as codex's footer: "Pursuing
-// goal (12.5K / 50K)", "Goal paused (/goal resume)" and so on. seconds is
+// goal (14m)", "Goal paused (/goal resume)" and so on. seconds is
 // the goal's time including the running turn; held is an active goal
 // waiting for the user after their input.
 func (g *Goal) Indicator(seconds int64, held bool) string {
@@ -324,9 +318,6 @@ func (g *Goal) Indicator(seconds int64, held bool) string {
 		if held {
 			return "Goal waiting (enter to continue)"
 		}
-		if g.Budget > 0 {
-			return fmt.Sprintf("Pursuing goal (%s / %s)", Tokens(g.TokensUsed), Tokens(g.Budget))
-		}
 		return "Pursuing goal (" + FormatElapsed(seconds) + ")"
 	case Paused:
 		return "Goal paused (/goal resume)"
@@ -334,15 +325,7 @@ func (g *Goal) Indicator(seconds int64, held bool) string {
 		return "Goal stalled (/goal resume)"
 	case UsageLimited:
 		return "Goal hit usage limits (/goal resume)"
-	case BudgetLimited:
-		if g.Budget > 0 {
-			return fmt.Sprintf("Goal unmet (%s / %s tokens)", Tokens(g.TokensUsed), Tokens(g.Budget))
-		}
-		return "Goal abandoned"
 	case Complete:
-		if g.Budget > 0 {
-			return fmt.Sprintf("Goal achieved (%s tokens)", Tokens(g.TokensUsed))
-		}
 		return "Goal achieved (" + FormatElapsed(seconds) + ")"
 	}
 	return ""
@@ -365,23 +348,6 @@ func IsUsageLimit(err error) bool {
 		return true
 	}
 	return usageLimit.MatchString(err.Error())
-}
-
-// ParseBudget reads "50k", "1.5M" or "20000".
-func ParseBudget(s string) (int, error) {
-	s = strings.TrimSpace(strings.ToLower(s))
-	mult := 1.0
-	switch {
-	case strings.HasSuffix(s, "k"):
-		mult, s = 1e3, strings.TrimSuffix(s, "k")
-	case strings.HasSuffix(s, "m"):
-		mult, s = 1e6, strings.TrimSuffix(s, "m")
-	}
-	var f float64
-	if _, err := fmt.Sscanf(s, "%g", &f); err != nil || f <= 0 {
-		return 0, fmt.Errorf("bad budget %q: use e.g. 50k or 1.5M", s)
-	}
-	return int(f * mult), nil
 }
 
 // Goal messages are wrapped as internal context, after codex's
@@ -428,10 +394,6 @@ func (g *Goal) data() prompts.Goal {
 	return prompts.Goal{
 		Objective:   escape(g.Objective),
 		Turns:       g.Turns,
-		Used:        g.TokensUsed,
-		Budget:      g.Budget,
-		Remaining:   max(0, g.Budget-g.TokensUsed),
-		Seconds:     g.Seconds,
 		Label:       g.Status.Label(),
 		Interrupted: g.Note == NoteInterrupted,
 	}
@@ -445,33 +407,16 @@ func (g *Goal) Continuation() string {
 	return wrap(prompts.Render("goal_continuation", g.data()))
 }
 
-// BudgetMessage tells the model to wrap up once the budget is spent (codex's
-// budget_limit template).
-func (g *Goal) BudgetMessage() string {
-	return wrap(prompts.Render("goal_budget", g.data()))
-}
-
-// BudgetReminderMessage tells the model, mid-turn, that it is still working
-// past the budget message and must wrap up (atto's own: codex sends the
-// budget message only once).
-func (g *Goal) BudgetReminderMessage() string {
-	return wrap(prompts.Render("goal_budget_reminder", g.data()))
-}
-
-// ClearedMessage, PausedMessage and BudgetChangedMessage tell the running
+// ClearedMessage and PausedMessage tell the running
 // turn what the user just did to the goal, so it stops goal work (and does
 // not set a new goal) instead of finishing what the user cancelled.
 func ClearedMessage() string { return wrap(prompts.Render("goal_cleared", nil)) }
 
 func (g *Goal) PausedMessage() string { return wrap(prompts.Render("goal_paused", g.data())) }
 
-func (g *Goal) BudgetChangedMessage() string {
-	return wrap(prompts.Render("goal_budget_changed", g.data()))
-}
-
 // StateMessage is the note that goes with a message the user started a turn
 // with while the goal is not running by itself: waiting for the user (held),
-// paused, stalled, usage or budget limited. It tells the model to answer
+// paused, stalled or usage limited. It tells the model to answer
 // the user instead of picking the goal work back up. Empty for a goal that
 // is running or finished.
 func (g *Goal) StateMessage(held bool) string {
@@ -484,8 +429,6 @@ func (g *Goal) StateMessage(held bool) string {
 		name = "goal_state_waiting"
 	case Paused, Blocked, UsageLimited:
 		name = "goal_state_paused"
-	case BudgetLimited:
-		name = "goal_state_budget"
 	default:
 		return ""
 	}

@@ -16,10 +16,9 @@ const goalUsage = `usage:
   atto goal blocked "<reason>"      stalled: the same blocker for three goal turns in a row, needs the user
   atto goal pause "<why>"           only when the user explicitly asked to pause the goal
   atto goal resume "<why>"          only when the user explicitly asked to resume the goal
-  atto goal set [-budget 50k] "<objective>"   set a goal: only when the user asked for one in their own
-                                    message; never infer goals from ordinary tasks, and never re-create a
-                                    goal the user cleared or completed. -budget only if the user gave one.
-                                    Fails if an unfinished goal exists.
+  atto goal set "<objective>"       set a goal: only when the user asked for one in their own message;
+                                    never infer goals from ordinary tasks, and never re-create a goal the
+                                    user cleared or completed. Fails if an unfinished goal exists.
 /goal ... commands are the user's, not shell commands.`
 
 // RunGoal implements "atto goal". The model uses complete/blocked from its
@@ -27,7 +26,6 @@ const goalUsage = `usage:
 func RunGoal(args []string, out io.Writer) error {
 	fs := newFlags("goal")
 	session := sessionFlag(fs)
-	budget := fs.String("budget", "", "token budget, e.g. 50k")
 	sub := "show"
 	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
 		sub, args = args[0], args[1:]
@@ -66,7 +64,7 @@ func RunGoal(args []string, out io.Writer) error {
 		if g == nil {
 			return fmt.Errorf("there is no goal")
 		}
-		if g.Status != goal.Active && (g.Status != goal.BudgetLimited || sub == "pause") {
+		if g.Status != goal.Active {
 			return fmt.Errorf("the goal is %s, not active", g.Status.Label())
 		}
 		if text == "" {
@@ -83,8 +81,6 @@ func RunGoal(args []string, out io.Writer) error {
 		}
 		switch g.Status {
 		case goal.Paused, goal.Blocked, goal.UsageLimited:
-		case goal.BudgetLimited:
-			return fmt.Errorf("the goal is %s; only the user can raise the budget (/goal budget)", g.Status.Label())
 		default:
 			return fmt.Errorf("the goal is %s, not paused", g.Status.Label())
 		}
@@ -100,13 +96,7 @@ func RunGoal(args []string, out io.Writer) error {
 		if g != nil && g.Status != goal.Complete && config.InAgent() {
 			return fmt.Errorf("the session already has a goal (%s); only the user can replace it (/goal)", g.Status.Label())
 		}
-		b := 0
-		if *budget != "" {
-			if b, err = goal.ParseBudget(*budget); err != nil {
-				return err
-			}
-		}
-		ng, err := goal.New(text, b)
+		ng, err := goal.New(text)
 		if err != nil {
 			return err
 		}

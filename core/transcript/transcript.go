@@ -25,7 +25,7 @@ const (
 	Tool       Kind = "tool"       // a shell command the model ran
 	Compaction Kind = "compaction" // the context was replaced by handoff notes
 	Event      Kind = "event"      // an [atto event] for the model: a job exited, a timer fired, a monitor matched
-	Goal       Kind = "goal"       // a goal message for the model: a continuation, or the budget running out
+	Goal       Kind = "goal"       // a goal message for the model: a continuation, or what the user did to the goal
 	Hook       Kind = "hook"       // something a hook said, or what it blocked
 	Notice     Kind = "notice"     // a message from atto itself (live only: not in the session)
 	GoalStatus Kind = "goalStatus" // the goal changed status (live only)

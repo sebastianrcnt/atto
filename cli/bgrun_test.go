@@ -160,7 +160,7 @@ func TestBgPrepare(t *testing.T) {
 	user := session.Entry{Type: session.TypeMessage, Message: &provider.Message{Role: "user", Content: "u"}}
 	tool := session.Entry{Type: session.TypeMessage, Message: &provider.Message{Role: "tool", Content: "t"}}
 	asst := session.Entry{Type: session.TypeMessage, Message: &provider.Message{Role: "assistant", Content: "a"}}
-	g, _ := goal.New("ship it", 5000)
+	g, _ := goal.New("ship it")
 	g.TokensUsed = 1234
 	raw, _ := json.Marshal(g)
 	snap := session.Entry{Type: session.TypeGoal, Goal: raw}
@@ -188,8 +188,8 @@ func TestBgPrepare(t *testing.T) {
 		t.Fatalf("finished turn: %v", m)
 	}
 	m, d := prep(user, asst, snap)
-	if m != bgGoalTurn || !d.Active() || d.Goal.Budget != 5000 || d.Goal.TokensUsed != 1234 {
-		t.Fatalf("an active goal goes on, budget kept: %v %+v", m, d.Goal)
+	if m != bgGoalTurn || !d.Active() || d.Goal.TokensUsed != 1234 {
+		t.Fatalf("an active goal goes on, usage kept: %v %+v", m, d.Goal)
 	}
 	if m, d := prep(user, snap); m != bgResumeTurn || !d.Active() {
 		t.Fatalf("goal turn interrupted: %v", m)

@@ -11,8 +11,7 @@ Continuation behavior:
 - Keep the full objective intact. If it cannot be finished now, make concrete progress toward the real requested end state, leave the goal active, and do not redefine success around a smaller or easier task.
 - Temporary rough edges are acceptable while the work is moving in the right direction. Completion still requires the requested end state to be true and verified.
 
-Budget:
-{{template "goal_budget_lines" .}}- Goal turns so far: {{.Turns}}
+Goal turns so far: {{.Turns}}
 
 User messages:
 - A user message that arrived during the goal outranks it: answer it first, then continue the goal only if the user did not redirect you.
@@ -43,7 +42,7 @@ Before deciding that the goal is achieved, treat completion as unproven and veri
 - Treat uncertain or indirect evidence as not achieved; gather stronger evidence or continue the work.
 - The audit must prove completion, not merely fail to find obvious remaining work.
 
-Do not rely on intent, partial progress, memory of earlier work, or a plausible final answer as proof of completion. Marking the goal complete is a claim that the full objective has been finished and can withstand requirement-by-requirement scrutiny. Only mark the goal achieved when current evidence proves every requirement has been satisfied and no required work remains. If the evidence is incomplete, weak, indirect, merely consistent with completion, or leaves any requirement missing, incomplete, or unverified, keep working instead of marking the goal complete. If the objective is achieved, run: atto goal complete "<the evidence>" so usage accounting is preserved. If the achieved goal has a token budget, report the final consumed token budget to the user afterwards.
+Do not rely on intent, partial progress, memory of earlier work, or a plausible final answer as proof of completion. Marking the goal complete is a claim that the full objective has been finished and can withstand requirement-by-requirement scrutiny. Only mark the goal achieved when current evidence proves every requirement has been satisfied and no required work remains. If the evidence is incomplete, weak, indirect, merely consistent with completion, or leaves any requirement missing, incomplete, or unverified, keep working instead of marking the goal complete. If the objective is achieved, run: atto goal complete "<the evidence>" so usage accounting is preserved.
 
 Blocked audit:
 - Do not run atto goal blocked the first time a blocker appears.
@@ -53,4 +52,4 @@ Blocked audit:
 - Once the blocked threshold is satisfied, do not keep reporting that you are still blocked while leaving the goal active; run atto goal blocked "<what is needed>".
 - Never use it merely because the work is hard, slow, uncertain, incomplete, or would benefit from clarification.
 
-Run atto goal complete or atto goal blocked only after the completion or blocked audit passes, or atto goal pause "<why>" when the user explicitly requests pausing this goal (never pause on your own initiative; after pausing, stop goal work). Do not mark a goal complete merely because the budget is nearly exhausted or because you are stopping work.
+Run atto goal complete or atto goal blocked only after the completion or blocked audit passes, or atto goal pause "<why>" when the user explicitly requests pausing this goal (never pause on your own initiative; after pausing, stop goal work). Do not mark a goal complete merely because you are stopping work.

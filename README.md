@@ -110,7 +110,7 @@ git diff | atto -p "review this"      # stdin is appended to the prompt
 atto -p -image shot.png "why?"        # attach images (repeatable)
 pngpaste - | atto -p "what is this?"  # an image on stdin is attached too
 atto -p -output-format json "..."     # also: stream-json
-atto -p -goal "make the tests pass" -goal-budget 200k
+atto -p -goal "make the tests pass"
 ```
 
 ### Keys in the session
@@ -172,7 +172,7 @@ To use the terminal's own selection instead, hold the key that bypasses mouse re
 | `/autorename` | have the current model name the session from what it is about |
 | `/archive` | archive the session and start a new one |
 | `/clear` | start a new session |
-| `/goal [<objective>\|clear\|edit\|pause\|resume\|budget <n>]` | set or view the goal for a long-running task, as in codex: bare `/goal` (or `status`) shows it, `help` shows the usage, `edit` opens a prompt, a new objective asks before replacing an unfinished goal; `budget <n>` caps its tokens (raising a used-up budget leaves the goal paused: `/goal resume` continues). The words help, status and budget alone never become an objective. Clearing, pausing or changing the budget while a turn runs is told to the model. A message sent while the goal is waiting, paused, stalled or limited carries a short note saying so, so the model answers instead of resuming goal work. A turn that goes on after the budget message is reminded every quarter budget and stopped at twice the budget. The status shows at the right of the status line ("Pursuing goal (12.5K / 50K)"), Esc pauses it, and opening a session with a paused or stalled goal asks whether to resume |
+| `/goal [<objective>\|clear\|edit\|pause\|resume]` | set or view the goal for a long-running task, as in codex: bare `/goal` (or `status`) shows it with the time and tokens used, `help` shows the usage, `edit` opens a prompt, a new objective asks before replacing an unfinished goal. The words help and status alone never become an objective. Clearing or pausing while a turn runs is told to the model. A message sent while the goal is waiting, paused, stalled or usage limited carries a short note saying so, so the model answers instead of resuming goal work. The status shows at the right of the status line ("Pursuing goal (14m)"), Esc pauses it, and opening a session with a paused or stalled goal asks whether to resume |
 | `/remote [on [port]\|off]` | control this session from a phone or browser: serves atto's web client on port 7879 (or `"remote": {"port": N}` in `settings.json`), prints its link and a QR code, and marks messages sent from there "from remote"; `off` closes every connection and revokes the link |
 | `/jobs`, `/stop` | list or stop background jobs |
 | `/timer`, `/timers` | wake the agent later, or list pending timers |

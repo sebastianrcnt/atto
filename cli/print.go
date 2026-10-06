@@ -43,9 +43,8 @@ type PrintOptions struct {
 	Resume   string // continue the session with this ID
 	NoSave   bool   // do not record the run as a session
 	// Goal keeps running turns until the objective is done (or blocked,
-	// out of budget, or failing); GoalBudget caps its tokens.
-	Goal       string
-	GoalBudget string
+	// or failing).
+	Goal string
 	// Background is atto _continue (experimental): continue the session
 	// -session names without a new message, holding its lock, and notify
 	// the Notification hook when done.
@@ -283,16 +282,9 @@ func RunPrint(o PrintOptions) error {
 	// The goal lives here; from the file only the model's complete/blocked
 	// report is taken (see goal.Adopt). Its snapshot goes into the session
 	// once, at the end.
-	d := core.GoalDriver{Session: sess.ID, Steer: ag.Steer, Stop: ag.StopAtBoundary,
-		Notice: func(text string) { fmt.Fprintln(os.Stderr, "atto: "+text) }}
+	d := core.GoalDriver{Session: sess.ID, Steer: ag.Steer}
 	if o.Goal != "" {
-		budget := 0
-		if o.GoalBudget != "" {
-			if budget, err = goal.ParseBudget(o.GoalBudget); err != nil {
-				return err
-			}
-		}
-		g, err := goal.New(o.Goal, budget)
+		g, err := goal.New(o.Goal)
 		if err != nil {
 			return err
 		}

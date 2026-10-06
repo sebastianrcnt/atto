@@ -2,6 +2,7 @@ package core
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -10,45 +11,57 @@ import (
 	"github.com/sebastianrcnt/atto/agent"
 	"github.com/sebastianrcnt/atto/goal"
 	"github.com/sebastianrcnt/atto/provider"
+	"github.com/sebastianrcnt/atto/session"
 )
 
 func step(in, cached, out int) agent.StepEnd {
 	return agent.StepEnd{Usage: provider.Usage{PromptTokens: in, CachedTokens: cached, CompletionTokens: out}}
 }
 
-func TestGoalDriverBudget(t *testing.T) {
+func TestGoalDriverAccounts(t *testing.T) {
 	t.Setenv("ATTO_DIR", t.TempDir())
-	g, _ := goal.New("ship it", 100)
+	g, _ := goal.New("ship it")
 	var steers []string
-	var changes []goal.Status
+	changes := 0
 	snaps := 0
 	d := GoalDriver{Session: "s", Goal: g,
 		Steer:    func(s string) { steers = append(steers, s) },
-		Changed:  func(g *goal.Goal) { changes = append(changes, g.Status) },
+		Changed:  func(*goal.Goal) { changes++ },
 		Snapshot: func(*goal.Goal) { snaps++ },
 	}
 	d.BeginTurn()
 	d.Event(agent.ToolStart{})
 	d.Event(step(60, 20, 10)) // 50 new tokens
-	if len(steers) != 0 || g.TokensUsed != 50 {
-		t.Fatalf("under budget: %v %d", steers, g.TokensUsed)
+	d.Event(step(80, 60, 40)) // 60 more
+	if len(steers) != 0 || g.TokensUsed != 110 || g.Status != goal.Active {
+		t.Fatalf("tokens are information only: %v %s %d", steers, g.Status, g.TokensUsed)
 	}
-	d.Event(step(80, 60, 40)) // 60 more: over
-	d.Event(step(80, 60, 40)) // limited: still counted (60 + 60); a reminder, no second wrap-up
-	if len(steers) != 2 || !strings.Contains(steers[0], "reached its token budget") || !strings.Contains(steers[1], "still over") || g.Status != goal.BudgetLimited || g.TokensUsed != 170 {
-		t.Fatalf("budget: %v %s %d", steers, g.Status, g.TokensUsed)
+	if !d.EndTurn(nil) || g.Turns != 1 || snaps != 1 || changes != 0 {
+		t.Fatalf("turn end: %d turns, %d snapshots, %d changes", g.Turns, snaps, changes)
 	}
-	if d.EndTurn(nil) || g.Turns != 1 || snaps != 1 {
-		t.Fatalf("turn end: active, %d turns, %d snapshots", g.Turns, snaps)
+}
+
+// A session saved when goals had token budgets: a goal whose budget ran out
+// comes back paused, so the user can resume it.
+func TestGoalDriverRestoresLegacyBudgetLimitedGoal(t *testing.T) {
+	t.Setenv("ATTO_DIR", t.TempDir())
+	raw := `{"objective":"ship it","status":"budget_limited","budget":5000,"tokensUsed":5100,"seconds":42,"note":"token budget of 5K used","turns":3}`
+	d := GoalDriver{Session: "s"}
+	if d.Restore([]session.Entry{{Type: session.TypeGoal, Goal: json.RawMessage(raw)}}) {
+		t.Fatal("not an active goal: nothing to wake")
 	}
-	if len(changes) != 1 || changes[0] != goal.BudgetLimited {
-		t.Fatalf("changes %v", changes)
+	g := d.Goal
+	if g == nil || g.Status != goal.Paused || g.TokensUsed != 5100 || g.Seconds != 42 || g.Turns != 3 || d.Active() {
+		t.Fatalf("%+v", g)
+	}
+	if f, err := goal.Load("s"); err != nil || f.Status != goal.Paused {
+		t.Fatalf("the goal file: %+v %v", f, err)
 	}
 }
 
 func TestGoalDriverStops(t *testing.T) {
 	t.Setenv("ATTO_DIR", t.TempDir())
-	g, _ := goal.New("ship it", 0)
+	g, _ := goal.New("ship it")
 	d := GoalDriver{Session: "s", Goal: g}
 	d.BeginTurn()
 	if d.EndTurn(context.Canceled) || g.Status != goal.Paused || g.Note != "interrupted" {
@@ -76,7 +89,7 @@ func TestGoalDriverStops(t *testing.T) {
 	// as a new goal and continued.
 	var adopted *goal.Goal
 	d.Adopted = func(g *goal.Goal) { adopted = g }
-	ng, _ := goal.New("next thing", 0)
+	ng, _ := goal.New("next thing")
 	ng.Created = g.Created.Add(time.Second)
 	_ = goal.Save("s", ng)
 	if text, ok := d.Next(); !ok || adopted == nil || d.Goal.Objective != "next thing" || !strings.Contains(text, "next thing") {
@@ -108,7 +121,7 @@ func TestGoalDriverRun(t *testing.T) {
 	}
 
 	inputs = nil
-	g, _ := goal.New("ship it", 0)
+	g, _ := goal.New("ship it")
 	d.Goal = g
 	_ = goal.Save("s", g)
 	if err := d.Run(context.Background(), "start", turn, emit, func() { between++ }); err != nil {
@@ -124,7 +137,7 @@ func TestGoalDriverRun(t *testing.T) {
 
 func TestGoalDriverElapsedCountsTheRunningTurn(t *testing.T) {
 	t.Setenv("ATTO_DIR", t.TempDir())
-	g, _ := goal.New("ship it", 0)
+	g, _ := goal.New("ship it")
 	g.Seconds = 60
 	d := GoalDriver{Session: "s", Goal: g}
 	if d.Elapsed() != 60 {
@@ -143,7 +156,7 @@ func TestGoalDriverElapsedCountsTheRunningTurn(t *testing.T) {
 
 func TestGoalDriverModelPause(t *testing.T) {
 	t.Setenv("ATTO_DIR", t.TempDir())
-	g, _ := goal.New("ship it", 0)
+	g, _ := goal.New("ship it")
 	d := GoalDriver{Session: "s", Goal: g}
 	d.Set(g)
 	f, _ := goal.Load("s")
@@ -158,7 +171,7 @@ func TestGoalDriverModelPause(t *testing.T) {
 // releases the hold: the goal goes on after the turn.
 func TestGoalDriverModelResumeIsNotHeld(t *testing.T) {
 	t.Setenv("ATTO_DIR", t.TempDir())
-	g, _ := goal.New("ship it", 0)
+	g, _ := goal.New("ship it")
 	g.Status, g.Note, g.IdleStreak = goal.Paused, "paused by the user", 2
 	d := GoalDriver{Session: "s", Goal: g}
 	d.Set(g)
@@ -183,22 +196,12 @@ func TestGoalDriverModelResumeIsNotHeld(t *testing.T) {
 		t.Fatalf("the goal continues: %q %v", text, ok)
 	}
 
-	// Without a resume the same turn holds, and a budget limited goal is not
-	// resumed from the file.
+	// Without a resume the same turn holds.
 	d.BeginTurn()
 	d.UserInput()
 	d.EndTurn(nil)
 	if !d.Held() {
 		t.Fatal("a turn with user input holds")
-	}
-	d.Release()
-	g.Status = goal.BudgetLimited
-	f, _ = goal.Load("s")
-	f.Status = goal.Active
-	_ = goal.Save("s", f)
-	d.Poll()
-	if g.Status != goal.BudgetLimited {
-		t.Fatalf("a budget limit stays: %+v", g)
 	}
 }
 
@@ -206,7 +209,7 @@ func TestGoalDriverModelResumeIsNotHeld(t *testing.T) {
 // continuations and events do not.
 func TestGoalDriverHoldAfterUserInput(t *testing.T) {
 	t.Setenv("ATTO_DIR", t.TempDir())
-	g, _ := goal.New("ship it", 0)
+	g, _ := goal.New("ship it")
 	d := GoalDriver{Session: "s", Goal: g}
 	turn := func(user bool) {
 		d.BeginTurn()
@@ -274,7 +277,7 @@ func TestGoalDriverAdoptedGoalIsNotHeld(t *testing.T) {
 	d := GoalDriver{Session: "s"}
 	d.BeginTurn()
 	d.UserInput()
-	g, _ := goal.New("from the model", 0)
+	g, _ := goal.New("from the model")
 	_ = goal.Save("s", g)
 	d.EndTurn(nil)
 	if d.Goal == nil || d.Held() {
@@ -299,7 +302,7 @@ func TestGoalDriverRestoreDropsHold(t *testing.T) {
 // announced, and the rest of the turn does not add to a finished goal.
 func TestGoalDriverTimeAgreesAtCompletion(t *testing.T) {
 	t.Setenv("ATTO_DIR", t.TempDir())
-	g, _ := goal.New("ship it", 0)
+	g, _ := goal.New("ship it")
 	var announced int64 = -1
 	d := GoalDriver{Session: "s", Goal: g, Changed: func(g *goal.Goal) { announced = g.Seconds }}
 	d.BeginTurn()
@@ -329,7 +332,7 @@ func TestGoalDriverTimeAgreesAtCompletion(t *testing.T) {
 // or tokens.
 func TestGoalDriverUnrelatedTurnIsNotCounted(t *testing.T) {
 	t.Setenv("ATTO_DIR", t.TempDir())
-	g, _ := goal.New("ship it", 0)
+	g, _ := goal.New("ship it")
 	g.Status = goal.Paused
 	d := GoalDriver{Session: "s", Goal: g}
 	d.BeginTurn()
@@ -345,7 +348,7 @@ func TestGoalDriverUnrelatedTurnIsNotCounted(t *testing.T) {
 // model completed the goal: its closing summary is the goal's too.
 func TestGoalDriverAccountsTheRestOfTheTurn(t *testing.T) {
 	t.Setenv("ATTO_DIR", t.TempDir())
-	g, _ := goal.New("ship it", 0)
+	g, _ := goal.New("ship it")
 	d := GoalDriver{Session: "s", Goal: g}
 	d.BeginTurn()
 	d.Event(step(100, 0, 0))
@@ -359,84 +362,9 @@ func TestGoalDriverAccountsTheRestOfTheTurn(t *testing.T) {
 	}
 }
 
-func TestGoalDriverBudgetRemindersAndHardStop(t *testing.T) {
-	t.Setenv("ATTO_DIR", t.TempDir())
-	g, _ := goal.New("ship it", 100)
-	var steers, notices []string
-	stops := 0
-	d := GoalDriver{Session: "s", Goal: g,
-		Steer:  func(s string) { steers = append(steers, s) },
-		Stop:   func() { stops++ },
-		Notice: func(s string) { notices = append(notices, s) },
-	}
-	d.BeginTurn()
-	d.Event(step(100, 0, 0)) // 100: budget used, wrap-up
-	if len(steers) != 1 || !strings.Contains(steers[0], "reached its token budget") || g.Status != goal.BudgetLimited {
-		t.Fatalf("wrap-up: %v %s", steers, g.Status)
-	}
-	d.Event(step(20, 0, 0)) // 120: under another quarter
-	if len(steers) != 1 {
-		t.Fatalf("no reminder yet: %v", steers)
-	}
-	d.Event(step(10, 0, 0)) // 130: a quarter past the wrap-up
-	if len(steers) != 2 || !strings.Contains(steers[1], "still over its token budget") || !goal.IsMessage(steers[1]) {
-		t.Fatalf("reminder: %v", steers)
-	}
-	d.Event(step(20, 0, 0)) // 150
-	d.Event(step(4, 0, 0))  // 154: not a quarter past the reminder
-	if len(steers) != 2 {
-		t.Fatalf("one reminder per quarter: %d", len(steers))
-	}
-	d.Event(step(21, 0, 0)) // 175: next reminder
-	if len(steers) != 3 || stops != 0 {
-		t.Fatalf("second reminder: %d steers, %d stops", len(steers), stops)
-	}
-	d.Event(step(30, 0, 0)) // 205: twice the budget
-	if stops != 1 || len(notices) != 1 || notices[0] != "Goal budget exceeded: stopped the turn." || len(steers) != 3 {
-		t.Fatalf("hard stop: %d stops, %v, %d steers", stops, notices, len(steers))
-	}
-	d.Event(step(30, 0, 0)) // the turn is already stopping: no second notice
-	if stops != 1 || len(notices) != 1 {
-		t.Fatalf("stops once: %d %v", stops, notices)
-	}
-	d.EndTurn(nil)
-	if g.TokensUsed != 235 || g.Status != goal.BudgetLimited {
-		t.Fatalf("%+v", g)
-	}
-
-	// The next turn starts clean: a user turn on the limited goal counts
-	// tokens but is not reminded or stopped (no wrap-up was sent in it).
-	steers, notices, stops = nil, nil, 0
-	d.BeginTurn()
-	d.Event(step(500, 0, 0))
-	if stops != 0 || len(steers) != 0 || len(notices) != 0 || g.TokensUsed != 735 {
-		t.Fatalf("user turn: %d %v %v %d", stops, steers, notices, g.TokensUsed)
-	}
-}
-
-// The model may still complete a budget limited goal, and the budget
-// handling then stops.
-func TestGoalDriverCompleteWhileBudgetLimited(t *testing.T) {
-	t.Setenv("ATTO_DIR", t.TempDir())
-	g, _ := goal.New("ship it", 100)
-	var steers []string
-	stops := 0
-	d := GoalDriver{Session: "s", Goal: g, Steer: func(s string) { steers = append(steers, s) }, Stop: func() { stops++ }}
-	d.BeginTurn()
-	d.Event(step(100, 0, 0))
-	done := *g
-	done.Status, done.Note = goal.Complete, "done"
-	done.Updated = time.Now().Add(time.Second)
-	_ = goal.Save("s", &done)
-	d.Event(step(500, 0, 0))
-	if g.Status != goal.Complete || stops != 0 || len(steers) != 1 {
-		t.Fatalf("%s, %d stops, %d steers", g.Status, stops, len(steers))
-	}
-}
-
 func TestGoalDriverTellsTheRunningTurn(t *testing.T) {
 	t.Setenv("ATTO_DIR", t.TempDir())
-	g, _ := goal.New("ship it", 0)
+	g, _ := goal.New("ship it")
 	var steers []string
 	d := GoalDriver{Session: "s", Goal: g, Steer: func(s string) { steers = append(steers, s) }}
 	d.Tell(goal.ClearedMessage()) // no turn: nothing to tell
@@ -464,7 +392,7 @@ func TestGoalDriverStateNote(t *testing.T) {
 	if d.StateNote() != "" {
 		t.Fatal("no goal, no note")
 	}
-	g, _ := goal.New("ship it", 100)
+	g, _ := goal.New("ship it")
 	d.Set(g)
 	if d.StateNote() != "" {
 		t.Fatal("a running goal needs no note")
@@ -481,10 +409,6 @@ func TestGoalDriverStateNote(t *testing.T) {
 	d.EndTurn(context.Canceled) // an interrupt pauses it
 	if n := d.StateNote(); g.Status != goal.Paused || !strings.Contains(n, "because the user interrupted it") {
 		t.Fatalf("interrupted: %s %q", g.Status, n)
-	}
-	g.Status = goal.BudgetLimited
-	if n := d.StateNote(); !strings.Contains(n, "token budget is used up") {
-		t.Fatalf("budget limited: %q", n)
 	}
 	g.Status = goal.Complete
 	if d.StateNote() != "" {

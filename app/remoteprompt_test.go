@@ -278,7 +278,7 @@ func TestRemoteGoal(t *testing.T) {
 		t.Fatalf("no goal yet: %v", read["goal"])
 	}
 	a.ui.Do(func() {
-		a.goal.Set(&goal.Goal{Objective: "port the parser", Status: goal.Paused, Budget: 50000, TokensUsed: 12500, Seconds: 840})
+		a.goal.Set(&goal.Goal{Objective: "port the parser", Status: goal.Paused, TokensUsed: 12500, Seconds: 840})
 	})
 	g, _ := first(t, ev, "goal/updated").Params["goal"].(map[string]any)
 	var status string
@@ -286,23 +286,23 @@ func TestRemoteGoal(t *testing.T) {
 	if g["indicator"] != "Goal paused (/goal resume)" || !strings.Contains(status, g["indicator"].(string)) {
 		t.Fatalf("indicator %v, status line %q", g["indicator"], status)
 	}
-	if g["objective"] != "port the parser" || g["status"] != "paused" || g["statusLabel"] != "paused" || g["tokens"] != "12.5K / 50K" ||
-		g["elapsed"] != "14m" || g["summary"] != "Objective: port the parser Time: 14m. Tokens: 12.5K/50K." {
+	if g["objective"] != "port the parser" || g["status"] != "paused" || g["statusLabel"] != "paused" || g["tokens"] != "12.5K" ||
+		g["elapsed"] != "14m" || g["summary"] != "Objective: port the parser Time: 14m." {
 		t.Fatalf("goal %v", g)
 	}
 
-	// Active: the status line's budget wording, on the phone too.
+	// Active: the status line's wording, on the phone too.
 	a.ui.Do(func() { gg := a.goal.Goal; gg.Status = goal.Active; a.goal.Set(gg) })
 	g, _ = first(t, ev, "goal/updated").Params["goal"].(map[string]any)
 	a.ui.Do(func() { status = plainLines(a.renderStatus(200)) })
-	if g["indicator"] != "Pursuing goal (12.5K / 50K)" || g["statusLabel"] != "active" || !strings.Contains(status, "Pursuing goal (12.5K / 50K)") {
+	if g["indicator"] != "Pursuing goal (14m)" || g["statusLabel"] != "active" || !strings.Contains(status, "Pursuing goal (14m)") {
 		t.Fatalf("active goal %v, status line %q", g, status)
 	}
 	if read := c.must("thread/read", nil); read["goal"].(map[string]any)["indicator"] != g["indicator"] {
 		t.Fatalf("snapshot goal %v", read["goal"])
 	}
 	// Each status as the terminal words it.
-	for _, st := range []goal.Status{goal.Blocked, goal.UsageLimited, goal.BudgetLimited, goal.Complete} {
+	for _, st := range []goal.Status{goal.Blocked, goal.UsageLimited, goal.Complete} {
 		var want string
 		a.ui.Do(func() {
 			gg := a.goal.Goal

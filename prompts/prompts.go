@@ -69,10 +69,6 @@ type Subagent struct {
 type Goal struct {
 	Objective string // already escaped
 	Turns     int
-	Used      int // tokens
-	Budget    int // tokens; 0 = none
-	Remaining int // tokens, when there is a budget
-	Seconds   int64
 	Label     string // the status as the user sees it: "paused", "stalled"...
 	// Interrupted: the goal is paused because the user interrupted a turn.
 	Interrupted bool

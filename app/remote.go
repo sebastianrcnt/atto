@@ -406,14 +406,10 @@ func (a *App) remoteGoalInfo() *server.GoalInfo {
 		return nil
 	}
 	secs := a.goal.Elapsed()
-	tokens := goal.Tokens(g.TokensUsed)
-	if g.Budget > 0 {
-		tokens += " / " + goal.Tokens(g.Budget)
-	}
 	return &server.GoalInfo{
 		Objective: g.Objective, Status: string(g.Status), Label: g.Status.Label(),
 		Indicator: g.Indicator(secs, a.goal.Held()), Summary: g.Summary(), Note: g.Note,
-		Tokens: tokens, TokensUsed: g.TokensUsed, Budget: g.Budget,
+		Tokens: goal.Tokens(g.TokensUsed), TokensUsed: g.TokensUsed,
 		Elapsed: goal.FormatElapsed(secs), Seconds: secs, Held: a.goal.Held(),
 	}
 }

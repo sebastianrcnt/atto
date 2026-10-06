@@ -16,7 +16,6 @@ import (
 	"github.com/sebastianrcnt/atto/config"
 	"github.com/sebastianrcnt/atto/events"
 	"github.com/sebastianrcnt/atto/goal"
-	"github.com/sebastianrcnt/atto/provider"
 	"github.com/sebastianrcnt/atto/session"
 	"github.com/sebastianrcnt/atto/tui"
 )
@@ -50,7 +49,7 @@ func TestGoalBareShowsUsage(t *testing.T) {
 	a := goalApp(t)
 	a.cmdGoal("")
 	got := goalText(a)
-	if !strings.Contains(got, "Usage: /goal [<objective>|clear|edit|pause|resume|budget <n>]") || !strings.Contains(got, "No goal is currently set.") {
+	if !strings.Contains(got, "Usage: /goal [<objective>|clear|edit|pause|resume]") || !strings.Contains(got, "No goal is currently set.") {
 		t.Fatalf("no goal:\n%s", got)
 	}
 }
@@ -59,7 +58,7 @@ func TestGoalSetPauseResumeClear(t *testing.T) {
 	a := goalApp(t)
 	a.cmdGoal("ship the thing")
 	g := a.goal.Goal
-	if g == nil || g.Status != goal.Active || g.Objective != "ship the thing" || g.Budget != 0 {
+	if g == nil || g.Status != goal.Active || g.Objective != "ship the thing" {
 		t.Fatalf("set: %+v", g)
 	}
 	if got := goalText(a); !strings.Contains(got, "• Goal active") || !strings.Contains(got, "Objective: ship the thing") {
@@ -88,13 +87,11 @@ func TestGoalSetPauseResumeClear(t *testing.T) {
 		t.Fatalf("resume from usage limited: %+v", g)
 	}
 
-	// A goal that hit its budget or is complete does not resume.
-	for _, st := range []goal.Status{goal.BudgetLimited, goal.Complete} {
-		g.Status = st
-		a.cmdGoal("resume")
-		if g.Status != st {
-			t.Fatalf("%s must stay: %+v", st, g)
-		}
+	// A complete goal does not resume.
+	g.Status = goal.Complete
+	a.cmdGoal("resume")
+	if g.Status != goal.Complete {
+		t.Fatalf("complete must stay: %+v", g)
 	}
 
 	a.cmdGoal("clear")
@@ -120,10 +117,10 @@ func TestGoalPauseOnlyWhatCanPause(t *testing.T) {
 	a := goalApp(t)
 	a.cmdGoal("x")
 	g := a.goal.Goal
-	g.Status = goal.BudgetLimited
+	g.Status = goal.Complete
 	a.cmdGoal("pause")
-	if g.Status != goal.BudgetLimited || !strings.Contains(goalText(a), "Goal limited by budget") {
-		t.Fatalf("a budget limit takes precedence over a pause: %+v", g)
+	if g.Status != goal.Complete || !strings.Contains(goalText(a), "Goal complete") {
+		t.Fatalf("a complete goal does not pause: %+v", g)
 	}
 	g.Status = goal.Blocked
 	a.cmdGoal("pause")
@@ -171,16 +168,15 @@ func TestGoalReplaceNeedsConfirmation(t *testing.T) {
 func TestGoalSummaryPerStatus(t *testing.T) {
 	g := &goal.Goal{Objective: "ship it", TokensUsed: 63876, Seconds: 120}
 	hints := map[goal.Status]string{
-		goal.Active:        "Commands: /goal edit, /goal pause, /goal clear",
-		goal.Paused:        "Commands: /goal edit, /goal resume, /goal clear",
-		goal.Blocked:       "Commands: /goal edit, /goal resume, /goal clear",
-		goal.UsageLimited:  "Commands: /goal edit, /goal resume, /goal clear",
-		goal.BudgetLimited: "Commands: /goal edit, /goal clear",
-		goal.Complete:      "Commands: /goal edit, /goal clear",
+		goal.Active:       "Commands: /goal edit, /goal pause, /goal clear",
+		goal.Paused:       "Commands: /goal edit, /goal resume, /goal clear",
+		goal.Blocked:      "Commands: /goal edit, /goal resume, /goal clear",
+		goal.UsageLimited: "Commands: /goal edit, /goal resume, /goal clear",
+		goal.Complete:     "Commands: /goal edit, /goal clear",
 	}
 	labels := map[goal.Status]string{
 		goal.Active: "active", goal.Paused: "paused", goal.Blocked: "stalled",
-		goal.UsageLimited: "usage limited", goal.BudgetLimited: "limited by budget", goal.Complete: "complete",
+		goal.UsageLimited: "usage limited", goal.Complete: "complete",
 	}
 	for st, hint := range hints {
 		g.Status = st
@@ -190,11 +186,6 @@ func TestGoalSummaryPerStatus(t *testing.T) {
 			t.Errorf("%s:\n%s\nwant:\n%s", st, got, want)
 		}
 	}
-	g.Budget = 50000
-	if got := tui.StripEscapes(strings.Join(goalSummaryLines(g, false), "\n")); !strings.Contains(got, "Tokens used: 63.9K\nToken budget: 50K\n") {
-		t.Fatalf("budget line:\n%s", got)
-	}
-
 	a := goalApp(t)
 	a.cmdGoal("ship it")
 	a.cmdGoal("")
@@ -207,7 +198,7 @@ func TestGoalEditPrompt(t *testing.T) {
 	a := goalApp(t)
 	a.cmdGoal("old objective")
 	g := a.goal.Goal
-	g.Budget, g.TokensUsed, g.Status = 50000, 1200, goal.Paused
+	g.TokensUsed, g.Status = 1200, goal.Paused
 
 	a.cmdGoal("edit")
 	if a.modal == nil {
@@ -229,22 +220,20 @@ func TestGoalEditPrompt(t *testing.T) {
 	if a.modal != nil || g.Objective != "old new one" {
 		t.Fatalf("edited: %q", g.Objective)
 	}
-	if g.Status != goal.Paused || g.Budget != 50000 || g.TokensUsed != 1200 {
-		t.Fatalf("a paused goal stays paused and keeps its budget and usage: %+v", g)
+	if g.Status != goal.Paused || g.TokensUsed != 1200 {
+		t.Fatalf("a paused goal stays paused and keeps its usage: %+v", g)
 	}
 	if got := goalText(a); !strings.Contains(got, "• Goal paused") || !strings.Contains(got, "Objective: old new one") {
 		t.Fatalf("announces the edit:\n%s", got)
 	}
 
-	// Finished and budget limited goals become active again.
-	for _, st := range []goal.Status{goal.Complete, goal.BudgetLimited} {
-		g.Status = st
-		a.cmdGoal("edit")
-		a.modal.HandleInput("!")
-		keys(a, "enter")
-		if g.Status != goal.Active {
-			t.Fatalf("%s edit -> %s", st, g.Status)
-		}
+	// A finished goal becomes active again.
+	g.Status = goal.Complete
+	a.cmdGoal("edit")
+	a.modal.HandleInput("!")
+	keys(a, "enter")
+	if g.Status != goal.Active {
+		t.Fatalf("complete edit -> %s", g.Status)
 	}
 	g.Status = goal.Blocked
 	a.cmdGoal("edit")
@@ -287,13 +276,9 @@ func TestGoalIndicatorPlacement(t *testing.T) {
 		want string
 	}{
 		{goal.Goal{Status: goal.Active, Seconds: 90}, "Pursuing goal (1m)"},
-		{goal.Goal{Status: goal.Active, Budget: 50000, TokensUsed: 12500}, "Pursuing goal (12.5K / 50K)"},
 		{goal.Goal{Status: goal.Paused}, "Goal paused (/goal resume)"},
 		{goal.Goal{Status: goal.Blocked}, "Goal stalled (/goal resume)"},
 		{goal.Goal{Status: goal.UsageLimited}, "Goal hit usage limits (/goal resume)"},
-		{goal.Goal{Status: goal.BudgetLimited, Budget: 50000, TokensUsed: 63876}, "Goal unmet (63.9K / 50K tokens)"},
-		{goal.Goal{Status: goal.BudgetLimited}, "Goal abandoned"},
-		{goal.Goal{Status: goal.Complete, Budget: 50000, TokensUsed: 40000}, "Goal achieved (40K tokens)"},
 		{goal.Goal{Status: goal.Complete, Seconds: 36720}, "Goal achieved (10h 12m)"},
 	}
 	for _, c := range cases {
@@ -378,7 +363,7 @@ func TestResumePausedGoalPrompt(t *testing.T) {
 	}
 	for _, st := range []goal.Status{goal.Paused, goal.Blocked, goal.UsageLimited, goal.Active} {
 		a := goalApp(t)
-		a.restoreGoal(snap(&goal.Goal{Objective: "ship it", Status: st, Budget: 100}))
+		a.restoreGoal(snap(&goal.Goal{Objective: "ship it", Status: st}))
 		if a.modal == nil {
 			t.Fatalf("%s: a goal that is not running asks to resume", st)
 		}
@@ -410,13 +395,11 @@ func TestResumePausedGoalPrompt(t *testing.T) {
 		t.Fatalf("resume: %+v", a.goal.Goal)
 	}
 
-	// Finished and budget limited goals, and sessions without a goal, don't ask.
-	for _, g := range []*goal.Goal{{Objective: "x", Status: goal.Complete}, {Objective: "x", Status: goal.BudgetLimited}} {
-		a := goalApp(t)
-		a.restoreGoal(snap(g))
-		if a.modal != nil || a.goal.Goal == nil {
-			t.Fatalf("%s: no prompt", g.Status)
-		}
+	// Finished goals, and sessions without a goal, don't ask.
+	c := goalApp(t)
+	c.restoreGoal(snap(&goal.Goal{Objective: "x", Status: goal.Complete}))
+	if c.modal != nil || c.goal.Goal == nil {
+		t.Fatal("complete: no prompt")
 	}
 	b := goalApp(t)
 	b.restoreGoal(nil)
@@ -431,7 +414,7 @@ func TestOldGoalSnapshotsStillLoad(t *testing.T) {
 	a := goalApp(t)
 	a.restoreGoal([]session.Entry{{Type: session.TypeGoal, Goal: json.RawMessage(raw)}})
 	g := a.goal.Goal
-	if g == nil || g.Status != goal.Blocked || g.Objective != "old goal" || g.Budget != 1000 || g.TokensUsed != 500 || g.Seconds != 61 || g.Turns != 2 {
+	if g == nil || g.Status != goal.Blocked || g.Objective != "old goal" || g.TokensUsed != 500 || g.Seconds != 61 || g.Turns != 2 {
 		t.Fatalf("%+v", g)
 	}
 	if a.modal == nil {
@@ -439,10 +422,23 @@ func TestOldGoalSnapshotsStillLoad(t *testing.T) {
 	}
 	// The JSON of the goal keeps its keys, and the old status names.
 	out, _ := json.Marshal(g)
-	for _, key := range []string{`"objective"`, `"status":"blocked"`, `"budget":1000`, `"tokensUsed":500`, `"seconds":61`} {
+	for _, key := range []string{`"objective"`, `"status":"blocked"`, `"tokensUsed":500`, `"seconds":61`} {
 		if !strings.Contains(string(out), key) {
 			t.Errorf("format changed, lost %s: %s", key, out)
 		}
+	}
+
+	// A goal whose token budget ran out, from when goals had budgets, comes
+	// back paused and asks to resume.
+	raw = `{"objective":"old goal","status":"budget_limited","budget":1000,"tokensUsed":1200,"seconds":61,"note":"token budget of 1K used","turns":2}`
+	b := goalApp(t)
+	b.restoreGoal([]session.Entry{{Type: session.TypeGoal, Goal: json.RawMessage(raw)}})
+	if g := b.goal.Goal; g == nil || g.Status != goal.Paused || g.TokensUsed != 1200 || b.modal == nil {
+		t.Fatalf("budget limited: %+v, prompt %v", g, b.modal != nil)
+	}
+	keys(b, "enter") // Resume goal
+	if g := b.goal.Goal; g.Status != goal.Active {
+		t.Fatalf("resumed: %+v", g)
 	}
 }
 
@@ -493,8 +489,8 @@ func TestGoalHeldAfterUserInput(t *testing.T) {
 		{"user message started the turn", true, nil, true},
 		{"user steer", false, []string{"why did you do that?"}, true},
 		{"event steer", false, []string{events.Prefix + "job done"}, false},
-		{"goal message steer", false, []string{goal.OpenTag + "\nbudget\n" + goal.CloseTag}, false},
-		{"legacy goal message steer", false, []string{"[atto goal] budget"}, false},
+		{"goal message steer", false, []string{goal.OpenTag + "\npaused\n" + goal.CloseTag}, false},
+		{"legacy goal message steer", false, []string{"[atto goal] paused"}, false},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			a := goalApp(t)
@@ -597,7 +593,7 @@ func TestGoalHoldEndToEnd(t *testing.T) {
 
 	a := treeApp(t)
 	a.agent.SetModel(config.ModelRef{ProviderName: "t", Provider: config.Provider{BaseURL: srv.URL}, Model: config.Model{ID: "m", ContextWindow: 100000}})
-	g, _ := goal.New("ship it", 0)
+	g, _ := goal.New("ship it")
 	a.ui.Do(func() { a.goal.Set(g) })
 
 	a.ui.Do(func() { a.startTurn("what is going on?", nil) })
@@ -632,12 +628,12 @@ func TestGoalHoldEndToEnd(t *testing.T) {
 }
 
 func TestGoalMessageTitle(t *testing.T) {
-	g, _ := goal.New("ship it", 0)
+	g, _ := goal.New("ship it")
 	for text, want := range map[string]string{
 		g.Continuation():                                  "◎ Continuing goal",
 		"[atto goal] <objective>\nx":                      "◎ Continuing goal",
-		goal.OpenTag + "\nBudget used.\n" + goal.CloseTag: "◎ Budget used.",
-		"[atto goal] Budget used.":                        "◎ Budget used.",
+		goal.OpenTag + "\nGoal paused.\n" + goal.CloseTag: "◎ Goal paused.",
+		"[atto goal] Goal paused.":                        "◎ Goal paused.",
 	} {
 		if got := goalMessageTitle(text); got != want {
 			t.Errorf("%.40q: %q, want %q", text, got, want)
@@ -647,13 +643,13 @@ func TestGoalMessageTitle(t *testing.T) {
 
 func TestGoalReservedWordsMakeNoGoal(t *testing.T) {
 	a := goalApp(t)
-	for _, w := range []string{"help", "Help", "status", "budget", "show", "--help"} {
+	for _, w := range []string{"help", "Help", "status", "show", "--help"} {
 		a.cmdGoal(w)
 		if a.goal.Goal != nil || a.modal != nil {
 			t.Fatalf("/goal %s made a goal or asked: %+v", w, a.goal.Goal)
 		}
 	}
-	if got := goalText(a); strings.Count(got, "Usage: /goal [<objective>") != 6 {
+	if got := goalText(a); strings.Count(got, "Usage: /goal [<objective>") != 5 {
 		t.Fatalf("each shows the usage (no goal set):\n%s", got)
 	}
 
@@ -662,40 +658,12 @@ func TestGoalReservedWordsMakeNoGoal(t *testing.T) {
 	if got := goalText(a); !strings.Contains(got, "Objective: ship it") {
 		t.Fatalf("status shows the goal:\n%s", got)
 	}
-	a.cmdGoal("budget")
-	if got := goalText(a); !strings.Contains(got, "no token budget") {
-		t.Fatalf("budget alone shows the budget:\n%s", got)
-	}
-	a.cmdGoal("budget 50k")
-	a.cmdGoal("budget")
-	if got := goalText(a); !strings.Contains(got, "Goal budget: 50K (0 used)") {
-		t.Fatalf("budget alone shows the budget:\n%s", got)
-	}
 	a.cmdGoal("help")
 	if a.goal.Goal.Objective != "ship it" || a.modal != nil {
 		t.Fatalf("help leaves the goal: %+v", a.goal.Goal)
 	}
-	if strings.Count(goalText(a), "Usage: /goal [<objective>") != 7 {
+	if strings.Count(goalText(a), "Usage: /goal [<objective>") != 6 {
 		t.Fatalf("help shows the usage with a goal too:\n%s", goalText(a))
-	}
-}
-
-func TestGoalBudgetRaiseHintsAtResume(t *testing.T) {
-	a := goalApp(t)
-	a.cmdGoal("ship it")
-	g := a.goal.Goal
-	g.Status, g.TokensUsed, g.Budget = goal.BudgetLimited, 60, 50
-	a.cmdGoal("budget 40") // still under usage: stays limited, no hint
-	if g.Status != goal.BudgetLimited || strings.Contains(goalText(a), "/goal resume to continue") {
-		t.Fatalf("%s\n%s", g.Status, goalText(a))
-	}
-	a.cmdGoal("budget 100")
-	if g.Status != goal.Paused || !strings.Contains(goalText(a), "Goal budget set to 100 (60 used). Use /goal resume to continue.") {
-		t.Fatalf("%s\n%s", g.Status, goalText(a))
-	}
-	a.cmdGoal("budget 200") // not limited any more: no hint
-	if strings.Count(goalText(a), "Use /goal resume to continue.") != 1 {
-		t.Fatalf("one hint:\n%s", goalText(a))
 	}
 }
 
@@ -708,8 +676,6 @@ func TestGoalChangesMidTurnSteerTheModel(t *testing.T) {
 	}{
 		{"clear", nil, "The user cleared the goal. Stop goal work"},
 		{"pause", nil, "The user paused the goal. Stop goal work"},
-		{"budget 5k", nil, "set the goal's token budget to 5000 tokens"},
-		{"budget 5k", func(g *goal.Goal) { g.Status, g.TokensUsed, g.Budget = goal.BudgetLimited, 100, 50 }, "The goal is now paused"},
 	} {
 		t.Run(c.cmd, func(t *testing.T) {
 			a := goalApp(t)
@@ -757,23 +723,6 @@ func TestGoalNoteLeftAtTurnEndStartsNoTurn(t *testing.T) {
 	a.afterRun(nil)
 	if a.busy || len(a.agent.DrainSteers()) != 0 {
 		t.Fatal("the note started a turn")
-	}
-}
-
-// The turn is stopped, with the notice, at twice the budget.
-func TestGoalBudgetStopNotice(t *testing.T) {
-	a := goalApp(t)
-	a.cmdGoal("ship it")
-	a.goal.Goal.Budget = 100
-	a.busy, a.runKind = true, "turn"
-	a.goal.BeginTurn()
-	a.onEvent(agent.StepEnd{Usage: provider.Usage{PromptTokens: 120}})
-	if strings.Contains(goalText(a), "Goal budget exceeded") {
-		t.Fatal("not yet")
-	}
-	a.onEvent(agent.StepEnd{Usage: provider.Usage{PromptTokens: 100}})
-	if !strings.Contains(goalText(a), "Goal budget exceeded: stopped the turn.") {
-		t.Fatalf("\n%s", goalText(a))
 	}
 }
 
@@ -837,7 +786,7 @@ func TestGoalStateNoteAttachesToUserTurns(t *testing.T) {
 		})
 	}
 
-	g, _ := goal.New("ship it", 100)
+	g, _ := goal.New("ship it")
 	a.ui.Do(func() { a.goal.Set(g) })
 	if got := say("hi"); got != "hi" {
 		t.Fatalf("a running goal adds no note: %q", got)
@@ -856,7 +805,7 @@ func TestGoalStateNoteAttachesToUserTurns(t *testing.T) {
 	}{
 		{"interrupted", func(g *goal.Goal) { g.Status, g.Note = goal.Paused, goal.NoteInterrupted }, "paused because the user interrupted it"},
 		{"stalled", func(g *goal.Goal) { g.Status, g.Note = goal.Blocked, "stuck" }, "stalled"},
-		{"budget", func(g *goal.Goal) { g.Status, g.TokensUsed = goal.BudgetLimited, 150 }, "token budget is used up"},
+		{"usage limited", func(g *goal.Goal) { g.Status = goal.UsageLimited }, "usage limited"},
 	} {
 		set(c.f)
 		if _, note := goal.SplitNote(say("what now?")); !strings.Contains(note, c.want) {

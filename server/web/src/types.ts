@@ -169,7 +169,6 @@ export type GoalInfo = {
   note?: string;
   tokens: string;
   tokensUsed: number;
-  budget?: number;
   elapsed: string;
   seconds: number;
   // An active goal waiting for the user ("/goal resume").
