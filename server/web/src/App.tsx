@@ -11,12 +11,13 @@ import Loading from "./components/Loading";
 import PromptBar, { type Pending } from "./components/PromptBar";
 import PromptSheet, { type Answer } from "./components/PromptSheet";
 import Thinking from "./components/Thinking";
+import ToolGroup from "./components/ToolGroup";
 import ToolRow from "./components/ToolRow";
 import { Markdown } from "./markdown";
 import { Client, initialToken, saveToken, Unauthorized } from "./rpc";
 import { loadThreadId, saveThreadId } from "./storage";
 import { anchorShift, atBottom, firstBelow, nextFollow } from "./scroll";
-import { Transcript } from "./transcript";
+import { isRun, Transcript, type Row } from "./transcript";
 import type { ExtensionUI, GoalInfo, Item, Model, Notification, Prompt, ThreadInfo, ThreadSummary } from "./types";
 
 // --- items ---
@@ -139,14 +140,15 @@ export const ItemView = memo(function ItemView({ it }: { it: Item }) {
   return null;
 });
 
-// Items in blocks (see transcript.ts): a frame re-renders the block
-// that changed.
-export const Block = memo(function Block({ items }: { items: Item[] }) {
+const itemView = (it: Item) => <ItemView key={it.id} it={it} />;
+
+// Rows in blocks (see transcript.ts): a frame re-renders the block that
+// changed. A run of commands shows as a group unless settings.json says
+// "toolGroups": false.
+export const Block = memo(function Block({ rows, groups }: { rows: Row[]; groups: boolean }) {
   return (
     <>
-      {items.map((it) => (
-        <ItemView key={it.id} it={it} />
-      ))}
+      {rows.map((r) => (isRun(r) ? <ToolGroup key={r.id} run={r} on={groups} item={itemView} /> : itemView(r)))}
     </>
   );
 });
@@ -168,6 +170,8 @@ export default function App() {
   const [phase, setPhase] = useState<Phase>(client.token ? "loading" : "login");
   const [loginError, setLoginError] = useState("");
   const [live, setLive] = useState(false);
+  // settings.json's "toolGroups" (initialize's settings)
+  const [groups, setGroups] = useState(true);
   const [models, setModels] = useState<Model[]>([]);
   const [threads, setThreads] = useState<ThreadSummary[]>([]);
   const [info, setInfo] = useState<ThreadInfo | null>(null);
@@ -359,10 +363,11 @@ export default function App() {
   const start = useCallback(async () => {
     setPhase("loading");
     try {
-      const init = await client.call<{ live?: boolean; eventId?: number }>("initialize");
+      const init = await client.call<{ live?: boolean; eventId?: number; settings?: { toolGroups?: boolean } }>("initialize");
       saveToken(client.token);
       history.replaceState(null, "", location.pathname);
       setLive(!!init.live);
+      setGroups(init.settings?.toolGroups !== false);
       const ms = await client.call<{ models: Model[] }>("models/list").catch(() => ({ models: [] as Model[] }));
       setModels(ms.models || []);
       setPhase("ready");
@@ -697,7 +702,7 @@ export default function App() {
               <div className="py-16 text-center text-[14px] text-ink-3">{live ? "Waiting for the terminal session…" : "Pick a conversation, or write below to start one."}</div>
             )}
             {blocks.map((b, j) => (
-              <Block key={j} items={b} />
+              <Block key={j} rows={b} groups={groups} />
             ))}
             {busy && !streaming && <Loading label="Working" since={busySince} />}
           </div>

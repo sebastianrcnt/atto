@@ -159,3 +159,96 @@ shown + "|" + s.get("r").display
 		}
 	}
 }
+
+// Runs of commands (src/transcript.ts) and how a run shows as a group
+// (src/toolgroup.ts), as the terminal's app/toolgroup.go.
+func TestToolGroups(t *testing.T) {
+	vm := jsModule(t, "src/transcript.ts", "tr")
+	run := func(src string) any {
+		t.Helper()
+		v, err := vm.RunString(src)
+		if err != nil {
+			t.Fatalf("%s: %v", src, err)
+		}
+		return v.Export()
+	}
+	run(`
+var s = new tr.Transcript();
+function cmd(id, extra) { var it = {id: id, type: "commandExecution", status: "completed", description: "do " + id, command: id, exitCode: 0, durationMs: 1000}; for (var k in extra) it[k] = extra[k]; return it; }
+s.reset([
+  {id: "u", type: "userMessage", text: "go"},
+  {id: "r0", type: "reasoning", text: "plan"},
+  cmd("a"), {id: "r1", type: "reasoning", text: "then"}, cmd("b", {exitCode: 2, status: "failed"}), cmd("c"),
+  {id: "r2", type: "reasoning", text: "done"},
+  {id: "m", type: "agentMessage", text: "ok"},
+  cmd("d"),
+]);
+var rows = s.blocks()[0];
+var b1 = s.blocks().slice();
+s.upsert(cmd("e", {status: "inProgress", exitCode: undefined}));
+var b2 = s.blocks()[0];
+`)
+	for expr, want := range map[string]any{
+		`rows.map(function (r) { return r.id; }).join(",")`:            "u,r0,run-a,m,run-d",
+		`rows[2].members.map(function (m) { return m.id; }).join(",")`: "a,r1,b,c,r2",
+		`b2.length === rows.length && b2[4].members.length`:            int64(2), // e joined d's run
+		`b2[2] === rows[2] && b2[4] !== rows[4]`:                       true,
+		`(s.upsert(cmd("e")), s.blocks()[0][4].members[1].status)`:     "completed",
+		`s.length`: int64(10),
+		`(s.delta("r1", "!"), s.blocks()[0][2].members[1].text)`: "then!",
+	} {
+		if got := run(expr); got != want {
+			t.Errorf("%s = %v, want %v", expr, got, want)
+		}
+	}
+
+	vm = jsModule(t, "src/toolgroup.ts", "tg")
+	run = func(src string) any {
+		t.Helper()
+		v, err := vm.RunString(src)
+		if err != nil {
+			t.Fatalf("%s: %v", src, err)
+		}
+		return v.Export()
+	}
+	run(`
+function cmd(id, extra) { var it = {id: id, type: "commandExecution", status: "completed", description: "do " + id, command: id, exitCode: 0, durationMs: 1500}; for (var k in extra) it[k] = extra[k]; return it; }
+var members = [cmd("a"), {id: "r1", type: "reasoning"}, cmd("b", {exitCode: 2}), cmd("c", {description: "", command: "ls -la\nmore"}),
+  cmd("d", {status: "inProgress", exitCode: undefined, durationMs: 0}), cmd("e"), {id: "r2", type: "reasoning"}];
+function ids(p) { return p.shown.map(function (m) { return m.id; }).join(","); }
+var p = tg.plan(members, true, false);
+`)
+	for expr, want := range map[string]any{
+		`p.grouped`:                              true,
+		`tg.head(p)`:                             "4 commands · 4.5s · 1 failed", // a, b, c and the running d
+		`p.labels.join(", ")`:                    "do a, do b, ls -la, do d",
+		`ids(p)`:                                 "b,d,e,r2", // failed, running, the last, reasoning after it
+		`ids(tg.plan(members, true, true))`:      "a,r1,b,c,d,e,r2",
+		`tg.plan(members, false, false).grouped`: false,
+		`tg.plan([cmd("x"), {id: "r", type: "reasoning"}], true, false).grouped`:  false,
+		`tg.label({type: "commandExecution", pending: true})`:                     "Preparing command",
+		`tg.failed(cmd("t", {timedOut: true, exitCode: undefined}))`:              true,
+		`tg.failed(cmd("p", {pending: true, status: "inProgress", exitCode: 1}))`: false,
+	} {
+		if got := run(expr); got != want {
+			t.Errorf("%s = %v, want %v", expr, got, want)
+		}
+	}
+}
+
+func TestFormat(t *testing.T) {
+	vm := jsModule(t, "src/format.ts", "f")
+	for expr, want := range map[string]any{
+		`[80, 4210, 187000, 3900000].map(f.duration).join(",")`:                "80ms,4.2s,3m 07s,1h 05m",
+		`[950, 12500, 1200000].map(f.tokens).join(",")`:                        "950,12.5k,1.2M",
+		`[950, 1200, 1000, 12400, 1200000, 12000000].map(f.compact).join(",")`: "950,1.2k,1k,12k,1.2M,12M",
+	} {
+		v, err := vm.RunString(expr)
+		if err != nil {
+			t.Fatalf("%s: %v", expr, err)
+		}
+		if got := v.Export(); got != want {
+			t.Errorf("%s = %v, want %v", expr, got, want)
+		}
+	}
+}

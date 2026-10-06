@@ -76,6 +76,71 @@ export type ThreadInfo = {
   prompt?: Prompt;
   goal?: GoalInfo;
   extensionUi?: ExtensionUI;
+  // what the status line shows (see Usage, TurnInfo, PendingInput)
+  modelName?: string;
+  autoCompactLimit?: number;
+  priced?: boolean;
+  subscription?: boolean;
+  usage?: Usage;
+  turn?: TurnInfo;
+  pending?: PendingInput | null;
+};
+
+// Token usage: a session's totals, or one model response's. Input
+// includes the cached and written tokens.
+export type Usage = {
+  inputTokens: number;
+  cachedInputTokens: number;
+  cacheWriteTokens?: number;
+  outputTokens: number;
+  cost?: number;
+  lastInputTokens?: number;
+  lastCachedInputTokens?: number;
+};
+
+// The running turn, as the activity line shows it.
+export type TurnInfo = {
+  startedAt: number;
+  verb?: string;
+  inputTokens: number;
+  outputTokens: number;
+};
+
+// Input the running turn has not taken: steers, and in a live session
+// follow-ups queued for after it.
+export type PendingInput = { steers: string[]; queued?: string[] };
+
+// A background job of the session (job/list).
+export type Job = {
+  id: number;
+  label: string;
+  kind: string;
+  command: string;
+  status: "starting" | "running" | "exited" | "killed" | "failed" | "lost";
+  exitCode?: number;
+  error?: string;
+  started: number;
+  runtimeMs: number;
+};
+
+// A subagent of the session (subagent/list).
+export type Subagent = {
+  name: string;
+  preset: string;
+  model: string;
+  effort?: string;
+  threadId: string;
+  task: string;
+  prompt: string;
+  turn: number;
+  status: "idle" | "queued" | "running" | "done" | "failed" | "stopped";
+  durationMs?: number;
+  error?: string;
+  inputTokens?: number;
+  cachedInputTokens?: number;
+  outputTokens?: number;
+  cost?: number;
+  created: number;
 };
 
 // A picker or input open in the live session's terminal.
