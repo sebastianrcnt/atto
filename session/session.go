@@ -637,9 +637,40 @@ func move(path, fromRoot, toRoot string) (string, error) {
 	if err != nil || strings.HasPrefix(rel, "..") {
 		return "", fmt.Errorf("%s is not under %s", path, fromRoot)
 	}
-	dst := filepath.Join(toRoot, rel)
-	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+	release, err := Lock(path)
+	if err != nil {
 		return "", err
 	}
-	return dst, os.Rename(path, dst)
+	defer release()
+	dst := filepath.Join(toRoot, rel)
+	if err := os.MkdirAll(filepath.Dir(dst), 0o700); err != nil {
+		return "", err
+	}
+	dstRelease, err := Lock(dst)
+	if err != nil {
+		return "", err
+	}
+	defer dstRelease()
+	if _, err := os.Stat(dst); err == nil {
+		return "", fmt.Errorf("session already exists at %s", dst)
+	} else if !os.IsNotExist(err) {
+		return "", err
+	}
+	movedLog := false
+	if err := os.Rename(LogPath(path), LogPath(dst)); err == nil {
+		movedLog = true
+	} else if !os.IsNotExist(err) {
+		return "", err
+	}
+	if err := os.Rename(path, dst); err != nil {
+		if movedLog {
+			_ = os.Rename(LogPath(dst), LogPath(path))
+		}
+		return "", err
+	}
+	// Destination has its own held lock; never replace its locked inode.
+	if err := os.Remove(LockPath(path)); err != nil && !os.IsNotExist(err) {
+		return dst, err
+	}
+	return dst, nil
 }

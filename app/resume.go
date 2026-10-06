@@ -475,15 +475,29 @@ func (a *App) cmdSessions(string) {
 	}
 	p.onCancel = a.closeModal
 	p.onArchive = func(s session.Summary) {
+		current := s.Path == a.sess.Path
+		if current && a.busy {
+			a.errorNotice(fmt.Errorf("cannot archive the current session while a turn is running"))
+			return
+		}
 		var err error
 		if s.Archived {
 			_, err = session.Unarchive(s.Path)
 		} else {
-			if s.Path == a.sess.Path {
-				a.sess.Close() // reopened lazily; a new session starts below
+			if current {
+				a.closeSession() // release the old path before moving it
 			}
 			_, err = session.Archive(s.Path)
-			if err == nil && s.Path == a.sess.Path && !a.busy {
+			if err != nil && current {
+				release, lockErr := session.LockTUI(a.sess.Path)
+				if lockErr != nil {
+					a.sess.SetReadOnly(lockErr.Error())
+					a.errorNotice(lockErr)
+				} else {
+					a.unlock = release
+				}
+			}
+			if err == nil && current {
 				a.reset()
 				a.newSession("other")
 				a.notice("Archived the current conversation and started a new one.")
