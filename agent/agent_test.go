@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/sebastianrcnt/atto/config"
+	"github.com/sebastianrcnt/atto/provider"
 	"github.com/sebastianrcnt/atto/session"
 	"github.com/sebastianrcnt/atto/shell"
 )
@@ -60,6 +61,37 @@ func text(s string) []string {
 
 func newTestAgent(url string) *Agent {
 	return New(config.ModelRef{ProviderName: "t", Provider: config.Provider{BaseURL: url}, Model: config.Model{ID: "m"}}, "", os.TempDir())
+}
+
+func TestRequestUsesOneModelSnapshot(t *testing.T) {
+	one := config.ModelRef{ProviderName: "p", Provider: config.Provider{BaseURL: "http://one"}, Model: config.Model{ID: "one", MaxTokens: 100}}
+	two := config.ModelRef{ProviderName: "p", Provider: config.Provider{BaseURL: "http://two"}, Model: config.Model{ID: "two", MaxTokens: 200}}
+	a := New(one, "", os.TempDir())
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for range 50000 {
+			a.SetModel(two)
+			a.SetModel(one)
+		}
+	}()
+
+	for {
+		streamer, req := a.request()
+		client, ok := streamer.(*provider.Client)
+		if !ok {
+			t.Fatalf("streamer %T, want *provider.Client", streamer)
+		}
+		if req.Model != client.Model.ID {
+			t.Fatalf("mixed request snapshot: request model %q, client model %q", req.Model, client.Model.ID)
+		}
+		select {
+		case <-done:
+			return
+		default:
+		}
+	}
 }
 
 func TestSteerDeliveredAfterToolCall(t *testing.T) {
