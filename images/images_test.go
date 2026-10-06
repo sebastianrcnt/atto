@@ -2,6 +2,8 @@ package images
 
 import (
 	"bytes"
+	"encoding/binary"
+	"hash/crc32"
 	"image"
 	"image/color"
 	"image/jpeg"
@@ -106,5 +108,18 @@ func TestPastedPath(t *testing.T) {
 		if got, ok := PastedPath(in); ok {
 			t.Errorf("PastedPath(%q) = %q, want no path", in, got)
 		}
+	}
+}
+
+func TestPrepareRejectsInvalidAndOversizedImages(t *testing.T) {
+	header := append([]byte(nil), pngBytes(t, 1, 1)[:33]...)
+	if _, err := Prepare(header); err == nil || !strings.Contains(err.Error(), "decoding image") {
+		t.Fatalf("incomplete image: %v", err)
+	}
+	binary.BigEndian.PutUint32(header[16:20], 100_000)
+	binary.BigEndian.PutUint32(header[20:24], 100_000)
+	binary.BigEndian.PutUint32(header[29:33], crc32.ChecksumIEEE(header[12:29]))
+	if _, err := Prepare(header); err == nil || !strings.Contains(err.Error(), "pixels") {
+		t.Fatalf("oversized image must be rejected before decode: %v", err)
 	}
 }

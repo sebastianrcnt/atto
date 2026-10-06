@@ -34,6 +34,9 @@ const MaxDimension = 2048
 // prompt images.
 const MaxFileBytes = 64 << 20
 
+// MaxPixels bounds decoded memory before allocating the image.
+const MaxPixels = 64_000_000
+
 // Prepare decodes data and returns it ready to send: PNG, JPEG and WebP
 // that fit MaxDimension pass through byte for byte; larger images are
 // downscaled (JPEG stays JPEG, the rest become PNG) and other formats are
@@ -46,14 +49,17 @@ func Prepare(data []byte) (provider.Image, error) {
 	if err != nil {
 		return provider.Image{}, fmt.Errorf("not a supported image (PNG, JPEG, GIF or WebP): %w", err)
 	}
-	fits := cfg.Width <= MaxDimension && cfg.Height <= MaxDimension
-	mime := "image/" + format
-	if fits && (format == "png" || format == "jpeg" || format == "webp") {
-		return named(provider.Image{MIME: mime, Width: cfg.Width, Height: cfg.Height, Data: data}), nil
+	if cfg.Width <= 0 || cfg.Height <= 0 || cfg.Width > MaxPixels/cfg.Height {
+		return provider.Image{}, fmt.Errorf("image dimensions exceed %d pixels", MaxPixels)
 	}
 	src, _, err := image.Decode(bytes.NewReader(data))
 	if err != nil {
 		return provider.Image{}, fmt.Errorf("decoding image: %w", err)
+	}
+	fits := cfg.Width <= MaxDimension && cfg.Height <= MaxDimension
+	mime := "image/" + format
+	if fits && (format == "png" || format == "jpeg" || format == "webp") {
+		return named(provider.Image{MIME: mime, Width: cfg.Width, Height: cfg.Height, Data: data}), nil
 	}
 	if !fits {
 		src = resize(src, MaxDimension)
