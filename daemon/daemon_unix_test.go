@@ -5,6 +5,7 @@ package daemon
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -546,5 +547,46 @@ func TestClientQueueOverflowDropsClient(t *testing.T) {
 	c.wmu.Unlock()
 	if queued > clientQueueBytes {
 		t.Fatalf("queue has %d bytes", queued)
+	}
+}
+
+func TestClientRejectsLegacyDaemon(t *testing.T) {
+	t.Setenv(config.EnvDir, t.TempDir())
+	if err := privateDir(RunDir()); err != nil {
+		t.Fatal(err)
+	}
+	ln, err := net.Listen("unix", SocketPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	done := make(chan error, 1)
+	go func() {
+		c, err := ln.Accept()
+		if err != nil {
+			done <- err
+			return
+		}
+		defer c.Close()
+		typ, b, err := readFrame(c)
+		var h Hello
+		if err != nil || typ != fHello || json.Unmarshal(b, &h) != nil || h.Proto == 1 {
+			done <- fmt.Errorf("new client sent legacy Hello: %c %s %v", typ, b, err)
+			return
+		}
+		done <- writeFrame(c, fError, []byte("the running atto daemon speaks protocol 1, this atto 2: end its panes, then run atto daemon stop"))
+	}()
+	c, _, _, err := request(Hello{Op: "new"}, false)
+	if c != nil {
+		c.Close()
+		t.Fatal("connected to a legacy daemon")
+	}
+	// The existing mismatch response is actionable, not an unavailable
+	// daemon error that interactive startup would silently fall back from.
+	if err == nil || errors.Is(err, ErrUnavailable) || !strings.Contains(err.Error(), "protocol 1") {
+		t.Fatalf("legacy daemon error: %v", err)
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
 	}
 }
