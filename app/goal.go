@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"strings"
+	"time"
 
 	"github.com/sebastianrcnt/atto/core"
 	"github.com/sebastianrcnt/atto/core/transcript"
@@ -28,6 +29,7 @@ func (a *App) resetGoal() {
 		Changed:  a.announceGoal,
 		Adopted:  a.goalInfo,
 		Error:    a.errorNotice,
+		Retrying: func(r core.Retry) { a.notice("%s", r.Notice()) },
 	}
 }
 
@@ -50,6 +52,14 @@ func (a *App) continueGoal() {
 	if a.busy || a.modal != nil || a.queuePaused || len(a.queued) > 0 || len(a.pendingEvents) > 0 || a.goal.Held() {
 		return
 	}
+	if r := a.goal.Pending(); r != nil {
+		// A transient failure: wait out the delay without blocking the UI
+		// (the user can type, /goal pause, clear or press Esc meanwhile).
+		if wait := time.Until(r.At); wait > 0 {
+			a.scheduleGoalRetry(wait)
+			return
+		}
+	}
 	text, ok := a.goal.Next()
 	if !ok {
 		return
@@ -60,6 +70,50 @@ func (a *App) continueGoal() {
 	a.start("Working on goal", func(ctx context.Context, emit func(any)) error {
 		return a.agent.Run(ctx, text, emit)
 	})
+}
+
+// scheduleGoalRetry starts the continuation again after wait, unless
+// something else came first (see cancelGoalRetry); one timer at a time.
+func (a *App) scheduleGoalRetry(wait time.Duration) {
+	if a.retryTimer != nil {
+		return
+	}
+	var t *time.Timer
+	t = time.AfterFunc(wait, func() {
+		a.ui.Do(func() {
+			if a.retryTimer != t { // canceled meanwhile
+				return
+			}
+			a.retryTimer = nil
+			a.continueGoal()
+		})
+	})
+	a.retryTimer = t
+}
+
+// cancelGoalRetry drops the timer of a waiting retry, and reports whether
+// there was one.
+func (a *App) cancelGoalRetry() bool {
+	if a.retryTimer == nil {
+		return false
+	}
+	a.retryTimer.Stop()
+	a.retryTimer = nil
+	return true
+}
+
+// interruptGoalRetry is Esc while a goal retry waits: it pauses the goal, as
+// interrupting its turn would.
+func (a *App) interruptGoalRetry() bool {
+	if !a.cancelGoalRetry() {
+		return false
+	}
+	if g := a.goal.Goal; g != nil && g.Status == goal.Active {
+		g.Status, g.Note = goal.Paused, goal.NoteInterrupted
+		a.goal.Set(g)
+		a.goalInfo(g)
+	}
+	return true
 }
 
 // goalWaitingNotice is shown when a goal is held after a turn with user input.
@@ -124,6 +178,7 @@ func (a *App) cmdGoal(arg string) {
 			return
 		}
 		a.goal.Set(nil)
+		a.cancelGoalRetry()
 		told := a.goal.Tell(goal.ClearedMessage())
 		a.add(&infoBlock{title: "Goal cleared"})
 		if told {
@@ -141,6 +196,7 @@ func (a *App) cmdGoal(arg string) {
 		if g.Status == goal.Active || g.Status == goal.Blocked || g.Status == goal.UsageLimited {
 			g.Status, g.Note = goal.Paused, "paused by the user"
 			a.goal.Set(g)
+			a.cancelGoalRetry()
 			told := a.goal.Tell(g.PausedMessage())
 			a.goalInfo(g)
 			if told {

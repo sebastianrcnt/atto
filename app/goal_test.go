@@ -864,6 +864,54 @@ func TestGoalStateNoteAttachesToUserTurns(t *testing.T) {
 	}
 }
 
+// A transient model error does not stall the goal: the user is told when it
+// retries, no "waiting for you" goes with the error, and the wait can be
+// ended by /goal pause, /goal clear and Esc.
+func TestGoalTransientErrorRetriesLater(t *testing.T) {
+	fail := func(a *App) {
+		a.busy, a.runKind = true, "turn"
+		a.goal.BeginTurn()
+		a.busy = false
+		a.afterRun(errors.New("400: Upstream request failed: Model is unavailable"))
+	}
+	a := goalApp(t)
+	a.cmdGoal("ship it")
+	a.queuePaused = false
+	t.Cleanup(func() { a.cancelGoalRetry() })
+	fail(a)
+	g := a.goal.Goal
+	if g.Status != goal.Active || g.FailStreak != 0 || a.goal.Pending() == nil || a.retryTimer == nil {
+		t.Fatalf("%+v pending=%v timer=%v", g, a.goal.Pending(), a.retryTimer)
+	}
+	got := strings.Join(strings.Fields(goalText(a)), " ")
+	if !strings.Contains(got, "Model error (400: Upstream request failed: Model is unavailable); retrying the goal in 10s (1/3).") ||
+		strings.Contains(got, goalWaitingNotice) || strings.Contains(got, "stalled") {
+		t.Fatalf("notice:\n%s", got)
+	}
+	if !strings.Contains(a.goalIndicator(), "Pursuing goal") {
+		t.Fatalf("indicator %q", a.goalIndicator())
+	}
+
+	a.cmdGoal("pause")
+	if a.retryTimer != nil || a.goal.Pending() != nil || g.Status != goal.Paused {
+		t.Fatalf("pause: timer=%v %+v", a.retryTimer, g)
+	}
+
+	// Esc while it waits pauses the goal as interrupting its turn would.
+	g.Status = goal.Active
+	a.goal.Set(g)
+	fail(a)
+	if a.retryTimer == nil {
+		t.Fatal("no timer")
+	}
+	if !a.interrupt() || a.retryTimer != nil || g.Status != goal.Paused || g.Note != goal.NoteInterrupted {
+		t.Fatalf("esc: timer=%v %+v", a.retryTimer, g)
+	}
+	if a.interrupt() {
+		t.Fatal("nothing left to interrupt")
+	}
+}
+
 // A message the user sends while the goal's turn runs carries the note that
 // the goal is still active, for the model only.
 func TestGoalSteerNoteReachesTheModel(t *testing.T) {

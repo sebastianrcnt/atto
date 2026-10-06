@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -489,5 +490,161 @@ func TestGoalDriverSteerNote(t *testing.T) {
 	d.Restore(nil) // resuming a session brings no goal back
 	if d.SteerNote("hi") != "" {
 		t.Fatal("no goal after restore")
+	}
+}
+
+func fastRetries(t *testing.T) {
+	old := retryDelays
+	retryDelays = []time.Duration{time.Millisecond, 2 * time.Millisecond, 3 * time.Millisecond}
+	t.Cleanup(func() { retryDelays = old })
+}
+
+var errUnavailable = errors.New("400: Upstream request failed: Model is unavailable")
+
+// A transient failure retries the goal after a delay instead of stalling it;
+// the retries are told, run out after three, and then it stalls.
+func TestGoalDriverRetriesTransientFailures(t *testing.T) {
+	t.Setenv("ATTO_DIR", t.TempDir())
+	g, _ := goal.New("ship it")
+	var told []Retry
+	d := GoalDriver{Session: "s", Goal: g, Retrying: func(r Retry) { told = append(told, r) }}
+	for i := 1; i <= 3; i++ {
+		d.BeginTurn()
+		if !d.EndTurn(errUnavailable) || g.Status != goal.Active || g.FailStreak != 0 {
+			t.Fatalf("failure %d stalled the goal: %s %d", i, g.Status, g.FailStreak)
+		}
+		r := d.Pending()
+		if r == nil || r.Attempt != i || r.Of != 3 || len(told) != i {
+			t.Fatalf("failure %d: pending %+v, told %d", i, r, len(told))
+		}
+		if _, ok := d.Next(); !ok || d.Pending() != nil {
+			t.Fatal("the retry starts with Next")
+		}
+	}
+	if n := told[1].Notice(); !strings.Contains(n, "Model error (400: Upstream request failed: Model is unavailable); retrying the goal in") || !strings.HasSuffix(n, "(2/3).") {
+		t.Fatalf("notice %q", n)
+	}
+	d.BeginTurn()
+	if d.EndTurn(errUnavailable) || g.Status != goal.Blocked || d.Pending() != nil {
+		t.Fatalf("the fourth failure stalls: %s", g.Status)
+	}
+	if !strings.Contains(g.Note, "after 3 retries") || !strings.Contains(g.Note, "unavailable") {
+		t.Fatalf("note %q", g.Note)
+	}
+	if len(told) != 3 {
+		t.Fatalf("told %d", len(told))
+	}
+}
+
+func TestGoalDriverRetryCountResets(t *testing.T) {
+	t.Setenv("ATTO_DIR", t.TempDir())
+	g, _ := goal.New("ship it")
+	d := GoalDriver{Session: "s", Goal: g}
+	for range 2 {
+		d.BeginTurn()
+		d.EndTurn(errUnavailable)
+	}
+	d.BeginTurn()
+	d.Event(agent.ToolStart{})
+	d.EndTurn(nil) // a turn that works: the next failure is the first again
+	d.BeginTurn()
+	d.EndTurn(errUnavailable)
+	if r := d.Pending(); r == nil || r.Attempt != 1 {
+		t.Fatalf("pending %+v", r)
+	}
+	// Pausing drops the retry.
+	g.Status = goal.Paused
+	d.Set(g)
+	if d.Pending() != nil {
+		t.Fatal("a paused goal retries nothing")
+	}
+}
+
+func TestGoalDriverOtherFailuresStallAtOnce(t *testing.T) {
+	t.Setenv("ATTO_DIR", t.TempDir())
+	for i, err := range []error{errors.New("401: invalid api key"), errors.New("400: bad request"), errors.New("boom")} {
+		g, _ := goal.New("ship it")
+		d := GoalDriver{Session: fmt.Sprint("other", i), Goal: g, Retrying: func(Retry) { t.Fatal("retried") }}
+		d.BeginTurn()
+		if d.EndTurn(err) || g.Status != goal.Blocked || d.Pending() != nil {
+			t.Fatalf("%v: %s", err, g.Status)
+		}
+	}
+	g, _ := goal.New("ship it")
+	d := GoalDriver{Session: "limit", Goal: g}
+	d.BeginTurn()
+	if d.EndTurn(errors.New("429: You have hit your usage limit")) || g.Status != goal.UsageLimited {
+		t.Fatalf("a usage limit is not retried: %s", g.Status)
+	}
+}
+
+// The user's own message failing for a transient reason is theirs to send
+// again: no retry and no stall, the goal waits as after any message of theirs.
+func TestGoalDriverTransientFailureOfUserTurn(t *testing.T) {
+	t.Setenv("ATTO_DIR", t.TempDir())
+	g, _ := goal.New("ship it")
+	d := GoalDriver{Session: "s", Goal: g, Retrying: func(Retry) { t.Fatal("retried") }}
+	d.BeginTurn()
+	d.UserInput()
+	if !d.EndTurn(errUnavailable) || g.Status != goal.Active || !d.Held() || d.Pending() != nil || g.FailStreak != 0 {
+		t.Fatalf("%s held=%v", g.Status, d.Held())
+	}
+	if _, ok := d.Next(); ok {
+		t.Fatal("a held goal starts nothing")
+	}
+}
+
+// User input while a retry waits takes its place.
+func TestGoalDriverUserInputDropsRetry(t *testing.T) {
+	t.Setenv("ATTO_DIR", t.TempDir())
+	g, _ := goal.New("ship it")
+	d := GoalDriver{Session: "s", Goal: g}
+	d.BeginTurn()
+	d.EndTurn(errUnavailable)
+	d.UserInput()
+	if d.Pending() != nil {
+		t.Fatal("pending after user input")
+	}
+}
+
+// Run waits out the delay and then goes on; an interrupt ends the wait.
+func TestGoalDriverRunRetries(t *testing.T) {
+	t.Setenv("ATTO_DIR", t.TempDir())
+	fastRetries(t)
+	g, _ := goal.New("ship it")
+	_ = goal.Save("s", g)
+	d := GoalDriver{Session: "s", Goal: g}
+	calls := 0
+	turn := func(_ context.Context, _ string, emit func(any)) error {
+		calls++
+		if calls <= 2 {
+			return errUnavailable
+		}
+		emit(agent.ToolStart{})
+		f, _ := goal.Load("s")
+		f.Status, f.Note = goal.Complete, "done"
+		_ = goal.Save("s", f)
+		return nil
+	}
+	start := time.Now()
+	if err := d.Run(context.Background(), "go", turn, func(any) {}, nil); err != nil || calls != 3 || g.Status != goal.Complete {
+		t.Fatalf("%v, %d calls, %s", err, calls, g.Status)
+	}
+	if time.Since(start) < 3*time.Millisecond {
+		t.Fatal("did not wait")
+	}
+
+	retryDelays = []time.Duration{time.Hour}
+	g2, _ := goal.New("again")
+	d2 := GoalDriver{Session: "s", Goal: g2}
+	ctx, cancel := context.WithCancel(context.Background())
+	calls = 0
+	turn2 := func(context.Context, string, func(any)) error {
+		calls++
+		time.AfterFunc(10*time.Millisecond, cancel)
+		return errUnavailable
+	}
+	if err := d2.Run(ctx, "go", turn2, func(any) {}, nil); !errors.Is(err, errUnavailable) || calls != 1 {
+		t.Fatalf("%v, %d calls", err, calls)
 	}
 }

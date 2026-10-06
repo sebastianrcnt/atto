@@ -170,6 +170,9 @@ type App struct {
 	jobCount, timerCount int
 
 	goal core.GoalDriver
+	// retryTimer starts the goal again after a transient failure
+	// (scheduleGoalRetry); UI goroutine only.
+	retryTimer *time.Timer
 	// bgx is the experimental exit menu (background_exit.go).
 	bgx bgExit
 
@@ -595,7 +598,7 @@ func (a *App) interrupt() bool {
 		return true
 	}
 	if !a.busy {
-		return false
+		return a.interruptGoalRetry()
 	}
 	if len(a.pendingSteers) > 0 {
 		a.sendSteersAfterInterrupt = true
@@ -687,6 +690,7 @@ func (a *App) start(activity string, fn func(context.Context, func(any)) error) 
 	ctx, cancel := context.WithCancel(context.Background())
 	a.busy, a.cancel = true, cancel
 	a.runStart, a.activity = a.clock(), activity
+	a.cancelGoalRetry() // whatever starts, a goal retry waiting is moot
 	a.lastEvent, a.toolsRunning = a.runStart, 0
 	a.turnOut, a.streamChars, a.turnIn, a.draftChars = 0, 0, 0, nil
 	a.turnVerb = a.pickVerb()

@@ -1,6 +1,7 @@
 package goal
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"os"
@@ -401,5 +402,44 @@ func TestSteerMessage(t *testing.T) {
 	}
 	if msg, n := SplitNote("Why did it stop?\n\n" + note); msg != "Why did it stop?" || n != note {
 		t.Fatalf("split: %q %q", msg, n)
+	}
+}
+
+func TestIsTransient(t *testing.T) {
+	for _, err := range []error{
+		errors.New("400: Upstream request failed: Model is unavailable"),
+		errors.New("Upstream request failed (400): Model is unavailable"),
+		errors.New("503 Service Unavailable"),
+		errors.New("500: internal error"),
+		errors.New("529: Overloaded"),
+		errors.New("429: Rate limit exceeded, retry later"),
+		errors.New("408: request timeout"),
+		errors.New(`Post "https://x/v1": read tcp: connection reset by peer`),
+		errors.New(`Post "https://x/v1": EOF`),
+		errors.New("request failed: dial tcp 1.2.3.4:443: i/o timeout"),
+		&ai.ProviderError{Status: 502, StatusText: "Bad Gateway"},
+		&ai.ProviderError{Status: 429, Body: "slow down"},
+		context.DeadlineExceeded,
+	} {
+		if !IsTransient(err) {
+			t.Errorf("%v is transient", err)
+		}
+	}
+	for _, err := range []error{
+		nil,
+		context.Canceled,
+		errors.New("boom"),
+		errors.New("400: invalid request: messages must not be empty"),
+		errors.New("401: invalid api key"),
+		errors.New("403: forbidden, upstream says no"),
+		errors.New("404: the model does not exist or is unavailable"),
+		errors.New("422: unprocessable"),
+		errors.New("429: You have hit your ChatGPT usage limit (plus plan)."),
+		&ai.ProviderError{Status: 402, Body: "pay up"},
+		&ai.ProviderError{Status: 401, Body: "upstream auth"},
+	} {
+		if IsTransient(err) {
+			t.Errorf("%v is not transient", err)
+		}
 	}
 }

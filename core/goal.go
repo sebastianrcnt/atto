@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -29,6 +30,12 @@ import (
 // continuation starts until the user continues (Release), so the model's
 // answer is not buried under more goal work. Goal continuations and events
 // are not user input.
+//
+// A turn that fails for a transient reason (a 5xx, a timeout, an unavailable
+// model: goal.IsTransient) does not stall the goal at once: the continuation
+// is retried after a growing delay (retryDelays), and only when those
+// retries fail too does the goal stall. The driver only says when (Pending);
+// the front end waits, so it stays responsive, and Run waits itself.
 //
 // The goal lives in memory; the goal file is how the model reports back
 // (atto goal complete|blocked|pause|resume), and only those reports are taken from it
@@ -56,6 +63,9 @@ type GoalDriver struct {
 	Adopted func(*goal.Goal)
 	// Error, if set, receives failures to read or write the goal file.
 	Error func(error)
+	// Retrying, if set, is told that a turn failed for a transient reason and
+	// the goal will be retried (see Pending).
+	Retrying func(Retry)
 
 	running bool // a turn is in progress (BeginTurn..EndTurn)
 	tools   int  // tool calls in the current turn
@@ -68,9 +78,35 @@ type GoalDriver struct {
 	userInput       bool // the running turn took user input (see UserInput)
 	replaced        bool // the running turn is being interrupted for a message of the user (see Replace)
 	held            bool // waiting for the user after a turn with user input
+
+	retries int    // transient failures in a row, retried so far
+	retry   *Retry // the retry waiting to start (see Pending)
 	// live mirrors that the goal is active, for SteerNote, which the agent
 	// calls from its turn's goroutine.
 	live atomic.Bool
+}
+
+// retryDelays are the waits before the retries of a goal turn that failed
+// for a transient reason; when the last retry fails the goal stalls.
+var retryDelays = []time.Duration{10 * time.Second, 30 * time.Second, 90 * time.Second}
+
+// Retry is a goal turn that failed for a transient reason, to be tried again
+// at At: attempt Attempt of Of.
+type Retry struct {
+	Attempt, Of int
+	At          time.Time
+	Err         error
+}
+
+// Notice is what to tell the user: "Model error (…); retrying the goal in
+// 30s (2/3)."
+func (r Retry) Notice() string {
+	msg := strings.Join(strings.Fields(r.Err.Error()), " ")
+	if rs := []rune(msg); len(rs) > 120 {
+		msg = string(rs[:119]) + "…"
+	}
+	wait := goal.FormatElapsed(int64((time.Until(r.At) + time.Second/2) / time.Second))
+	return fmt.Sprintf("Model error (%s); retrying the goal in %s (%d/%d).", msg, wait, r.Attempt, r.Of)
 }
 
 func (d *GoalDriver) fail(err error) {
@@ -90,10 +126,14 @@ func (d *GoalDriver) changed() {
 func (d *GoalDriver) Set(g *goal.Goal) {
 	if g != d.Goal { // another goal: the running turn is not part of it yet
 		d.counted, d.timing, d.lastFold = false, false, time.Now()
+		d.retries, d.retry = 0, nil
 		d.track()
 	}
 	d.Goal = g
 	d.live.Store(running(g))
+	if !running(g) { // paused, cleared, finished: nothing to retry
+		d.retries, d.retry = 0, nil
+	}
 	if g == nil {
 		_ = goal.Clear(d.Session)
 	} else {
@@ -210,8 +250,9 @@ func (d *GoalDriver) SteerNote(text string) string {
 }
 
 // UserInput notes that the user's own input went into the running turn (or
-// the turn about to begin): when it ends, the goal waits for the user.
-func (d *GoalDriver) UserInput() { d.userInput = true }
+// the turn about to begin): when it ends, the goal waits for the user. It
+// also takes the place of a retry still waiting.
+func (d *GoalDriver) UserInput() { d.userInput, d.retry = true, nil }
 
 // Replace notes that the running turn is being interrupted to make way for
 // a message the user sends at once: the interrupt does not pause the goal
@@ -229,7 +270,7 @@ func (d *GoalDriver) Release() { d.held, d.userInput = false, false }
 
 // BeginTurn starts counting a turn.
 func (d *GoalDriver) BeginTurn() {
-	d.lastFold, d.tools, d.running = time.Now(), 0, true
+	d.lastFold, d.tools, d.running, d.retry = time.Now(), 0, true, nil
 	d.counted, d.timing = false, false
 	d.track()
 }
@@ -302,9 +343,32 @@ func (d *GoalDriver) EndTurn(err error) bool {
 	case err != nil:
 		failed = err
 	}
-	if replaced {
+	switch {
+	case replaced:
 		g.Turns++ // cut off, so neither progress nor a lack of it
-	} else {
+	case failed != nil && goal.IsTransient(failed) && g.Status == goal.Active:
+		g.Turns++ // not yet a stall (see GoalDriver)
+		switch {
+		case user:
+			// The user's own message failed: they see the error and say it
+			// again; the goal waits for them as after any message of theirs.
+		case d.retries < len(retryDelays):
+			d.retry = &Retry{Attempt: d.retries + 1, Of: len(retryDelays), At: time.Now().Add(retryDelays[d.retries]), Err: failed}
+			d.retries++
+			if d.Retrying != nil {
+				d.Retrying(*d.retry)
+			}
+		default:
+			g.TurnEnded(failed, d.tools) // the retries failed too: stalls
+			if g.Status == goal.Blocked {
+				g.Note = fmt.Sprintf("model errors persisted after %d retries (last: %v)", d.retries, failed)
+			}
+			d.retries = 0
+		}
+	default:
+		if err == nil {
+			d.retries = 0
+		}
 		g.TurnEnded(failed, d.tools)
 	}
 	d.Set(g)
@@ -324,7 +388,17 @@ func (d *GoalDriver) Next() (string, bool) {
 	if !d.Active() || d.held {
 		return "", false
 	}
+	d.retry = nil // the retry starts now
 	return d.Goal.Continuation(), true
+}
+
+// Pending is the retry of a failed turn that has not started yet, or nil:
+// the front end waits until At (or less, for a hurried user) before Next.
+func (d *GoalDriver) Pending() *Retry {
+	if d.retry == nil || !d.Active() || d.held {
+		return nil
+	}
+	return d.retry
 }
 
 // Run runs turns until the goal stops being active, starting with input:
@@ -340,6 +414,15 @@ func (d *GoalDriver) Run(ctx context.Context, input string, turn func(ctx contex
 		})
 		if !d.EndTurn(err) || ctx.Err() != nil {
 			return err
+		}
+		if r := d.Pending(); r != nil { // a transient failure: wait, unless interrupted
+			t := time.NewTimer(time.Until(r.At))
+			select {
+			case <-t.C:
+			case <-ctx.Done():
+				t.Stop()
+				return err
+			}
 		}
 		next, ok := d.Next()
 		if !ok {

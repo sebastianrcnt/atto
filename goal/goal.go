@@ -11,6 +11,7 @@
 package goal
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -18,6 +19,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -348,6 +350,45 @@ func IsUsageLimit(err error) bool {
 		return true
 	}
 	return usageLimit.MatchString(err.Error())
+}
+
+// transientText matches the provider and network errors that pass by
+// themselves: an overloaded or unavailable model, a gateway or upstream
+// failure, a dropped connection, a timeout.
+var transientText = regexp.MustCompile(`(?i)unavailable|overloaded|upstream|bad gateway|gateway time-?out|time-?d? ?out|connection (reset|refused|closed|aborted)|reset by peer|broken pipe|unexpected eof|\beof\b|dial tcp|no such host|temporar|try again|too many requests|rate.?limit|server error|internal error|at capacity`)
+
+// errStatus is the HTTP status an error carries: the provider's, or the one
+// atto's messages start with ("503: ...", "Upstream request failed (400): ...").
+func errStatus(err error) int {
+	if pe, ok := errors.AsType[*ai.ProviderError](err); ok {
+		return pe.Status
+	}
+	m := statusText.FindStringSubmatch(err.Error())
+	if m == nil {
+		return 0
+	}
+	n, _ := strconv.Atoi(m[1] + m[2])
+	return n
+}
+
+var statusText = regexp.MustCompile(`^(?:(\d{3})\b|[^(:]*\((\d{3})\):)`)
+
+// IsTransient reports whether err is a failure worth retrying shortly: HTTP
+// 5xx, 408 and 429 (a usage limit is not one), a timeout or a dropped
+// connection, or a message that says the model is unavailable or overloaded
+// (also under a 400, as some gateways answer). Other 4xx (auth, a bad
+// request) and an interrupt are not.
+func IsTransient(err error) bool {
+	if err == nil || IsUsageLimit(err) || errors.Is(err, context.Canceled) {
+		return false
+	}
+	switch st := errStatus(err); {
+	case st >= 500 || st == 408 || st == 429:
+		return true
+	case st >= 400 && st < 500 && st != 400 && st != 409:
+		return false
+	}
+	return errors.Is(err, context.DeadlineExceeded) || transientText.MatchString(err.Error())
 }
 
 // Goal messages are wrapped as internal context, after codex's
