@@ -124,6 +124,7 @@ So closing the terminal, losing an SSH connection or `/detach` leaves the sessio
 atto attach            # the most recent session no terminal shows
 atto attach 3          # pane 3, or a session ID (a prefix will do)
 atto attach -l         # the running sessions: pane, session, name, directory
+atto agents            # the agent center on its own: pick a session, enter attaches
 atto daemon kill 3     # end one, as closing its terminal used to
 atto daemon stop       # stop the daemon (-force: even with sessions running)
 ```

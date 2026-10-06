@@ -93,3 +93,33 @@ func TestCenterSwitchesPane(t *testing.T) {
 		t.Fatal("enter on this session closes without switching")
 	}
 }
+
+func TestStandaloneCenterPicksAPane(t *testing.T) {
+	t.Setenv("ATTO_DIR", t.TempDir())
+	t.Setenv(daemon.EnvPane, "")
+	old := listPanes
+	t.Cleanup(func() { listPanes = old })
+	listPanes = func() ([]daemon.Pane, error) {
+		return []daemon.Pane{{ID: 4, Cwd: "/w", Session: "s4", Name: "four", Clients: 1}, {ID: 7, Cwd: "/x", Name: "seven"}}, nil
+	}
+	closed, picked := false, 0
+	c := &agentCenter{onClose: func() { closed = true }, onSwitch: func(id int) { picked = id }}
+	c.reload()
+	text := tui.StripEscapes(strings.Join(c.Render(200), "\n"))
+	if !strings.Contains(text, "#4 four") || !strings.Contains(text, "1 terminal") || !strings.Contains(text, "#7 seven") || !strings.Contains(text, "enter attach") || strings.Contains(text, "this terminal") {
+		t.Fatalf("center:\n%s", text)
+	}
+	c.HandleInput("\x1b[B")
+	c.HandleInput("\r")
+	if picked != 7 || !closed {
+		t.Fatalf("picked %d closed %v", picked, closed)
+	}
+
+	listPanes = func() ([]daemon.Pane, error) { return nil, nil }
+	c = &agentCenter{onClose: func() {}, onSwitch: func(int) {}}
+	c.reload()
+	if text := tui.StripEscapes(strings.Join(c.Render(200), "\n")); !strings.Contains(text, "no atto is running") {
+		t.Fatalf("empty center:\n%s", text)
+	}
+	c.HandleInput("\r") // nothing to open: no panic
+}

@@ -6,6 +6,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/sebastianrcnt/atto/daemon"
@@ -19,7 +20,8 @@ import (
 // agents overview: every atto the daemon runs, with its session, goal and
 // subagents. Enter on another session shows it on this terminal (the
 // daemon moves the terminal to that pane); enter on a subagent shows its
-// latest report, read-only. ← or Esc goes back.
+// latest report, read-only. ← or Esc goes back. "atto agents" shows the
+// same list on its own (RunAgents), from any shell: Enter attaches.
 
 // listPanes lists the daemon's panes; tests replace it.
 var listPanes = daemon.List
@@ -37,18 +39,21 @@ type centerRow struct {
 }
 
 type agentCenter struct {
-	a      *App
-	rows   []centerRow
-	sel    int
-	direct bool     // this atto isn't in the daemon
-	view   []string // a subagent's report being read, nil: the list
-	scroll int
+	a        *App // nil: on its own (atto agents)
+	onClose  func()
+	onSwitch func(pane int)
+	rows     []centerRow
+	sel      int
+	direct   bool     // this atto isn't in the daemon
+	view     []string // a subagent's report being read, nil: the list
+	scroll   int
 }
 
 func (a *App) cmdAgents(string) { a.openAgents() }
 
 func (a *App) openAgents() {
-	c := &agentCenter{a: a, direct: !a.pane.on}
+	c := &agentCenter{a: a, direct: !a.pane.on, onClose: a.closeModal}
+	c.onSwitch = func(id int) { a.ui.Emit(daemon.MarkerSeq("switch", strconv.Itoa(id))) }
 	c.reload()
 	a.openModal(c)
 	go func() { // reload while open; ends once the center is gone
@@ -73,7 +78,7 @@ func (a *App) openAgents() {
 	}()
 }
 
-func (c *agentCenter) close() { c.a.closeModal() }
+func (c *agentCenter) close() { c.onClose() }
 
 // reload gathers the rows: the daemon's panes (just this session when
 // atto runs directly), each followed by its subagents.
@@ -84,12 +89,12 @@ func (c *agentCenter) reload() {
 		panes, _ = listPanes()
 	}
 	self, _ := strconv.Atoi(os.Getenv(daemon.EnvPane))
-	if len(panes) == 0 {
+	if len(panes) == 0 && a != nil {
 		panes = []daemon.Pane{{ID: self, Cwd: a.cwd, Session: a.sess.ID, Name: a.sessName, Clients: 1}}
 	}
 	var rows []centerRow
 	for _, p := range panes {
-		r := centerRow{pane: p, current: p.ID == self || p.Session == a.sess.ID}
+		r := centerRow{pane: p, current: a != nil && (p.ID == self || p.Session == a.sess.ID)}
 		r.title, r.goal = p.Name, ""
 		if r.current {
 			r.title = a.sessName
@@ -156,8 +161,8 @@ func (c *agentCenter) HandleInput(data string) {
 		case r.current:
 			c.close()
 		default:
+			c.onSwitch(r.pane.ID)
 			c.close()
-			c.a.ui.Emit(daemon.MarkerSeq("switch", strconv.Itoa(r.pane.ID)))
 		}
 	}
 }
@@ -196,6 +201,9 @@ func (c *agentCenter) Render(width int) []string {
 		return c.renderView(width)
 	}
 	out := []string{tui.Bold(" Agents")}
+	if c.a == nil && len(c.rows) == 0 {
+		out = append(out, tui.Dim(" no atto is running in the daemon now"))
+	}
 	if c.direct {
 		out = append(out, tui.Dim(" atto runs directly here, not in the daemon: only this session is shown"))
 	}
@@ -240,6 +248,9 @@ func (c *agentCenter) Render(width int) []string {
 		out = append(out, tui.Truncate(line, width, "…"))
 	}
 	hint := "↑↓ select · enter open · ← back"
+	if c.a == nil {
+		hint = "↑↓ select · enter attach · ← quit"
+	}
 	if c.direct {
 		hint = "↑↓ select · enter open a subagent · ← back"
 	}
@@ -268,4 +279,43 @@ func (c *agentCenter) renderView(width int) []string {
 		more = fmt.Sprintf(" · %d more lines ↓", len(body)-end)
 	}
 	return append(slices.Clone(out), "", tui.Truncate(tui.Dim(" ↑↓ scroll · ← back"+more), width, "…"))
+}
+
+// RunAgents shows the agent center on this terminal by itself and returns
+// the pane picked to attach to, 0 for none.
+func RunAgents() (int, error) {
+	ui := tui.New(tui.NewProcessTerminal())
+	done := make(chan struct{})
+	var once sync.Once
+	quit := func() { once.Do(func() { close(done) }) }
+	picked := 0
+	c := &agentCenter{onClose: quit, onSwitch: func(id int) { picked = id }}
+	c.reload()
+	ui.Body.Children = []tui.Component{c}
+	ui.SetFocus(c)
+	ui.OnInput = func(data string) bool {
+		if tui.Key(data) == "ctrl+c" {
+			quit()
+			return true
+		}
+		return false
+	}
+	if err := ui.Start(); err != nil {
+		return 0, err
+	}
+	t := time.NewTicker(centerRefresh)
+	defer t.Stop()
+	for {
+		select {
+		case <-done:
+			ui.Stop()
+			return picked, nil
+		case <-t.C:
+			ui.Do(func() {
+				if c.view == nil {
+					c.reload()
+				}
+			})
+		}
+	}
 }

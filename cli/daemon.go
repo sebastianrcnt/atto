@@ -7,9 +7,11 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"syscall"
 	"text/tabwriter"
 	"time"
 
+	"github.com/sebastianrcnt/atto/app"
 	"github.com/sebastianrcnt/atto/daemon"
 )
 
@@ -138,4 +140,23 @@ func age(t time.Time) string {
 		return d.Round(time.Minute).String()
 	}
 	return d.Round(time.Hour).String()
+}
+
+// RunAgents implements "atto agents": the agent center by itself, then the
+// pane picked, attached.
+func RunAgents(args []string, out io.Writer) error {
+	if len(args) > 0 {
+		return errors.New("usage: atto agents   (every atto the daemon runs; enter attaches)")
+	}
+	id, err := app.RunAgents()
+	if err != nil || id == 0 {
+		return err
+	}
+	// A fresh process attaches: the center's terminal reader may still be
+	// blocked on stdin and would take the first keys.
+	exe, err := os.Executable()
+	if err != nil {
+		return err
+	}
+	return syscall.Exec(exe, []string{"atto", "attach", strconv.Itoa(id)}, os.Environ())
 }
