@@ -54,7 +54,7 @@ var okReply = sse(`{"choices":[{"delta":{"content":"done"},"finish_reason":"stop
 
 func noWait(t *testing.T) {
 	old := retryWait
-	retryWait = func(error, int, time.Duration) time.Duration { return time.Millisecond }
+	retryWait = func(error, int, time.Duration) (time.Duration, error) { return time.Millisecond, nil }
 	t.Cleanup(func() { retryWait = old })
 }
 
@@ -128,5 +128,22 @@ func TestTurnCompactsOnContextOverflow(t *testing.T) {
 	})
 	if err != nil || !compacted || count() != 3 {
 		t.Fatalf("err %v, compacted %v, %d requests", err, compacted, count())
+	}
+}
+
+func TestTurnDoesNotRetryLongProviderDelay(t *testing.T) {
+	srv, count := scriptedServer(t, func(w http.ResponseWriter) {
+		w.Header().Set("Retry-After", "3600")
+		status(429, "rate limited")(w)
+	}, okReply)
+	a := newTestAgent(srv.URL)
+	retries := 0
+	err := a.Run(context.Background(), "go", func(ev any) {
+		if _, ok := ev.(StreamRetry); ok {
+			retries++
+		}
+	})
+	if err == nil || !strings.Contains(err.Error(), "3600s retry delay") || count() != 1 || retries != 0 {
+		t.Fatalf("err %v, %d requests, %d retries", err, count(), retries)
 	}
 }

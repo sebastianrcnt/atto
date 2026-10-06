@@ -147,6 +147,7 @@ func errorStream(model *Model, err error) *AssistantMessageEventStream {
 	out := newAssistantOutput(model, model.Api)
 	out.StopReason = StopError
 	out.ErrorMessage = err.Error()
+	out.ErrorCause = err
 	s.Push(AssistantMessageEvent{Type: EventError, Reason: StopError, Error: out})
 	s.End()
 	return s

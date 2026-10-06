@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 )
@@ -50,14 +51,17 @@ func TestIsPermanent(t *testing.T) {
 
 func TestRetryWait(t *testing.T) {
 	for attempt, want := range map[int]time.Duration{1: time.Second, 2: 2 * time.Second, 3: 4 * time.Second, 9: 30 * time.Second} {
-		got := RetryWait(errors.New("boom"), attempt, time.Minute)
+		got, err := RetryWait(errors.New("boom"), attempt, time.Minute)
+		if err != nil {
+			t.Fatal(err)
+		}
 		if got < want*9/10 || got > want*11/10 {
 			t.Errorf("attempt %d: %v, want about %v", attempt, got, want)
 		}
 	}
 	pe := &ProviderError{Status: 429, Headers: http.Header{"Retry-After": {"7"}}}
-	if got := RetryWait(pe, 1, time.Minute); got != 7*time.Second {
-		t.Errorf("retry-after: %v", got)
+	if got, err := RetryWait(pe, 1, time.Minute); err != nil || got != 7*time.Second {
+		t.Errorf("retry-after: %v %v", got, err)
 	}
 }
 
@@ -72,6 +76,20 @@ func TestStatusOf(t *testing.T) {
 	for err, want := range cases {
 		if got := StatusOf(err); got != want {
 			t.Errorf("StatusOf(%v) = %d, want %d", err, got, want)
+		}
+	}
+}
+
+func TestRetryWaitRejectsLongProviderDelay(t *testing.T) {
+	for _, header := range []http.Header{
+		{"Retry-After": {"3600"}},
+		{"Retry-After-Ms": {"3600000"}},
+		{"Retry-After": {time.Now().Add(time.Hour).UTC().Format(http.TimeFormat)}},
+	} {
+		pe := &ProviderError{Status: 429, Headers: header}
+		delay, err := RetryWait(pe, 1, 5*time.Minute)
+		if err == nil || delay != 0 || !strings.Contains(err.Error(), "retry delay") || !strings.Contains(err.Error(), "3600s") {
+			t.Fatalf("header %v: delay %v, err %v", header, delay, err)
 		}
 	}
 }

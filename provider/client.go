@@ -143,10 +143,22 @@ func (c *Client) stream(ctx context.Context, req Request, h Handler, streamed *b
 		if final != nil && final.ErrorMessage != "" {
 			msg = final.ErrorMessage
 		}
+		if final != nil && final.ErrorCause != nil {
+			return res, streamError{message: msg, cause: final.ErrorCause}
+		}
 		return res, errors.New(msg)
 	}
 	return res, nil
 }
+
+// streamError keeps the displayed message and the provider's retry metadata.
+type streamError struct {
+	message string
+	cause   error
+}
+
+func (e streamError) Error() string { return e.message }
+func (e streamError) Unwrap() error { return e.cause }
 
 // ToContext converts an atto transcript to an ai context for model. The
 // first system message becomes the system prompt.

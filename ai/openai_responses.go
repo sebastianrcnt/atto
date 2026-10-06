@@ -194,6 +194,7 @@ func StreamOpenAIResponses(model *Model, context TranscriptContext, options *Ope
 			msg += "\nCheck your ChatGPT usage: " + chatGPTUsageURL
 		}
 		output.ErrorMessage = msg
+		output.ErrorCause = err
 		stream.Push(AssistantMessageEvent{Type: EventError, Reason: output.StopReason, Error: output})
 		stream.End()
 	}()

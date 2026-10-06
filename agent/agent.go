@@ -1098,7 +1098,11 @@ func (a *Agent) loop(ctx context.Context, emit func(any)) error {
 			}
 			// Anything else may pass: drop what streamed and send it again.
 			drafts.endAll()
-			wait := retryWait(err, attempt, maxRetryWait)
+			wait, werr := retryWait(err, attempt, maxRetryWait)
+			if werr != nil {
+				err = werr
+				break
+			}
 			emit(StreamRetry{Attempt: attempt, Of: streamRetries, Wait: wait, Err: err.Error()})
 			select {
 			case <-time.After(wait):

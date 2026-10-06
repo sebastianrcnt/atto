@@ -108,16 +108,14 @@ func StatusOf(err error) int {
 
 // RetryWait is how long to wait before sending a failed request again for
 // the attempt-th time (from 1): the provider's Retry-After when it gives
-// one (up to max), else an exponential backoff from 1s, capped at 30s, with
-// jitter so clients that failed together do not retry together.
-func RetryWait(err error, attempt int, max time.Duration) time.Duration {
-	if pe, ok := errors.AsType[*ProviderError](err); ok && pe.Headers != nil {
-		if d, derr := retryDelay(pe, attempt-1, int(max.Milliseconds())); derr == nil &&
-			(pe.Headers.Get("retry-after") != "" || pe.Headers.Get("retry-after-ms") != "") {
-			return d
-		}
+// one, else an exponential backoff from 1s, capped at 30s, with jitter.
+// A provider delay above max returns an error: do not retry this turn.
+func RetryWait(err error, attempt int, max time.Duration) (time.Duration, error) {
+	if pe, ok := errors.AsType[*ProviderError](err); ok && pe.Headers != nil &&
+		(pe.Headers.Get("retry-after") != "" || pe.Headers.Get("retry-after-ms") != "") {
+		return retryDelay(pe, attempt-1, int(max.Milliseconds()))
 	}
 	d := time.Second << min(attempt-1, 5)
 	d = min(d, 30*time.Second)
-	return time.Duration(float64(d) * (0.9 + 0.2*rand.Float64()))
+	return time.Duration(float64(d) * (0.9 + 0.2*rand.Float64())), nil
 }

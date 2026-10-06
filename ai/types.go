@@ -311,6 +311,7 @@ type AssistantMessage struct {
 	Usage                 Usage      `json:"usage"`
 	StopReason            StopReason `json:"stopReason"`
 	ErrorMessage          string     `json:"errorMessage,omitempty"`
+	ErrorCause            error      `json:"-"` // retained for retry policy, not persisted
 	RawStopReason         string     `json:"rawStopReason,omitempty"`
 	EndTurn               *bool      `json:"endTurn,omitempty"`
 	Timestamp             int64      `json:"timestamp"`

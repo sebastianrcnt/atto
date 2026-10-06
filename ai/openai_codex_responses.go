@@ -201,6 +201,7 @@ func StreamOpenAICodexResponses(model *Model, context TranscriptContext, options
 			output.StopReason = StopAborted
 		}
 		output.ErrorMessage = FormatProviderError(err, "")
+		output.ErrorCause = err
 		stream.Push(AssistantMessageEvent{Type: EventError, Reason: output.StopReason, Error: output})
 		stream.End()
 	}()

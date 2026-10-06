@@ -596,6 +596,7 @@ func StreamOpenAICompletions(model *Model, context TranscriptContext, options *O
 			output.StopReason = StopAborted
 		}
 		output.ErrorMessage = FormatProviderError(err, "")
+		output.ErrorCause = err
 		stream.Push(AssistantMessageEvent{Type: EventError, Reason: output.StopReason, Error: output})
 		stream.End()
 	}()
