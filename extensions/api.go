@@ -173,7 +173,11 @@ func (e *ext) sessionObject() *goja.Object {
 		_, msgs := e.m.sessionText(max(0, limit))
 		out := make([]any, len(msgs))
 		for i, m := range msgs {
-			out[i] = map[string]any{"role": m.Role, "text": m.Content}
+			// An object, not a Go map: a map's keys come out in random order.
+			mo := vm.NewObject()
+			_ = mo.Set("role", m.Role)
+			_ = mo.Set("text", m.Content)
+			out[i] = mo
 		}
 		return vm.ToValue(out)
 	})
