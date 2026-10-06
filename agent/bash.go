@@ -43,7 +43,7 @@ func SetToolOutputTokenLimit(n int) {
 	if n <= 0 {
 		n = DefaultToolOutputTokens
 	}
-	maxOutputBytes.Store(int64(n) * 4)
+	maxOutputBytes.Store(int64(min(n, maxCaptureBytes/4)) * 4)
 }
 
 var bashSchema = json.RawMessage(`{
@@ -91,7 +91,7 @@ func (a BashArgs) timeout() time.Duration {
 	if a.Timeout <= 0 {
 		return DefaultBashTimeout
 	}
-	return min(time.Duration(a.Timeout)*time.Second, MaxBashTimeout)
+	return time.Duration(min(a.Timeout, int(MaxBashTimeout/time.Second))) * time.Second
 }
 
 type BashResult struct {

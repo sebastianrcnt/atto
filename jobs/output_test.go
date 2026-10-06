@@ -52,3 +52,12 @@ func TestCappedFileNoticesFinalTruncatingWrite(t *testing.T) {
 		}
 	}
 }
+
+func TestTailNonPositiveLineCount(t *testing.T) {
+	t.Setenv("ATTO_DIR", t.TempDir())
+	for _, n := range []int{-10, -1, 0} {
+		if got, err := Tail("s", 1, n); got != "" || err != nil {
+			t.Fatalf("Tail(%d): %q, %v", n, got, err)
+		}
+	}
+}

@@ -447,6 +447,9 @@ func Wait(session string, id int, timeout time.Duration) (Job, string, error) {
 
 // Tail returns the last n lines of a job's output.
 func Tail(session string, id, n int) (string, error) {
+	if n <= 0 {
+		return "", nil
+	}
 	data, err := readTail(OutputPath(session, id), 256<<10)
 	if err != nil {
 		return "", err

@@ -149,11 +149,15 @@ func (a *App) statusTrigger() {
 	}
 }
 
+func statusRefreshDuration(seconds int) time.Duration {
+	return time.Duration(min(int64(seconds), int64((1<<63-1)/time.Second))) * time.Second
+}
+
 func (a *App) statusLoop(cfg *config.StatusLine) {
 	var last []byte
 	var refresh <-chan time.Time
 	if cfg.RefreshInterval > 0 {
-		t := time.NewTicker(time.Duration(cfg.RefreshInterval) * time.Second)
+		t := time.NewTicker(statusRefreshDuration(cfg.RefreshInterval))
 		defer t.Stop()
 		refresh = t.C
 	}
