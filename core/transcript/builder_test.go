@@ -158,7 +158,7 @@ func TestLiveMatchesReplay(t *testing.T) {
 	ag.Steer("also this")
 	run("hello [image 1]", im)
 	run(events.Prefix + "job 1 exited")
-	run(goal.Prefix + "keep going")
+	run(goal.OpenTag + "\nkeep going\n" + goal.CloseTag)
 	if err := ag.Compact(ctx, live.Event); err != nil {
 		t.Fatal(err)
 	}
@@ -269,6 +269,20 @@ func TestReplayInterruptedCall(t *testing.T) {
 	}
 	if b.Command != "pwd" || !b.Result.Canceled || b.Status != Failed || items[3].Text != "again" {
 		t.Fatalf("call without a result %+v", b)
+	}
+}
+
+// Goal messages replay as goal items, the old "[atto goal] " ones too; a
+// user's message that merely mentions the tag stays the user's.
+func TestReplayGoalMessages(t *testing.T) {
+	var entries []session.Entry
+	texts := []string{goal.OpenTag + "\nkeep going\n" + goal.CloseTag, "[atto goal] keep going", "fix <atto_internal_context> handling"}
+	for _, text := range texts {
+		entries = append(entries, session.Entry{Type: session.TypeMessage, Message: &provider.Message{Role: "user", Content: text}})
+	}
+	items := FromEntries("", entries)
+	if len(items) != 3 || items[0].Kind != Goal || items[1].Kind != Goal || items[2].Kind != User {
+		t.Fatalf("%+v", items)
 	}
 }
 

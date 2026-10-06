@@ -4,9 +4,17 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
+	"github.com/sebastianrcnt/atto/agent"
+	"github.com/sebastianrcnt/atto/config"
+	"github.com/sebastianrcnt/atto/events"
 	"github.com/sebastianrcnt/atto/goal"
 	"github.com/sebastianrcnt/atto/session"
 	"github.com/sebastianrcnt/atto/tui"
@@ -175,14 +183,14 @@ func TestGoalSummaryPerStatus(t *testing.T) {
 	}
 	for st, hint := range hints {
 		g.Status = st
-		got := tui.StripEscapes(strings.Join(goalSummaryLines(g), "\n"))
+		got := tui.StripEscapes(strings.Join(goalSummaryLines(g, false), "\n"))
 		want := "Goal\nStatus: " + labels[st] + "\nObjective: ship it\nTime used: 2m\nTokens used: 63.9K\n\n" + hint
 		if got != want {
 			t.Errorf("%s:\n%s\nwant:\n%s", st, got, want)
 		}
 	}
 	g.Budget = 50000
-	if got := tui.StripEscapes(strings.Join(goalSummaryLines(g), "\n")); !strings.Contains(got, "Tokens used: 63.9K\nToken budget: 50K\n") {
+	if got := tui.StripEscapes(strings.Join(goalSummaryLines(g, false), "\n")); !strings.Contains(got, "Tokens used: 63.9K\nToken budget: 50K\n") {
 		t.Fatalf("budget line:\n%s", got)
 	}
 
@@ -454,5 +462,184 @@ func TestUsageLimitedTurnStopsTheGoal(t *testing.T) {
 	a.cmdGoal("resume")
 	if g.Status != goal.Active {
 		t.Fatalf("resume: %+v", g)
+	}
+}
+
+// endTurn simulates a goal turn that ends: steers are the texts committed
+// during it, userStart that the user's message started it.
+func endTurn(a *App, userStart bool, steers ...string) {
+	a.busy, a.runKind = true, "turn"
+	a.goal.BeginTurn()
+	if userStart {
+		a.goal.UserInput()
+	}
+	if len(steers) > 0 {
+		a.onEvent(agent.SteerCommitted{Texts: steers})
+	}
+	a.goal.Event(agent.ToolStart{})
+	a.busy = false
+	a.afterRun(nil)
+}
+
+func TestGoalHeldAfterUserInput(t *testing.T) {
+	for _, c := range []struct {
+		name      string
+		userStart bool
+		steers    []string
+		held      bool
+	}{
+		{"continuation", false, nil, false},
+		{"user message started the turn", true, nil, true},
+		{"user steer", false, []string{"why did you do that?"}, true},
+		{"event steer", false, []string{events.Prefix + "job done"}, false},
+		{"goal message steer", false, []string{goal.OpenTag + "\nbudget\n" + goal.CloseTag}, false},
+		{"legacy goal message steer", false, []string{"[atto goal] budget"}, false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			a := goalApp(t)
+			a.cmdGoal("ship it")
+			endTurn(a, c.userStart, c.steers...)
+			if got := a.goal.Held(); got != c.held {
+				t.Fatalf("held = %v, want %v", got, c.held)
+			}
+			if !a.goal.Active() {
+				t.Fatalf("the goal stays active: %+v", a.goal.Goal)
+			}
+			notice := strings.Contains(strings.Join(strings.Fields(goalText(a)), " "), goalWaitingNotice)
+			if notice != c.held {
+				t.Fatalf("notice = %v, want %v:\n%s", notice, c.held, goalText(a))
+			}
+			if c.held && !strings.Contains(a.goalIndicator(), "Goal waiting (enter to continue)") {
+				t.Fatalf("indicator %q", a.goalIndicator())
+			}
+			if !c.held && !strings.Contains(a.goalIndicator(), "Pursuing goal") {
+				t.Fatalf("indicator %q", a.goalIndicator())
+			}
+		})
+	}
+}
+
+func TestGoalHoldReleasedByEnterResumeAndNewGoal(t *testing.T) {
+	held := func() *App {
+		a := goalApp(t)
+		a.cmdGoal("ship it")
+		endTurn(a, true)
+		if !a.goal.Held() {
+			t.Fatal("not held")
+		}
+		return a
+	}
+
+	a := held()
+	a.submit("", nil) // enter on an empty prompt
+	if a.goal.Held() {
+		t.Fatal("empty enter releases the hold")
+	}
+
+	a = held()
+	a.cmdGoal("resume")
+	if a.goal.Held() || a.goal.Goal.Status != goal.Active {
+		t.Fatal("/goal resume releases the hold")
+	}
+
+	a = held()
+	a.cmdGoal("second") // confirm replacing
+	keys(a, "enter")
+	if a.goal.Held() || a.goal.Goal.Objective != "second" {
+		t.Fatalf("a new goal releases the hold: %+v", a.goal.Goal)
+	}
+
+	a = held()
+	a.setObjective("edited")
+	if a.goal.Held() {
+		t.Fatal("editing the objective releases the hold")
+	}
+
+	// Pausing keeps nothing waiting, and resuming later starts clean.
+	a = held()
+	a.cmdGoal("pause")
+	a.cmdGoal("resume")
+	if a.goal.Held() {
+		t.Fatal("resume after pause releases the hold")
+	}
+}
+
+// A goal held after the user's turn does not start another turn by itself,
+// and enter on an empty prompt continues it, against a scripted model.
+func TestGoalHoldEndToEnd(t *testing.T) {
+	var mu sync.Mutex
+	requests := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		requests++
+		mu.Unlock()
+		fmt.Fprint(w, `data: {"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}`+"\n\n")
+		fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+	defer srv.Close()
+	count := func() int { mu.Lock(); defer mu.Unlock(); return requests }
+	idle := func(a *App) {
+		t.Helper()
+		deadline := time.Now().Add(10 * time.Second)
+		for {
+			var busy bool
+			a.ui.Do(func() { busy = a.busy })
+			if !busy {
+				return
+			}
+			if time.Now().After(deadline) {
+				t.Fatal("turn did not finish")
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+
+	a := treeApp(t)
+	a.agent.SetModel(config.ModelRef{ProviderName: "t", Provider: config.Provider{BaseURL: srv.URL}, Model: config.Model{ID: "m", ContextWindow: 100000}})
+	g, _ := goal.New("ship it", 0)
+	a.ui.Do(func() { a.goal.Set(g) })
+
+	a.ui.Do(func() { a.startTurn("what is going on?", nil) })
+	idle(a)
+	time.Sleep(100 * time.Millisecond) // a continuation would have started by now
+	idle(a)
+	var held bool
+	a.ui.Do(func() { held = a.goal.Held() })
+	if n := count(); n != 1 || !held {
+		t.Fatalf("after the user's turn: %d requests, held %v; want 1 and held", n, held)
+	}
+
+	a.ui.Do(func() { a.submit("", nil) })
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		var st goal.Status
+		a.ui.Do(func() { st = a.goal.Goal.Status })
+		if st != goal.Active {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the goal did not continue")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	idle(a)
+	a.ui.Do(func() { held = a.goal.Held() })
+	// The user's turn and two idle continuations stall the goal; the continuations do not hold.
+	if n := count(); n != 3 || held {
+		t.Fatalf("after enter: %d requests, held %v; want 3, not held", n, held)
+	}
+}
+
+func TestGoalMessageTitle(t *testing.T) {
+	g, _ := goal.New("ship it", 0)
+	for text, want := range map[string]string{
+		g.Continuation():                                  "◎ Continuing goal",
+		"[atto goal] <objective>\nx":                      "◎ Continuing goal",
+		goal.OpenTag + "\nBudget used.\n" + goal.CloseTag: "◎ Budget used.",
+		"[atto goal] Budget used.":                        "◎ Budget used.",
+	} {
+		if got := goalMessageTitle(text); got != want {
+			t.Errorf("%.40q: %q, want %q", text, got, want)
+		}
 	}
 }

@@ -110,6 +110,9 @@ func (a *App) afterRun(err error) {
 			took = tui.FormatDuration(d.Truncate(100 * time.Millisecond))
 		}
 		a.notice("Worked for %s • %s", took, time.Now().Format("3:04 PM"))
+		if a.goal.Held() {
+			a.notice(goalWaitingNotice)
+		}
 		a.notifyIdle()
 	}
 	a.runKind = ""
@@ -163,12 +166,12 @@ func (a *App) afterRun(err error) {
 
 // notifyIdle sends the idle_prompt notification when a long turn has ended
 // and atto now waits for the user: nothing queued or pending and no goal
-// turn about to start.
+// turn about to start (a goal waiting for the user starts none).
 func (a *App) notifyIdle() {
 	if time.Since(a.runStart) < notifyAfter {
 		return
 	}
-	if len(a.queued) > 0 || len(a.pendingEvents) > 0 || len(a.pendingSteers) > 0 || a.goal.Active() {
+	if len(a.queued) > 0 || len(a.pendingEvents) > 0 || len(a.pendingSteers) > 0 || (a.goal.Active() && !a.goal.Held()) {
 		return
 	}
 	a.notify("idle_prompt", "atto finished and is waiting for your input")

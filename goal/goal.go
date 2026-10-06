@@ -284,10 +284,14 @@ func (g *Goal) Summary() string {
 
 // Indicator is the status indicator, worded as codex's footer: "Pursuing
 // goal (12.5K / 50K)", "Goal paused (/goal resume)" and so on. seconds is
-// the goal's time including the running turn.
-func (g *Goal) Indicator(seconds int64) string {
+// the goal's time including the running turn; held is an active goal
+// waiting for the user after their input.
+func (g *Goal) Indicator(seconds int64, held bool) string {
 	switch g.Status {
 	case Active:
+		if held {
+			return "Goal waiting (enter to continue)"
+		}
 		if g.Budget > 0 {
 			return fmt.Sprintf("Pursuing goal (%s / %s)", Tokens(g.TokensUsed), Tokens(g.Budget))
 		}
@@ -348,8 +352,39 @@ func ParseBudget(s string) (int, error) {
 	return int(f * mult), nil
 }
 
-// Prefix marks goal messages in the conversation.
-const Prefix = "[atto goal] "
+// Goal messages are wrapped as internal context, after codex's
+// <codex_internal_context>, so the model can tell them from the user's own
+// words (see the system prompt's Goals paragraph).
+const (
+	OpenTag  = `<atto_internal_context source="goal">`
+	CloseTag = `</atto_internal_context>`
+
+	// legacyPrefix marked goal messages before the wrapper; sessions
+	// written then still hold them.
+	legacyPrefix = "[atto goal] "
+)
+
+// wrap frames a goal message as internal context.
+func wrap(body string) string {
+	return OpenTag + "\n" + strings.TrimSpace(body) + "\n" + CloseTag
+}
+
+// IsMessage reports whether text is a goal message: a user-role message
+// atto inserted, not the user. The old "[atto goal] " prefix counts.
+func IsMessage(text string) bool {
+	return strings.HasPrefix(text, OpenTag) || strings.HasPrefix(text, legacyPrefix)
+}
+
+// Body is a goal message without its wrapper (or old prefix); text that
+// is not a goal message comes back unchanged.
+func Body(text string) string {
+	if rest, ok := strings.CutPrefix(text, OpenTag); ok {
+		rest = strings.TrimPrefix(rest, "\n")
+		rest = strings.TrimSuffix(rest, CloseTag)
+		return strings.TrimSpace(rest)
+	}
+	return strings.TrimPrefix(text, legacyPrefix)
+}
 
 // escape keeps the objective from closing the tag it is wrapped in.
 func escape(s string) string {
@@ -373,17 +408,17 @@ func (g *Goal) data() prompts.Goal {
 // survives compaction, and is framed as user data rather than instructions
 // that outrank everything else.
 func (g *Goal) Continuation() string {
-	return Prefix + prompts.Render("goal_continuation", g.data())
+	return wrap(prompts.Render("goal_continuation", g.data()))
 }
 
 // BudgetMessage tells the model to wrap up once the budget is spent (codex's
 // budget_limit template).
 func (g *Goal) BudgetMessage() string {
-	return Prefix + prompts.Render("goal_budget", g.data())
+	return wrap(prompts.Render("goal_budget", g.data()))
 }
 
 // ObjectiveUpdatedMessage tells the model, mid-turn, that the user edited
 // the objective (codex's objective_updated template).
 func (g *Goal) ObjectiveUpdatedMessage() string {
-	return Prefix + prompts.Render("goal_objective_updated", g.data())
+	return wrap(prompts.Render("goal_objective_updated", g.data()))
 }

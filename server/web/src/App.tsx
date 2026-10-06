@@ -19,6 +19,7 @@ import Thinking from "./components/Thinking";
 import StatusLine from "./components/StatusLine";
 import ToolGroup from "./components/ToolGroup";
 import ToolRow from "./components/ToolRow";
+import { goalBody } from "./format";
 import { Markdown } from "./markdown";
 import { Client, initialToken, saveToken, Unauthorized } from "./rpc";
 import { loadThreadId, saveThreadId } from "./storage";
@@ -126,7 +127,7 @@ export const ItemView = memo(function ItemView({ it }: { it: Item }) {
     case "event":
       return <Line icon={<Bolt size={13} />}>{(it.text || "").replace(/^\[atto event\] ?/, "").split("\n")[0]}</Line>;
     case "goal":
-      return <Line icon={<Target size={13} />}>{/<objective>/.test(it.text || "") ? "Continuing goal" : (it.text || "").replace(/^\[atto goal\] ?/, "").split("\n")[0]}</Line>;
+      return <Line icon={<Target size={13} />}>{/<objective>/.test(it.text || "") ? "Continuing goal" : goalBody(it.text || "").split("\n")[0]}</Line>;
     case "goalStatus":
       return <Line icon={<Target size={13} />}>{"Goal " + (it.goalStatus || "") + (it.text ? ": " + it.text : "")}</Line>;
     case "hook":

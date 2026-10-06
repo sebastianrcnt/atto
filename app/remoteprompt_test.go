@@ -308,7 +308,7 @@ func TestRemoteGoal(t *testing.T) {
 			gg := a.goal.Goal
 			gg.Status = st
 			a.goal.Set(gg)
-			want = gg.Indicator(a.goal.Elapsed())
+			want = gg.Indicator(a.goal.Elapsed(), a.goal.Held())
 			status = plainLines(a.renderStatus(200))
 		})
 		g, _ = first(t, ev, "goal/updated").Params["goal"].(map[string]any)

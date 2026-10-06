@@ -41,10 +41,12 @@ func (a *App) snapshotGoal(g *goal.Goal) {
 }
 
 // continueGoal starts the next goal turn when nothing else is waiting:
-// user input (queued, pending events, an open picker) always goes first.
+// user input (queued, pending events, an open picker) always goes first,
+// and a goal held after a turn with user input waits for the user (enter on
+// an empty prompt, or /goal resume).
 // As in codex, a continuation shows nothing of its own: the turn just starts.
 func (a *App) continueGoal() {
-	if a.busy || a.modal != nil || a.queuePaused || len(a.queued) > 0 || len(a.pendingEvents) > 0 {
+	if a.busy || a.modal != nil || a.queuePaused || len(a.queued) > 0 || len(a.pendingEvents) > 0 || a.goal.Held() {
 		return
 	}
 	text, ok := a.goal.Next()
@@ -58,6 +60,9 @@ func (a *App) continueGoal() {
 		return a.agent.Run(ctx, text, emit)
 	})
 }
+
+// goalWaitingNotice is shown when a goal is held after a turn with user input.
+const goalWaitingNotice = "Goal waiting for you — press enter on an empty prompt or /goal resume to continue."
 
 // goalUsage is codex's usage line for /goal.
 const goalUsage = "Usage: /goal [<objective>|clear|edit|pause|resume]"
@@ -103,7 +108,7 @@ func (a *App) cmdGoal(arg string) {
 			a.add(&infoBlock{title: goalUsage, hint: "No goal is currently set."})
 			return
 		}
-		a.add(&contextBlock{lines: goalSummaryLines(g)})
+		a.add(&contextBlock{lines: goalSummaryLines(g, a.goal.Held())})
 		return
 	case "clear":
 		if g == nil {
@@ -132,8 +137,8 @@ func (a *App) cmdGoal(arg string) {
 			a.errorNotice(errNoGoal)
 			return
 		}
-		switch g.Status {
-		case goal.Paused, goal.Blocked, goal.UsageLimited:
+		switch {
+		case g.Status == goal.Paused || g.Status == goal.Blocked || g.Status == goal.UsageLimited || a.goal.Held():
 			a.resumeGoal()
 			return
 		}
@@ -176,15 +181,18 @@ func (a *App) cmdGoal(arg string) {
 
 // startGoal makes ng the goal and starts working on it.
 func (a *App) startGoal(ng *goal.Goal) {
+	a.goal.Release()
 	a.goal.Set(ng)
 	a.goalInfo(ng)
 	a.continueGoal() // starts now if idle, else after the current turn
 }
 
-// resumeGoal makes a paused, stalled or usage limited goal active again; a
-// resumed run starts a fresh stall audit.
+// resumeGoal makes a paused, stalled or usage limited goal active again, or
+// ends the hold of a goal waiting for the user; a resumed run starts a
+// fresh stall audit.
 func (a *App) resumeGoal() {
 	g := a.goal.Goal
+	a.goal.Release()
 	g.Status, g.Note, g.FailStreak, g.IdleStreak = goal.Active, "", 0, 0
 	a.goal.Set(g)
 	a.goalInfo(g)
@@ -192,7 +200,7 @@ func (a *App) resumeGoal() {
 }
 
 // goalSummaryLines is codex's summary of /goal without arguments.
-func goalSummaryLines(g *goal.Goal) []string {
+func goalSummaryLines(g *goal.Goal, held bool) []string {
 	lines := []string{
 		tui.Bold("Goal"),
 		tui.Dim("Status: ") + g.Status.Label(),
@@ -207,6 +215,9 @@ func goalSummaryLines(g *goal.Goal) []string {
 	switch g.Status {
 	case goal.Active:
 		hint = "Commands: /goal edit, /goal pause, /goal clear"
+		if held {
+			hint = "Waiting for you. Commands: /goal resume, /goal edit, /goal pause, /goal clear"
+		}
 	case goal.Paused, goal.Blocked, goal.UsageLimited:
 		hint = "Commands: /goal edit, /goal resume, /goal clear"
 	}
@@ -303,6 +314,7 @@ func (a *App) setObjective(text string) {
 		return
 	}
 	g.Objective = text
+	a.goal.Release() // an edit is the user steering the goal: no waiting
 	if g.Status == goal.BudgetLimited || g.Status == goal.Complete {
 		g.Status, g.Note, g.FailStreak, g.IdleStreak = goal.Active, "", 0, 0
 	}
@@ -339,7 +351,7 @@ func (a *App) goalIndicator() string {
 	if g == nil {
 		return ""
 	}
-	if s := g.Indicator(a.goal.Elapsed()); s != "" {
+	if s := g.Indicator(a.goal.Elapsed(), a.goal.Held()); s != "" {
 		return tui.FG(5, s)
 	}
 	return ""

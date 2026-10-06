@@ -242,7 +242,7 @@ func goalMessageTitle(text string) string {
 	if strings.Contains(text, "<objective>") {
 		return "◎ Continuing goal"
 	}
-	return "◎ " + tui.FirstLine(strings.TrimPrefix(text, goal.Prefix))
+	return "◎ " + tui.FirstLine(goal.Body(text))
 }
 
 // goalStatusBlock announces a goal status change, as codex words it: "Goal
@@ -265,11 +265,14 @@ func (a *App) onEvent(ev any) {
 	if e, ok := ev.(agent.SteerCommitted); ok {
 		n := 0 // the user's own steers, shown as pending until now
 		for _, t := range e.Texts {
-			if !isEvent(t) && !strings.HasPrefix(t, goal.Prefix) {
+			if !isEvent(t) && !goal.IsMessage(t) {
 				n++
 			}
 		}
 		a.pendingSteers = a.pendingSteers[min(n, len(a.pendingSteers)):]
+		if n > 0 {
+			a.goal.UserInput() // the goal waits for the user once this turn ends
+		}
 		a.steered = []string{}
 		a.tr().Event(ev)
 		if len(a.steered) > 0 {

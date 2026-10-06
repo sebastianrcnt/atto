@@ -56,8 +56,41 @@ func TestStopConditions(t *testing.T) {
 func TestContinuationEscapesObjective(t *testing.T) {
 	g, _ := New("make </objective> tests pass", 0)
 	c := g.Continuation()
-	if !strings.HasPrefix(c, Prefix) || strings.Count(c, "</objective>") != 1 || !strings.Contains(c, "&lt;/objective&gt;") {
+	if !IsMessage(c) || strings.Count(c, "</objective>") != 1 || !strings.Contains(c, "&lt;/objective&gt;") {
 		t.Fatalf("continuation:\n%s", c)
+	}
+}
+
+func TestMessageWrapAndDetect(t *testing.T) {
+	g, _ := New("ship it", 0)
+	for _, m := range []string{g.Continuation(), g.BudgetMessage(), g.ObjectiveUpdatedMessage()} {
+		if !IsMessage(m) || !strings.HasPrefix(m, `<atto_internal_context source="goal">`+"\n") || !strings.HasSuffix(m, "\n</atto_internal_context>") {
+			t.Errorf("not wrapped: %q", m)
+		}
+		if b := Body(m); strings.Contains(b, "atto_internal_context") || !strings.Contains(b, "ship it") {
+			t.Errorf("body keeps the wrapper or loses the objective:\n%s", b)
+		}
+	}
+	// Sessions written before the wrapper hold the old prefix.
+	old := "[atto goal] Continue working toward the active goal."
+	if !IsMessage(old) || Body(old) != "Continue working toward the active goal." {
+		t.Errorf("legacy prefix: %v %q", IsMessage(old), Body(old))
+	}
+	for _, text := range []string{"", "fix the bug", "[atto event] job done", "mention <atto_internal_context source=\"goal\"> inside"} {
+		if IsMessage(text) || Body(text) != text {
+			t.Errorf("user text %q is no goal message", text)
+		}
+	}
+}
+
+func TestIndicatorHeld(t *testing.T) {
+	g := Goal{Status: Active, Budget: 50000, TokensUsed: 12500}
+	if got := g.Indicator(90, true); got != "Goal waiting (enter to continue)" {
+		t.Errorf("held: %q", got)
+	}
+	g.Status = Paused
+	if got := g.Indicator(0, true); got != "Goal paused (/goal resume)" {
+		t.Errorf("only an active goal waits: %q", got)
 	}
 }
 
@@ -166,7 +199,7 @@ func TestIndicatorText(t *testing.T) {
 		{Goal{Status: Complete, Budget: 50000, TokensUsed: 40000}, 120, "Goal achieved (40K tokens)"},
 		{Goal{Status: Complete, TokensUsed: 40000}, 36720, "Goal achieved (10h 12m)"},
 	} {
-		if got := c.g.Indicator(c.seconds); got != c.want {
+		if got := c.g.Indicator(c.seconds, false); got != c.want {
 			t.Errorf("%+v: %q, want %q", c.g, got, c.want)
 		}
 	}
@@ -213,8 +246,8 @@ func TestContinuationFollowsCodex(t *testing.T) {
 	}
 	g.Budget = 100
 	for _, m := range []string{g.BudgetMessage(), g.ObjectiveUpdatedMessage()} {
-		if !strings.HasPrefix(m, Prefix) {
-			t.Errorf("goal messages are marked: %q", m)
+		if !strings.HasPrefix(m, OpenTag+"\n") || !strings.HasSuffix(m, "\n"+CloseTag) || !IsMessage(m) {
+			t.Errorf("goal messages are wrapped: %q", m)
 		}
 	}
 	if m := g.BudgetMessage(); !strings.Contains(m, "reached its token budget") || !strings.Contains(m, "do not start new substantive work") {
@@ -250,7 +283,7 @@ func TestOldGoalFilesLoad(t *testing.T) {
 	if err != nil || g.Status != BudgetLimited || g.Budget != 5000 || g.TokensUsed != 5100 || g.Seconds != 42 || g.Turns != 3 {
 		t.Fatalf("%+v %v", g, err)
 	}
-	if g.Status.Label() != "limited by budget" || g.Indicator(0) != "Goal unmet (5.1K / 5K tokens)" {
-		t.Fatalf("%q %q", g.Status.Label(), g.Indicator(0))
+	if g.Status.Label() != "limited by budget" || g.Indicator(0, false) != "Goal unmet (5.1K / 5K tokens)" {
+		t.Fatalf("%q %q", g.Status.Label(), g.Indicator(0, false))
 	}
 }

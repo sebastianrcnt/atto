@@ -616,10 +616,17 @@ func (a *App) submit(text string, att []tui.Attachment) {
 	}
 	switch {
 	case text == "":
-		// Enter on an empty prompt resumes a paused queue.
-		if !a.busy && len(a.queued) > 0 {
+		// Enter on an empty prompt resumes a paused queue, or else a goal
+		// waiting for the user.
+		switch {
+		case a.busy:
+		case len(a.queued) > 0:
 			a.queuePaused = false
 			a.maybeSendNextQueued()
+		case a.goal.Held():
+			a.goal.Release()
+			a.remoteGoal()
+			a.continueGoal()
 		}
 	case strings.HasPrefix(text, "/"):
 		a.runCommand(text)
@@ -662,6 +669,7 @@ func (a *App) startTurn(text string, att []tui.Attachment) {
 		}
 	}
 	a.tr().Event(transcript.Input{Text: text, Images: imgs})
+	a.goal.UserInput() // a turn the user started: the goal waits for them after it
 	a.runKind = "turn"
 	a.recordSettings()
 	a.start("Thinking", func(ctx context.Context, emit func(any)) error {

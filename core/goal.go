@@ -21,6 +21,12 @@ import (
 // agent event, EndTurn, then Next when idle), or as a loop (Run), as
 // atto -p does.
 //
+// A turn that took real user input (a message that started it, or a steer)
+// puts the goal on hold when it ends: the goal stays active but no
+// continuation starts until the user continues (Release), so the model's
+// answer is not buried under more goal work. Goal continuations and events
+// are not user input.
+//
 // The goal lives in memory; the goal file is how the model reports back
 // (atto goal complete|blocked), and only those reports are taken from it
 // (goal.Adopt), so editing the file cannot rewrite the objective or the
@@ -48,6 +54,8 @@ type GoalDriver struct {
 	running    bool // a turn is in progress (BeginTurn..EndTurn)
 	tools      int  // tool calls in the current turn
 	budgetSent bool // budget message already steered into this turn
+	userInput  bool // the running turn took user input (see UserInput)
+	held       bool // waiting for the user after a turn with user input
 }
 
 func (d *GoalDriver) fail(err error) {
@@ -88,6 +96,7 @@ func (d *GoalDriver) Poll() {
 	if g == nil || g.Status == goal.Complete {
 		if file != nil && file.Status == goal.Active && (g == nil || !file.Created.Equal(g.Created)) {
 			d.Set(file)
+			d.Release() // a new goal starts at once, even from a user's turn
 			if d.Adopted != nil {
 				d.Adopted(file)
 			}
@@ -102,6 +111,18 @@ func (d *GoalDriver) Poll() {
 
 // Active reports whether the goal wants more turns.
 func (d *GoalDriver) Active() bool { return d.Goal != nil && d.Goal.Status == goal.Active }
+
+// UserInput notes that the user's own input went into the running turn (or
+// the turn about to begin): when it ends, the goal waits for the user.
+func (d *GoalDriver) UserInput() { d.userInput = true }
+
+// Held reports whether the goal is active but waiting for the user to
+// continue it, after a turn that took user input.
+func (d *GoalDriver) Held() bool { return d.held && d.Active() }
+
+// Release ends the hold (the user continued, resumed or set a new goal)
+// and forgets user input noted so far in the running turn.
+func (d *GoalDriver) Release() { d.held, d.userInput = false, false }
 
 // BeginTurn starts counting a turn.
 func (d *GoalDriver) BeginTurn() {
@@ -153,10 +174,13 @@ func (d *GoalDriver) step(input, cached, output int) {
 }
 
 // EndTurn applies the stop conditions after a turn that ended with err.
-// An interrupt pauses the goal. Returns true if the goal is still active.
+// An interrupt pauses the goal; user input in the turn puts an active goal
+// on hold. Returns true if the goal is still active (held or not).
 func (d *GoalDriver) EndTurn(err error) bool {
 	d.running = false
 	d.Poll()
+	user := d.userInput // after Poll: a goal adopted from the model starts at once
+	d.userInput = false
 	g := d.Goal
 	if g == nil {
 		return false
@@ -176,13 +200,17 @@ func (d *GoalDriver) EndTurn(err error) bool {
 	if wasActive && g.Status != goal.Active {
 		d.changed()
 	}
+	if user && g.Status == goal.Active {
+		d.held = true
+	}
 	return g.Status == goal.Active
 }
 
-// Next is the input of the next goal turn, if the goal is still active.
+// Next is the input of the next goal turn, if the goal is still active
+// and not waiting for the user.
 func (d *GoalDriver) Next() (string, bool) {
 	d.Poll()
-	if !d.Active() {
+	if !d.Active() || d.held {
 		return "", false
 	}
 	return d.Goal.Continuation(), true
@@ -224,6 +252,7 @@ func (d *GoalDriver) Restore(entries []session.Entry) (paused bool) {
 		}
 	}
 	d.Goal = nil
+	d.Release()
 	if len(last) == 0 || string(last) == "null" {
 		_ = goal.Clear(d.Session)
 		return false

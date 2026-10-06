@@ -172,6 +172,8 @@ export type GoalInfo = {
   budget?: number;
   elapsed: string;
   seconds: number;
+  // An active goal waiting for the user ("/goal resume").
+  held?: boolean;
 };
 
 export type ThreadSummary = {

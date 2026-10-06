@@ -8,10 +8,10 @@ import { Chevron, Target } from "./icons";
 
 export type GoalAction = "pause" | "resume" | "edit" | "clear";
 
-function actions(status: string): GoalAction[] {
+function actions(status: string, held?: boolean): GoalAction[] {
   switch (status) {
     case "active":
-      return ["pause", "edit", "clear"];
+      return held ? ["resume", "pause", "edit", "clear"] : ["pause", "edit", "clear"];
     case "paused":
     case "blocked":
     case "usage_limited":
@@ -47,7 +47,7 @@ export default function GoalBar({ goal, onAction }: { goal: GoalInfo; onAction: 
             </p>
             {goal.note && <p className="mt-1.5 text-[12.5px] leading-snug text-ink-3">{goal.note}</p>}
             <div className="mt-3 flex flex-wrap gap-2">
-              {actions(goal.status).map((a) => (
+              {actions(goal.status, goal.held).map((a) => (
                 <button
                   key={a}
                   type="button"

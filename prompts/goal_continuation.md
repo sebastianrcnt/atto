@@ -14,6 +14,11 @@ Continuation behavior:
 Budget:
 {{template "goal_budget_lines" .}}- Goal turns so far: {{.Turns}}
 
+User messages:
+- A user message that arrived during the goal outranks it: answer it first, then continue the goal only if the user did not redirect you.
+- A turn spent answering the user counts as legitimate work, not "no progress".
+- Pause only on an explicit user request (ask if it is unclear).
+
 Work from evidence:
 Use the current files and external state as authoritative. Previous conversation context can help locate relevant work, but inspect the current state before relying on it. Improve, replace, or remove existing work as needed to satisfy the actual objective.
 

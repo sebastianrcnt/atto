@@ -29,3 +29,13 @@ export function compact(n: number): string {
   if (n < 1e7) return (n / 1e6).toFixed(1) + "M";
   return Math.round(n / 1e6) + "M";
 }
+
+// goalBody is goal.Body: a goal message without its <atto_internal_context>
+// wrapper (or the old "[atto goal] " prefix).
+export function goalBody(text: string): string {
+  return text
+    .replace(/^<atto_internal_context source="goal">\n?/, "")
+    .replace(/<\/atto_internal_context>\s*$/, "")
+    .replace(/^\[atto goal\] ?/, "")
+    .trim();
+}

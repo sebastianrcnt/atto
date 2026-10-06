@@ -55,7 +55,7 @@ type bgExit struct {
 // exitRunning reports whether leaving now would stop work: a turn is
 // running, or a goal is active and will start the next one.
 func (a *App) exitRunning() bool {
-	return (a.busy && a.runKind == "turn") || a.goal.Active()
+	return (a.busy && a.runKind == "turn") || (a.goal.Active() && !a.goal.Held())
 }
 
 // requestQuit is every way of exiting (ctrl+c, ctrl+d, /quit, /exit): the
@@ -212,7 +212,7 @@ func (a *App) backgroundAfterRun(err error) bool {
 			a.goal.EndTurn(nil)
 		}
 		a.runKind = ""
-		if !a.goal.Active() {
+		if !a.goal.Active() || a.goal.Held() {
 			a.notice("The task finished.")
 			a.doQuit()
 			return true

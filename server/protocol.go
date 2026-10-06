@@ -161,7 +161,7 @@ const (
 	ItemCommand    = "commandExecution"
 	ItemCompaction = "compaction"
 	ItemEvent      = "event" // [atto event]: a job exited, a timer fired, a monitor matched
-	ItemGoal       = "goal"  // [atto goal]: a goal continuation or budget message for the model
+	ItemGoal       = "goal"  // atto_internal_context source="goal": a goal continuation or budget message for the model
 	ItemHook       = "hook"  // a hook's message, or what it blocked
 	ItemNotice     = "notice"
 	ItemGoalStatus = "goalStatus"
@@ -475,4 +475,7 @@ type GoalInfo struct {
 	Budget     int    `json:"budget,omitempty"`
 	Elapsed    string `json:"elapsed"`
 	Seconds    int64  `json:"seconds"`
+	// Held: an active goal waiting for the user to continue it ("/goal
+	// resume"), after a turn that took their input.
+	Held bool `json:"held,omitempty"`
 }

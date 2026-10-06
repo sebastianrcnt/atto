@@ -285,7 +285,7 @@ func (b *Builder) input(text string, imgs []provider.Image) {
 	switch {
 	case strings.HasPrefix(text, events.Prefix):
 		it.Kind = Event
-	case strings.HasPrefix(text, goal.Prefix):
+	case goal.IsMessage(text):
 		it.Kind = Goal
 	case strings.HasPrefix(text, agent.StopHookPrefix):
 		// The reason a Stop hook gave for keeping the turn going: live it

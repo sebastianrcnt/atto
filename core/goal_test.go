@@ -114,7 +114,7 @@ func TestGoalDriverRun(t *testing.T) {
 	if err := d.Run(context.Background(), "start", turn, emit, func() { between++ }); err != nil {
 		t.Fatal(err)
 	}
-	if len(inputs) != 3 || inputs[0] != "start" || !strings.HasPrefix(inputs[1], goal.Prefix) || between != 2 {
+	if len(inputs) != 3 || inputs[0] != "start" || !goal.IsMessage(inputs[1]) || between != 2 {
 		t.Fatalf("inputs %q, between %d", inputs, between)
 	}
 	if g.Status != goal.Complete || g.Turns != 3 || g.TokensUsed != 33 || seen != 8 {
@@ -156,5 +156,97 @@ func TestGoalDriverModelPause(t *testing.T) {
 	_ = goal.Save("s", f)
 	if _, ok := d.Next(); ok || g.Status != goal.Paused || g.Note != "the user asked" {
 		t.Fatalf("the model's pause is taken: %+v", g)
+	}
+}
+
+// A turn that took user input puts the goal on hold when it ends; turns of
+// continuations and events do not.
+func TestGoalDriverHoldAfterUserInput(t *testing.T) {
+	t.Setenv("ATTO_DIR", t.TempDir())
+	g, _ := goal.New("ship it", 0)
+	d := GoalDriver{Session: "s", Goal: g}
+	turn := func(user bool) {
+		d.BeginTurn()
+		if user {
+			d.UserInput()
+		}
+		d.Event(agent.ToolStart{}) // progress, so the stall audit stays out of it
+		d.EndTurn(nil)
+	}
+
+	// Continuations and events: no hold.
+	turn(false)
+	if _, ok := d.Next(); !ok || d.Held() {
+		t.Fatal("a goal turn without user input continues")
+	}
+
+	// A user's message or steer: on hold, still active.
+	turn(true)
+	if _, ok := d.Next(); ok || !d.Held() || !d.Active() {
+		t.Fatalf("held=%v active=%v: want held and active, no continuation", d.Held(), d.Active())
+	}
+
+	// An event turn while held does not release it.
+	turn(false)
+	if _, ok := d.Next(); ok || !d.Held() {
+		t.Fatal("an event turn keeps the hold")
+	}
+
+	// Release continues; the next turn without user input holds nothing.
+	d.Release()
+	if _, ok := d.Next(); !ok || d.Held() {
+		t.Fatal("release continues the goal")
+	}
+	turn(false)
+	if d.Held() {
+		t.Fatal("a continuation turn does not hold")
+	}
+
+	// Input noted in a turn that is then released (a new goal, an edit) does
+	// not hold.
+	d.BeginTurn()
+	d.UserInput()
+	d.Release()
+	d.EndTurn(nil)
+	if d.Held() {
+		t.Fatal("release drops the turn's user input")
+	}
+
+	// A hold only matters while active.
+	turn(true)
+	g.Status = goal.Paused
+	if d.Held() {
+		t.Fatal("a paused goal is not waiting")
+	}
+	g.Status = goal.Active
+	if !d.Held() {
+		t.Fatal("hold survives pausing until released")
+	}
+	d.Release()
+}
+
+// A goal the model sets itself during the user's turn starts at once.
+func TestGoalDriverAdoptedGoalIsNotHeld(t *testing.T) {
+	t.Setenv("ATTO_DIR", t.TempDir())
+	d := GoalDriver{Session: "s"}
+	d.BeginTurn()
+	d.UserInput()
+	g, _ := goal.New("from the model", 0)
+	_ = goal.Save("s", g)
+	d.EndTurn(nil)
+	if d.Goal == nil || d.Held() {
+		t.Fatalf("goal %v held %v", d.Goal, d.Held())
+	}
+}
+
+func TestGoalDriverRestoreDropsHold(t *testing.T) {
+	t.Setenv("ATTO_DIR", t.TempDir())
+	d := GoalDriver{Session: "s"}
+	d.UserInput()
+	d.Restore(nil)
+	d.BeginTurn()
+	d.EndTurn(nil)
+	if d.Held() {
+		t.Fatal("restoring a session starts clean")
 	}
 }
