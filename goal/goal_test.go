@@ -270,6 +270,34 @@ func TestAdoptPause(t *testing.T) {
 	}
 }
 
+func TestAdoptResume(t *testing.T) {
+	for _, st := range []Status{Paused, Blocked, UsageLimited} {
+		g, _ := New("x", 0)
+		g.Status, g.Note, g.FailStreak, g.IdleStreak = st, "why", 1, 2
+		if g.Adopt(&Goal{Status: Active, Updated: g.Updated}) {
+			t.Fatalf("%s: a file not written after the goal stopped is stale", st)
+		}
+		if !g.Adopt(&Goal{Status: Active, Updated: g.Updated.Add(time.Second)}) || g.Status != Active || g.Note != "" || g.FailStreak != 0 || g.IdleStreak != 0 {
+			t.Fatalf("%s resumes with a fresh audit: %+v", st, g)
+		}
+	}
+	b, _ := New("x", 10)
+	b.Status = BudgetLimited
+	if b.Adopt(&Goal{Status: Active, Updated: b.Updated.Add(time.Second)}) || b.Status != BudgetLimited {
+		t.Fatal("a budget limit is not the model's to lift")
+	}
+	c, _ := New("x", 0)
+	c.Status = Complete
+	if c.Adopt(&Goal{Status: Active, Updated: c.Updated.Add(time.Second)}) || c.Status != Complete {
+		t.Fatal("a complete goal stays complete")
+	}
+	p, _ := New("x", 0)
+	p.Status = Paused
+	if p.Adopt(&Goal{Status: Paused, Updated: p.Updated.Add(time.Second)}) || p.Adopt(nil) {
+		t.Fatal("only an active report resumes")
+	}
+}
+
 func TestOldGoalFilesLoad(t *testing.T) {
 	t.Setenv("ATTO_DIR", t.TempDir())
 	old := `{"objective":"keep going","status":"budget_limited","budget":5000,"tokensUsed":5100,"seconds":42,"note":"token budget of 5.0k used","turns":3,"created":"2026-01-01T00:00:00Z","updated":"2026-01-01T00:00:00Z"}`

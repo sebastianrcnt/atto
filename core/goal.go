@@ -14,7 +14,7 @@ import (
 // GoalDriver keeps a session's goal going across turns, the same way in
 // every front end: each model call is accounted against the budget, the
 // model is told to wrap up once (mid-turn) when the budget runs out, its
-// complete/blocked reports are taken from the goal file, the stop
+// complete/blocked/pause/resume reports are taken from the goal file, the stop
 // conditions apply when a turn ends and an interrupt pauses the goal.
 //
 // It works event-driven, as the TUI uses it (BeginTurn, Event for every
@@ -28,7 +28,7 @@ import (
 // are not user input.
 //
 // The goal lives in memory; the goal file is how the model reports back
-// (atto goal complete|blocked), and only those reports are taken from it
+// (atto goal complete|blocked|pause|resume), and only those reports are taken from it
 // (goal.Adopt), so editing the file cannot rewrite the objective or the
 // budget. The driver is not safe for concurrent use.
 type GoalDriver struct {
@@ -45,7 +45,8 @@ type GoalDriver struct {
 	// an interrupt paused it.
 	Changed func(*goal.Goal)
 	// Adopted, if set, is told about a goal the model set with atto goal
-	// set (at the user's request, as codex's create_goal).
+	// set (at the user's request, as codex's create_goal) or resumed with
+	// atto goal resume.
 	Adopted func(*goal.Goal)
 	// Error, if set, receives failures to read or write the goal file.
 	Error func(error)
@@ -84,8 +85,9 @@ func (d *GoalDriver) Set(g *goal.Goal) {
 	}
 }
 
-// Poll takes a report the model wrote with atto goal complete|blocked, or
-// a goal it set with atto goal set when none was unfinished.
+// Poll takes a report the model wrote with atto goal complete|blocked|
+// pause|resume, or a goal it set with atto goal set when none was
+// unfinished.
 func (d *GoalDriver) Poll() {
 	g := d.Goal
 	file, err := goal.Load(d.Session)
@@ -103,8 +105,18 @@ func (d *GoalDriver) Poll() {
 		}
 		return
 	}
+	was := g.Status
 	if g.Adopt(file) {
 		d.Set(g)
+		if g.Status == goal.Active && was != goal.Active {
+			// The model resumed the goal at the user's request: their message
+			// was the go-ahead, so there is nothing to wait for.
+			d.Release()
+			if d.Adopted != nil {
+				d.Adopted(g)
+			}
+			return
+		}
 		d.changed()
 	}
 }

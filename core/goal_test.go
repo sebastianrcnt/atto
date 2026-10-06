@@ -159,6 +159,54 @@ func TestGoalDriverModelPause(t *testing.T) {
 	}
 }
 
+// The user's message asking to resume is user input, but the model's resume
+// releases the hold: the goal goes on after the turn.
+func TestGoalDriverModelResumeIsNotHeld(t *testing.T) {
+	t.Setenv("ATTO_DIR", t.TempDir())
+	g, _ := goal.New("ship it", 0)
+	g.Status, g.Note, g.IdleStreak = goal.Paused, "paused by the user", 2
+	d := GoalDriver{Session: "s", Goal: g}
+	d.Set(g)
+	var adopted *goal.Goal
+	d.Adopted = func(g *goal.Goal) { adopted = g }
+	changed := 0
+	d.Changed = func(*goal.Goal) { changed++ }
+
+	d.BeginTurn()
+	d.UserInput() // "please resume the goal"
+	f, _ := goal.Load("s")
+	f.Status, f.Note, f.IdleStreak = goal.Active, "", 0
+	_ = goal.Save("s", f)
+	d.Event(step(1, 0, 1)) // the next model call notices it
+	if !d.Active() || g.Note != "" || g.IdleStreak != 0 || adopted != g || changed != 0 {
+		t.Fatalf("the model's resume is taken: %+v %v %d", g, adopted, changed)
+	}
+	if !d.EndTurn(nil) || d.Held() {
+		t.Fatal("the goal is not held after the turn that resumed it")
+	}
+	if text, ok := d.Next(); !ok || !goal.IsMessage(text) {
+		t.Fatalf("the goal continues: %q %v", text, ok)
+	}
+
+	// Without a resume the same turn holds, and a budget limited goal is not
+	// resumed from the file.
+	d.BeginTurn()
+	d.UserInput()
+	d.EndTurn(nil)
+	if !d.Held() {
+		t.Fatal("a turn with user input holds")
+	}
+	d.Release()
+	g.Status = goal.BudgetLimited
+	f, _ = goal.Load("s")
+	f.Status = goal.Active
+	_ = goal.Save("s", f)
+	d.Poll()
+	if g.Status != goal.BudgetLimited {
+		t.Fatalf("a budget limit stays: %+v", g)
+	}
+}
+
 // A turn that took user input puts the goal on hold when it ends; turns of
 // continuations and events do not.
 func TestGoalDriverHoldAfterUserInput(t *testing.T) {

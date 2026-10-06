@@ -46,6 +46,44 @@ func TestGoalCommandInsideAgent(t *testing.T) {
 	}
 }
 
+func TestGoalResumeReport(t *testing.T) {
+	t.Setenv(config.EnvDir, t.TempDir())
+	t.Setenv("ATTO_SESSION_ID", "s1")
+	t.Setenv(config.EnvAgent, "1")
+	if err := RunGoal([]string{"resume", "the user asked"}, io.Discard); err == nil || !strings.Contains(err.Error(), "no goal") {
+		t.Fatalf("no goal: %v", err)
+	}
+	g, _ := goal.New("ship it", 0)
+	_ = goal.Save("s1", g)
+	if err := RunGoal([]string{"resume", "x"}, io.Discard); err == nil || !strings.Contains(err.Error(), "active, not paused") {
+		t.Fatalf("an active goal does not resume: %v", err)
+	}
+	for _, st := range []goal.Status{goal.Paused, goal.Blocked, goal.UsageLimited} {
+		g.Status, g.Note, g.FailStreak, g.IdleStreak = st, "why", 1, 2
+		_ = goal.Save("s1", g)
+		if err := RunGoal([]string{"resume"}, io.Discard); err == nil {
+			t.Fatal("a reason is required")
+		}
+		var out strings.Builder
+		if err := RunGoal([]string{"resume", "the user asked"}, &out); err != nil {
+			t.Fatalf("%s: %v", st, err)
+		}
+		if got, _ := goal.Load("s1"); got.Status != goal.Active || got.Note != "" || got.FailStreak != 0 || got.IdleStreak != 0 || !strings.Contains(out.String(), "resumed") {
+			t.Fatalf("%s: %+v %q", st, got, out.String())
+		}
+	}
+	for _, st := range []goal.Status{goal.BudgetLimited, goal.Complete} {
+		g.Status = st
+		_ = goal.Save("s1", g)
+		if err := RunGoal([]string{"resume", "x"}, io.Discard); err == nil {
+			t.Fatalf("a %s goal does not resume", st)
+		}
+		if got, _ := goal.Load("s1"); got.Status != st {
+			t.Fatalf("refusal changed the goal: %+v", got)
+		}
+	}
+}
+
 func TestGoalPauseReport(t *testing.T) {
 	t.Setenv(config.EnvDir, t.TempDir())
 	t.Setenv("ATTO_SESSION_ID", "s1")

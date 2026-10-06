@@ -15,6 +15,7 @@ const goalUsage = `usage:
   atto goal complete "<evidence>"   the goal is achieved (after verifying it)
   atto goal blocked "<reason>"      stalled: the same blocker for three goal turns in a row, needs the user
   atto goal pause "<why>"           only when the user explicitly asked to pause the goal
+  atto goal resume "<why>"          only when the user explicitly asked to resume the goal
   atto goal set [-budget 50k] "<objective>"   set a goal: only when the user explicitly asks for one;
                                     never infer goals from ordinary tasks. -budget only if the user gave one.
                                     Fails if an unfinished goal exists.`
@@ -74,6 +75,25 @@ func RunGoal(args []string, out io.Writer) error {
 			return err
 		}
 		fmt.Fprintf(out, "goal marked %s. End your turn with a short summary for the user.\n", g.Status.Label())
+	case "resume":
+		if g == nil {
+			return fmt.Errorf("there is no goal")
+		}
+		switch g.Status {
+		case goal.Paused, goal.Blocked, goal.UsageLimited:
+		case goal.BudgetLimited:
+			return fmt.Errorf("the goal is %s; only the user can raise the budget (/goal budget)", g.Status.Label())
+		default:
+			return fmt.Errorf("the goal is %s, not paused", g.Status.Label())
+		}
+		if text == "" {
+			return fmt.Errorf("give the reason: atto goal resume \"...\"")
+		}
+		g.Status, g.Note, g.FailStreak, g.IdleStreak = goal.Active, "", 0, 0
+		if err := goal.Save(*session, g); err != nil {
+			return err
+		}
+		fmt.Fprintln(out, "goal resumed; continue working toward it.")
 	case "set":
 		if g != nil && g.Status != goal.Complete && config.InAgent() {
 			return fmt.Errorf("the session already has a goal (%s); only the user can replace it (/goal)", g.Status.Label())

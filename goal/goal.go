@@ -128,15 +128,31 @@ func (g *Goal) Account(input, cached, output int) bool {
 }
 
 // Adopt takes the model's status report from the goal file (atto goal
-// complete|blocked|pause). The front end keeps the goal in memory and
+// complete|blocked|pause|resume). The front end keeps the goal in memory and
 // accepts only that transition, so editing the file cannot change the
 // objective, the budget or the usage. Returns true if the status changed.
 //
 // As in codex's update_goal, complete and blocked also apply to a goal
 // whose budget ran out, while pausing (only at the user's request) applies
-// to an active goal only: a budget limit takes precedence.
+// to an active goal only: a budget limit takes precedence. Resuming (also
+// only at the user's request) makes a paused, stalled or usage limited goal
+// active again, as the user's /goal resume does, with a fresh stall audit;
+// a budget limited goal stays the user's to raise.
 func (g *Goal) Adopt(file *Goal) bool {
-	if file == nil || (g.Status != Active && g.Status != BudgetLimited) {
+	if file == nil {
+		return false
+	}
+	switch g.Status {
+	case Paused, Blocked, UsageLimited:
+		// Only a report written after our last save: a file that still says
+		// active from before the goal stopped is stale, not a resume.
+		if file.Status != Active || !file.Updated.After(g.Updated) {
+			return false
+		}
+		g.Status, g.Note, g.FailStreak, g.IdleStreak = Active, "", 0, 0
+		return true
+	case Active, BudgetLimited:
+	default:
 		return false
 	}
 	switch file.Status {

@@ -51,6 +51,7 @@ func TestRender(t *testing.T) {
 		{"goal_continuation", Goal{Objective: "a &lt; b", Used: 5}, "<objective>\na &lt; b\n</objective>"},
 		{"goal_continuation", Goal{Used: 5}, "- Token budget: none\n- Tokens remaining: unbounded\n- Goal turns so far: 0"},
 		{"goal_continuation", Goal{Used: 5, Budget: 8, Remaining: 3}, "- Token budget: 8\n- Tokens remaining: 3\n"},
+		{"system", System{Kind: "bash", Tool: "bash", Date: "d"}, `run "atto goal resume '<why>'" (never resume on your own)`},
 		{"subagent", Subagent{Name: "w", Preset: "p"}, `You are subagent "w" (preset p)`},
 	} {
 		if got := Render(c.name, c.data); !strings.Contains(got, c.want) {
