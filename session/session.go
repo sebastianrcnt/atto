@@ -94,7 +94,7 @@ type Entry struct {
 	ParentSession string `json:"parentSession,omitempty"` // path of the session this was forked from
 	GitBranch     string `json:"gitBranch,omitempty"`     // branch checked out in Cwd when the session began ("HEAD" if detached)
 	// AgentOf is the ID of the session a subagent session works for (atto
-	// agent). Such sessions are left out of listings.
+	// agent). Such sessions are left out of default listings.
 	AgentOf  string `json:"agentOf,omitempty"`
 	External bool   `json:"external,omitempty"` // lightweight external orchestration parent
 
@@ -452,6 +452,7 @@ type Summary struct {
 	Path        string
 	ID          string
 	Name        string // from the latest "name" entry
+	Model       string // provider/id from the latest "model" entry
 	Archived    bool
 	Cwd         string
 	Created     time.Time
@@ -471,6 +472,16 @@ type Summary struct {
 // sessions instead of active ones. Subagent sessions are left out: they
 // are reached through atto agent (or by ID).
 func List(cwd string, archived bool) ([]Summary, error) {
+	return list(cwd, archived, false)
+}
+
+// ListAll is List including agent sessions, even before their first message.
+// It is intended for views of the complete session tree.
+func ListAll(cwd string, archived bool) ([]Summary, error) {
+	return list(cwd, archived, true)
+}
+
+func list(cwd string, archived, agents bool) ([]Summary, error) {
 	var out []Summary
 	root := config.SessionsDir()
 	if archived {
@@ -482,8 +493,8 @@ func List(cwd string, archived bool) ([]Summary, error) {
 			return nil
 		}
 		seen[path] = true
-		s, err := listSummary(path)
-		if err != nil || (cwd != "" && !SameDir(s.Cwd, cwd)) || (s.Preview == "" && !s.External) || s.AgentOf != "" {
+		s, err := listSummaryMode(path, agents)
+		if err != nil || (cwd != "" && !SameDir(s.Cwd, cwd)) || (s.Preview == "" && !s.External && !(agents && s.AgentOf != "")) || (!agents && s.AgentOf != "") {
 			return nil
 		}
 		s.Archived = archived
@@ -534,6 +545,9 @@ func summarize(path string) (Summary, error) {
 		s.Updated = e.Time
 		if e.Type == TypeName {
 			s.Name = e.Name
+		}
+		if e.Type == TypeModel {
+			s.Model = e.Provider + "/" + e.Model
 		}
 		// A preview from any branch keeps a session that went back to its
 		// start listed; the active branch's first message replaces it.

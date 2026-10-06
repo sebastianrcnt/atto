@@ -540,6 +540,13 @@ func (a *App) resume(path string) {
 	}
 	l, locked := session.LockedBy(path)
 	background := locked && (l.Kind == "" || l.Kind == session.KindBackground)
+	if locked && !background {
+		// Agent turns hold run leases rather than background leases. Their
+		// transcripts are still safe to view, but never to write concurrently.
+		if saved, err := session.Summarize(path); err == nil && saved.AgentOf != "" {
+			background = true
+		}
+	}
 	var release func()
 	var err error
 	if !background {

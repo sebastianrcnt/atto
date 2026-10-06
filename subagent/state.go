@@ -243,3 +243,16 @@ func (s State) Latest() Turn {
 	}
 	return t
 }
+
+// ListAll returns agents from every parent, including agents whose parent
+// session no longer exists. Like List, it reads only the agent state files.
+func ListAll() []State {
+	dirs, _ := os.ReadDir(config.SubagentsDir())
+	var out []State
+	for _, d := range dirs {
+		if d.IsDir() && d.Name() != "_up" {
+			out = append(out, List(d.Name())...)
+		}
+	}
+	return out
+}

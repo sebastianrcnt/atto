@@ -12,6 +12,7 @@ import (
 
 	"github.com/sebastianrcnt/atto/daemon"
 	"github.com/sebastianrcnt/atto/session"
+	"github.com/sebastianrcnt/atto/subagent"
 	"github.com/sebastianrcnt/atto/tui"
 )
 
@@ -22,23 +23,51 @@ import (
 // session: the daemon shows that pane on this terminal, or opens a saved
 // session in a new one; ← or Esc comes back. n starts a new session in the
 // selected one's project, / searches. "atto agents" shows it by itself.
-// Agents other agents started are not listed: they belong to their
-// session (atto agent list).
+// Agents are equal sessions, shown as a tree under the session (or shell
+// parent) that started them. Space folds/unfolds a tree; filtering reveals
+// matching agents with their ancestors. Opening a locked agent shows its
+// transcript read-only, with the usual ctrl+r refresh. Ctrl+C closes the
+// center only, never interrupting the underlying session's work.
 
 // listPanes lists the daemon's panes; tests replace it.
 var listPanes = daemon.List
 
 // listSaved lists saved sessions, newest first; tests replace it.
 var listSaved = func() []session.Summary {
-	l, _ := session.List("", false)
-	return l
+	active, _ := session.ListAll("", false)
+	archived, _ := session.ListAll("", true)
+	// Closing agents archives their transcripts. Keep those visible as
+	// Inactive, along with any archived ancestors needed to connect them.
+	needed := map[string]bool{}
+	for _, s := range active {
+		if s.AgentOf != "" {
+			needed[s.AgentOf] = true
+		}
+	}
+	for _, s := range archived {
+		if s.AgentOf != "" {
+			needed[s.ID], needed[s.AgentOf] = true, true
+		}
+	}
+	for changed := true; changed; {
+		changed = false
+		for _, s := range archived {
+			if needed[s.ID] && s.AgentOf != "" && !needed[s.AgentOf] {
+				needed[s.AgentOf], changed = true, true
+			}
+		}
+	}
+	for _, s := range archived {
+		if needed[s.ID] {
+			active = append(active, s)
+		}
+	}
+	slices.SortStableFunc(active, func(x, y session.Summary) int { return y.Updated.Compare(x.Updated) })
+	return active
 }
 
 // centerRefresh is how often the open center reloads.
 const centerRefresh = 2 * time.Second
-
-// centerSaved caps the saved sessions listed.
-const centerSaved = 200
 
 // centerRows is how many list rows the inline renderer shows at once.
 const centerRows = 24
@@ -56,12 +85,19 @@ var tabNames = []string{"All", "Needs you", "Working", "Ready", "Inactive"}
 
 // centerItem is a session in the center.
 type centerItem struct {
-	id, title, cwd string
-	branch, prompt string
-	pane           *daemon.Pane // nil: saved, not running
-	current        bool         // this atto's own session
-	tab            int          // tabNeedsYou .. tabInactive
-	updated        time.Time
+	id, title, cwd                 string
+	branch, prompt                 string
+	pane                           *daemon.Pane // nil: saved, not running
+	current                        bool         // this atto's own session
+	tab                            int          // tabNeedsYou .. tabInactive
+	updated                        time.Time
+	parent, agentPath, role, model string
+	external, archived             bool
+	turn                           *subagent.Turn
+	// Tree-only presentation fields, populated by centerTree.
+	depth           int
+	prefix, project string
+	children        bool
 }
 
 func (it centerItem) status() string {
@@ -85,15 +121,16 @@ type agentCenter struct {
 	onOpen func(id, cwd string)
 	onNew  func(cwd string)
 
-	items  []centerItem
-	tab    int
-	sel    int // index into shown()
-	top    int // first shown row
-	search string
-	typing bool // the search box has focus
-	flat   bool // not grouped by project (g)
-	msgs   map[string]string
-	loaded bool
+	items     []centerItem
+	tab       int
+	sel       int // index into shown()
+	top       int // first shown row
+	search    string
+	typing    bool // the search box has focus
+	flat      bool // not grouped by project (g)
+	msgs      map[string]string
+	loaded    bool
+	collapsed map[string]bool // expanded by default; retained across refreshes
 }
 
 func (a *App) cmdAgents(string) { a.openAgents(tabAll) }
@@ -131,13 +168,49 @@ func (a *App) openAgents(tab int) {
 }
 
 type centerSnapshot struct {
-	panes []daemon.Pane
-	saved []session.Summary
+	panes  []daemon.Pane
+	saved  []session.Summary
+	agents []centerAgent
+}
+
+type centerAgent struct {
+	state subagent.State
+	turn  subagent.Turn
 }
 
 func scanCenter() centerSnapshot {
 	panes, _ := listPanes()
-	return centerSnapshot{panes: panes, saved: listSaved()}
+	snapshot := centerSnapshot{panes: panes, saved: listSaved()}
+	for _, s := range subagent.ListAll() {
+		snapshot.agents = append(snapshot.agents, centerAgent{s, s.Latest()})
+	}
+	// A parent may have no user message yet (for example a shell using
+	// -session explicitly). Default-style listings omit those sessions,
+	// but an existing recorded parent should still anchor its agents.
+	seen := map[string]bool{}
+	var parents []string
+	for _, s := range snapshot.saved {
+		seen[s.ID] = true
+		parents = append(parents, s.AgentOf)
+	}
+	for _, agent := range snapshot.agents {
+		parents = append(parents, agent.state.Parent)
+	}
+	for len(parents) > 0 {
+		id := parents[0]
+		parents = parents[1:]
+		if id == "" || seen[id] {
+			continue
+		}
+		seen[id] = true
+		if path, err := session.Find(id); err == nil {
+			if s, err := session.Summarize(path); err == nil {
+				snapshot.saved = append(snapshot.saved, s)
+				parents = append(parents, s.AgentOf)
+			}
+		}
+	}
+	return snapshot
 }
 
 // watch scans off the UI goroutine and swaps completed snapshots in.
@@ -194,8 +267,20 @@ func (c *agentCenter) apply(snapshot centerSnapshot) {
 		default:
 			it.tab = tabReady
 		}
+		if it.id == "" {
+			it.id = fmt.Sprintf("pane:%d", p.ID)
+		}
+		if seen[it.id] {
+			// Multiple panes may view one agent transcript. Prefer this
+			// terminal's pane, otherwise a working/waiting pane over an idle one.
+			j := slices.IndexFunc(items, func(x centerItem) bool { return x.id == it.id })
+			if it.current || (!items[j].current && items[j].tab == tabReady && it.tab != tabReady) {
+				items[j] = it
+			}
+			continue
+		}
 		items = append(items, it)
-		seen[p.Session] = true
+		seen[it.id] = true
 	}
 	if a := c.a; a != nil && !seen[a.sess.ID] {
 		it := centerItem{id: a.sess.ID, title: a.sessName, cwd: a.cwd, current: true, updated: time.Now(), tab: tabReady}
@@ -209,15 +294,12 @@ func (c *agentCenter) apply(snapshot centerSnapshot) {
 		seen[a.sess.ID] = true
 	}
 	c.msgs = make(map[string]string)
-	for i, s := range snapshot.saved {
-		if i >= centerSaved {
-			break
-		}
-		if s.AgentOf != "" || s.External {
-			continue
-		}
+	for _, s := range snapshot.saved {
 		c.msgs[s.ID] = s.LastMessage
 		title := s.Name
+		if s.External {
+			title = "agents started from a shell"
+		}
 		if title == "" {
 			title = s.Preview
 		}
@@ -227,12 +309,49 @@ func (c *agentCenter) apply(snapshot centerSnapshot) {
 					if items[j].title == "" {
 						items[j].title = title
 					}
-					items[j].branch, items[j].prompt = s.Branch, s.Preview
+					items[j].branch, items[j].prompt, items[j].model = s.Branch, s.Preview, s.Model
+					items[j].parent, items[j].external, items[j].archived = s.AgentOf, s.External, s.Archived
 				}
 			}
 			continue
 		}
-		items = append(items, centerItem{id: s.ID, title: title, cwd: s.Cwd, branch: s.Branch, prompt: s.Preview, updated: s.Updated, tab: tabInactive})
+		items = append(items, centerItem{id: s.ID, title: title, cwd: s.Cwd, branch: s.Branch, prompt: s.Preview, model: s.Model, updated: s.Updated, tab: tabInactive, parent: s.AgentOf, external: s.External, archived: s.Archived})
+	}
+	// Enrich from the same state and Latest turn used by atto agent list.
+	// State can precede a session's first write, or outlive its parent.
+	for _, agent := range snapshot.agents {
+		st, turn := agent.state, agent.turn
+		if st.Session == "" {
+			continue
+		}
+		j := slices.IndexFunc(items, func(it centerItem) bool { return it.id == st.Session })
+		if j < 0 {
+			items = append(items, centerItem{id: st.Session, cwd: st.Cwd, updated: st.Created})
+			j = len(items) - 1
+		}
+		it := &items[j]
+		it.parent, it.title, it.prompt = st.Parent, st.Name, st.Task
+		it.role, it.model, it.turn = st.Preset, st.Model, &turn
+		if st.Branch != "" {
+			it.branch = st.Branch
+		}
+		// A live pane's waiting/working state is more precise than turn state.
+		viewer := it.current && c.a != nil && c.a.sess.ReadOnly() != ""
+		if it.pane != nil && it.pane.State != "waiting" && turn.Status.Active() {
+			// A pane may be a read-only viewer of the headless turn. Its idle
+			// frontend does not make the actual agent idle.
+			it.tab = tabWorking
+		}
+		if it.pane == nil && (!it.current || viewer) && !it.archived {
+			switch turn.Status {
+			case subagent.Running, subagent.Queued:
+				it.tab = tabWorking
+			case subagent.Idle, subagent.Done:
+				it.tab = tabReady
+			default:
+				it.tab = tabInactive
+			}
+		}
 	}
 	c.items = items
 	c.reorder()
@@ -274,18 +393,110 @@ func groupByProject(items []centerItem) []centerItem {
 	return items
 }
 
-// shown is the items the tab and the search let through.
+// shown filters the tree, retaining ancestors as context. Filters bypass
+// folds so a working or matching agent cannot disappear under a parent.
 func (c *agentCenter) shown() []centerItem {
+	tree := centerTree(c.items)
 	q := strings.ToLower(c.search)
-	var out []centerItem
-	for _, it := range c.items {
+	filtering := c.tab != tabAll || q != ""
+	include := map[string]bool{}
+	parents := map[string]string{}
+	for _, it := range tree {
+		parents[it.id] = it.parent
+	}
+	for _, it := range tree {
 		if c.tab != tabAll && it.tab != c.tab {
 			continue
 		}
-		if q != "" && !strings.Contains(strings.ToLower(it.title+" "+it.cwd+" "+it.prompt), q) {
+		if q != "" && !strings.Contains(strings.ToLower(it.title+" "+it.cwd+" "+it.prompt+" "+it.agentPath+" "+it.role+" "+it.model), q) {
 			continue
 		}
+		for id := it.id; id != "" && !include[id]; id = parents[id] {
+			include[id] = true
+		}
+	}
+	var out []centerItem
+	folded := -1
+	for _, it := range tree {
+		if !include[it.id] {
+			continue
+		}
+		if !filtering {
+			if folded >= 0 && it.depth > folded {
+				continue
+			}
+			folded = -1
+			if c.collapsed[it.id] {
+				folded = it.depth
+			}
+		}
 		out = append(out, it)
+	}
+	return out
+}
+
+// centerTree builds a stable preorder forest from recorded parent IDs.
+// Missing parents become roots; a visited set also makes corrupt cycles safe.
+// Worktree children keep their own cwd, but group under the root's project.
+func centerTree(items []centerItem) []centerItem {
+	ids := map[string]bool{}
+	children := map[string][]centerItem{}
+	for _, it := range items {
+		ids[it.id] = true
+	}
+	var roots []centerItem
+	for _, it := range items {
+		if it.parent != "" && ids[it.parent] && it.parent != it.id {
+			children[it.parent] = append(children[it.parent], it)
+		} else {
+			roots = append(roots, it)
+		}
+	}
+	seen := map[string]bool{}
+	var out []centerItem
+	var walk func(centerItem, int, string, string, string)
+	walk = func(it centerItem, depth int, prefix, project, path string) {
+		if seen[it.id] {
+			return
+		}
+		seen[it.id] = true
+		it.depth, it.prefix, it.project, it.children = depth, prefix, project, len(children[it.id]) > 0
+		if it.parent != "" {
+			name := it.title
+			if name == "" {
+				name = it.id
+			}
+			it.agentPath = path + "/" + firstLine(name)
+		}
+		out = append(out, it)
+		childPath := path
+		if it.agentPath != "" {
+			childPath = it.agentPath
+		}
+		kids := children[it.id]
+		for i, kid := range kids {
+			edge := "├─ "
+			if i == len(kids)-1 {
+				edge = "└─ "
+			}
+			base := strings.TrimSuffix(strings.TrimSuffix(prefix, "├─ "), "└─ ")
+			if depth > 0 {
+				if strings.HasSuffix(prefix, "└─ ") {
+					base += "   "
+				} else {
+					base += "│  "
+				}
+			}
+			walk(kid, depth+1, base+edge, project, childPath)
+		}
+	}
+	for _, it := range roots {
+		walk(it, 0, "", it.cwd, subagent.RootPath)
+	}
+	for _, it := range items {
+		if !seen[it.id] {
+			walk(it, 0, "", it.cwd, subagent.RootPath)
+		}
 	}
 	return out
 }
@@ -302,6 +513,12 @@ func (c *agentCenter) close() { c.onClose() }
 
 func (c *agentCenter) HandleInput(data string) {
 	key := tui.Key(data)
+	// Ctrl+C belongs to the center while it has focus, even in search.
+	// Do not pass it through to the session's turn or shell cancellation.
+	if key == "ctrl+c" {
+		c.close()
+		return
+	}
 	if c.typing {
 		switch key {
 		case "escape":
@@ -346,6 +563,15 @@ func (c *agentCenter) HandleInput(data string) {
 	case "g":
 		c.flat, c.sel, c.top = !c.flat, 0, 0
 		c.reorder()
+	case " ":
+		if c.sel < len(sh) && sh[c.sel].children {
+			if c.collapsed == nil {
+				c.collapsed = map[string]bool{}
+			}
+			id := sh[c.sel].id
+			c.collapsed[id] = !c.collapsed[id]
+			c.top = 0
+		}
 	case "n":
 		cwd := ""
 		if c.sel < len(sh) {
@@ -412,12 +638,12 @@ func (c *agentCenter) RenderScreen(width, height int) []string {
 	}
 	out := []string{tui.Truncate(head, width, "…"), tabLine, tui.Dim(strings.Repeat("─", max(width, 0)))}
 
-	keys := "esc back  ↑/↓ move  enter open  n new  / search  tab filter"
+	keys := "esc back  ↑/↓ move  enter open  space fold  n new  / search  tab filter"
 	if c.a == nil {
-		keys = "esc quit  ↑/↓ move  enter open  n new  / search  tab filter"
+		keys = "esc quit  ↑/↓ move  enter open  space fold  n new  / search  tab filter"
 	}
 	if width < 60 {
-		keys = "esc ←  ↑↓  enter →  n new  / find  tab"
+		keys = "esc ←  ↑↓  enter →  space fold  n new  / find  tab"
 	}
 	footer := []string{"", tui.Truncate(tui.Dim(keys), width, "…")}
 	bodyH := max(height-len(out)-len(footer), 3)
@@ -472,11 +698,11 @@ func (c *agentCenter) renderList(sh []centerItem, width, bodyH int) []string {
 	selLine := 0
 	group := "\x00"
 	for i, it := range sh {
-		if !c.flat && it.cwd != group {
-			group = it.cwd
+		if !c.flat && it.project != group {
+			group = it.project
 			n := 0
 			for _, x := range sh {
-				if x.cwd == group {
+				if x.project == group {
 					n++
 				}
 			}
@@ -489,9 +715,29 @@ func (c *agentCenter) renderList(sh []centerItem, width, bodyH int) []string {
 		if title == "" {
 			title = "(new session)"
 		}
+		if it.agentPath != "" {
+			title = it.agentPath
+			if it.role != "" {
+				title += " · " + it.role
+			}
+			if it.model != "" {
+				title += " · " + it.model
+			}
+			if it.branch != "" {
+				title += " · " + it.branch
+			}
+		}
 		if it.current {
 			title += " (here)"
 		}
+		fold := ""
+		if it.children {
+			fold = "▾ "
+			if c.collapsed[it.id] && c.tab == tabAll && c.search == "" {
+				fold = "▸ "
+			}
+		}
+		title = it.prefix + fold + title
 		mark := "○"
 		switch it.tab {
 		case tabWorking:
@@ -550,10 +796,30 @@ func (c *agentCenter) renderDetail(it centerItem, width int) []string {
 		title = "(new session)"
 	}
 	out := []string{tui.Bold("Task details"), ""}
+	if it.agentPath != "" {
+		title = firstLine(it.prompt)
+	}
 	out = append(out, wrap(title)...)
+	if it.agentPath != "" {
+		out = append(out, wrap(it.agentPath)...)
+		out = append(out, wrap(strings.Join(slices.DeleteFunc([]string{it.role, it.model}, func(s string) bool { return s == "" }), " · "))...)
+		if it.turn != nil {
+			t := it.turn
+			if t.PromptTokens+t.OutputTokens > 0 {
+				out = append(out, wrap(fmt.Sprintf("Tokens: %d in · %d cached · %d out", t.PromptTokens, t.CachedTokens, t.OutputTokens))...)
+			}
+			if d := t.Duration(); d > 0 {
+				out = append(out, wrap("Duration: "+tui.FormatDuration(d))...)
+			}
+		}
+	}
 	out = append(out, tui.Dim(it.status()), "")
 	if msg := c.lastMessage(it.id); msg != "" {
-		out = append(out, tui.Dim("Last message"))
+		label := "Last message"
+		if it.agentPath != "" {
+			label = "Last answer / report"
+		}
+		out = append(out, tui.Dim(label))
 		lines := wrap(msg)
 		if len(lines) > 8 {
 			lines = append(lines[:8], "…")
@@ -564,14 +830,16 @@ func (c *agentCenter) renderDetail(it centerItem, width int) []string {
 	out = append(out, tui.Dim("Project"))
 	out = append(out, wrap(shortPath(it.cwd))...)
 	if it.branch != "" {
-		out = append(out, "", tui.Dim("Branch"), it.branch)
+		out = append(out, "", tui.Dim("Branch"))
+		out = append(out, wrap(it.branch)...)
 	}
 	if it.pane != nil {
 		shown := "detached"
 		if n := it.pane.Clients; n > 0 {
 			shown = fmt.Sprintf("shown on %d terminal(s)", n)
 		}
-		out = append(out, "", tui.Dim("Pane"), fmt.Sprintf("#%d · %s", it.pane.ID, shown))
+		out = append(out, "", tui.Dim("Pane"))
+		out = append(out, wrap(fmt.Sprintf("#%d · %s", it.pane.ID, shown))...)
 	}
 	if it.prompt != "" {
 		out = append(out, "", tui.Dim("Prompt"))

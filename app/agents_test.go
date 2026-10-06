@@ -62,14 +62,14 @@ func TestCenterListsSessionsByProjectAndState(t *testing.T) {
 	a.cmdAgents("")
 	waitCenter(t, a)
 	text := centerText(a)
-	for _, want := range []string{"Agent command center", "All 4", "Needs you 1", "Working 1", "Ready 1", "Inactive 1",
-		"/w/api  2", "fix the api", "Working", "answer me", "Needs you", "/w/web  1", "css cleanup", "Inactive", "3h ago", "(here)", "Task details"} {
+	for _, want := range []string{"Agent command center", "All 5", "Needs you 1", "Working 1", "Ready 1", "Inactive 2",
+		"/w/api  3", "fix the api", "Working", "answer me", "Needs you", "/w/web  1", "css cleanup", "Inactive", "3h ago", "(here)", "Task details"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("center lacks %q:\n%s", want, text)
 		}
 	}
-	if strings.Contains(text, "a subagent") {
-		t.Fatalf("an agent's session is listed:\n%s", text)
+	if !strings.Contains(text, "└─ /root/a subagent") {
+		t.Fatalf("agent tree missing:\n%s", text)
 	}
 
 	// Tabs filter; enter on a running session switches to its pane.
@@ -90,6 +90,11 @@ func TestCenterListsSessionsByProjectAndState(t *testing.T) {
 	c = a.modal.(*agentCenter)
 	for range 4 {
 		c.HandleInput("\t") // Inactive
+	}
+	for i, it := range c.shown() {
+		if it.id == "old" {
+			c.sel = i
+		}
 	}
 	c.HandleInput("\x1b[C") // →
 	if got := rec.take(); !strings.Contains(got, daemon.MarkerSeq("open", "old", "/w/web")) {
@@ -114,7 +119,7 @@ func TestCenterListsSessionsByProjectAndState(t *testing.T) {
 	}
 	c.HandleInput("\r")
 	c.HandleInput("\x1b")
-	if a.modal == nil || len(c.shown()) != 4 {
+	if a.modal == nil || len(c.shown()) != 5 {
 		t.Fatal("esc clears the search first")
 	}
 	c.HandleInput("\x1b")

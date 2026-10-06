@@ -13,6 +13,7 @@ type cachedSummary struct {
 	size     int64
 	modified time.Time
 	summary  Summary
+	complete bool // agent transcript read, rather than header-only
 }
 
 var summaryCache = struct {
@@ -22,6 +23,10 @@ var summaryCache = struct {
 
 // listSummary caches disk metadata, but reads the writer lease each time.
 func listSummary(path string) (Summary, error) {
+	return listSummaryMode(path, false)
+}
+
+func listSummaryMode(path string, agents bool) (Summary, error) {
 	st, err := os.Stat(path)
 	if err != nil {
 		return Summary{}, err
@@ -29,20 +34,20 @@ func listSummary(path string) (Summary, error) {
 	summaryCache.Lock()
 	cached, ok := summaryCache.paths[path]
 	summaryCache.Unlock()
-	if !ok || cached.size != st.Size() || !cached.modified.Equal(st.ModTime()) {
+	if !ok || cached.size != st.Size() || !cached.modified.Equal(st.ModTime()) || (agents && !cached.complete) {
 		h, err := summaryHeader(path)
 		if err != nil {
 			return Summary{}, err
 		}
 		s := Summary{Path: path, ID: h.ID, Cwd: h.Cwd, Created: h.Time, Updated: h.Time, AgentOf: h.AgentOf, External: h.External}
-		if h.AgentOf == "" {
+		if h.AgentOf == "" || agents {
 			s, err = summarize(path)
 			if err != nil {
 				return Summary{}, err
 			}
 		}
 		s.Size, s.Running = st.Size(), 0
-		cached = cachedSummary{size: st.Size(), modified: st.ModTime(), summary: s}
+		cached = cachedSummary{size: st.Size(), modified: st.ModTime(), summary: s, complete: h.AgentOf == "" || agents}
 		summaryCache.Lock()
 		summaryCache.paths[path] = cached
 		summaryCache.Unlock()
