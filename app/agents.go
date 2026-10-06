@@ -40,7 +40,7 @@ const centerRefresh = 2 * time.Second
 // centerSaved caps the saved sessions listed.
 const centerSaved = 200
 
-// centerRows is how many list rows show at once.
+// centerRows is how many list rows the inline renderer shows at once.
 const centerRows = 24
 
 // Center tabs, as codex's (and A2A's task states).
@@ -91,6 +91,7 @@ type agentCenter struct {
 	top    int // first shown row
 	search string
 	typing bool // the search box has focus
+	flat   bool // not grouped by project (g)
 	msgs   map[string]string
 }
 
@@ -124,7 +125,8 @@ func (a *App) openAgents(tab int) {
 	c.reload()
 	c.selectCurrent()
 	a.openModal(c)
-	go func() { // reload while open; ends once the center is gone
+	a.ui.Screen = c // fullscreen: the center takes the whole screen
+	go func() {     // reload while open; ends once the center is gone
 		t := time.NewTicker(centerRefresh)
 		defer t.Stop()
 		for range t.C {
@@ -205,13 +207,23 @@ func (c *agentCenter) reload() {
 		}
 		items = append(items, centerItem{id: s.ID, title: title, cwd: s.Cwd, branch: s.Branch, prompt: s.Preview, updated: s.Updated, tab: tabInactive})
 	}
-	c.items = groupByProject(items)
+	c.items = items
+	c.reorder()
 	c.sel = 0
 	for i, it := range c.shown() {
 		if keep != "" && it.id == keep {
 			c.sel = i
 		}
 	}
+}
+
+// reorder sorts the items: by project, or newest first when flat.
+func (c *agentCenter) reorder() {
+	if c.flat {
+		slices.SortStableFunc(c.items, func(x, y centerItem) int { return y.updated.Compare(x.updated) })
+		return
+	}
+	c.items = groupByProject(c.items)
 }
 
 // groupByProject orders items by project, the projects by their latest
@@ -304,6 +316,9 @@ func (c *agentCenter) HandleInput(data string) {
 		c.tab, c.sel, c.top = (c.tab+len(tabNames)-1)%len(tabNames), 0, 0
 	case "/":
 		c.typing = true
+	case "g":
+		c.flat, c.sel, c.top = !c.flat, 0, 0
+		c.reorder()
 	case "n":
 		cwd := ""
 		if c.sel < len(sh) {
@@ -329,32 +344,56 @@ func (c *agentCenter) HandleInput(data string) {
 	}
 }
 
-func (c *agentCenter) Render(width int) []string {
+// Render is the center as a modal (the inline renderer); fullscreen, it
+// takes the whole screen (RenderScreen, as TUI.Screen).
+func (c *agentCenter) Render(width int) []string { return c.RenderScreen(width, centerRows+8) }
+
+// RenderScreen draws the center at the terminal's size: the title and
+// tabs, the list (with the selected session's details on the right when
+// there is room) and the keys at the bottom.
+func (c *agentCenter) RenderScreen(width, height int) []string {
 	sh := c.shown()
 	counts := make([]int, len(tabNames))
 	for _, it := range c.items {
 		counts[tabAll]++
 		counts[it.tab]++
 	}
-	head := tui.Bold("Agent command center")
+	group := "Project"
+	if c.flat {
+		group = "None"
+	}
+	head := tui.Bold("Agent command center") + tui.Dim("  Group: "+group+"  g")
 	if c.typing || c.search != "" {
-		head += tui.Dim("  search: ") + c.search
+		head = tui.Bold("Search: ") + c.search
 		if c.typing {
 			head += "▏"
 		}
 	}
-	out := []string{tui.Truncate(head, width, "…")}
-	var tabs []string
+	var tabs strings.Builder
 	for i, n := range tabNames {
 		t := fmt.Sprintf(" %s %d ", n, counts[i])
 		if i == c.tab {
-			t = tui.BG(238, tui.Bold(t))
+			t = "\x1b[7m" + t + "\x1b[27m"
 		} else {
 			t = tui.Dim(t)
 		}
-		tabs = append(tabs, t)
+		tabs.WriteString(t + " ")
 	}
-	out = append(out, tui.Truncate(strings.Join(tabs, " ")+tui.Dim("   tab/shift+tab filter"), width, "…"), tui.Dim(strings.Repeat("─", max(width, 0))))
+	tabLine := tabs.String()
+	if tui.VisibleWidth(tabLine) > width {
+		tabLine = tui.Truncate(tabLine, width, "›")
+	}
+	out := []string{tui.Truncate(head, width, "…"), tabLine, tui.Dim(strings.Repeat("─", max(width, 0)))}
+
+	keys := "esc back  ↑/↓ move  enter open  n new  / search  tab filter"
+	if c.a == nil {
+		keys = "esc quit  ↑/↓ move  enter open  n new  / search  tab filter"
+	}
+	if width < 60 {
+		keys = "esc ←  ↑↓  enter →  n new  / find  tab"
+	}
+	footer := []string{"", tui.Truncate(tui.Dim(keys), width, "…")}
+	bodyH := max(height-len(out)-len(footer), 3)
 
 	detailW := 0
 	if width >= 100 {
@@ -364,67 +403,60 @@ func (c *agentCenter) Render(width int) []string {
 	if detailW > 0 {
 		listW = width - detailW - 3
 	}
-	list := c.renderList(sh, listW)
+	list := c.renderList(sh, listW, bodyH)
+	var detail []string
 	if detailW > 0 && c.sel < len(sh) {
-		detail := c.renderDetail(sh[c.sel], detailW)
-		for i := 0; i < max(len(list), len(detail)); i++ {
-			l, d := "", ""
-			if i < len(list) {
-				l = list[i]
-			}
+		detail = c.renderDetail(sh[c.sel], detailW)
+	}
+	for i := range bodyH {
+		l := ""
+		if i < len(list) {
+			l = list[i]
+		}
+		if detailW > 0 {
+			d := ""
 			if i < len(detail) {
 				d = detail[i]
 			}
-			l += strings.Repeat(" ", max(0, listW-tui.VisibleWidth(l)))
-			out = append(out, l+tui.Dim(" │ ")+d)
+			l += strings.Repeat(" ", max(0, listW-tui.VisibleWidth(l))) + tui.Dim(" │ ") + d
 		}
-	} else {
-		out = append(out, list...)
+		out = append(out, l)
 	}
-	hint := "↑↓ move · enter/→ open · ← back · n new · / search"
-	if c.a == nil {
-		hint = "↑↓ move · enter open · ← quit · n new · / search"
-	}
-	return append(out, "", tui.Truncate(tui.Dim(hint), width, "…"))
+	return append(out, footer...)
 }
 
-func (c *agentCenter) renderList(sh []centerItem, width int) []string {
+// renderList is the list, bodyH rows at most: project headers (unless
+// flat), one row per session, scrolled to keep the selection in view.
+func (c *agentCenter) renderList(sh []centerItem, width, bodyH int) []string {
 	if len(sh) == 0 {
 		msg := "No sessions here."
 		if c.search != "" {
 			msg = "No session matches."
 		}
-		return []string{tui.Dim(msg)}
+		return []string{tui.Dim(" " + msg)}
 	}
-	if c.sel < c.top {
-		c.top = c.sel
-	}
-	if c.sel >= c.top+centerRows {
-		c.top = c.sel - centerRows + 1
-	}
+	wide := width >= 60
 	statusW, ageW := 10, 8
-	titleW := max(width-statusW-ageW-7, 10)
-	var out []string
-	group := ""
+	titleW := width - 4
+	if wide {
+		titleW = width - statusW - ageW - 7
+	}
+	var lines []string
+	selLine := 0
+	group := "\x00"
 	for i, it := range sh {
-		visible := i >= c.top && i < c.top+centerRows
-		if it.cwd != group {
+		if !c.flat && it.cwd != group {
 			group = it.cwd
-			if visible {
-				n := 0
-				for _, x := range sh {
-					if x.cwd == group {
-						n++
-					}
+			n := 0
+			for _, x := range sh {
+				if x.cwd == group {
+					n++
 				}
-				if len(out) > 0 {
-					out = append(out, "")
-				}
-				out = append(out, tui.Truncate(tui.Dim(fmt.Sprintf("%s  %d", shortPath(group), n)), width, "…"))
 			}
-		}
-		if !visible {
-			continue
+			if len(lines) > 0 {
+				lines = append(lines, "")
+			}
+			lines = append(lines, tui.Truncate(tui.Dim(fmt.Sprintf(" %s  %d", shortPath(group), n)), width, "…"))
 		}
 		title := firstLine(it.title)
 		if title == "" {
@@ -436,24 +468,48 @@ func (c *agentCenter) renderList(sh []centerItem, width int) []string {
 		mark := "○"
 		switch it.tab {
 		case tabWorking:
-			mark = tui.FG(2, "●")
+			mark = "●"
 		case tabNeedsYou:
-			mark = tui.FG(3, "●")
+			mark = "◆"
 		case tabReady:
-			mark = tui.FG(6, "●")
+			mark = "●"
 		}
-		name := tui.Truncate(title, titleW, "…")
-		row := " " + mark + " " + name + strings.Repeat(" ", max(1, titleW-tui.VisibleWidth(name)+2))
-		row += fmt.Sprintf("%-*s %*s", statusW, it.status(), ageW, ago(it.updated))
+		name := tui.Truncate(title, max(titleW, 8), "…")
+		row := "  " + mark + " " + name
+		if wide {
+			row += strings.Repeat(" ", max(1, titleW-tui.VisibleWidth(name)+2))
+			row += fmt.Sprintf("%-*s %*s", statusW, it.status(), ageW, ago(it.updated))
+		}
 		if i == c.sel {
-			row = tui.FG(6, "›") + tui.Bold(row)
+			selLine = len(lines)
+			row = "\x1b[7m" + row + strings.Repeat(" ", max(0, width-tui.VisibleWidth(row))) + "\x1b[27m"
 		} else {
-			row = " " + row
+			switch it.tab {
+			case tabWorking:
+				row = strings.Replace(row, mark, tui.FG(2, mark), 1)
+			case tabNeedsYou:
+				row = strings.Replace(row, mark, tui.FG(3, mark), 1)
+			case tabReady:
+				row = strings.Replace(row, mark, tui.FG(6, mark), 1)
+			}
 		}
-		out = append(out, tui.Truncate(row, width, "…"))
+		lines = append(lines, tui.Truncate(row, width, "…"))
 	}
-	if rest := len(sh) - (c.top + centerRows); rest > 0 {
-		out = append(out, "", tui.Dim(fmt.Sprintf("   %d more ↓", rest)))
+	// Scroll so the selection shows, with its project's header when it fits.
+	if selLine < c.top+1 {
+		c.top = max(0, selLine-1)
+	}
+	if selLine >= c.top+bodyH-1 {
+		c.top = selLine - bodyH + 2
+	}
+	c.top = max(0, min(c.top, len(lines)-bodyH))
+	end := min(len(lines), c.top+bodyH)
+	out := slices.Clone(lines[c.top:end])
+	if end < len(lines) && len(out) > 0 {
+		out[len(out)-1] = tui.Dim(fmt.Sprintf("   ↓ %d more", len(lines)-end))
+	}
+	if c.top > 0 && len(out) > 0 {
+		out[0] = tui.Dim("   ↑ more")
 	}
 	return out
 }
@@ -562,7 +618,7 @@ func RunAgents() (AgentsPick, error) {
 		onNew:    func(cwd string) { pick = AgentsPick{New: true, Cwd: cwd} },
 	}
 	c.reload()
-	ui.Body.Children = []tui.Component{c}
+	ui.Screen = c
 	ui.SetFocus(c)
 	ui.OnInput = func(data string) bool {
 		if tui.Key(data) == "ctrl+c" {

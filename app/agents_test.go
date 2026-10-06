@@ -1,6 +1,7 @@
 package app
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -143,7 +144,7 @@ func TestStandaloneCenterPicks(t *testing.T) {
 	c := &agentCenter{onClose: func() {}, onSwitch: func(id int) { picked = "pane" }, onOpen: func(id, cwd string) { picked = "open " + id + " " + cwd }, onNew: func(cwd string) { picked = "new " + cwd }}
 	c.reload()
 	text := tui.StripEscapes(strings.Join(c.Render(160), "\n"))
-	if !strings.Contains(text, "four") || !strings.Contains(text, "nine") || strings.Contains(text, "(here)") || !strings.Contains(text, "← quit") {
+	if !strings.Contains(text, "four") || !strings.Contains(text, "nine") || strings.Contains(text, "(here)") || !strings.Contains(text, "esc quit") {
 		t.Fatalf("center:\n%s", text)
 	}
 	c.HandleInput("\r")
@@ -158,5 +159,56 @@ func TestStandaloneCenterPicks(t *testing.T) {
 	c.HandleInput("n")
 	if picked != "new /x" {
 		t.Fatalf("picked %q", picked)
+	}
+}
+
+// Fullscreen, the center takes the whole screen at the terminal's size; on
+// a phone-narrow terminal rows drop the status and age columns.
+func TestCenterScreenLayouts(t *testing.T) {
+	a, _ := paneApp(t, false)
+	now := time.Now()
+	var saved []session.Summary
+	for i := range 40 {
+		saved = append(saved, session.Summary{ID: fmt.Sprintf("s%d", i), Cwd: fmt.Sprintf("/w/p%d", i%5), Name: fmt.Sprintf("task %d", i), Updated: now.Add(-time.Duration(i) * time.Hour)})
+	}
+	fakeCenter(t, nil, saved)
+	a.cmdAgents("")
+	if a.ui.Screen == nil {
+		t.Fatal("the center is not the screen")
+	}
+	c := a.modal.(*agentCenter)
+	for _, size := range [][2]int{{160, 40}, {45, 50}, {45, 12}} {
+		rows := c.RenderScreen(size[0], size[1])
+		if len(rows) != size[1] {
+			t.Fatalf("%v: %d rows", size, len(rows))
+		}
+		for _, r := range rows {
+			if w := tui.VisibleWidth(r); w > size[0] {
+				t.Fatalf("%v: row %d wide: %q", size, w, tui.StripEscapes(r))
+			}
+		}
+		text := tui.StripEscapes(strings.Join(rows, "\n"))
+		if size[0] < 60 && strings.Contains(text, "Inactive  ") {
+			t.Fatalf("narrow rows keep the status column:\n%s", text)
+		}
+		if !strings.Contains(text, "more") {
+			t.Fatalf("%v: no sign of more rows:\n%s", size, text)
+		}
+	}
+	// The selection stays in view while moving down a long list.
+	for range 30 {
+		c.HandleInput("\x1b[B")
+	}
+	if text := tui.StripEscapes(strings.Join(c.RenderScreen(45, 20), "\n")); !strings.Contains(text, c.shown()[c.sel].title) {
+		t.Fatalf("the selection scrolled out:\n%s", text)
+	}
+	// g: one list, newest first.
+	c.HandleInput("g")
+	if sh := c.shown(); !c.flat || !sh[0].current || sh[1].id != "s0" || sh[2].id != "s1" {
+		t.Fatalf("flat order %v %v", c.shown()[0].id, c.shown()[1].id)
+	}
+	c.HandleInput("\x1b")
+	if a.ui.Screen != nil {
+		t.Fatal("closing the center gives the screen back")
 	}
 }

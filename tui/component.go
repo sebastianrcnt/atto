@@ -108,3 +108,9 @@ func (c *Container) Render(width int) []string {
 	}
 	return lines
 }
+
+// Screen is a component that takes the whole terminal (TUI.Screen): it
+// renders exactly height rows of width columns.
+type Screen interface {
+	RenderScreen(width, height int) []string
+}

@@ -57,6 +57,10 @@ type TUI struct {
 	// and the footer (fullscreen only).
 	GapY int
 
+	// Screen, if set, takes the whole screen in fullscreen mode instead of
+	// the body and footer (input still goes to the focused component).
+	Screen Screen
+
 	// Pin, if set, may return a line to pin over the first visible body row
 	// in fullscreen mode, given the index of the first visible body line —
 	// e.g. the prompt that scrolled out of view (codex does this).
@@ -365,7 +369,7 @@ func (t *TUI) Redraw() {
 
 func (t *TUI) handleInput(data string) {
 	t.mu.Lock()
-	consumed := t.handleScroll(data) || t.selectionKey(data) || (t.OnInput != nil && t.OnInput(data))
+	consumed := (t.Screen == nil && (t.handleScroll(data) || t.selectionKey(data))) || (t.OnInput != nil && t.OnInput(data))
 	if !consumed {
 		if h, ok := t.focused.(InputHandler); ok {
 			h.HandleInput(data)
@@ -646,6 +650,18 @@ func (t *TUI) positionCursor(b *strings.Builder, cur *cursorPos, total int) {
 // rewrites only the screen rows that changed (every row with FullRepaint).
 func (t *TUI) doRenderFullscreen() {
 	width, height := t.term.Size()
+	if t.Screen != nil {
+		frame := t.Screen.RenderScreen(width, height)
+		if len(frame) > height {
+			frame = frame[:height]
+		}
+		for len(frame) < height {
+			frame = append(frame, "")
+		}
+		lines, cur := t.prepareLines(frame, width, height)
+		t.writeFrame(lines, cur, width, height)
+		return
+	}
 	inner := t.fullscreenWidth(width)
 	anchor, anchored := t.anchorBefore()
 	body := t.padBody(t.Body.Render(inner))
@@ -713,7 +729,12 @@ func (t *TUI) doRenderFullscreen() {
 	t.decorate(frame, gap, start, end-start, len(body), width)
 	frame = append(frame, footer...)
 	lines, cur := t.prepareLines(frame, width, height)
+	t.writeFrame(lines, cur, width, height)
+}
 
+// writeFrame puts a fullscreen frame on the terminal, rewriting only the
+// rows that changed (every row with FullRepaint).
+func (t *TUI) writeFrame(lines []string, cur *cursorPos, width, height int) {
 	full := t.prevWidth != width || t.prevHeight != height || len(t.prevFrame) != len(lines)
 	changed := full
 	for i := 0; !changed && i < len(lines); i++ {

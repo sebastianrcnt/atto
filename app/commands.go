@@ -234,6 +234,7 @@ func (a *App) runCommand(text string) {
 // shows on /remote's clients too.
 func (a *App) openModal(m modal) {
 	a.promptGone() // one open modal replaced by another
+	a.ui.Screen = nil
 	a.modal = m
 	a.ui.SetFocus(m)
 	a.promptOpened(m)
@@ -241,6 +242,7 @@ func (a *App) openModal(m modal) {
 
 func (a *App) closeModal() {
 	a.promptGone()
+	a.ui.Screen = nil
 	a.modal = nil
 	a.ui.SetFocus(a.editor)
 	a.maybeSendNextQueued()
