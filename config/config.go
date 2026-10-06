@@ -157,7 +157,14 @@ type Settings struct {
 	Remote *RemoteSettings `json:"remote,omitempty"`
 	// Subagents configures atto agent.
 	Subagents *SubagentSettings `json:"subagents,omitempty"`
+	// Daemon: false runs the TUI in the terminal's own process instead of
+	// a pane of the atto daemon (package daemon). ATTO_NO_DAEMON=1 does
+	// the same for one run.
+	Daemon *bool `json:"daemon,omitempty"`
 }
+
+// DaemonOn reports whether interactive atto runs in the daemon.
+func (s Settings) DaemonOn() bool { return s.Daemon == nil || *s.Daemon }
 
 // SubagentSettings is settings.json's "subagents".
 type SubagentSettings struct {

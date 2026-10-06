@@ -49,6 +49,7 @@ func init() {
 		{"tui", "[auto|fullscreen|inline]", "Choose the renderer (fullscreen or inline)", (*App).cmdTui},
 		{"remote", "[on [port]|off]", "Control this session from a phone or browser (QR code)", (*App).cmdRemote},
 		{"clear", "", "Start a new conversation", (*App).cmdClear},
+		{"detach", "", "Leave atto running in the daemon (atto attach returns)", (*App).cmdDetach},
 		{"quit", "", "Exit atto", (*App).cmdQuit},
 		{"exit", "", "Exit atto", (*App).cmdQuit},
 	}

@@ -3,6 +3,7 @@ module github.com/sebastianrcnt/atto
 go 1.27.1
 
 require (
+	github.com/creack/pty v1.1.24
 	github.com/dop251/goja v0.0.0-20261004200024-481fdb442bb4
 	github.com/evanw/esbuild v0.28.2
 	github.com/modelcontextprotocol/go-sdk v1.6.0

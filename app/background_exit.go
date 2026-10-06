@@ -76,6 +76,7 @@ func (a *App) exitMenuAvailable() bool {
 const (
 	exitCancel = "cancel"
 	exitBG     = "background"
+	exitDetach = "detach"
 	exitQuit   = "exit"
 )
 
@@ -95,9 +96,14 @@ func (m exitMenuModal) Render(width int) []string {
 }
 
 func (a *App) exitMenu() {
+	bg := tui.SelectItem{Label: "2. Run in background", Detail: "Exit atto and leave the task running", Value: exitBG}
+	if a.pane.on {
+		// In the daemon the task goes on as it is: leave the terminal only.
+		bg = tui.SelectItem{Label: "2. Detach", Detail: "Leave atto running; atto attach to return", Value: exitDetach}
+	}
 	l := &tui.SelectList{Items: []tui.SelectItem{
 		{Label: "1. Cancel task", Detail: "Stop the current task and stay in atto", Value: exitCancel},
-		{Label: "2. Run in background", Detail: "Exit atto and leave the task running", Value: exitBG},
+		bg,
 		{Label: "3. Exit", Detail: "Stop the current task and exit atto", Value: exitQuit},
 	}}
 	l.RenderRow = func(it tui.SelectItem, selected bool, width int) []string {
@@ -118,6 +124,9 @@ func (a *App) exitMenu() {
 		case exitBG:
 			a.dismissModal()
 			a.runInBackground()
+		case exitDetach:
+			a.closeModal()
+			a.detach()
 		case exitQuit:
 			a.dismissModal()
 			a.doQuit()

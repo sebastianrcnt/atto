@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"runtime"
 	"slices"
 	"sort"
 	"strings"
@@ -15,10 +16,12 @@ import (
 	"github.com/sebastianrcnt/atto/app"
 	"github.com/sebastianrcnt/atto/cli"
 	"github.com/sebastianrcnt/atto/config"
+	"github.com/sebastianrcnt/atto/daemon"
 	"github.com/sebastianrcnt/atto/mcp"
 	"github.com/sebastianrcnt/atto/provider"
 	"github.com/sebastianrcnt/atto/server"
 	"github.com/sebastianrcnt/atto/update"
+	"golang.org/x/term"
 )
 
 const usage = `atto — a terminal coding harness
@@ -35,6 +38,9 @@ usage:
   atto login [provider]             sign in (ChatGPT, …); /login inside atto
   atto logout <provider>            remove stored credentials
   atto resume [id]                  resume a session (no id: pick one)
+  atto attach [ID] | attach -l      return to an atto running in the daemon
+                                    (closed terminal, SSH drop, /detach)
+  atto daemon [status|kill|stop]    the daemon interactive atto runs in
   atto sessions [list|show|rename|archive|unarchive|delete]
                                     manage saved sessions (atto sessions -h)
   atto history grep|show ...        search a session transcript
@@ -63,7 +69,7 @@ flags:
 // changing credentials. "" is atto itself (interactive or -p). Commands
 // that work on the agent's own session (history, job, goal, reload...) or
 // only read (context, models) are allowed.
-var nestedRefused = map[string]bool{"": true, "serve": true, "app-server": true, "resume": true, "login": true, "logout": true, "auth": true, "update": true, "channel": true, "_continue": true}
+var nestedRefused = map[string]bool{"": true, "attach": true, "daemon": true, "_daemon": true, "serve": true, "app-server": true, "resume": true, "login": true, "logout": true, "auth": true, "update": true, "channel": true, "_continue": true}
 
 func refuseNested(cmd string) {
 	if !config.InAgent() || !nestedRefused[cmd] {
@@ -113,6 +119,9 @@ func subcommands() map[string]func([]string, io.Writer) error {
 		"_supervise":  cli.RunSupervise,
 		"_shell":      cli.RunShellHost,
 		"_continue":   cli.RunContinue,
+		"attach":      cli.RunAttach,
+		"daemon":      cli.RunDaemon,
+		"_daemon":     cli.RunDaemonServe,
 		"login":       cli.RunLogin,
 		"logout":      cli.RunLogout,
 		"serve": func(args []string, out io.Writer) error {
@@ -317,6 +326,16 @@ func main() {
 			fmt.Fprintln(os.Stderr, msg)
 			os.Exit(2)
 		}
+		if useDaemon() {
+			code, note, derr := daemon.Run(daemon.Hello{Op: "new", Args: os.Args[1:], Cwd: cwd(), Env: os.Environ()})
+			if derr == nil {
+				if note != "" {
+					fmt.Fprintln(os.Stderr, note)
+				}
+				os.Exit(code)
+			}
+			fmt.Fprintf(os.Stderr, "atto: running without the daemon: %v\n", derr)
+		}
 		err = app.Run(app.Options{Prompt: initialPrompt(positional), Inline: *inline, Continue: *cont, Resume: *resume, Model: *model, Session: *sessionID, Effort: *effort})
 	}
 	if errors.Is(err, cli.ErrPrintFailed) {
@@ -326,4 +345,23 @@ func main() {
 		fmt.Fprintln(os.Stderr, "atto:", err)
 		os.Exit(1)
 	}
+}
+
+// useDaemon reports whether interactive atto should run in a pane of the
+// daemon (package daemon): on a terminal, not already in a pane, unless
+// turned off.
+func useDaemon() bool {
+	if runtime.GOOS == "windows" || os.Getenv(daemon.EnvPane) != "" || os.Getenv("ATTO_NO_DAEMON") != "" {
+		return false
+	}
+	if !term.IsTerminal(int(os.Stdin.Fd())) || !term.IsTerminal(int(os.Stdout.Fd())) {
+		return false
+	}
+	s, err := config.LoadSettings()
+	return err != nil || s.DaemonOn()
+}
+
+func cwd() string {
+	d, _ := os.Getwd()
+	return d
 }

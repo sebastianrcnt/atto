@@ -111,7 +111,24 @@ atto -p -image shot.png "why?"        # attach images (repeatable)
 pngpaste - | atto -p "what is this?"  # an image on stdin is attached too
 atto -p -output-format json "..."     # also: stream-json
 atto -p -goal "make the tests pass"
+atto attach                           # back to an atto left running (see below)
 ```
+
+### Sessions keep running: the daemon
+
+Interactive atto runs the way a shell runs in tmux. The terminal you start it in only shows it: the session itself runs in a pane of the atto daemon, a background process per user that the first `atto` starts by itself and that exits when its last session ends. It is never installed as a service (no launchd, systemd or scheduled task).
+
+So closing the terminal, losing an SSH connection or `/detach` leaves the session running, turn and goal included, and `atto attach` shows it again, from any terminal of the same user. A phone works the same way: connect with an SSH app and run `atto attach`.
+
+```sh
+atto attach            # the most recent session no terminal shows
+atto attach 3          # pane 3, or a session ID (a prefix will do)
+atto attach -l         # the running sessions: pane, session, name, directory
+atto daemon kill 3     # end one, as closing its terminal used to
+atto daemon stop       # stop the daemon (-force: even with sessions running)
+```
+
+Leaving atto while a turn runs offers "Detach" instead of "Run in background". Several terminals may show one session at once; any of them can type, and the one that typed last sets the size. `"daemon": false` in `settings.json` (or `ATTO_NO_DAEMON=1` for one run) runs atto directly in the terminal, as before; on Windows it always does. The daemon's socket is in `~/.atto/run` and its log in `~/.atto/logs/daemon.log`.
 
 ### Keys in the session
 
@@ -174,6 +191,7 @@ To use the terminal's own selection instead, hold the key that bypasses mouse re
 | `/archive` | archive the session and start a new one |
 | `/clear` | start a new session |
 | `/goal [<objective>\|clear\|edit\|pause\|resume]` | set or view the goal for a long-running task, as in codex: bare `/goal` (or `status`) shows it with the time and tokens used, `help` shows the usage, `edit` opens a prompt, a new objective asks before replacing an unfinished goal. The words help and status alone never become an objective. Clearing or pausing while a turn runs is told to the model. A message sent while the goal is waiting, paused, stalled or usage limited carries a short note saying so, so the model answers instead of resuming goal work; a message sent while a goal turn runs says the goal is still active. A turn that fails for a transient reason (a 5xx, a timeout, an unavailable model) is retried after 10s, 30s and 90s before the goal stalls; Esc, `/goal pause` and `/goal clear` end the wait. The status shows at the right of the status line ("Pursuing goal (14m)"), Esc pauses it, and opening a session with a paused or stalled goal asks whether to resume |
+| `/detach` | leave the session running in the daemon and return to the shell; `atto attach` comes back |
 | `/remote [on [port]\|off]` | control this session from a phone or browser: serves atto's web client on port 7879 (or `"remote": {"port": N}` in `settings.json`), prints its link and a QR code, and marks messages sent from there "from remote"; `off` closes every connection and revokes the link |
 | `/jobs`, `/stop` | list or stop background jobs |
 | `/timer`, `/timers` | wake the agent later, or list pending timers |
@@ -336,7 +354,7 @@ Everything lives in `~/.atto`. Set `ATTO_DIR` to move it.
 
 | Path | Contents |
 | --- | --- |
-| `settings.json` | default model and effort, renderer, `mouse`, `toolGroups` (`false`: no command groups), `spinnerVerbs` (the word the activity line shows while commands run, drawn once per turn: `en`, the default, made-up English verbs; `ko`, made-up Korean words, as `글벅거리는 중…`; `ko-literary`, Korean verbs; `off`, just `Working…`), `spinnerScanner` (`true`: a sweeping `▰▱` scanner before that word), status line, hooks, `updateCheck`, `doubleEscapeAction` (`tree`, `fork` or `none`), `branchSummary.skipPrompt`, `toolOutputTokenLimit` (how much of a command's output the model gets, default 10000 tokens; the middle is cut and the full output saved to a file, as in codex), `backgroundExit` (experimental: `false` turns off the exit menu that offers "Run in background" while a turn runs), `remote.port` (`/remote`'s port, default 7879), `extensions` (`disabled` names, handler `timeout` in seconds), `skills.disabled` (built-in skills to turn off), `subagents` (`enabled`, `maxConcurrent`, `model`, `effort`) |
+| `settings.json` | default model and effort, renderer, `mouse`, `toolGroups` (`false`: no command groups), `spinnerVerbs` (the word the activity line shows while commands run, drawn once per turn: `en`, the default, made-up English verbs; `ko`, made-up Korean words, as `글벅거리는 중…`; `ko-literary`, Korean verbs; `off`, just `Working…`), `spinnerScanner` (`true`: a sweeping `▰▱` scanner before that word), status line, hooks, `updateCheck`, `doubleEscapeAction` (`tree`, `fork` or `none`), `branchSummary.skipPrompt`, `toolOutputTokenLimit` (how much of a command's output the model gets, default 10000 tokens; the middle is cut and the full output saved to a file, as in codex), `backgroundExit` (experimental: `false` turns off the exit menu that offers "Run in background" while a turn runs), `remote.port` (`/remote`'s port, default 7879), `daemon` (`false`: run the TUI directly instead of in a daemon pane), `extensions` (`disabled` names, handler `timeout` in seconds), `skills.disabled` (built-in skills to turn off), `subagents` (`enabled`, `maxConcurrent`, `model`, `effort`) |
 | `agents/` | subagent presets (`<name>.md`); `subagents/` holds the state of the subagents each session started |
 | `mcp.json` | MCP servers (Claude Code's `.mcp.json` format); `mcp-approvals.json` holds approved project servers, `mcp/` the endpoints of running sessions |
 | `extensions/` | your extensions; `extension-approvals.json` holds approved project extensions, `extensions.log` their logs |

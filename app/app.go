@@ -53,6 +53,7 @@ type App struct {
 	agent  *agent.Agent
 	sess   *session.Writer
 	unlock func()        // releases this terminal's lock on sess
+	pane   pane          // the daemon pane this atto runs in, if any
 	hooks  *hooks.Runner // nil when no hooks are configured
 	// ext runs the session's extensions (nil in tests that need none);
 	// extUI is what they show.
@@ -293,6 +294,7 @@ func Run(opts Options) error {
 	if err := a.ui.Start(); err != nil {
 		return err
 	}
+	a.startPane()
 	if opts.Prompt != "" {
 		// As if typed: goes through submit, so a leading "/" is a command too.
 		a.ui.Do(func() { a.submit(opts.Prompt, nil) })

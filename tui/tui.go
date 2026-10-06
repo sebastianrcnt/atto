@@ -344,6 +344,17 @@ func (t *TUI) ScrollOffset() int { return t.scroll }
 // scrolled up; it clears when the view is back at the bottom.
 func (t *TUI) NewBelow() bool { return t.newBelow }
 
+// ForceRedraw repaints everything now; safe from any goroutine.
+func (t *TUI) ForceRedraw() {
+	t.mu.Lock()
+	t.Redraw()
+	t.mu.Unlock()
+	t.RequestRender()
+}
+
+// Emit writes s to the terminal as is, between frames.
+func (t *TUI) Emit(s string) { t.term.Write(s) }
+
 // Redraw forces the next frame to repaint everything.
 func (t *TUI) Redraw() {
 	t.prevFrame = nil
