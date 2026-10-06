@@ -296,6 +296,8 @@ atto agent rm NAME... | rm -done        remove finished ones; their sessions are
 - `atto app-server` serves it over stdio.
 - `/remote` in the TUI serves the session you are in, with the same protocol and web client: the browser shows the conversation as it streams, and what you send from it goes in as if typed (a turn, or a steer while one runs); Stop, Background, model and effort work too. `/clear` and `/resume` take the browser along. Each `/remote on` makes a new token, so `/remote off` revokes the link; quitting atto stops it. There is no TLS: use it on a network you trust (or Tailscale).
 
+The web client shows what the terminal does: commands the model ran one after another fold into one line (`toolGroups` in `settings.json` applies), the status line sits under the input (model, context, cache hit rate, ↑/↓ tokens, cost) with the activity line above it while a turn runs (its time and tokens, orange when the model has been quiet for a while), and steers or queued messages not taken yet are listed above the input, where they can be edited or dropped. The ⋯ menu starts a new conversation, compacts, undoes the last turn (its message returns to the input), switches model and effort, and opens the session's background jobs (their output, and Stop) and subagents (their reports and, read only, their transcripts). The protocol is documented in `server/protocol.go`.
+
 ## Safety
 
 atto has **no permission prompts**. The model's commands run with your user's permissions. The only filters are hooks you configure.
