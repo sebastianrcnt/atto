@@ -243,7 +243,7 @@ func (d *GoalDriver) StateNote() string {
 // a paused goal, whatever the model makes of its silence. Events and goal
 // messages take none. Safe to call from any goroutine.
 func (d *GoalDriver) SteerNote(text string) string {
-	if !d.live.Load() || strings.HasPrefix(text, events.Prefix) || goal.IsMessage(text) {
+	if !d.live.Load() || events.IsEvent(text) || goal.IsMessage(text) {
 		return ""
 	}
 	return goal.SteerMessage()

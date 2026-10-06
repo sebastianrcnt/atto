@@ -231,8 +231,8 @@ func (a *App) itemCompleted(it *transcript.Item) {
 // eventTitles are the first lines of the events in a message.
 func eventTitles(text string) []string {
 	var out []string
-	for e := range strings.SplitSeq(strings.TrimPrefix(text, events.Prefix), "\n\n"+events.Prefix) {
-		out = append(out, tui.FirstLine(e))
+	for _, e := range events.Split(text) {
+		out = append(out, events.TitleOf(e))
 	}
 	return out
 }

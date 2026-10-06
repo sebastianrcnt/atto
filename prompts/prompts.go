@@ -63,6 +63,7 @@ type System struct {
 // Subagent is the data of "subagent".
 type Subagent struct {
 	Name, Preset, Instructions string
+	Path, Parent               string // its path and its parent's: /root/tests, /root
 	Worktree, Branch           string // with -worktree
 }
 

@@ -33,6 +33,27 @@ type Event struct {
 	Source string    `json:"source"` // "job", "timer", "monitor", "goal"
 	Text   string    `json:"text"`   // what the model sees (after Prefix)
 	Title  string    `json:"title"`  // one-line summary for the UI
+	// Quiet events don't start a turn: an idle session keeps them until
+	// its next turn, a running one takes them after its current step (an
+	// agent's message sent with atto agent send).
+	Quiet bool `json:"quiet,omitempty"`
+}
+
+// Wakes reports whether evs should start a turn: any of them not quiet.
+func Wakes(evs []Event) bool {
+	for _, e := range evs {
+		if !e.Quiet {
+			return true
+		}
+	}
+	return false
+}
+
+// Requeue puts taken events back, in their order, for a later turn.
+func Requeue(session string, evs []Event) {
+	for _, e := range evs {
+		_ = Push(session, e)
+	}
 }
 
 // SourceReload marks a request to reload the session's configuration
@@ -152,7 +173,58 @@ func Format(evs []Event) string {
 		if i > 0 {
 			b.WriteString("\n\n")
 		}
-		b.WriteString(Prefix + e.Text)
+		if !strings.HasPrefix(e.Text, "<atto_internal_context") { // an envelope says what it is
+			b.WriteString(Prefix)
+		}
+		b.WriteString(e.Text)
 	}
 	return b.String()
+}
+
+// envelopeStart begins a message one agent sends another (see package
+// subagent): an event of its own kind, not prefixed.
+const envelopeStart = `<atto_internal_context source="agent">`
+
+// IsEvent reports whether a message to the model is events: prefixed, or
+// an agent's message.
+func IsEvent(text string) bool {
+	return strings.HasPrefix(text, Prefix) || strings.HasPrefix(text, envelopeStart)
+}
+
+// Split takes a message Format made apart into its events' texts.
+func Split(text string) []string {
+	var out []string
+	rest := text
+	for rest != "" {
+		next := len(rest)
+		for _, sep := range []string{"\n\n" + Prefix, "\n\n" + envelopeStart} {
+			if i := strings.Index(rest[1:], sep); i >= 0 && i+1 < next {
+				next = i + 1
+			}
+		}
+		out = append(out, strings.TrimPrefix(rest[:next], Prefix))
+		rest = strings.TrimPrefix(rest[next:], "\n\n")
+	}
+	return out
+}
+
+// TitleOf is a one-line title for an event's text: for an agent's message,
+// its type and sender ("◆ FINAL_ANSWER from /root/tests"), else its first
+// line.
+func TitleOf(text string) string {
+	if !strings.HasPrefix(text, envelopeStart) {
+		first, _, _ := strings.Cut(text, "\n")
+		return first
+	}
+	var kind, from string
+	for line := range strings.SplitSeq(text, "\n") {
+		if v, ok := strings.CutPrefix(line, "Message Type: "); ok {
+			kind = v
+		}
+		if v, ok := strings.CutPrefix(line, "From: "); ok {
+			from = v
+			break
+		}
+	}
+	return "◆ " + strings.ToLower(strings.ReplaceAll(kind, "_", " ")) + " from " + from
 }

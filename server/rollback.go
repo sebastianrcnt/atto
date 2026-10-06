@@ -69,7 +69,7 @@ func UserMessages(branch []session.Entry) []session.Entry {
 	var users []session.Entry
 	for _, e := range branch {
 		if m := e.Message; e.Type == session.TypeMessage && m != nil && m.Role == "user" &&
-			!strings.HasPrefix(m.Content, events.Prefix) && !strings.HasPrefix(m.Content, agent.SummaryPrefix) {
+			!events.IsEvent(m.Content) && !strings.HasPrefix(m.Content, agent.SummaryPrefix) {
 			users = append(users, e)
 		}
 	}

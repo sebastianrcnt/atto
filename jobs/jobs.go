@@ -356,10 +356,13 @@ func Kill(session string, id int) (Job, error) {
 }
 
 // KillAll stops every active job of a session.
-func KillAll(session string) int {
+func KillAll(session string) int { return KillAllExcept(session, nil) }
+
+// KillAllExcept is KillAll sparing the jobs keep says to.
+func KillAllExcept(session string, keep func(Job) bool) int {
 	n := 0
 	for _, j := range List(session) {
-		if j.Active() {
+		if j.Active() && (keep == nil || !keep(j)) {
 			if _, err := Kill(session, j.ID); err == nil {
 				n++
 			}

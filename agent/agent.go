@@ -254,6 +254,7 @@ type Agent struct {
 	// state, for the model only (the goal is running). It runs on the turn's
 	// goroutine, so it must be safe to call while the front end runs.
 	SteerNote func(steer string) string
+	atStop    atomic.Bool // the boundary running is the model's stop (AtStop)
 	// stopReq: end the running turn at its next step boundary (StopAtBoundary).
 	stopReq atomic.Bool
 
@@ -365,6 +366,11 @@ func (a *Agent) TakeBoundary() []func() string {
 	return fns
 }
 
+// AtStop reports, to a function queued with AtBoundary, that the boundary
+// is the model having stopped: what it returns goes on the turn, which
+// would otherwise end.
+func (a *Agent) AtStop() bool { return a.atStop.Load() }
+
 func (a *Agent) runBoundary() {
 	for _, fn := range a.TakeBoundary() {
 		if text := fn(); text != "" {
@@ -442,23 +448,28 @@ func (a *Agent) Reload() (changed bool) {
 // Subagent describes an agent working for another one (atto agent).
 type Subagent struct {
 	Name, Preset string
-	Instructions string // the preset's
+	Instructions string // its role's
+	// Path and Parent: where it is in its tree, /root/tests under /root.
+	Path, Parent string
+	// CanSpawn: it may start agents of its own (the depth allows it).
+	CanSpawn bool
 	// Worktree and Branch: the git worktree it works in, with -worktree.
 	Worktree, Branch string
 }
 
-// subagentPart is the prompt's paragraph about subagents: for a subagent,
-// what it is; for any other agent, the presets it may start when
-// subagents are enabled (nothing otherwise). It has no trailing newline.
+// subagentPart is the prompt's paragraph about agents: for an agent, what
+// it is; for any session (an agent too, when it may) that may start
+// agents, how, with the roles. It has no trailing newline.
 func subagentPart(sub *Subagent, enabled bool, presets []subagent.Preset) string {
+	var parts []string
 	if sub != nil {
-		return prompts.Render("subagent", prompts.Subagent{Name: sub.Name, Preset: sub.Preset, Instructions: sub.Instructions, Worktree: sub.Worktree, Branch: sub.Branch})
+		parts = append(parts, prompts.Render("subagent", prompts.Subagent{Name: sub.Name, Preset: sub.Preset, Instructions: sub.Instructions, Path: sub.Path, Parent: sub.Parent, Worktree: sub.Worktree, Branch: sub.Branch}))
 	}
-	if !enabled {
-		return ""
+	if enabled && (sub == nil || sub.CanSpawn) {
+		list := strings.TrimSuffix(subagent.PromptList(presets), "\n")
+		parts = append(parts, prompts.Render("subagent_parent", map[string]any{"Presets": list}))
 	}
-	list := strings.TrimSuffix(subagent.PromptList(presets), "\n")
-	return prompts.Render("subagent_parent", map[string]any{"Presets": list})
+	return strings.Join(parts, "\n\n")
 }
 
 // Sources is what the system prompt was built from.
@@ -492,7 +503,7 @@ func (a *Agent) scan(start time.Time) (Sources, string) {
 		mcp = a.MCP.PromptServers()
 	}
 	var presets []subagent.Preset
-	if a.Subagent == nil && st.SubagentsEnabled() {
+	if (a.Subagent == nil || a.Subagent.CanSpawn) && st.SubagentsEnabled() {
 		presets, _ = subagent.LoadPresets(subagent.Dirs(a.Cwd, projectRoot(a.Cwd)))
 	}
 	sub := subagentPart(a.Subagent, st.SubagentsEnabled(), presets)
@@ -1034,7 +1045,9 @@ func (a *Agent) loop(ctx context.Context, emit func(any)) error {
 			if a.stopReq.Swap(false) {
 				return nil
 			}
+			a.atStop.Store(true)
 			a.runBoundary()
+			a.atStop.Store(false)
 			if a.commitSteers(emit) {
 				continue
 			}

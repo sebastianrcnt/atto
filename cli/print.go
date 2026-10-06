@@ -310,18 +310,26 @@ func RunPrint(o PrintOptions) error {
 	}
 	imgs := o.Images // with the first turn only
 	if o.Subagent != nil {
-		// Messages that came before the turn go with its prompt; later
-		// ones are taken at each step boundary.
+		// Messages that came before the turn go with its prompt.
 		if text := inboxText(sess.ID); text != "" {
 			input += "\n\n" + text
 		}
-		var poll func() string
-		poll = func() string {
-			ag.AtBoundary(poll)
-			return inboxText(sess.ID)
-		}
-		ag.AtBoundary(poll)
 	}
+	// Later ones (an agent's messages and final answers, jobs ending) are
+	// taken at each step boundary. Quiet messages don't keep a finished
+	// turn going, and a plain run's finished turn takes nothing: what is
+	// left waits in the inbox for the session's next turn.
+	var poll func() string
+	poll = func() string {
+		ag.AtBoundary(poll)
+		_, evs := events.SplitReload(core.Poll(sess.ID))
+		if ag.AtStop() && (o.Subagent == nil || !events.Wakes(evs)) {
+			events.Requeue(sess.ID, evs)
+			return ""
+		}
+		return events.Format(evs)
+	}
+	ag.AtBoundary(poll)
 
 	resume := o.Background && mode == bgResumeTurn // the first turn has its message already
 	turn := func(ctx context.Context, input string, emit func(any)) error {
@@ -345,10 +353,12 @@ func RunPrint(o PrintOptions) error {
 	})
 	// What arrived as the turn ended gets a turn of its own.
 	for o.Subagent != nil && runErr == nil && ctx.Err() == nil {
-		text := inboxText(sess.ID)
-		if text == "" {
+		_, evs := events.SplitReload(core.Poll(sess.ID))
+		if !events.Wakes(evs) {
+			events.Requeue(sess.ID, evs) // quiet messages wait for its next turn
 			break
 		}
+		text := events.Format(evs)
 		p.flushStep()
 		runErr = turn(ctx, text, p.event)
 	}
@@ -362,7 +372,11 @@ func RunPrint(o PrintOptions) error {
 			runErr = fmt.Errorf("goal %s: %s", g.Status.Label(), g.Note)
 		}
 	}
-	if n := core.Leave(sess.ID); n > 0 { // jobs end with the run
+	leave := core.Leave
+	if o.Subagent != nil {
+		leave = core.LeaveKeepingAgents // the turns of its own agents go on
+	}
+	if n := leave(sess.ID); n > 0 { // jobs end with the run
 		fmt.Fprintf(os.Stderr, "atto: stopped %d background job(s)\n", n)
 	}
 	if hk != nil { // the run is the whole session

@@ -73,13 +73,17 @@ func (s *Server) watchInbox() {
 			if len(evs) == 0 {
 				continue
 			}
+			t.mu.Lock()
+			busy := t.busy
+			t.mu.Unlock()
+			if !busy && !events.Wakes(evs) {
+				events.Requeue(t.id, evs) // quiet: for the next turn
+				continue
+			}
 			for _, e := range evs {
 				s.notify(t, "event", map[string]any{"title": e.Title, "source": e.Source})
 			}
 			text := events.Format(evs)
-			t.mu.Lock()
-			busy := t.busy
-			t.mu.Unlock()
 			if busy {
 				t.agent.Steer(text)
 				continue

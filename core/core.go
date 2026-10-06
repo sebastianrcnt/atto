@@ -241,6 +241,14 @@ func Leave(id string) int {
 	return jobs.KillAll(id)
 }
 
+// LeaveKeepingAgents is Leave for one turn of an agent: the turns of the
+// agents it started (jobs named "agent ...") outlive it, as they would a
+// session that stays open.
+func LeaveKeepingAgents(id string) int {
+	_ = goal.Clear(id)
+	return jobs.KillAllExcept(id, func(j jobs.Job) bool { return strings.HasPrefix(j.Name, "agent ") })
+}
+
 // Poll fires the session's due timers and takes the events waiting in its
 // inbox (finished jobs, monitors, timers).
 func Poll(id string) []events.Event {

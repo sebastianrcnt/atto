@@ -144,7 +144,7 @@ func TestAgentWorktree(t *testing.T) {
 	mustGit(t, wt, "add", ".")
 	mustGit(t, wt, "commit", "-q", "-m", "made")
 	out, err = runAgent(t, "rm", "w1", "-session", parent)
-	if err != nil || !strings.Contains(out, "branch atto/p1/w1 kept (1 new commit): merge it with git merge atto/p1/w1") || !strings.Contains(out, "removed subagent w1") {
+	if err != nil || !strings.Contains(out, "branch atto/p1/w1 kept (1 new commit): merge it with git merge atto/p1/w1") || !strings.Contains(out, "closed agent /root/w1") {
 		t.Fatalf("rm clean: %q %v", out, err)
 	}
 	if _, err := os.Stat(wt); !os.IsNotExist(err) {
@@ -162,14 +162,14 @@ func TestAgentWorktree(t *testing.T) {
 		t.Fatal(err)
 	}
 	wt3 := filepath.Join(config.Dir(), "worktrees", parent, "w3")
-	if _, err := runAgent(t, "rm", "-done", "-session", parent); err == nil || !strings.Contains(err.Error(), "subagent w3") || !strings.Contains(err.Error(), "uncommitted") {
+	if _, err := runAgent(t, "rm", "-done", "-session", parent); err == nil || !strings.Contains(err.Error(), "agent w3") || !strings.Contains(err.Error(), "uncommitted") {
 		t.Fatalf("rm -done dirty: %v", err)
 	}
 	if _, err := subagent.Load(parent, "w3"); err != nil {
 		t.Fatalf("dirty subagent removed: %v", err)
 	}
 	out, err = runAgent(t, "rm", "-done", "-force", "-session", parent)
-	if err != nil || !strings.Contains(out, "branch atto/p1/w3 kept (0 new commits)") || !strings.Contains(out, "removed subagent w3") {
+	if err != nil || !strings.Contains(out, "branch atto/p1/w3 kept (0 new commits)") || !strings.Contains(out, "closed agent /root/w3") {
 		t.Fatalf("rm -done -force: %q %v", out, err)
 	}
 	if _, err := os.Stat(wt3); !os.IsNotExist(err) {

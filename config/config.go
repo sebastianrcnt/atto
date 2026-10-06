@@ -155,7 +155,9 @@ type Settings struct {
 	// Remote configures /remote, which serves the TUI's session to a
 	// phone or browser.
 	Remote *RemoteSettings `json:"remote,omitempty"`
-	// Subagents configures atto agent.
+	// Agents configures atto agent: agents other agents start. "subagents",
+	// its old name, is read when "agents" is absent.
+	Agents    *SubagentSettings `json:"agents,omitempty"`
 	Subagents *SubagentSettings `json:"subagents,omitempty"`
 	// Daemon: false runs the TUI in the terminal's own process instead of
 	// a pane of the atto daemon (package daemon). ATTO_NO_DAEMON=1 does
@@ -179,18 +181,48 @@ type SubagentSettings struct {
 	// that starts it.
 	Model  string `json:"model,omitempty"`
 	Effort string `json:"effort,omitempty"`
+	// MaxDepth is how deep agent trees may grow: 1 (the default) lets a
+	// session start agents, 2 lets those start agents too, and so on.
+	MaxDepth int `json:"maxDepth,omitempty"`
+}
+
+// agents is the agent settings, under either name.
+func (s Settings) agents() *SubagentSettings {
+	if s.Agents != nil {
+		return s.Agents
+	}
+	return s.Subagents
 }
 
 // SubagentsEnabled reports whether atto agent is turned on.
-func (s Settings) SubagentsEnabled() bool { return s.Subagents != nil && s.Subagents.Enabled }
+func (s Settings) SubagentsEnabled() bool { return s.agents() != nil && s.agents().Enabled }
+
+// DefaultAgentDepth is SubagentSettings.MaxDepth's default, as codex's.
+const DefaultAgentDepth = 1
+
+// AgentMaxDepth is how deep agent trees may grow.
+func (s Settings) AgentMaxDepth() int {
+	if a := s.agents(); a != nil && a.MaxDepth > 0 {
+		return a.MaxDepth
+	}
+	return DefaultAgentDepth
+}
+
+// AgentDefaults is the model and effort settings give agents, if any.
+func (s Settings) AgentDefaults() (model, effort string) {
+	if a := s.agents(); a != nil {
+		return a.Model, a.Effort
+	}
+	return "", ""
+}
 
 // DefaultMaxSubagents is SubagentSettings.MaxConcurrent's default.
 const DefaultMaxSubagents = 3
 
 // SubagentLimit is how many subagent turns may run at once.
 func (s Settings) SubagentLimit() int {
-	if s.Subagents != nil && s.Subagents.MaxConcurrent > 0 {
-		return s.Subagents.MaxConcurrent
+	if a := s.agents(); a != nil && a.MaxConcurrent > 0 {
+		return a.MaxConcurrent
 	}
 	return DefaultMaxSubagents
 }

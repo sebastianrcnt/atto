@@ -62,6 +62,12 @@ func (a *App) pollInbox(s string) {
 		a.jobCount, a.timerCount = nJobs, nTimers
 		a.goal.Poll()
 		a.pendingEvents = append(a.pendingEvents, evs...)
+		if !a.busy && !events.Wakes(a.pendingEvents) {
+			// Quiet messages wait in the inbox for the next turn, which
+			// takes them after its first step.
+			events.Requeue(s, a.pendingEvents)
+			a.pendingEvents = nil
+		}
 		if reload { // atto reload, run by the agent
 			a.requestReload(true)
 		}
@@ -119,7 +125,7 @@ func firstTitle(evs []events.Event) string {
 }
 
 // isEvent reports whether a committed steer came from the inbox.
-func isEvent(s string) bool { return strings.HasPrefix(s, events.Prefix) }
+func isEvent(s string) bool { return events.IsEvent(s) }
 
 func (a *App) cmdJobs(arg string) {
 	list := jobs.List(a.sess.ID)

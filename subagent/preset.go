@@ -126,7 +126,7 @@ func Find(presets []Preset, name string) (Preset, error) {
 // PromptList is the system prompt's list of presets.
 func PromptList(presets []Preset) string {
 	var b strings.Builder
-	b.WriteString("Subagent presets:\n")
+	b.WriteString("Roles (-role; default general):\n")
 	for _, p := range presets {
 		if p.Description != "" {
 			fmt.Fprintf(&b, "- %s: %s\n", p.Name, strings.Join(strings.Fields(p.Description), " "))

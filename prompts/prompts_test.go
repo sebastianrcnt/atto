@@ -10,8 +10,8 @@ import (
 var samples = map[string]any{
 	"system":                   System{Kind: "powershell", WinPS51: true, Tool: "powershell", Sub: "SUB", MCP: "a, b", Cwd: "/w", OS: "linux", Arch: "amd64", Shell: "/bin/sh", Date: "2026-01-02"},
 	"bash_tool":                map[string]any{"Kind": "bash"},
-	"subagent":                 Subagent{Name: "w1", Preset: "docs", Instructions: "Be brief."},
-	"subagent_parent":          map[string]any{"Presets": "Subagent presets:\n- docs"},
+	"subagent":                 Subagent{Name: "w1", Preset: "docs", Instructions: "Be brief.", Path: "/root/w1", Parent: "/root"},
+	"subagent_parent":          map[string]any{"Presets": "Roles (-role; default general):\n- docs"},
 	"compact":                  map[string]any{"Words": 700},
 	"compact_prefix":           nil,
 	"branch_summary":           map[string]any{"Start": "X", "Words": 600, "Focus": "tests"},
@@ -54,14 +54,14 @@ func TestRender(t *testing.T) {
 		{"goal_continuation", Goal{Objective: "a &lt; b"}, "<objective>\na &lt; b\n</objective>"},
 		{"goal_continuation", Goal{Turns: 3}, "verified.\n\nGoal turns so far: 3\n\nUser messages:"},
 		{"system", System{Kind: "bash", Tool: "bash", Date: "d"}, `run "atto goal resume '<why>'" (never resume on your own)`},
-		{"subagent", Subagent{Name: "w", Preset: "p"}, `You are subagent "w" (preset p)`},
+		{"subagent", Subagent{Name: "w", Preset: "p", Path: "/root/w", Parent: "/root"}, `You are agent /root/w, in a team of atto agents working for the user: /root started you with role p`},
 	} {
 		if got := Render(c.name, c.data); !strings.Contains(got, c.want) {
 			t.Errorf("%s: %q not in %q", c.name, c.want, got)
 		}
 	}
 	// A template ends where its last line does.
-	if got := Render("subagent", Subagent{Name: "w", Preset: "p", Instructions: "I"}); !strings.HasSuffix(got, "Instructions for this subagent:\nI") {
+	if got := Render("subagent", Subagent{Name: "w", Preset: "p", Instructions: "I"}); !strings.HasSuffix(got, "Instructions for your role:\nI") {
 		t.Errorf("subagent: %q", got)
 	}
 	if got := Render("branch_summary", map[string]any{"Start": "X", "Words": 1, "Focus": ""}); !strings.HasSuffix(got, "Do not call tools.") {

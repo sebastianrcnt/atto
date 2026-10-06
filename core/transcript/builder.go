@@ -282,7 +282,7 @@ func (b *Builder) apply(ev any, at time.Time) {
 func (b *Builder) input(text string, imgs []provider.Image) {
 	it := Item{Kind: User, Status: Completed, Text: text}
 	switch {
-	case strings.HasPrefix(text, events.Prefix):
+	case events.IsEvent(text):
 		it.Kind = Event
 	case goal.IsMessage(text):
 		it.Kind = Goal

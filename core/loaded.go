@@ -476,7 +476,7 @@ func (l Loaded) Summary() []Row {
 		for _, p := range l.Presets {
 			names = append(names, p.Name)
 		}
-		rows = append(rows, Row{"Subagents", "presets: " + strings.Join(names, ", ")})
+		rows = append(rows, Row{"Agents", "roles: " + strings.Join(names, ", ")})
 	}
 
 	rows = append(rows, Row{"Model", l.modelText()})
@@ -647,9 +647,9 @@ func (l Loaded) Details() []Section {
 	}
 	out = append(out, s)
 
-	s = Section{Title: "Subagent presets (atto agent)"}
+	s = Section{Title: "Agent roles (atto agent)"}
 	if !l.Subagents {
-		s.Title += " · off: \"subagents\": {\"enabled\": true} in " + ShortPath(config.SettingsPath()) + " turns them on"
+		s.Title += " · off: \"agents\": {\"enabled\": true} in " + ShortPath(config.SettingsPath()) + " turns them on"
 	}
 	for _, p := range l.Presets {
 		text := "built-in"

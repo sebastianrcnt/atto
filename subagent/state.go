@@ -150,11 +150,17 @@ func Create(s State) error {
 		return err
 	}
 	f.Close()
+	if err := saveUp(s); err != nil {
+		return err
+	}
 	return Save(s)
 }
 
 // Remove deletes the subagent's state (its session stays).
 func Remove(parent, name string) {
+	if s, err := Load(parent, name); err == nil && s.Session != "" {
+		_ = os.Remove(upPath(s.Session))
+	}
 	_ = os.Remove(statePath(parent, name))
 	_ = os.Remove(turnPath(parent, name))
 }
