@@ -67,6 +67,7 @@ type Monitor struct {
 }
 
 type Job struct {
+	Type          string     `json:"kind,omitempty"` // agent turns have an explicit lifecycle kind
 	ID            int        `json:"id"`
 	Session       string     `json:"session"`
 	Name          string     `json:"name"`
@@ -90,6 +91,9 @@ type Job struct {
 }
 
 func (j Job) Kind() string {
+	if j.Type != "" {
+		return j.Type
+	}
 	if j.Monitor != nil {
 		return "monitor"
 	}
@@ -246,6 +250,15 @@ func StartEnv(session, cwd, name, command string, env []string) (Job, error) {
 // shell in between, under the label name. With quiet, a clean exit posts
 // no event: the command reports itself.
 func StartArgs(session, cwd, name string, args []string, quiet bool) (Job, error) {
+	return startArgs(session, cwd, name, args, quiet, "")
+}
+
+// StartAgentArgs starts an agent turn, which outlives an intermediate turn.
+func StartAgentArgs(session, cwd, name string, args []string) (Job, error) {
+	return startArgs(session, cwd, name, args, true, "agent")
+}
+
+func startArgs(session, cwd, name string, args []string, quiet bool, kind string) (Job, error) {
 	if len(args) == 0 {
 		return Job{}, fmt.Errorf("empty command")
 	}
@@ -253,7 +266,7 @@ func StartArgs(session, cwd, name string, args []string, quiet bool) (Job, error
 	if err != nil {
 		return Job{}, err
 	}
-	j := Job{ID: id, Session: session, Name: name, Command: strings.Join(args, " "), Cwd: cwd, Status: Starting, Started: time.Now(), Args: args, Quiet: quiet}
+	j := Job{Type: kind, ID: id, Session: session, Name: name, Command: strings.Join(args, " "), Cwd: cwd, Status: Starting, Started: time.Now(), Args: args, Quiet: quiet}
 	return launch(dir, j, nil)
 }
 

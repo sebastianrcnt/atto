@@ -22,6 +22,7 @@ import (
 	"github.com/sebastianrcnt/atto/hooks"
 	"github.com/sebastianrcnt/atto/jobs"
 	"github.com/sebastianrcnt/atto/session"
+	"github.com/sebastianrcnt/atto/subagent"
 )
 
 // DefaultEffort applies when neither a flag, the session nor settings.json
@@ -167,6 +168,7 @@ func SetHooks(ag *agent.Agent, hk *hooks.Runner) {
 // system prompt (a resumed session keeps its own, which keeps the prefix
 // cache); record makes the agent append its messages to the file.
 func Bind(ag *agent.Agent, hk *hooks.Runner, file *session.Writer, start time.Time, record bool) {
+	subagent.OpenTree(file.ID)
 	ag.SetStart(start)
 	ag.SetSession(file.ID, Env(file.ID))
 	ag.Record, ag.EntryID = nil, nil
@@ -237,16 +239,37 @@ func (s Saved) Branch() []session.Entry { return session.Active(s.Entries) }
 // codex) and its goal file goes (the session file keeps the goal's last
 // snapshot). Returns how many jobs were stopped.
 func Leave(id string) int {
-	_ = goal.Clear(id)
-	return jobs.KillAll(id)
+	release, err := subagent.CloseTree(id)
+	if err == nil {
+		defer release()
+	}
+	seen := make(map[string]bool)
+	var stop func(string) int
+	stop = func(session string) int {
+		if seen[session] {
+			return 0
+		}
+		seen[session] = true
+		n := 0
+		for _, s := range subagent.List(session) {
+			n += stop(s.Session)
+		}
+		_ = goal.Clear(session)
+		return n + jobs.KillAll(session)
+	}
+	return stop(id)
 }
 
 // LeaveKeepingAgents is Leave for one turn of an agent: the turns of the
-// agents it started (jobs named "agent ...") outlive it, as they would a
+// agents it started outlive it, as they would a
 // session that stays open.
 func LeaveKeepingAgents(id string) int {
 	_ = goal.Clear(id)
-	return jobs.KillAllExcept(id, func(j jobs.Job) bool { return strings.HasPrefix(j.Name, "agent ") })
+	children := make(map[int]bool)
+	for _, s := range subagent.List(id) {
+		children[s.Job] = true
+	}
+	return jobs.KillAllExcept(id, func(j jobs.Job) bool { return j.Kind() == "agent" || children[j.ID] })
 }
 
 // Poll fires the session's due timers and takes the events waiting in its

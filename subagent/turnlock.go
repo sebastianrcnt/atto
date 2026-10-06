@@ -12,10 +12,14 @@ func LockTurn(parent, name string) (func(), error) {
 	if err := ValidName(name); err != nil {
 		return nil, err
 	}
-	if err := os.MkdirAll(Dir(parent), 0o755); err != nil {
+	return lockFile(filepath.Join(Dir(parent), name+".lock"))
+}
+
+func lockFile(path string) (func(), error) {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return nil, err
 	}
-	f, err := os.OpenFile(filepath.Join(Dir(parent), name+".lock"), os.O_CREATE|os.O_RDWR, 0o644)
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o644)
 	if err != nil {
 		return nil, err
 	}

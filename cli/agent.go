@@ -445,6 +445,12 @@ func contains(list []string, s string) bool {
 
 // agentStart creates subagent name from preset and starts its first turn.
 func agentStart(out io.Writer, settings config.Settings, parent, name, preset, task, model, effortOverride string, useWorktree bool) error {
+	release, err := subagent.StartWork(parent)
+	if err != nil {
+		return err
+	}
+	defer release()
+
 	if task == "" {
 		return fmt.Errorf("give the subagent its task: atto agent start %s %s \"...\"", name, preset)
 	}
@@ -508,7 +514,7 @@ func agentStart(out io.Writer, settings config.Settings, parent, name, preset, t
 		undo()
 		return err
 	}
-	if err := startTurn(&st, task); err != nil {
+	if err := startTurnLocked(&st, task); err != nil {
 		subagent.Remove(parent, name)
 		undo()
 		return err
@@ -531,6 +537,15 @@ func orDash(s string) string {
 // startTurn starts the next turn of st with message text, as a job of the
 // parent session, and saves st.
 func startTurn(st *subagent.State, text string) error {
+	release, err := subagent.StartWork(st.Session)
+	if err != nil {
+		return err
+	}
+	defer release()
+	return startTurnLocked(st, text)
+}
+
+func startTurnLocked(st *subagent.State, text string) error {
 	exe, err := os.Executable()
 	if err != nil {
 		return err
@@ -541,7 +556,7 @@ func startTurn(st *subagent.State, text string) error {
 		return err
 	}
 	args := []string{exe, "_agent-turn", "-session", st.Parent, st.Name, fmt.Sprint(st.Turns)}
-	j, err := jobs.StartArgs(st.Parent, st.Cwd, "agent "+st.Name, args, true)
+	j, err := jobs.StartAgentArgs(st.Parent, st.Cwd, "agent "+st.Name, args)
 	if err != nil {
 		return fmt.Errorf("starting agent %s: %w", st.Name, err)
 	}
