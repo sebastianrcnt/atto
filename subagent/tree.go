@@ -46,14 +46,24 @@ func saveUp(s State) error {
 // name there; ok is false for a root.
 func ParentOf(session string) (parent, name string, ok bool) {
 	data, err := os.ReadFile(upPath(session))
-	if err != nil {
-		return "", "", false
-	}
 	var u up
-	if json.Unmarshal(data, &u) != nil || u.Parent == "" {
-		return "", "", false
+	if err == nil && json.Unmarshal(data, &u) == nil && u.Parent != "" {
+		return u.Parent, u.Name, true
 	}
-	return u.Parent, u.Name, true
+	// Older agents have state but no reverse index. Repair it from state.
+	dirs, _ := os.ReadDir(config.SubagentsDir())
+	for _, d := range dirs {
+		if !d.IsDir() || d.Name() == "_up" {
+			continue
+		}
+		for _, s := range List(d.Name()) {
+			if s.Session == session {
+				_ = saveUp(s)
+				return s.Parent, s.Name, true
+			}
+		}
+	}
+	return "", "", false
 }
 
 // maxHops bounds walks up a tree, against a corrupt loop.
@@ -120,7 +130,15 @@ func Resolve(from, addr string) (Target, error) {
 		if !ok {
 			return Target{}, errors.New("this session is a root: it has no parent agent")
 		}
-		return Target{Session: p, Path: PathOf(p)}, nil
+		t := Target{Session: p, Path: PathOf(p)}
+		if grandparent, name, ok := ParentOf(p); ok {
+			s, err := Load(grandparent, name)
+			if err != nil {
+				return Target{}, err
+			}
+			t.State = &s
+		}
+		return t, nil
 	case addr == RootPath || strings.HasPrefix(addr, RootPath+"/"):
 		cur, path = Root(from), RootPath
 		rest = strings.TrimPrefix(strings.TrimPrefix(addr, RootPath), "/")

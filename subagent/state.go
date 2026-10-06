@@ -130,6 +130,9 @@ func Save(s State) error {
 	if err := os.MkdirAll(Dir(s.Parent), 0o755); err != nil {
 		return err
 	}
+	if err := saveUp(s); err != nil {
+		return err
+	}
 	data, _ := json.MarshalIndent(s, "", "  ")
 	return fsutil.WriteAtomic(statePath(s.Parent, s.Name), data, 0o644)
 }
@@ -150,9 +153,6 @@ func Create(s State) error {
 		return err
 	}
 	f.Close()
-	if err := saveUp(s); err != nil {
-		return err
-	}
 	return Save(s)
 }
 
