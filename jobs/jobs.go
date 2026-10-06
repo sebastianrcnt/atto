@@ -466,10 +466,16 @@ func Head(session string, id, n int) (string, error) {
 	}
 	defer f.Close()
 	var b strings.Builder
-	sc := bufio.NewScanner(f)
-	sc.Buffer(make([]byte, 64<<10), 1<<20)
-	for i := 0; i < n && sc.Scan(); i++ {
-		b.WriteString(sc.Text() + "\n")
+	r := bufio.NewReader(f)
+	for range n {
+		line, err := r.ReadString('\n')
+		b.WriteString(line)
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return "", err
+		}
 	}
 	return strings.TrimRight(b.String(), "\n"), nil
 }
