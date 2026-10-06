@@ -289,6 +289,10 @@ func (a *App) onEvent(ev any) {
 	a.tr().Event(ev)
 	a.goal.Event(ev)
 	a.lastEvent = a.clock()
+	switch ev.(type) {
+	case agent.TextDelta, agent.ReasoningDelta, agent.ToolDraft, agent.ToolStart, agent.StepEnd:
+		a.replied = true
+	}
 	a.remoteGoal()
 	a.backgroundEvent(ev)
 	switch e := ev.(type) {

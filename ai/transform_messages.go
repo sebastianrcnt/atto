@@ -191,7 +191,71 @@ func TransformMessages(messages []Message, model *Model, normalizeToolCallID fun
 		}
 	}
 	closePending()
-	return result
+	return mergeUserMessages(result)
+}
+
+// mergeUserMessages joins adjacent user messages into one, as many servers
+// reject or mishandle consecutive user turns (e.g. after a failed turn the
+// user sent again, or a skipped errored reply). Text is joined with a blank
+// line and images stay in order. It only shapes the request: the stored
+// transcript is unchanged, and the result depends only on the messages, so
+// the request prefix stays the same from one request to the next.
+func mergeUserMessages(messages []Message) []Message {
+	var out []Message
+	for _, msg := range messages {
+		cur, ok := msg.(*UserMessage)
+		if !ok || len(out) == 0 {
+			out = append(out, msg)
+			continue
+		}
+		prev, ok := out[len(out)-1].(*UserMessage)
+		if !ok {
+			out = append(out, msg)
+			continue
+		}
+		out[len(out)-1] = joinUserMessages(prev, cur)
+	}
+	return out
+}
+
+func joinUserMessages(a, b *UserMessage) *UserMessage {
+	merged := &UserMessage{Role: "user", Timestamp: a.Timestamp}
+	if a.IsText() && b.IsText() {
+		merged.Text = joinText(a.Text, b.Text)
+		return merged
+	}
+	parts := userParts(a)
+	for _, p := range userParts(b) {
+		last, lastText := (*TextContent)(nil), false
+		if n := len(parts); n > 0 {
+			last, lastText = parts[n-1].(*TextContent)
+		}
+		if t, ok := p.(*TextContent); ok && lastText {
+			parts[len(parts)-1] = NewText(joinText(last.Text, t.Text))
+			continue
+		}
+		parts = append(parts, p)
+	}
+	merged.Parts = parts
+	return merged
+}
+
+// userParts is m's content as blocks, never nil (nil means plain text).
+func userParts(m *UserMessage) []Content {
+	if m.IsText() {
+		if m.Text == "" {
+			return []Content{}
+		}
+		return []Content{NewText(m.Text)}
+	}
+	return append([]Content{}, m.Parts...)
+}
+
+func joinText(a, b string) string {
+	if a == "" || b == "" {
+		return a + b
+	}
+	return a + "\n\n" + b
 }
 
 func isBlank(s string) bool {

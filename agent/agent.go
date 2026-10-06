@@ -249,6 +249,9 @@ type Agent struct {
 	boundary []func() string
 	// inputNote goes with the next user message (SetInputNote).
 	inputNote string
+	// sent is the user message RunWithImages added last, as the user typed
+	// it, so the same input sent again after a failed turn is not added twice.
+	sent sentInput
 	// SteerNote, if set, gives text that goes at the end of a steer when it
 	// is committed ("" for none): context atto adds about the session's
 	// state, for the model only (the goal is running). It runs on the turn's
@@ -934,11 +937,32 @@ func (a *Agent) modelChangeNote() string {
 	return ""
 }
 
+// sentInput remembers a user message added by RunWithImages: what the user
+// typed (before hooks and notes were added), and the message as stored.
+type sentInput struct {
+	input string
+	imgs  []provider.Image
+	msg   provider.Message
+	index int // position of msg in the conversation
+}
+
+// unanswered reports whether the conversation still ends with the message
+// sent as input and imgs, which no reply followed: the turn failed before
+// the model answered, and the user is sending the same message again.
+func (a *Agent) unanswered(input string, imgs []provider.Image) bool {
+	s := a.sent
+	if s.msg.Role == "" || s.index != len(a.messages)-1 || a.messages[s.index].Content != s.msg.Content {
+		return false
+	}
+	return s.input == input && slices.EqualFunc(s.imgs, imgs, func(x, y provider.Image) bool { return x.File == y.File })
+}
+
 // RunWithImages is Run with images attached to the user message. Their
 // bytes must be loaded, and saved with images.Save for the session to
 // resume with them.
 func (a *Agent) RunWithImages(ctx context.Context, input string, imgs []provider.Image, emit func(any)) (err error) {
 	note := a.takeInputNote()
+	raw := input
 	if a.Extensions != nil {
 		a.Extensions.TurnStart(input)
 		defer func() { a.Extensions.TurnEnd(err) }()
@@ -965,6 +989,12 @@ func (a *Agent) RunWithImages(ctx context.Context, input string, imgs []provider
 			input += "\n\n" + o.Context
 		}
 	}
+	// The last attempt at this message failed before the model answered it:
+	// it is still in the conversation, so run it again as Continue does
+	// instead of adding a copy. (Compaction would rewrite it, so it waits.)
+	if a.unanswered(raw, imgs) {
+		return a.loop(ctx, emit)
+	}
 	if n := a.modelChangeNote(); n != "" {
 		input += "\n\n" + n
 	}
@@ -976,7 +1006,9 @@ func (a *Agent) RunWithImages(ctx context.Context, input string, imgs []provider
 			return err
 		}
 	}
-	a.appendMessage(provider.Message{Role: "user", Content: input, Images: imgs}, session.Entry{})
+	m := provider.Message{Role: "user", Content: input, Images: imgs}
+	a.appendMessage(m, session.Entry{})
+	a.sent = sentInput{input: raw, imgs: imgs, msg: m, index: len(a.messages) - 1}
 	return a.loop(ctx, emit)
 }
 

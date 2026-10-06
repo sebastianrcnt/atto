@@ -189,7 +189,7 @@ func (a *App) sendExtensionMessage(text string) {
 	case a.busy:
 		a.enqueue(text, nil)
 	default:
-		a.startTurn(text, nil)
+		a.runTurn(text, nil, false)
 	}
 }
 

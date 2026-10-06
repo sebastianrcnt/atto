@@ -130,9 +130,10 @@ func TestAutoCompactMidTurn(t *testing.T) {
 	if len(reqs) != 3 {
 		t.Fatalf("%d requests", len(reqs))
 	}
-	// Third request: system, kept user message, notes.
+	// Third request: system, then the kept user message and the notes (both
+	// user messages, merged on send).
 	third := reqs[2]
-	if len(third) != 3 || third[1]["content"] != "go" || !strings.HasPrefix(third[2]["content"].(string), SummaryPrefix) {
+	if len(third) != 2 || !strings.HasPrefix(third[1]["content"].(string), "go\n\n"+SummaryPrefix) {
 		t.Fatalf("post-compaction history: %v", third)
 	}
 
@@ -289,6 +290,8 @@ func TestInputNoteGoesWithTheNextUserMessageOnly(t *testing.T) {
 // Steers typed during one step are committed as messages of their own, in
 // order, so what the user said keeps its boundaries; SteerCommitted still
 // lists the plain texts, and SteerNote's text rides at the end of a message.
+// The request joins them (adjacent user messages are merged on send) with
+// blank lines between, while the stored history keeps them apart.
 func TestSteersAreSeparateMessages(t *testing.T) {
 	srv, seen := fakeServer(t, text("first"), text("second"))
 	a := newTestAgent(srv.URL)
@@ -319,7 +322,16 @@ func TestSteersAreSeparateMessages(t *testing.T) {
 			users = append(users, m["content"].(string))
 		}
 	}
-	if want := "hi|a|b?\n\nNOTE|c"; strings.Join(users, "|") != want {
-		t.Fatalf("user messages %q, want %q", users, want)
+	if want := "a\n\nb?\n\nNOTE\n\nc"; len(users) != 2 || users[0] != "hi" || users[1] != want {
+		t.Fatalf("user messages %q, want hi and %q", users, want)
+	}
+	var stored []string
+	for _, m := range a.messages {
+		if m.Role == "user" {
+			stored = append(stored, m.Content)
+		}
+	}
+	if want := "hi|a|b?\n\nNOTE|c"; strings.Join(stored, "|") != want {
+		t.Fatalf("stored user messages %q, want %q", stored, want)
 	}
 }

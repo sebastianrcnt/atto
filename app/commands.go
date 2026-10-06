@@ -197,7 +197,7 @@ func (a *App) cmdSkill(text string) {
 	case a.busy:
 		a.enqueue(msg, nil)
 	default:
-		a.startTurn(msg, nil)
+		a.runTurn(msg, nil, false)
 	}
 }
 

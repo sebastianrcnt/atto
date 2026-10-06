@@ -79,8 +79,12 @@ type App struct {
 	copyEnv copyEnv
 	toast   toast
 
-	busy     bool
-	runKind  string // "turn", "compact" or "branchSummary" while busy
+	busy    bool
+	runKind string // "turn", "compact" or "branchSummary" while busy
+	// typed is the message the user typed that started the running turn (nil
+	// for any other run); replied is set once the model has answered it.
+	typed    *queuedInput
+	replied  bool
 	cancel   context.CancelFunc
 	runStart time.Time
 	activity string
@@ -671,8 +675,17 @@ func (a *App) recordSettings() {
 	}
 }
 
-// startTurn runs a turn for text and its image attachments.
+// startTurn runs a message the user typed, with its image attachments, as a
+// turn. If the turn fails before the model answers, the text goes back to
+// the editor (see start).
 func (a *App) startTurn(text string, att []tui.Attachment) {
+	a.runTurn(text, att, true)
+}
+
+// runTurn is startTurn for any message that starts a turn; typed says the
+// user wrote text themselves, as opposed to a skill, an extension's message
+// or steers that came back.
+func (a *App) runTurn(text string, att []tui.Attachment, typed bool) {
 	if a.refuseReadOnly(text) {
 		return
 	}
@@ -693,10 +706,14 @@ func (a *App) startTurn(text string, att []tui.Attachment) {
 	a.start("Thinking", func(ctx context.Context, emit func(any)) error {
 		return a.agent.RunWithImages(ctx, text, imgs, emit)
 	})
+	if typed && !a.fromRemote { // after start, which forgets the last one
+		a.typed = &queuedInput{text, att, false}
+	}
 }
 
 // start runs fn in the background, routing its events into the UI.
 func (a *App) start(activity string, fn func(context.Context, func(any)) error) {
+	a.typed, a.replied = nil, false
 	ctx, cancel := context.WithCancel(context.Background())
 	a.busy, a.cancel = true, cancel
 	a.runStart, a.activity = a.clock(), activity
@@ -750,7 +767,14 @@ func (a *App) start(activity string, fn func(context.Context, func(any)) error) 
 				// The hook's reason was already shown.
 			case err != nil:
 				a.errorNotice(err)
+				// The model never answered: the message stays in the session
+				// (sending it again adds no copy), and its text comes back
+				// unless the user has started on something else.
+				if t := a.typed; t != nil && !a.replied && strings.TrimSpace(a.editor.Text()) == "" {
+					a.restoreToEditor([]string{t.text}, t.att...)
+				}
 			}
+			a.typed = nil
 			if werr := a.sess.Err(); werr != nil {
 				a.errorNotice(fmt.Errorf("saving session: %w", werr))
 			}

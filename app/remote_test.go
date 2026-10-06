@@ -41,6 +41,9 @@ func newRemoteModel(t *testing.T) *remoteModel {
 		_ = json.Unmarshal(raw, &body)
 		last := body.Messages[len(body.Messages)-1]
 		text, _ := last.Content.(string)
+		// An interrupted "block" stays in the history, and requests merge it
+		// into the user message after it.
+		text = strings.TrimPrefix(text, "block\n\n")
 		switch {
 		case last.Role == "user" && text == "block":
 			m.mu.Lock()
@@ -49,6 +52,9 @@ func newRemoteModel(t *testing.T) *remoteModel {
 			w.WriteHeader(200)
 			w.(http.Flusher).Flush()
 			<-r.Context().Done()
+			return
+		case last.Role == "user" && text == "fail":
+			http.Error(w, `{"error":{"message":"bad request"}}`, http.StatusBadRequest)
 			return
 		case last.Role == "user" && text == "tool":
 			fmt.Fprint(w, `data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"c1","type":"function","function":{"name":"bash","arguments":"{\"description\":\"Wait\",\"command\":\"sleep 30\"}"}}]},"finish_reason":"tool_calls"}]}`+"\n\n")

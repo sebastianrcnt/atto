@@ -22,3 +22,45 @@ func TestEditLastSteer(t *testing.T) {
 		t.Fatalf("a delivered steer came back: %q", a.editor.Text())
 	}
 }
+
+// A turn the model never answered gives the typed text back, so it can be
+// sent again; a draft typed meanwhile is not overwritten, and messages the
+// user did not type (skills, goal turns) do not come back.
+func TestFailedTurnRestoresTypedText(t *testing.T) {
+	model := newRemoteModel(t)
+	a := remoteApp(t, model)
+	a.ui.Do(func() {
+		a.queuePaused = true
+		a.startTurn("fail", nil)
+	})
+	within(t, a, "the failed turn", func() bool { return !a.busy })
+	a.ui.Do(func() {
+		if a.editor.Text() != "fail" {
+			t.Errorf("editor %q, want the failed message back", a.editor.Text())
+		}
+		a.editor.SetText("")
+		a.startTurn("fail", nil)
+		a.editor.SetText("typed meanwhile")
+	})
+	within(t, a, "the second failed turn", func() bool { return !a.busy })
+	a.ui.Do(func() {
+		if a.editor.Text() != "typed meanwhile" {
+			t.Errorf("editor %q, the draft was overwritten", a.editor.Text())
+		}
+		a.editor.SetText("")
+		a.runTurn("fail", nil, false)
+	})
+	within(t, a, "the untyped failed turn", func() bool { return !a.busy })
+	a.ui.Do(func() {
+		if a.editor.Text() != "" {
+			t.Errorf("editor %q, only typed messages come back", a.editor.Text())
+		}
+		a.startTurn("hello", nil)
+	})
+	within(t, a, "the answer", func() bool { return !a.busy })
+	a.ui.Do(func() {
+		if a.editor.Text() != "" {
+			t.Errorf("editor %q after a good turn", a.editor.Text())
+		}
+	})
+}

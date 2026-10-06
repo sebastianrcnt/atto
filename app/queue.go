@@ -175,7 +175,7 @@ func (a *App) afterRun(err error) {
 				a.fromRemote = a.takeRemoteSteer(t) || a.fromRemote
 			}
 			a.fromRemote = now.remote || a.fromRemote
-			a.startTurn(strings.Join(append(leftover, now.text), "\n\n"), now.att)
+			a.runTurn(strings.Join(append(leftover, now.text), "\n\n"), now.att, false)
 			a.fromRemote = false
 			return
 		}
@@ -191,7 +191,7 @@ func (a *App) afterRun(err error) {
 			for _, t := range leftover {
 				a.fromRemote = a.takeRemoteSteer(t) || a.fromRemote
 			}
-			a.startTurn(strings.Join(leftover, "\n\n"), nil)
+			a.runTurn(strings.Join(leftover, "\n\n"), nil, false)
 			a.fromRemote = false
 			return
 		}

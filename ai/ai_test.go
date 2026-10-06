@@ -415,3 +415,40 @@ func TestToolCallArgumentsReplayValidJSON(t *testing.T) {
 		t.Fatalf("parsed args lost: %q", got)
 	}
 }
+
+func TestTransformMessagesMergesUserMessages(t *testing.T) {
+	target := &Model{ID: "b", Api: ApiOpenAICompletions, Provider: "p", Input: []string{"text", "image"}}
+	user := func(s string) Message { return &UserMessage{Role: "user", Text: s} }
+	img := NewImage("data", "image/png")
+
+	out := TransformMessages([]Message{user("a"), user("b"), user("c")}, target, nil)
+	if len(out) != 1 || out[0].(*UserMessage).Text != "a\n\nb\n\nc" {
+		t.Fatalf("text messages: %#v", out)
+	}
+
+	withImg := &UserMessage{Role: "user", Parts: []Content{NewText("look"), img}}
+	out = TransformMessages([]Message{user("first"), withImg, user("last")}, target, nil)
+	if len(out) != 1 {
+		t.Fatalf("mixed messages: %#v", out)
+	}
+	parts := out[0].(*UserMessage).Parts
+	if len(parts) != 3 || parts[0].(*TextContent).Text != "first\n\nlook" || parts[1] != Content(img) || parts[2].(*TextContent).Text != "last" {
+		t.Fatalf("parts: %#v", parts)
+	}
+
+	// An assistant message between them keeps the turns apart, and the
+	// caller's messages are not changed.
+	asst := &AssistantMessage{Role: "assistant", Content: []Content{NewText("x")}}
+	in := []Message{user("a"), asst, user("b"), user("c")}
+	out = TransformMessages(in, target, nil)
+	if len(out) != 3 || out[2].(*UserMessage).Text != "b\n\nc" || in[2].(*UserMessage).Text != "b" {
+		t.Fatalf("with assistant: %#v", out)
+	}
+
+	// An errored reply is dropped, which leaves its user messages adjacent.
+	errored := &AssistantMessage{Role: "assistant", StopReason: StopError, Content: []Content{NewText("half")}}
+	out = TransformMessages([]Message{user("a"), errored, user("b")}, target, nil)
+	if len(out) != 1 || out[0].(*UserMessage).Text != "a\n\nb" {
+		t.Fatalf("after errored reply: %#v", out)
+	}
+}
