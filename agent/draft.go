@@ -53,9 +53,9 @@ func (d *draftTracker) delta(index int, raw string) {
 	var args BashArgs
 	args.Description, _ = m["description"].(string)
 	args.Command, _ = m["command"].(string)
-	if args.Description == "" {
-		args.Description = FirstLine(args.Command)
-	}
+	// Keep the draft header stable until the model actually streams a
+	// description. runTool supplies the command-first-line fallback once the
+	// call is complete.
 	if args == c.args {
 		return
 	}

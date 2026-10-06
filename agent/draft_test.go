@@ -105,6 +105,29 @@ func TestToolCallStreamsAsDraft(t *testing.T) {
 	}
 }
 
+func TestToolCallCommandBeforeDescriptionKeepsPreparingHeader(t *testing.T) {
+	args := `{"command":"echo hi","description":"Say hi"}`
+	cut := strings.Index(args, `,"description"`)
+	call := pieces(0, "c1", "bash", args[:cut], args[cut:])
+	srv, _ := fakeServer(t, append(call, finish("tool_calls")), text("done"))
+	a := newTestAgent(srv.URL)
+	var rec recorder
+	if err := a.Run(context.Background(), "go", rec.emit); err != nil {
+		t.Fatal(err)
+	}
+	got := rec.lines()
+	want := []string{
+		`draft 0 "" ""`,
+		`draft 0 "" "echo hi"`,
+		`draft 0 "Say hi" "echo hi"`,
+		`start 0 c1 "Say hi" "echo hi"`,
+		`end c1`,
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("got:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+	}
+}
+
 func TestToolCallWithoutDeltasHasNoDraft(t *testing.T) {
 	srv, _ := fakeServer(t, toolCall("echo hi"), text("done"))
 	a := newTestAgent(srv.URL)
