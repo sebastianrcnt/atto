@@ -195,11 +195,21 @@ func runStatusCommand(command string, input []byte, cwd string) ([]string, error
 	cmd := shell.Command(ctx, command)
 	cmd.Dir = cwd
 	cmd.Stdin = bytes.NewReader(input)
-	out, err := cmd.Output()
+	tree := shell.NewTree(cmd)
+	defer tree.Close()
+	defer tree.Kill()
+	cmd.WaitDelay = 2 * time.Second
+	var out bytes.Buffer
+	cmd.Stdout = &out
+	if err := cmd.Start(); err != nil {
+		return nil, err
+	}
+	tree.Started()
+	err := cmd.Wait()
 	if err != nil {
 		return nil, err
 	}
-	s := strings.TrimRight(string(out), "\n")
+	s := strings.TrimRight(out.String(), "\n")
 	if s == "" {
 		return nil, nil
 	}
