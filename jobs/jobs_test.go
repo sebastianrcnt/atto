@@ -3,6 +3,7 @@
 package jobs
 
 import (
+	"github.com/sebastianrcnt/atto/shell"
 	"os"
 	"strings"
 	"testing"
@@ -175,5 +176,47 @@ func TestStartArgsQuietExit(t *testing.T) {
 	}
 	if len(evs) != 1 || !strings.Contains(evs[0].Text, "exited with code 4") {
 		t.Fatalf("events %+v", evs)
+	}
+}
+
+// A job still starting has no supervisor PID. Killing it must not signal
+// PID 0 (the caller's own process group): it is recorded killed, and a
+// supervisor that comes up late leaves it alone.
+func TestKillStartingJob(t *testing.T) {
+	s := setup(t)
+	if err := shell.Terminate(0); err == nil {
+		t.Fatal("Terminate(0) was not refused")
+	}
+	id, dir, err := newDir(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := save(dir, Job{ID: id, Session: s, Command: "echo late", Status: Starting, Started: time.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	j, err := Kill(s, id) // waits ~3s for a PID that never comes
+	if err != nil || j.Status != Killed {
+		t.Fatalf("killed starting job: %+v %v", j, err)
+	}
+	if err := Supervise(dir); err != nil {
+		t.Fatal(err)
+	}
+	if log, _ := Tail(s, id, 10); log != "" {
+		t.Fatalf("a killed job ran: %q", log)
+	}
+}
+
+// A job whose supervisor never started is lost after a grace period.
+func TestStaleStartingJobIsLost(t *testing.T) {
+	s := setup(t)
+	id, dir, err := newDir(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := save(dir, Job{ID: id, Session: s, Status: Starting, Started: time.Now().Add(-2 * startGrace)}); err != nil {
+		t.Fatal(err)
+	}
+	if j, err := Get(s, id); err != nil || j.Status != Lost {
+		t.Fatalf("stale starting job: %+v %v", j, err)
 	}
 }

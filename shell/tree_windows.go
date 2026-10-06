@@ -3,6 +3,7 @@
 package shell
 
 import (
+	"fmt"
 	"os/exec"
 	"syscall"
 	"unsafe"
@@ -113,6 +114,9 @@ func KillGroup(pid int) {
 // supervisor is terminated outright; its kill-on-close job object takes
 // the command's whole tree down with it.
 func Terminate(pid int) error {
+	if pid <= 0 {
+		return fmt.Errorf("no process %d", pid)
+	}
 	h, err := windows.OpenProcess(windows.PROCESS_TERMINATE, false, uint32(pid))
 	if err != nil {
 		return err

@@ -153,11 +153,20 @@ func load(dir string) (Job, error) {
 	return j, json.Unmarshal(data, &j)
 }
 
+// startGrace is how long a job may wait for its supervisor to start.
+const startGrace = time.Minute
+
 // Get loads a job, marking it lost if its supervisor is gone.
 func Get(session string, id int) (Job, error) {
 	j, err := load(dirOf(session, id))
 	if errors.Is(err, os.ErrNotExist) {
 		return j, fmt.Errorf("no job %d", id)
+	}
+	if err == nil && j.Status == Starting && j.SupervisorPID == 0 && time.Since(j.Started) > startGrace {
+		// Its supervisor never came up (or died before saying so).
+		now := time.Now()
+		j.Status, j.Ended = Lost, &now
+		_ = save(dirOf(session, id), j)
 	}
 	if err == nil && j.Active() && j.SupervisorPID > 0 && !shell.Alive(j.SupervisorPID) {
 		// Re-read: the supervisor may have written its final state just now.
@@ -306,6 +315,8 @@ func launch(dir string, j Job, env []string) (Job, error) {
 	}
 	exe, err := os.Executable()
 	if err != nil {
+		j.Status, j.Error = Failed, err.Error()
+		_ = save(dir, j)
 		return j, err
 	}
 	sup := exec.Command(exe, "_supervise", dir)
@@ -317,7 +328,9 @@ func launch(dir string, j Job, env []string) (Job, error) {
 		_ = save(dir, j)
 		return j, err
 	}
-	_ = sup.Process.Release()
+	// Reap it when it ends, or it stays a zombie that looks alive while
+	// this process runs (the TUI starts jobs for hours).
+	go func() { _ = sup.Wait() }()
 	// Wait briefly for the supervisor to report the child's PID.
 	for deadline := time.Now().Add(3 * time.Second); time.Now().Before(deadline); time.Sleep(20 * time.Millisecond) {
 		if cur, err := load(dir); err == nil && cur.Status != Starting {
@@ -332,6 +345,21 @@ func Kill(session string, id int) (Job, error) {
 	j, err := Get(session, id)
 	if err != nil || !j.Active() {
 		return j, err
+	}
+	// A starting job has no supervisor PID yet: wait for it, and if it
+	// never comes, record the job killed so a late supervisor doesn't run it.
+	for deadline := time.Now().Add(3 * time.Second); j.SupervisorPID == 0 && j.Active() && time.Now().Before(deadline); time.Sleep(20 * time.Millisecond) {
+		if j, err = load(dirOf(session, id)); err != nil {
+			return j, err
+		}
+	}
+	if !j.Active() {
+		return j, nil
+	}
+	if j.SupervisorPID == 0 {
+		now := time.Now()
+		j.Status, j.Ended = Killed, &now
+		return j, save(dirOf(session, id), j)
 	}
 	if err := shell.Terminate(j.SupervisorPID); err != nil && shell.Alive(j.SupervisorPID) {
 		return j, err
@@ -473,6 +501,9 @@ func Supervise(dir string) error {
 	j, err := load(dir)
 	if err != nil {
 		return err
+	}
+	if !j.Active() { // killed before it started
+		return nil
 	}
 	logf, err := os.OpenFile(filepath.Join(dir, "output.log"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 	if err != nil {

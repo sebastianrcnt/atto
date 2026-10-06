@@ -3,6 +3,7 @@
 package shell
 
 import (
+	"fmt"
 	"os/exec"
 	"syscall"
 )
@@ -47,8 +48,14 @@ func KillGroup(pid int) {
 }
 
 // Terminate asks the process (a job supervisor) to stop; it kills its tree
-// and records the result.
-func Terminate(pid int) error { return syscall.Kill(pid, syscall.SIGTERM) }
+// and records the result. A pid of 0 or less is refused: kill(2) would send
+// the signal to the caller's own process group, or to every process.
+func Terminate(pid int) error {
+	if pid <= 0 {
+		return fmt.Errorf("no process %d", pid)
+	}
+	return syscall.Kill(pid, syscall.SIGTERM)
+}
 
 // Alive reports whether pid is running.
 func Alive(pid int) bool { return pid > 0 && syscall.Kill(pid, 0) == nil }
