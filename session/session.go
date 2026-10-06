@@ -449,20 +449,21 @@ func Load(path string) (Entry, []Entry, error) {
 
 // Summary describes a stored session for the resume picker.
 type Summary struct {
-	Path     string
-	ID       string
-	Name     string // from the latest "name" entry
-	Archived bool
-	Cwd      string
-	Created  time.Time
-	Updated  time.Time
-	Preview  string // first user message
-	Messages int    // user + assistant messages
-	Branch   string // git branch when the session began; "" if unknown
-	Size     int64  // file size in bytes
-	Running  int    // pid of the background process writing it; 0 if none
-	AgentOf  string // the session a subagent session works for
-	External bool
+	Path        string
+	ID          string
+	Name        string // from the latest "name" entry
+	Archived    bool
+	Cwd         string
+	Created     time.Time
+	Updated     time.Time
+	Preview     string // first user message
+	LastMessage string // bounded preview of the active branch's last assistant message
+	Messages    int    // user + assistant messages
+	Branch      string // git branch when the session began; "" if unknown
+	Size        int64  // file size in bytes
+	Running     int    // pid of the background process writing it; 0 if none
+	AgentOf     string // the session a subagent session works for
+	External    bool
 }
 
 // List returns sessions, newest first. If cwd is non-empty only sessions
@@ -475,11 +476,13 @@ func List(cwd string, archived bool) ([]Summary, error) {
 	if archived {
 		root = config.ArchivedDir()
 	}
+	seen := make(map[string]bool)
 	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil || d.IsDir() || !strings.HasSuffix(path, ".jsonl") {
 			return nil
 		}
-		s, err := summarize(path)
+		seen[path] = true
+		s, err := listSummary(path)
 		if err != nil || (cwd != "" && !SameDir(s.Cwd, cwd)) || (s.Preview == "" && !s.External) || s.AgentOf != "" {
 			return nil
 		}
@@ -490,6 +493,13 @@ func List(cwd string, archived bool) ([]Summary, error) {
 	if err != nil && !os.IsNotExist(err) {
 		return nil, err
 	}
+	summaryCache.Lock()
+	for path := range summaryCache.paths {
+		if strings.HasPrefix(path, root+string(filepath.Separator)) && !seen[path] {
+			delete(summaryCache.paths, path)
+		}
+	}
+	summaryCache.Unlock()
 	sort.Slice(out, func(i, j int) bool { return out[i].Updated.After(out[j].Updated) })
 	return out, nil
 }
@@ -544,6 +554,10 @@ func summarize(path string) (Summary, error) {
 			}
 		case "assistant":
 			s.Messages++
+			if text := strings.TrimSpace(e.Message.Content); text != "" {
+				r := []rune(text)
+				s.LastMessage = string(r[:min(len(r), 4096)])
+			}
 		}
 	}
 	return s, nil

@@ -28,11 +28,13 @@ func TestLeftOnEmptyPromptOpensCenter(t *testing.T) {
 	fakeCenter(t, nil, nil)
 	a.editor.SetText("draft")
 	a.onInput("\x1b[D")
+	waitCenter(t, a)
 	if a.modal != nil {
 		t.Fatal("← with text in the prompt moves the cursor, not into the center")
 	}
 	a.editor.SetText("")
 	a.onInput("\x1b[D")
+	waitCenter(t, a)
 	if _, ok := a.modal.(*agentCenter); !ok {
 		t.Fatalf("modal %T", a.modal)
 	}
@@ -58,6 +60,7 @@ func TestCenterListsSessionsByProjectAndState(t *testing.T) {
 			{ID: "kid", Cwd: "/w/api", Preview: "a subagent", AgentOf: "s2", Updated: now},
 		})
 	a.cmdAgents("")
+	waitCenter(t, a)
 	text := centerText(a)
 	for _, want := range []string{"Agent command center", "All 4", "Needs you 1", "Working 1", "Ready 1", "Inactive 1",
 		"/w/api  2", "fix the api", "Working", "answer me", "Needs you", "/w/web  1", "css cleanup", "Inactive", "3h ago", "(here)", "Task details"} {
@@ -83,6 +86,7 @@ func TestCenterListsSessionsByProjectAndState(t *testing.T) {
 
 	// A saved session opens in a new pane; n starts one in its project.
 	a.cmdAgents("")
+	waitCenter(t, a)
 	c = a.modal.(*agentCenter)
 	for range 4 {
 		c.HandleInput("\t") // Inactive
@@ -92,6 +96,7 @@ func TestCenterListsSessionsByProjectAndState(t *testing.T) {
 		t.Fatalf("open wrote %q", got)
 	}
 	a.cmdAgents("")
+	waitCenter(t, a)
 	a.modal.(*agentCenter).HandleInput("n")
 	if got := rec.take(); !strings.Contains(got, daemon.MarkerSeq("new", a.cwd)) {
 		t.Fatalf("new wrote %q", got)
@@ -99,6 +104,7 @@ func TestCenterListsSessionsByProjectAndState(t *testing.T) {
 
 	// / searches; esc clears the search, then closes.
 	a.cmdAgents("")
+	waitCenter(t, a)
 	c = a.modal.(*agentCenter)
 	for _, k := range []string{"/", "c", "s", "s"} {
 		c.HandleInput(k)
@@ -125,6 +131,7 @@ func TestCenterDirectResumesInPlace(t *testing.T) {
 	other.Close()
 	fakeCenter(t, nil, []session.Summary{{ID: other.ID, Cwd: a.cwd, Name: "earlier work", Updated: time.Now().Add(-time.Hour)}})
 	a.cmdResume("")
+	waitCenter(t, a)
 	c := a.modal.(*agentCenter)
 	if c.tab != tabInactive {
 		t.Fatalf("/resume opens on Inactive, tab %d", c.tab)
@@ -147,6 +154,7 @@ func TestCenterDefersResumeWhileBusy(t *testing.T) {
 	a.busy = true
 	a.cancel = func() { canceled = true }
 	a.cmdResume("")
+	waitCenter(t, a)
 	c := a.modal.(*agentCenter)
 	c.HandleInput("\r")
 
@@ -200,6 +208,7 @@ func TestCenterScreenLayouts(t *testing.T) {
 	}
 	fakeCenter(t, nil, saved)
 	a.cmdAgents("")
+	waitCenter(t, a)
 	if a.ui.Screen == nil {
 		t.Fatal("the center is not the screen")
 	}
@@ -238,4 +247,50 @@ func TestCenterScreenLayouts(t *testing.T) {
 	if a.ui.Screen != nil {
 		t.Fatal("closing the center gives the screen back")
 	}
+}
+
+func waitCenter(t *testing.T, a *App) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		ready := false
+		a.ui.Do(func() { c, ok := a.modal.(*agentCenter); ready = !ok || c.loaded })
+		if ready {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatal("center refresh did not finish")
+}
+
+func TestCenterRefreshDoesNotBlockUI(t *testing.T) {
+	a, _ := paneApp(t, false)
+	fakeCenter(t, nil, nil)
+	entered, release := make(chan struct{}), make(chan struct{})
+	listSaved = func() []session.Summary {
+		close(entered)
+		<-release
+		return []session.Summary{{ID: "saved", Cwd: "/work", Preview: "task", LastMessage: "fresh answer"}}
+	}
+	a.cmdAgents("")
+	select {
+	case <-entered:
+	case <-time.After(time.Second):
+		t.Fatal("scan did not start")
+	}
+	done := make(chan struct{})
+	go func() { a.ui.Do(func() { close(done) }) }()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		close(release)
+		t.Fatal("disk scan held the UI lock")
+	}
+	close(release)
+	waitCenter(t, a)
+	c := a.modal.(*agentCenter)
+	if c.lastMessage("saved") != "fresh answer" {
+		t.Fatal("snapshot did not swap in")
+	}
+	a.closeModal()
 }

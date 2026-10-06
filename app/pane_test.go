@@ -85,6 +85,7 @@ func TestPaneReportsSessionOnce(t *testing.T) {
 	}
 	a.closeModal()
 	a.cmdAgents("") // the center itself is not waiting for anything
+	waitCenter(t, a)
 	a.paneSync()
 	if got := rec.take(); got != daemon.MarkerSeq("state", "idle") {
 		t.Fatalf("center report %q", got)

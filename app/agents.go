@@ -93,6 +93,7 @@ type agentCenter struct {
 	typing bool // the search box has focus
 	flat   bool // not grouped by project (g)
 	msgs   map[string]string
+	loaded bool
 }
 
 func (a *App) cmdAgents(string) { a.openAgents(tabAll) }
@@ -122,38 +123,62 @@ func (a *App) openAgents(tab int) {
 		}
 		a.cmdClear("")
 	}
-	c.reload()
+	c.apply(centerSnapshot{})
 	c.selectCurrent()
 	a.openModal(c)
 	a.ui.Screen = c // fullscreen: the center takes the whole screen
-	go func() {     // reload while open; ends once the center is gone
-		t := time.NewTicker(centerRefresh)
-		defer t.Stop()
-		for range t.C {
-			gone := make(chan bool, 1)
-			a.ui.Do(func() {
-				if a.modal != c {
-					gone <- true
-					return
-				}
-				c.reload()
-				gone <- false
-			})
-			if <-gone {
-				return
-			}
+	go c.watch(a.ui, func() bool { return a.modal == c }, a.quit)
+}
+
+type centerSnapshot struct {
+	panes []daemon.Pane
+	saved []session.Summary
+}
+
+func scanCenter() centerSnapshot {
+	panes, _ := listPanes()
+	return centerSnapshot{panes: panes, saved: listSaved()}
+}
+
+// watch scans off the UI goroutine and swaps completed snapshots in.
+func (c *agentCenter) watch(ui *tui.TUI, active func() bool, quit <-chan struct{}) {
+	t := time.NewTicker(centerRefresh)
+	defer t.Stop()
+	for {
+		alive := false
+		ui.Do(func() { alive = active() })
+		if !alive {
+			return
 		}
-	}()
+		snapshot := scanCenter()
+		ui.Do(func() {
+			if active() {
+				first := !c.loaded
+				c.apply(snapshot)
+				c.loaded = true
+				if first {
+					c.selectCurrent()
+				}
+			}
+		})
+		select {
+		case <-quit:
+			return
+		case <-t.C:
+		}
+	}
 }
 
 // reload gathers the sessions: the daemon's panes, this one (when atto
 // runs directly), then the saved ones, newest first.
-func (c *agentCenter) reload() {
+func (c *agentCenter) reload() { c.apply(scanCenter()); c.loaded = true }
+
+func (c *agentCenter) apply(snapshot centerSnapshot) {
 	var keep string
 	if sh := c.shown(); c.sel < len(sh) {
 		keep = sh[c.sel].id
 	}
-	panes, _ := listPanes()
+	panes := snapshot.panes
 	self, _ := strconv.Atoi(os.Getenv(daemon.EnvPane))
 	var items []centerItem
 	seen := map[string]bool{}
@@ -183,13 +208,15 @@ func (c *agentCenter) reload() {
 		items = append(items, it)
 		seen[a.sess.ID] = true
 	}
-	for i, s := range listSaved() {
+	c.msgs = make(map[string]string)
+	for i, s := range snapshot.saved {
 		if i >= centerSaved {
 			break
 		}
 		if s.AgentOf != "" || s.External {
 			continue
 		}
+		c.msgs[s.ID] = s.LastMessage
 		title := s.Name
 		if title == "" {
 			title = s.Preview
@@ -557,22 +584,8 @@ func (c *agentCenter) renderDetail(it centerItem, width int) []string {
 	return out
 }
 
-// lastMessage is a session's last answer, read once per session while the
-// center is open.
-func (c *agentCenter) lastMessage(id string) string {
-	if id == "" {
-		return ""
-	}
-	if c.msgs == nil {
-		c.msgs = map[string]string{}
-	}
-	m, ok := c.msgs[id]
-	if !ok {
-		m = strings.TrimSpace(session.LastAssistant(id))
-		c.msgs[id] = m
-	}
-	return m
-}
+// lastMessage is loaded with the summary snapshot, never during rendering.
+func (c *agentCenter) lastMessage(id string) string { return c.msgs[id] }
 
 func firstLine(s string) string {
 	s, _, _ = strings.Cut(strings.TrimSpace(s), "\n")
@@ -630,8 +643,7 @@ func RunAgents() (AgentsPick, error) {
 	if err := ui.Start(); err != nil {
 		return pick, err
 	}
-	t := time.NewTicker(centerRefresh)
-	defer t.Stop()
+	go c.watch(ui, func() bool { return true }, done)
 	for {
 		select {
 		case <-done:
@@ -642,8 +654,6 @@ func RunAgents() (AgentsPick, error) {
 				}
 			}
 			return pick, nil
-		case <-t.C:
-			ui.Do(c.reload)
 		}
 	}
 }
