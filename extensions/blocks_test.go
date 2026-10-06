@@ -62,6 +62,11 @@ func newSideServer(t *testing.T) *sideServer {
 			return
 		case "wait":
 			time.Sleep(300 * time.Millisecond)
+		case "thinks":
+			if body["reasoning_effort"] != nil { // a model that always thinks
+				http.Error(w, `{"error":{"message":"Unsupported value: 'none' is not supported with this model.","param":"reasoning.effort"}}`, http.StatusBadRequest)
+				return
+			}
 		}
 		reply, _ := json.Marshal("re:" + prompt)
 		fmt.Fprintf(w, "data: {\"choices\":[{\"delta\":{\"content\":%s},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n", reply)
@@ -272,4 +277,25 @@ export default function (atto: any) {
 	m.SessionEnd("clear")
 	eventually(t, "the request to be cancelled by session end", func() bool { return srv.canceled.Load() == 2 })
 	time.Sleep(100 * time.Millisecond)
+}
+
+// A provider that rejects the reasoning level gets the request again at
+// its default level.
+func TestCompleteRetriesWithoutRejectedEffort(t *testing.T) {
+	dir, cwd := env(t)
+	srv := newSideServer(t)
+	sideModels(t, srv.URL)
+	write(t, filepath.Join(dir, "c.ts"), `
+export default function (atto: any) {
+  atto.on("user_prompt", async (e: any) => (await atto.complete({ model: "s/m", prompt: "thinks", reasoningEffort: "none" })).text);
+}
+`)
+	m := load(t, cwd, newHost(false))
+	if o := m.UserPrompt(context.Background(), "go"); o.Context != "re:thinks" {
+		t.Fatalf("%q (%v)", o.Context, o.Notices)
+	}
+	reqs := srv.requests()
+	if len(reqs) != 2 || reqs[0]["reasoning_effort"] != "none" || reqs[1]["reasoning_effort"] != nil {
+		t.Errorf("requests %v", reqs)
+	}
 }

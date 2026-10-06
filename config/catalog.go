@@ -415,6 +415,9 @@ func responsesEfforts(id string) ([]string, map[string]*string) {
 		levels = []string{"low", "medium", "high"}
 	case major == 5 && minor < 0:
 		levels = []string{"minimal", "low", "medium", "high"}
+	case strings.Contains(id, "-sol") && (major > 6 || minor >= 1):
+		// GPT-6.1 Sol rejects "none": it always thinks, up to max.
+		return []string{"low", "medium", "high", "xhigh", "max"}, nil
 	default:
 		levels = []string{"off", "low", "medium", "high"}
 	}

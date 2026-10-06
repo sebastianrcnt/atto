@@ -13,6 +13,7 @@ import (
 
 	"github.com/dop251/goja"
 
+	"github.com/sebastianrcnt/atto/ai"
 	"github.com/sebastianrcnt/atto/config"
 	"github.com/sebastianrcnt/atto/provider"
 )
@@ -125,6 +126,12 @@ func complete(ctx context.Context, model, system, prompt, effort string, maxToke
 	}
 	req.Messages = append(req.Messages, provider.Message{Role: "user", Content: prompt})
 	res, err := client.Stream(rctx, req, provider.Handler{})
+	if err != nil && rctx.Err() == nil && (req.Effort != "" || effort != "") && effortRejected(err) {
+		// The provider takes no such level (a model that always thinks
+		// rejects "none"): ask again at its default.
+		req.Effort, client.Model = "", m.AIModel()
+		res, err = client.Stream(rctx, req, provider.Handler{})
+	}
 	if err != nil {
 		switch {
 		case ctx.Err() != nil:
@@ -135,6 +142,12 @@ func complete(ctx context.Context, model, system, prompt, effort string, maxToke
 		return ref, "", fmt.Errorf("atto.complete: %s: %s", ref, describeNetError(err))
 	}
 	return ref, res.Message.Content, nil
+}
+
+// effortRejected reports a request refused for its reasoning level.
+func effortRejected(err error) bool {
+	msg := strings.ToLower(err.Error())
+	return ai.StatusOf(err) == 400 && strings.Contains(msg, "effort")
 }
 
 // describeNetError says what went wrong in a few words: the error as the

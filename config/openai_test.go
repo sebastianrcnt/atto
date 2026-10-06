@@ -138,6 +138,7 @@ func TestResponsesEfforts(t *testing.T) {
 		"gpt-5.4-pro":       "medium,high,xhigh",
 		"gpt-5.3-codex":     "low,medium,high,xhigh",
 		"gpt-6-sol":         "off,low,medium,high,xhigh",
+		"gpt-6.1-sol":       "low,medium,high,xhigh,max",
 		"gpt-5.6-luna":      "off,low,medium,high,xhigh",
 		"o3":                "low,medium,high",
 		"gpt-4.1":           "",
