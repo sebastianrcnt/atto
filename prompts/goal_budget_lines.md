@@ -1,0 +1,3 @@
+- Tokens used: {{.Used}}
+- Token budget: {{if .Budget}}{{.Budget}}{{else}}none{{end}}
+- Tokens remaining: {{if .Budget}}{{.Remaining}}{{else}}unbounded{{end}}

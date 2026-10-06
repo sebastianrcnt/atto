@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/sebastianrcnt/atto/jobs"
+	"github.com/sebastianrcnt/atto/prompts"
 	"github.com/sebastianrcnt/atto/shell"
 )
 
@@ -70,21 +71,7 @@ var bashSchema = json.RawMessage(`{
 
 // toolDescription describes the shell tool for the model.
 func toolDescription(sh shell.Shell) string {
-	var lead string
-	switch sh.Kind {
-	case shell.PowerShell:
-		lead = "Run a PowerShell command in the working directory and return its combined output. " +
-			"Each call runs in a fresh PowerShell session (use absolute paths or `Set-Location dir; ...`). "
-	case shell.Cmd:
-		lead = "Run a cmd.exe command in the working directory and return its combined output. " +
-			"Each call runs in a fresh shell (use absolute paths or `cd /d dir && ...`). "
-	default:
-		lead = "Run a bash command in the working directory and return its combined stdout/stderr. " +
-			"Each call runs in a fresh shell (use absolute paths or `cd dir && ...`). "
-	}
-	return lead + "Stdin is not connected; do not start interactive programs. " +
-		"Output over about 10k tokens is cut from the middle (the start and end are kept), and the full output is saved to a file whose path is reported. " +
-		"A command still running at its timeout is not killed: it moves to the background as a job, and an [atto event] arrives when it exits."
+	return prompts.Render("bash_tool", map[string]any{"Kind": string(sh.Kind)})
 }
 
 type BashArgs struct {

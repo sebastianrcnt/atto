@@ -22,6 +22,7 @@ import (
 	"github.com/sebastianrcnt/atto/ai"
 	"github.com/sebastianrcnt/atto/config"
 	"github.com/sebastianrcnt/atto/images"
+	"github.com/sebastianrcnt/atto/prompts"
 	"github.com/sebastianrcnt/atto/provider"
 	"github.com/sebastianrcnt/atto/session"
 	"github.com/sebastianrcnt/atto/shell"
@@ -401,22 +402,16 @@ type Subagent struct {
 
 // subagentPart is the prompt's paragraph about subagents: for a subagent,
 // what it is; for any other agent, the presets it may start when
-// subagents are enabled (nothing otherwise).
+// subagents are enabled (nothing otherwise). It has no trailing newline.
 func subagentPart(sub *Subagent, enabled bool, presets []subagent.Preset) string {
 	if sub != nil {
-		text := fmt.Sprintf("You are subagent %q (preset %s): another atto agent delegated a task to you and runs you in the background. "+
-			"It sees only the last message of each of your turns, so end with a self-contained report. "+
-			"Messages starting with \"[atto event] Message from the parent agent:\" come from it.\n\n", sub.Name, sub.Preset)
-		if sub.Instructions != "" {
-			text += "Instructions for this subagent:\n" + sub.Instructions + "\n\n"
-		}
-		return text
+		return prompts.Render("subagent", prompts.Subagent{Name: sub.Name, Preset: sub.Preset, Instructions: sub.Instructions})
 	}
 	if !enabled {
 		return ""
 	}
-	return "Subagents: only when the user explicitly asks for them, delegate self-contained work to a background subagent with " +
-		"\"atto agent start NAME PRESET '<task>'\" (see \"atto agent -h\"), and remove it (atto agent rm NAME) once you have its result and no more work for it.\n" + subagent.PromptList(presets) + "\n"
+	list := strings.TrimSuffix(subagent.PromptList(presets), "\n")
+	return prompts.Render("subagent_parent", map[string]any{"Presets": list})
 }
 
 // Sources is what the system prompt was built from.
@@ -1152,24 +1147,11 @@ func FirstLine(s string) string {
 	return s
 }
 
-const compactPrompt = `Context checkpoint: the conversation is about to be compacted. Write handoff notes so that you can continue this work with no other context.
-
-If earlier handoff notes appear above, fold them into one updated set: keep what is still relevant, drop what is stale.
-
-Include:
-- The user's goal and any constraints or preferences they stated
-- Progress so far and what was learned: key files, commands, findings, decisions and why
-- Current state: what works, what is broken, open errors
-- Remaining steps
-- References: distinctive search terms for details left out of the notes (error message fragments, file names, identifiers, experiment names), so they can be found again in the full transcript
-
-The full transcript stays searchable after compaction, so long logs and finished exploration need not be copied; but everything needed to continue must be in the notes. Be specific: exact file paths, function names, commands, error messages. Stay under %d words. Output only the notes, no preamble. Do not call tools.`
-
 // CompactNoteWords bounds the length of handoff notes.
 const CompactNoteWords = 700
 
 // SummaryPrefix introduces handoff notes in the compacted history.
-const SummaryPrefix = "[atto handoff notes] The conversation was compacted. Earlier messages were replaced by these notes, written by you from the full history; the tool state they describe (files, processes) is still in place. Build on them and avoid redoing finished work. If you need a detail the notes leave out, search the full transcript with `atto history grep <regexp>` and read an entry with `atto history show <n>`.\n\n"
+var SummaryPrefix = prompts.Render("compact_prefix", nil) + "\n\n"
 
 // keepUserTokens is how much recent user text survives compaction (codex
 // keeps 20k tokens of user messages).
@@ -1195,7 +1177,7 @@ func (a *Agent) compact(ctx context.Context, emit func(any), auto bool) error {
 	before := a.ContextTokens()
 	emit(CompactStart{Auto: auto})
 
-	prompt := provider.Message{Role: "user", Content: fmt.Sprintf(compactPrompt, CompactNoteWords)}
+	prompt := provider.Message{Role: "user", Content: prompts.Render("compact", map[string]any{"Words": CompactNoteWords})}
 	client, req := a.request(prompt)
 	req.ToolChoice = "none"
 	model, _ := a.Current()
@@ -1350,63 +1332,29 @@ func contextExceeded(err error) bool {
 
 var shellToolNames = map[string]bool{"bash": true, "powershell": true, "shell": true, "cmd": true}
 
-// shellGuide tells the model how to use its one tool on this shell.
-func shellGuide(sh shell.Shell) string {
-	switch sh.Kind {
-	case shell.PowerShell:
-		g := "You have one tool, powershell. Use it for everything: exploring (Get-ChildItem, Get-Content, Select-String, rg), editing files (Set-Content with here-strings, small scripts), building, and testing."
-		if strings.EqualFold(strings.TrimSuffix(filepath.Base(sh.Path), ".exe"), "powershell") {
-			g += "\nThis is Windows PowerShell 5.1: `&&` and `||` are not available; chain with `;` and check `$?` or `$LASTEXITCODE`."
-		}
-		return g
-	case shell.Cmd:
-		return "You have one tool, cmd (cmd.exe). Use it for everything: exploring (dir, type, findstr), editing files, building, and testing."
-	}
-	return "You have one tool, bash. Use it for everything: exploring (ls, rg, cat, sed -n), editing files (heredocs, sed, python scripts, patch), building, and testing."
-}
-
 func systemPrompt(cwd string, sh shell.Shell, start time.Time, sk []skills.Skill) string {
 	return buildPrompt(cwd, sh, start, sk, loadInstructions(cwd), nil, "")
 }
 
-// mcpLine is the prompt's one line about MCP, with the blank line after
-// it, or nothing when no server is configured. The names are sorted, so
-// the text depends on the configuration alone.
-func mcpLine(names []string) string {
-	if len(names) == 0 {
-		return ""
-	}
-	names = slices.Sorted(slices.Values(names))
-	return fmt.Sprintf("MCP servers are available through \"atto mcp tools [server [tool]]\" and \"atto mcp call <server> <tool> '<json args>'\" (configured: %s).\n\n", strings.Join(names, ", "))
-}
-
 // sub is the paragraph about subagents (see subagentPart), "" for none.
+// The MCP server names are sorted, so the text depends on the
+// configuration alone.
 func buildPrompt(cwd string, sh shell.Shell, start time.Time, sk []skills.Skill, instr []instructionFile, mcp []string, sub string) string {
 	var b strings.Builder
 	name := sh.ToolName()
-	fmt.Fprintf(&b, `You are atto, a coding agent running in the user's terminal.
-
-%s
-Every %s call needs a short description of what it does, shown to the user, e.g. "JIT compile atto.py", "Run unit tests", "Read main.go".
-Commands time out after 60 seconds by default; set timeout for longer builds or tests.`, shellGuide(sh), name)
-	fmt.Fprintf(&b, `
-The full transcript of this session, including anything removed by compaction, can be searched with "atto history grep <regexp>" and read with "atto history show <n>".
-After you change AGENTS.md files, skills or atto's settings, "atto reload" applies them to this session; "atto context" shows what is loaded.
-To look at an image file (a screenshot, a rendered plot), run "atto view <path>": the image is attached to that command's result.
-
-Background work: start long-running commands (dev servers, watchers, long builds) with "atto job start -- '<command>'" instead of blocking; quote the command so your shell passes it whole (e.g. atto job start -- 'npm run build && npm test'). When a job exits you receive an "[atto event]" message; check on it with "atto job output <id>", "atto job wait <id> -timeout 10m", or stop it with "atto job kill <id>". To wait for a condition, use "atto monitor -every 30s -until <regexp> -- '<check command>'"; to come back later, use "atto timer in 10m <note>". Then end your turn: you are woken with an [atto event]. "atto sleep <duration>" waits but returns early on events or user input. Run "atto job" for details. Jobs stop when the session ends.
-
-Goals: when a message starts with "[atto goal]", you are working toward a goal the user set and atto keeps starting turns until it is done. Mark it with "atto goal complete '<evidence>'" only after verifying it, or "atto goal blocked '<reason>'" when only the user can unblock it. Set a goal ("atto goal set '<objective>'") only when the user explicitly asks for one.
-
-%s%sWork autonomously: investigate, make the change, verify it. Keep replies concise and plain; the user sees your tool calls.
-
-Environment:
-- Working directory: %s
-- Platform: %s/%s
-- Shell: %s
-- Session started: %s
-`, sub, mcpLine(mcp), cwd, runtime.GOOS, runtime.GOARCH, sh.Path, start.Format("2006-01-02"))
-
+	b.WriteString(prompts.Render("system", prompts.System{
+		Kind:    string(sh.Kind),
+		WinPS51: strings.EqualFold(strings.TrimSuffix(filepath.Base(sh.Path), ".exe"), "powershell"),
+		Tool:    name,
+		Sub:     sub,
+		MCP:     strings.Join(slices.Sorted(slices.Values(mcp)), ", "),
+		Cwd:     cwd,
+		OS:      runtime.GOOS,
+		Arch:    runtime.GOARCH,
+		Shell:   sh.Path,
+		Date:    start.Format("2006-01-02"),
+	}))
+	b.WriteString("\n")
 	writeInstructions(&b, instr)
 	b.WriteString(skills.FormatForPrompt(sk, name))
 	return b.String()

@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/sebastianrcnt/atto/prompts"
 	"github.com/sebastianrcnt/atto/provider"
 	"github.com/sebastianrcnt/atto/session"
 )
@@ -29,35 +30,12 @@ type (
 	}
 )
 
-const branchSummaryPrompt = `Branch checkpoint: the user is leaving this branch of the conversation and going back to an earlier point. Everything from %s onward is about to be removed from the context. Write a summary of that part, so the conversation can continue from the earlier point knowing what was tried here.
-
-Use this format:
-
-## Goal
-What the user was trying to do on this branch.
-
-## Constraints & Preferences
-What the user asked for or ruled out.
-
-## Progress
-### Done
-### In Progress
-### Blocked
-
-## Key Decisions
-What was decided and why.
-
-## Next Steps
-What was about to happen next.
-
-Leave out what came before that point: it stays in the context. Commands run on this branch changed files and processes for real, and those changes stay, so name the files changed and anything left running. Be specific: exact file paths, function names, commands, error messages. Skip sections with nothing to say. Stay under %d words. Output only the summary, no preamble. Do not call tools.`
-
 // BranchSummaryWords bounds the length of a branch summary.
 const BranchSummaryWords = 600
 
 // BranchSummaryPrefix starts the message that carries a branch summary to
 // the model on the new branch; the summary follows in <summary> tags.
-const BranchSummaryPrefix = "[atto branch summary] The user went back to an earlier point in this conversation. The branch they left is summarized below; its messages are no longer in the context, but what its commands did to files and processes is still in place.\n\n"
+var BranchSummaryPrefix = prompts.Render("branch_summary_prefix", nil) + "\n\n"
 
 // BranchSummaryMessage is the user message a branch summary becomes in
 // the model's context. It depends only on the summary, so replaying the
@@ -78,10 +56,9 @@ func (a *Agent) SummarizeBranch(ctx context.Context, branch []session.Entry, ins
 	}
 	start := time.Now()
 	emit(BranchSummaryStart{})
-	prompt := fmt.Sprintf(branchSummaryPrompt, branchStart(branch), BranchSummaryWords)
-	if s := strings.TrimSpace(instructions); s != "" {
-		prompt += "\n\nAdditional focus: " + s
-	}
+	prompt := prompts.Render("branch_summary", map[string]any{
+		"Start": branchStart(branch), "Words": BranchSummaryWords, "Focus": strings.TrimSpace(instructions),
+	})
 	client, req := a.request(provider.Message{Role: "user", Content: prompt})
 	req.ToolChoice = "none"
 	res, err := client.Stream(ctx, req, provider.Handler{

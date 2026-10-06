@@ -1,0 +1,1 @@
+[atto branch summary] The user went back to an earlier point in this conversation. The branch they left is summarized below; its messages are no longer in the context, but what its commands did to files and processes is still in place.
