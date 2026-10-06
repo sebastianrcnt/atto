@@ -162,7 +162,7 @@ To use the terminal's own selection instead, hold the key that bypasses mouse re
 | `/tui [auto\|fullscreen\|inline]` | show or change the renderer; saved to `settings.json` and applied at once |
 | `/compact` | compact the conversation now |
 | `/copy` | copy the last answer; works over SSH in terminals with OSC 52 |
-| `/context` | show what fills the context and how much is cached |
+| `/context [system\|long\|normal]` | show context and cache use; allow long context or restore the tier cap |
 | `/reload` | read AGENTS.md, skills, hooks, extensions, MCP servers, `settings.json` and `models.json` again, keeping the conversation |
 | `/extensions [approve <name>]` | list extensions, or approve a project extension |
 | `/diff [--staged] [path]` | show what changed in the working tree: a summary, then the diff (a built-in extension, see `extensions/builtin/diff.ts`) |
@@ -201,6 +201,18 @@ To use the terminal's own selection instead, hold the key that bypasses mouse re
 - The history is append-only.
 - The system prompt and the tool schema don't change during a session, unless `/reload` (or `atto reload`) finds that AGENTS.md files or skills changed; the next request then reads the new prompt in full, and the reload says so.
 - Compaction keeps the latest user messages plus a summary, the way codex does it. Run `/context` to see the cache hit rate.
+
+Auto-compaction starts at 90% of the context window, or earlier to leave room for the model's maximum output. If a model's prices increase above a context size, atto also caps the trigger at 90% of the first positive price-tier boundary. This works with catalog prices and `models.json` `cost.tiers`, for every provider. For example, a 272k tier compacts at 244.8k instead of entering the long-context surcharge band.
+
+`/context` reports the trigger and its reason. `/context long` ignores the price-tier cap for this session; `/context normal` restores it. The choice survives resume and applies across model switches, but `/clear` starts in normal mode. The status line shows `long` beside the context percentage and `×2` (rounded input-price multiplier) beside cost when the last request used a surcharge tier. Context percentages always refer to the full window.
+
+For a persistent per-model override, add `compaction.limits` to `~/.atto/settings.json`:
+
+```json
+{"compaction": {"limits": {"openai/gpt-6-luna": 0, "local/my-model": 200000}}}
+```
+
+Keys are exact `provider/model` IDs. A positive cap compacts at 90% of that many tokens, never later than the window/output limit; `0` or a cap at least as large as the context window disables the tier cap, not auto-compaction. Missing keys use the model's prices. `/context long` bypasses these caps too; `/reload` applies settings changes.
 
 **Sessions** are JSONL files under `~/.atto/sessions/`. As in pi, entries form a tree: going back with `/tree` starts a new branch in the same file and keeps the old one. When that leaves work behind, atto asks whether to summarize the branch being left (optionally with your own instructions); the current model writes the summary, `Esc` cancels it, and the model sees it on the new branch. `"branchSummary": {"skipPrompt": true}` in `settings.json` never asks. `atto history grep` searches every branch and marks entries on other branches; `-active` limits it to the current one.
 

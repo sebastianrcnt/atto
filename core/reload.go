@@ -51,6 +51,7 @@ func Reload(ag *agent.Agent, id, transcript string, prev Loaded) (Reloaded, erro
 	}
 	hk.SetSession(id, transcript)
 	SetHooks(ag, hk)
+	ag.SetCompaction(settings.Compaction)
 
 	var warnings []string
 	if m, _ := ag.Current(); m.Model.ID != "" {

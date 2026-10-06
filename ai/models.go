@@ -32,6 +32,34 @@ func CalculateCost(model *Model, usage *Usage) UsageCost {
 
 var extendedThinkingLevels = []string{ThinkingOff, ThinkingMinimal, ThinkingLow, ThinkingMedium, ThinkingHigh, ThinkingXHigh, ThinkingMax}
 
+// ContextPriceBoundary is the first positive context-size price tier.
+func (c *ModelCost) ContextPriceBoundary() int {
+	if c == nil {
+		return 0
+	}
+	n := 0
+	for _, t := range c.Tiers {
+		if t.InputTokensAbove > 0 && (n == 0 || t.InputTokensAbove < n) {
+			n = t.InputTokensAbove
+		}
+	}
+	return n
+}
+
+// InputMultiplier reports the active tier's input price relative to base.
+func (c *ModelCost) InputMultiplier(tokens int) float64 {
+	if c == nil || c.Input <= 0 {
+		return 1
+	}
+	rate, matched := c.Input, -1
+	for _, t := range c.Tiers {
+		if tokens > t.InputTokensAbove && t.InputTokensAbove > matched {
+			rate, matched = t.Input, t.InputTokensAbove
+		}
+	}
+	return rate / c.Input
+}
+
 // GetSupportedThinkingLevels lists the levels a model accepts. A model
 // with Efforts set (atto) uses exactly that list.
 func GetSupportedThinkingLevels(model *Model) []string {

@@ -28,7 +28,7 @@ func init() {
 		{"effort", "[level]", "Set reasoning effort (also shift+tab)", (*App).cmdEffort},
 		{"compact", "", "Compact the conversation into handoff notes", (*App).cmdCompact},
 		{"copy", "", "Copy the last answer (works over SSH via OSC 52)", (*App).cmdCopy},
-		{"context", "[system]", "Show what fills the context and cache use", (*App).cmdContext},
+		{"context", "[system|long|normal]", "Show what fills the context and cache use", (*App).cmdContext},
 		{"reload", "", "Re-read AGENTS.md, skills, hooks, extensions, settings and models", (*App).cmdReload},
 		{"extensions", "[approve <name>]", "List extensions, or approve a project extension", (*App).cmdExtensions},
 		{"request", "", "Save the raw last request to a file", (*App).cmdRequest},
@@ -352,6 +352,7 @@ func (a *App) cmdCompact(string) {
 // reset clears the transcript and pending input (for /clear and /resume).
 func (a *App) reset() {
 	a.agent.Reset()
+	a.agent.SetLongContext(false)
 	a.queued, a.pendingSteers, a.queuePaused = nil, nil, false
 	a.remoteSteers = nil
 	a.ctxTokens = 0

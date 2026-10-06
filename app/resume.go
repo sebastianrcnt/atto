@@ -542,8 +542,9 @@ func (a *App) resume(path string) {
 	a.sessionStartHook("resume")
 	branch := saved.Branch()
 	a.agent.Restore(branch)
+	a.agent.SetLongContext(saved.LongContext)
 	a.ctxTokens = a.agent.ContextTokens()
-	a.usage.fromEntries(saved.Entries)
+	a.usage.fromEntries(saved.Entries, a.models)
 	a.recModel, a.recEffort, a.sessName = "", "", saved.Name
 	if ref, ok := a.models.Find("", saved.Model); ok {
 		a.agent.SetModel(ref)

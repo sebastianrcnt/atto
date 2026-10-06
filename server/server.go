@@ -174,6 +174,7 @@ func (t *thread) info() ThreadInfo {
 	m, effort := t.agent.Current()
 	info := ThreadInfo{ID: t.id, Cwd: t.cwd, Name: t.name, Effort: effort, ContextTokens: t.ctxTokens, Busy: t.busy, TurnID: t.turnID}
 	SetModel(&info, m, t.models)
+	info.AutoCompactLimit, _ = t.agent.CompactionLimit()
 	total := t.total
 	info.Usage = &total
 	if t.busy {
@@ -520,6 +521,7 @@ func (s *Server) resumeThread(id string) (any, error) {
 	}
 	t.name = saved.Name
 	t.restore(saved.Entries)
+	t.agent.SetLongContext(saved.LongContext)
 	s.sessionStart(t, "resume")
 	info := s.snapshot(t)
 	t.mu.Lock()

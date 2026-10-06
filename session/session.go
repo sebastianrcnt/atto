@@ -42,6 +42,7 @@ const (
 	TypeCompaction = "compaction"
 	TypeModel      = "model"
 	TypeEffort     = "effort"
+	TypeContext    = "context"
 	TypeName       = "name"
 	TypeGoal       = "goal"
 	TypeLabel      = "label"  // a bookmark on another entry (/tree shift+l)
@@ -111,6 +112,9 @@ type Entry struct {
 	ElapsedMs    int64              `json:"elapsedMs,omitempty"`   // how long writing the notes took
 	Auto         bool               `json:"auto,omitempty"`
 	Finish       string             `json:"finish,omitempty"` // how the notes' answer ended: stop, length...
+
+	// context
+	LongContext bool `json:"longContext,omitempty"`
 
 	// model / effort
 	Provider string `json:"provider,omitempty"`

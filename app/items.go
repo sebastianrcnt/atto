@@ -316,6 +316,7 @@ func (a *App) onEvent(ev any) {
 		a.streamChars = 0
 		a.ctxTokens = e.Context
 		a.usage.add(e.Usage)
+		a.usage.lastCost = a.model().Model.Cost
 		a.statusTrigger()
 		a.remoteStep(e.Usage)
 	case agent.CompactStart:

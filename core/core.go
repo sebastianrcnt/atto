@@ -133,7 +133,12 @@ func NewAgentSources(cwd string, model config.ModelRef, effort string) (*agent.A
 	if err != nil {
 		return nil, nil, nil, err
 	}
+	settings, err := config.LoadSettings()
+	if err != nil {
+		return nil, nil, nil, err
+	}
 	ag := agent.New(model, effort, cwd)
+	ag.SetCompaction(settings.Compaction)
 	SetHooks(ag, hk)
 	return ag, hk, src, nil
 }
@@ -189,14 +194,15 @@ func Env(id string) []string {
 }
 
 // Saved is what a session file says to restore beyond its messages: the
-// last model, effort and name. They are session-wide, so the latest value
+// last model, effort, context mode and name. They are session-wide; the latest value
 // wins whichever branch it was recorded on.
 type Saved struct {
-	Header  session.Entry
-	Entries []session.Entry
-	Model   string // provider/id
-	Effort  string
-	Name    string
+	Header      session.Entry
+	Entries     []session.Entry
+	Model       string // provider/id
+	Effort      string
+	Name        string
+	LongContext bool
 }
 
 // Open loads a saved session and reopens its file for appending, on the
@@ -213,6 +219,8 @@ func Open(path string) (Saved, *session.Writer, error) {
 			s.Model = e.Provider + "/" + e.Model
 		case session.TypeEffort:
 			s.Effort = e.Effort
+		case session.TypeContext:
+			s.LongContext = e.LongContext
 		case session.TypeName:
 			s.Name = e.Name
 		}

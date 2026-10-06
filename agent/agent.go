@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -192,13 +193,15 @@ type Agent struct {
 
 	// Model settings may change from the UI while a turn runs; they are
 	// read once per request.
-	cfgMu   sync.Mutex
-	client  provider.Streamer
-	model   config.ModelRef
-	effort  string
-	env     []string // extra environment for bash commands
-	lastReq []byte   // most recent request body, for inspection
-	sessID  string   // sent to providers that route by session
+	cfgMu         sync.Mutex
+	client        provider.Streamer
+	model         config.ModelRef
+	effort        string
+	env           []string // extra environment for bash commands
+	lastReq       []byte   // most recent request body, for inspection
+	longContext   bool
+	compactLimits map[string]int
+	sessID        string // sent to providers that route by session
 
 	// Record, if set, receives every change to the conversation, for
 	// persistence. Called on the goroutine running Run/Compact.
@@ -629,9 +632,13 @@ func (a *Agent) Current() (config.ModelRef, string) {
 	return a.model, a.effort
 }
 
-// AutoCompactLimit follows codex: 90% of the context window, further capped
-// so the largest possible response still fits.
+// AutoCompactLimit uses 90% of the window or first price-tier boundary,
+// further capped so the largest possible response still fits.
 func AutoCompactLimit(m config.Model) int {
+	return compactLimit(m, m.Cost.ContextPriceBoundary())
+}
+
+func compactLimit(m config.Model, cap int) int {
 	if m.ContextWindow <= 0 {
 		return 0
 	}
@@ -639,7 +646,47 @@ func AutoCompactLimit(m config.Model) int {
 	if m.MaxTokens > 0 {
 		limit = min(limit, m.ContextWindow-m.MaxTokens)
 	}
+	if cap > 0 && cap < m.ContextWindow {
+		limit = min(limit, cap*9/10)
+	}
 	return max(limit, 0)
+}
+
+// SetCompaction applies persistent per-model caps. A missing cap uses prices.
+func (a *Agent) SetCompaction(c *config.Compaction) {
+	a.cfgMu.Lock()
+	defer a.cfgMu.Unlock()
+	a.compactLimits = nil
+	if c != nil {
+		a.compactLimits = maps.Clone(c.Limits)
+	}
+}
+
+func (a *Agent) SetLongContext(long bool) {
+	a.cfgMu.Lock()
+	defer a.cfgMu.Unlock()
+	a.longContext = long
+}
+
+func (a *Agent) LongContext() bool {
+	a.cfgMu.Lock()
+	defer a.cfgMu.Unlock()
+	return a.longContext
+}
+
+// CompactionLimit returns the trigger and the effective cap (zero: window).
+func (a *Agent) CompactionLimit() (limit, cap int) {
+	a.cfgMu.Lock()
+	defer a.cfgMu.Unlock()
+	m := a.model
+	cap = m.Model.Cost.ContextPriceBoundary()
+	if n, ok := a.compactLimits[m.ProviderName+"/"+m.Model.ID]; ok && n >= 0 {
+		cap = n
+	}
+	if a.longContext || cap >= m.Model.ContextWindow {
+		cap = 0
+	}
+	return compactLimit(m.Model, cap), cap
 }
 
 // Reset clears the conversation.
@@ -725,8 +772,7 @@ func (a *Agent) ContextTokens() int {
 }
 
 func (a *Agent) needsCompact() bool {
-	m, _ := a.Current()
-	limit := AutoCompactLimit(m.Model)
+	limit, _ := a.CompactionLimit()
 	return limit > 0 && len(a.messages) > 0 && a.ContextTokens() >= limit
 }
 

@@ -260,6 +260,7 @@ func RunPrint(o PrintOptions) error {
 		}
 	}
 	ag.Restore(saved.Branch())
+	ag.SetLongContext(saved.LongContext)
 	if !o.NoSave && !o.Background {
 		sess.Append(session.Entry{Type: session.TypeModel, Provider: model.ProviderName, Model: model.Model.ID})
 		sess.Append(session.Entry{Type: session.TypeEffort, Effort: ag.Effort()})

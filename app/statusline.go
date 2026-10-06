@@ -12,7 +12,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/sebastianrcnt/atto/agent"
 	"github.com/sebastianrcnt/atto/config"
 	"github.com/sebastianrcnt/atto/shell"
 	"github.com/sebastianrcnt/atto/tui"
@@ -37,10 +36,11 @@ type statusInput struct {
 		ProjectDir string `json:"project_dir"`
 	} `json:"workspace"`
 	ContextWindow struct {
-		UsedTokens       int `json:"used_tokens"`
-		Size             int `json:"context_window_size"`
-		UsedPercentage   int `json:"used_percentage"`
-		AutoCompactLimit int `json:"auto_compact_limit"`
+		UsedTokens       int  `json:"used_tokens"`
+		Size             int  `json:"context_window_size"`
+		UsedPercentage   int  `json:"used_percentage"`
+		AutoCompactLimit int  `json:"auto_compact_limit"`
+		Long             bool `json:"long"`
 	} `json:"context_window"`
 	Effort    string `json:"effort"`
 	GitBranch string `json:"git_branch,omitempty"`
@@ -76,7 +76,8 @@ func (a *App) statusInput() statusInput {
 	if m.Model.ContextWindow > 0 {
 		in.ContextWindow.UsedPercentage = a.ctxTokens * 100 / m.Model.ContextWindow
 	}
-	in.ContextWindow.AutoCompactLimit = agent.AutoCompactLimit(m.Model)
+	in.ContextWindow.AutoCompactLimit, _ = a.agent.CompactionLimit()
+	in.ContextWindow.Long = a.agent.LongContext()
 	in.Effort = effort
 	in.GitBranch = a.gitBranch
 	in.Busy = a.busy
@@ -356,8 +357,10 @@ func (a *App) builtinStatus(first, width int) []string {
 	m, effort := a.agent.Current()
 	// The rows only change with what they are made of, which is far less
 	// often than frames are drawn, so keep them until it changes.
+	limit, _ := a.agent.CompactionLimit()
 	k := statusKey{
 		first: first, width: width, effort: effort,
+		compactLimit: limit, long: a.agent.LongContext(), surcharge: a.surcharge(m),
 		name: a.models.DisplayName(m), subscription: m.Provider.Subscription, priced: priced(m.Model),
 		ctxWindow: m.Model.ContextWindow, maxTokens: m.Model.MaxTokens,
 		reasoning: m.Model.Reasoning != nil && *m.Model.Reasoning, hasLevels: len(m.Model.Levels()) > 0,
@@ -374,6 +377,9 @@ func (a *App) builtinStatus(first, width int) []string {
 
 // statusKey is everything builtinStatus reads.
 type statusKey struct {
+	compactLimit          int
+	long                  bool
+	surcharge             string
 	first, width          int
 	effort, name          string
 	subscription, priced  bool
@@ -403,11 +409,15 @@ func (a *App) buildStatus(m config.ModelRef, effort string, first, width int) []
 	if cw := m.Model.ContextWindow; cw > 0 {
 		pct := a.ctxTokens * 100 / cw
 		style := tui.Dim
-		if limit := agent.AutoCompactLimit(m.Model); limit > 0 && a.ctxTokens*100/limit >= 80 {
+		if limit, _ := a.agent.CompactionLimit(); limit > 0 && a.ctxTokens*100/limit >= 80 {
 			style = func(s string) string { return tui.FG(3, s) } // nearing auto-compaction
 		}
+		label := fmt.Sprintf(" %d%%", pct)
+		if a.agent.LongContext() {
+			label += " long"
+		}
 		items = append(items,
-			statusItem{text: style(contextBar(pct, 10) + fmt.Sprintf(" %d%%", pct)), pre: "  "},
+			statusItem{text: style(contextBar(pct, 10) + label), pre: "  "},
 			statusItem{text: style(fmt.Sprintf("%s/%s", tui.FormatTokens(a.ctxTokens), tui.FormatTokens(cw))), pre: " ", drop: dropCtxSize})
 	}
 	if c := u.cacheLabel(); c != "" {
@@ -435,7 +445,7 @@ func (a *App) buildStatus(m config.ModelRef, effort string, first, width int) []
 	// On a subscription the prices only estimate what the usage would cost
 	// over the API.
 	if priced(m.Model) || u.cost > 0 {
-		cost := fmt.Sprintf("$%.3f", u.cost)
+		cost := fmt.Sprintf("$%.3f", u.cost) + a.surcharge(m)
 		if m.Provider.Subscription {
 			cost = "≈" + cost
 		}
@@ -565,4 +575,16 @@ func plural(n int) string {
 		return ""
 	}
 	return "s"
+}
+
+// surcharge uses the last request's prices, even after a model switch.
+func (a *App) surcharge(m config.ModelRef) string {
+	cost := a.usage.lastCost
+	if cost == nil {
+		cost = m.Model.Cost
+	}
+	if x := cost.InputMultiplier(a.usage.last.PromptTokens); x > 1 {
+		return fmt.Sprintf(" ×%.0f", x)
+	}
+	return ""
 }

@@ -99,9 +99,10 @@ func Ensure() error {
 
 // Settings is the contents of settings.json. Unknown fields are ignored.
 type Settings struct {
-	DefaultProvider string `json:"defaultProvider,omitempty"`
-	DefaultModel    string `json:"defaultModel,omitempty"`
-	DefaultEffort   string `json:"defaultEffort,omitempty"`
+	Compaction      *Compaction `json:"compaction,omitempty"`
+	DefaultProvider string      `json:"defaultProvider,omitempty"`
+	DefaultModel    string      `json:"defaultModel,omitempty"`
+	DefaultEffort   string      `json:"defaultEffort,omitempty"`
 	// Renderer is "fullscreen" (default) or "inline".
 	Renderer string `json:"renderer,omitempty"`
 	// StatusLine replaces the built-in status line with a command's output,
@@ -367,4 +368,10 @@ func UpdateSettings(kv map[string]any) error {
 		return err
 	}
 	return os.WriteFile(SettingsPath(), append(out, '\n'), 0o644)
+}
+
+// Compaction overrides the tier-aware auto-compaction cap per provider/model.
+// Limits are token caps; zero disables the tier cap, not compaction itself.
+type Compaction struct {
+	Limits map[string]int `json:"limits,omitempty"`
 }
