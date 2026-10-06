@@ -1,1 +1,1 @@
-The goal is waiting for the user: reply to this message, and do not resume goal work in this turn unless the user asks you to continue.
+The goal is still active and is waiting for the user. Reply to this message. If the message lets you continue (for example "ok", "go on", "that's fine, continue"), continuing the goal is fine; otherwise do not do goal work in this turn.

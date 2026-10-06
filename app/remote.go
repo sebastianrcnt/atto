@@ -408,7 +408,7 @@ func (a *App) remoteGoalInfo() *server.GoalInfo {
 	secs := a.goal.Elapsed()
 	return &server.GoalInfo{
 		Objective: g.Objective, Status: string(g.Status), Label: g.Status.Label(),
-		Indicator: g.Indicator(secs, a.goal.Held()), Summary: g.Summary(), Note: g.Note,
+		Indicator: g.Indicator(secs, a.goal.Held() && !a.busy), Summary: g.Summary(), Note: g.Note,
 		Tokens: goal.Tokens(g.TokensUsed), TokensUsed: g.TokensUsed,
 		Elapsed: goal.FormatElapsed(secs), Seconds: secs, Held: a.goal.Held(),
 	}

@@ -1,1 +1,1 @@
-The user paused the goal. Stop goal work: finish or wrap up what you were doing for the user's last request. Do not resume the goal unless the user asks.
+The user paused the goal. Stop goal work now: don't start new steps; reply with one or two sentences on where things stand. Do not resume the goal unless the user asks.

@@ -516,6 +516,31 @@ func TestGoalHeldAfterUserInput(t *testing.T) {
 	}
 }
 
+// A goal on hold is waiting only while idle: a running turn shows the usual
+// "Pursuing goal", whatever the turn does about the goal.
+func TestGoalIndicatorWhileHeld(t *testing.T) {
+	a := goalApp(t)
+	a.cmdGoal("ship it")
+	endTurn(a, true)
+	if !a.goal.Held() || !strings.Contains(a.goalIndicator(), "Goal waiting (enter to continue)") {
+		t.Fatalf("idle: held %v, %q", a.goal.Held(), a.goalIndicator())
+	}
+	a.busy, a.runKind = true, "turn"
+	a.goal.BeginTurn()
+	if !a.goal.Held() {
+		t.Fatal("the hold stays while the user's turn runs")
+	}
+	if got := a.goalIndicator(); !strings.Contains(got, "Pursuing goal") || strings.Contains(got, "waiting") {
+		t.Fatalf("running: %q", got)
+	}
+	a.goal.UserInput()
+	a.busy = false
+	a.afterRun(nil)
+	if !a.goal.Held() || !strings.Contains(a.goalIndicator(), "Goal waiting (enter to continue)") {
+		t.Fatalf("idle again: held %v, %q", a.goal.Held(), a.goalIndicator())
+	}
+}
+
 func TestGoalHoldReleasedByEnterResumeAndNewGoal(t *testing.T) {
 	held := func() *App {
 		a := goalApp(t)
@@ -683,6 +708,8 @@ func TestGoalChangesMidTurnSteerTheModel(t *testing.T) {
 			if c.setup != nil {
 				c.setup(a.goal.Goal)
 			}
+			stops := 0
+			a.goal.Stop = func() { stops++ }
 			a.busy, a.runKind = true, "turn"
 			a.goal.BeginTurn()
 			a.cmdGoal(c.cmd)
@@ -690,22 +717,30 @@ func TestGoalChangesMidTurnSteerTheModel(t *testing.T) {
 			if len(steers) != 1 || !goal.IsMessage(steers[0]) || !strings.Contains(steers[0], c.want) {
 				t.Fatalf("want a goal note with %q, got %q", c.want, steers)
 			}
+			if stops != 1 {
+				t.Fatalf("the turn is asked to stop %d times, want once", stops)
+			}
+			if !strings.Contains(goalText(a), stoppingNotice) {
+				t.Fatalf("no notice:\n%s", goalText(a))
+			}
 		})
 	}
 
 	// Idle, or in a turn that is not a goal turn's (a compaction), nothing is steered.
 	a := goalApp(t)
+	stops := 0
+	a.goal.Stop = func() { stops++ }
 	a.cmdGoal("ship it")
 	a.cmdGoal("pause")
 	a.cmdGoal("clear")
-	if s := a.agent.DrainSteers(); len(s) != 0 {
-		t.Fatalf("idle: %q", s)
+	if s := a.agent.DrainSteers(); len(s) != 0 || stops != 0 || strings.Contains(goalText(a), stoppingNotice) {
+		t.Fatalf("idle: %q, %d stops", s, stops)
 	}
 	a.cmdGoal("ship it")
 	a.busy, a.runKind = true, "compact"
 	a.cmdGoal("clear")
-	if s := a.agent.DrainSteers(); len(s) != 0 {
-		t.Fatalf("compaction: %q", s)
+	if s := a.agent.DrainSteers(); len(s) != 0 || stops != 0 || strings.Contains(goalText(a), stoppingNotice) {
+		t.Fatalf("compaction: %q, %d stops", s, stops)
 	}
 }
 

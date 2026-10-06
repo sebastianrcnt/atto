@@ -330,7 +330,7 @@ func TestStateMessage(t *testing.T) {
 		held   bool
 		want   []string
 	}{
-		{Active, "", true, []string{"waiting for the user", "reply to this message"}},
+		{Active, "", true, []string{"still active", "waiting for the user", "Reply to this message", "continuing the goal is fine"}},
 		{Paused, NoteInterrupted, false, []string{"paused because the user interrupted it", "/goal resume", "atto goal resume"}},
 		{Paused, "paused by the user", false, []string{"The goal is paused.", "/goal resume"}},
 		{Blocked, "stuck", false, []string{"stalled", "/goal resume"}},
@@ -346,6 +346,17 @@ func TestStateMessage(t *testing.T) {
 				t.Errorf("%s: %q not in %q", c.status, w, got)
 			}
 		}
+	}
+	g.Status, g.Note = Active, ""
+	if n := g.StateMessage(true); strings.Contains(n, "paused") {
+		t.Errorf("a goal waiting is not paused: %q", n)
+	}
+	g.Status, g.Note = Paused, "paused by the user"
+	if n := g.StateMessage(false); strings.Contains(n, "interrupted") {
+		t.Errorf("a pause by the user is not an interrupt: %q", n)
+	}
+	if n := g.PausedMessage(); strings.Contains(n, "interrupted") {
+		t.Errorf("%q", n)
 	}
 	g.Status = Complete
 	if g.StateMessage(false) != "" {
@@ -371,8 +382,11 @@ func TestUserChangeMessages(t *testing.T) {
 	g, _ := New("x")
 	g.TokensUsed, g.Status = 30, Paused
 	for _, c := range []struct{ got, want string }{
-		{ClearedMessage(), "do not set a new goal"},
+		{ClearedMessage(), "Do not set a new goal"},
+		{ClearedMessage(), "reply with one or two sentences on where things stand"},
 		{g.PausedMessage(), "paused the goal"},
+		{g.PausedMessage(), "Do not resume the goal unless the user asks"},
+		{g.PausedMessage(), "reply with one or two sentences on where things stand"},
 	} {
 		if !IsMessage(c.got) || !strings.Contains(c.got, c.want) {
 			t.Errorf("%q not in %q", c.want, c.got)

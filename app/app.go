@@ -691,6 +691,7 @@ func (a *App) start(activity string, fn func(context.Context, func(any)) error) 
 		a.goal.BeginTurn()
 	}
 	a.remoteTurnStarted()
+	a.remoteGoal() // a goal on hold is pursued while the turn runs
 
 	go func() { // keep the spinner and timers moving
 		t := time.NewTicker(a.ui.AnimationInterval())

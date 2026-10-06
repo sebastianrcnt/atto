@@ -246,6 +246,8 @@ type Agent struct {
 	boundary []func() string
 	// inputNote goes with the next user message (SetInputNote).
 	inputNote string
+	// stopReq: end the running turn at its next step boundary (StopAtBoundary).
+	stopReq atomic.Bool
 
 	// DiscardPartial makes an interrupted model call leave nothing behind,
 	// instead of its streamed text (experimental: set when the run goes on
@@ -301,6 +303,13 @@ func (a *Agent) takeInputNote() string {
 	a.inputNote = ""
 	return n
 }
+
+// StopAtBoundary ends the running turn at its next step boundary (after the
+// current tool calls, or when the model stops) as if the model had finished:
+// it returns no error, and steers not yet committed stay for DrainSteers.
+// Safe to call from any goroutine; a request no boundary reached before the
+// turn ended is dropped when the next turn starts.
+func (a *Agent) StopAtBoundary() { a.stopReq.Store(true) }
 
 // Unsteer takes back the last steer equal to text if it has not been
 // committed yet, and reports whether it did.
@@ -909,6 +918,7 @@ func (a *Agent) Continue(ctx context.Context, emit func(any)) error {
 // loop is the turn: model calls and tool calls until the model stops.
 func (a *Agent) loop(ctx context.Context, emit func(any)) error {
 	stopBlocks := 0 // Stop hook continuations in this turn
+	a.stopReq.Store(false)
 
 	for step := 1; ; step++ {
 		if a.MaxSteps > 0 && step > a.MaxSteps {
@@ -959,6 +969,9 @@ func (a *Agent) loop(ctx context.Context, emit func(any)) error {
 		emit(StepEnd{Usage: usage, Context: a.ContextTokens()})
 
 		if len(res.Message.ToolCalls) == 0 {
+			if a.stopReq.Swap(false) {
+				return nil
+			}
 			a.runBoundary()
 			if a.commitSteers(emit) {
 				continue
@@ -1007,6 +1020,9 @@ func (a *Agent) loop(ctx context.Context, emit func(any)) error {
 		}
 		if stopTurn {
 			return ErrStoppedByHook
+		}
+		if a.stopReq.Swap(false) {
+			return nil
 		}
 		a.runBoundary()
 		a.commitSteers(emit)

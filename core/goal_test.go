@@ -366,23 +366,31 @@ func TestGoalDriverTellsTheRunningTurn(t *testing.T) {
 	t.Setenv("ATTO_DIR", t.TempDir())
 	g, _ := goal.New("ship it")
 	var steers []string
-	d := GoalDriver{Session: "s", Goal: g, Steer: func(s string) { steers = append(steers, s) }}
-	d.Tell(goal.ClearedMessage()) // no turn: nothing to tell
-	if len(steers) != 0 {
-		t.Fatalf("idle: %v", steers)
+	stops := 0
+	d := GoalDriver{Session: "s", Goal: g, Steer: func(s string) { steers = append(steers, s) }, Stop: func() { stops++ }}
+	if d.Tell(goal.ClearedMessage()) { // no turn: nothing to tell
+		t.Fatal("told an idle driver")
+	}
+	if len(steers) != 0 || stops != 0 {
+		t.Fatalf("idle: %v, %d stops", steers, stops)
 	}
 	d.BeginTurn()
 	d.Set(nil)
-	d.Tell(goal.ClearedMessage())
+	if !d.Tell(goal.ClearedMessage()) {
+		t.Fatal("not told")
+	}
 	g.Status = goal.Paused
 	d.Tell(g.PausedMessage())
+	if stops != 2 {
+		t.Fatalf("each note asks the turn to stop: %d", stops)
+	}
 	if len(steers) != 2 || !strings.Contains(steers[0], "cleared the goal") || !strings.Contains(steers[1], "paused the goal") {
 		t.Fatalf("%q", steers)
 	}
 	d.EndTurn(nil)
 	d.Tell(goal.ClearedMessage())
-	if len(steers) != 2 {
-		t.Fatalf("after the turn: %v", steers)
+	if len(steers) != 2 || stops != 2 {
+		t.Fatalf("after the turn: %v, %d stops", steers, stops)
 	}
 }
 

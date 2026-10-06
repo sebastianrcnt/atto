@@ -37,6 +37,9 @@ type GoalDriver struct {
 	// Steer delivers internal messages (what the user did to the goal) into
 	// the running turn.
 	Steer func(string)
+	// Stop, if set, ends the running turn at its next step boundary (the
+	// user cleared or paused the goal: the turn should not go on).
+	Stop func()
 	// Snapshot, if set, records the goal in the session file whenever it
 	// is saved (nil when cleared), so a resumed session gets it back.
 	Snapshot func(*goal.Goal)
@@ -161,11 +164,19 @@ func (d *GoalDriver) Active() bool { return d.Goal != nil && d.Goal.Status == go
 
 // Tell steers an internal message into the running turn, if there is one:
 // what the user just did to the goal (cleared, paused), which the
-// model cannot otherwise know.
-func (d *GoalDriver) Tell(msg string) {
-	if d.running && d.Steer != nil {
+// model cannot otherwise know, and has the turn stop at its next step
+// boundary. It reports whether there was a turn to tell.
+func (d *GoalDriver) Tell(msg string) bool {
+	if !d.running {
+		return false
+	}
+	if d.Steer != nil {
 		d.Steer(msg)
 	}
+	if d.Stop != nil {
+		d.Stop()
+	}
+	return true
 }
 
 // StateNote is the note for a user message that starts a turn while the

@@ -23,6 +23,7 @@ func (a *App) resetGoal() {
 	a.goal = core.GoalDriver{
 		Session:  a.sess.ID,
 		Steer:    func(text string) { a.agent.Steer(text) },
+		Stop:     func() { a.agent.StopAtBoundary() },
 		Snapshot: a.snapshotGoal,
 		Changed:  a.announceGoal,
 		Adopted:  a.goalInfo,
@@ -63,6 +64,9 @@ func (a *App) continueGoal() {
 
 // goalWaitingNotice is shown when a goal is held after a turn with user input.
 const goalWaitingNotice = "Goal waiting for you — press enter on an empty prompt or /goal resume to continue."
+
+// stoppingNotice is shown when /goal clear or /goal pause ends a running turn.
+const stoppingNotice = "Stopping the turn after the current step."
 
 // goalUsage is codex's usage line for /goal.
 const goalUsage = "Usage: /goal [<objective>|clear|edit|pause|resume]"
@@ -120,8 +124,11 @@ func (a *App) cmdGoal(arg string) {
 			return
 		}
 		a.goal.Set(nil)
-		a.goal.Tell(goal.ClearedMessage())
+		told := a.goal.Tell(goal.ClearedMessage())
 		a.add(&infoBlock{title: "Goal cleared"})
+		if told {
+			a.notice(stoppingNotice)
+		}
 		return
 	case "edit":
 		a.editGoal()
@@ -134,7 +141,12 @@ func (a *App) cmdGoal(arg string) {
 		if g.Status == goal.Active || g.Status == goal.Blocked || g.Status == goal.UsageLimited {
 			g.Status, g.Note = goal.Paused, "paused by the user"
 			a.goal.Set(g)
-			a.goal.Tell(g.PausedMessage())
+			told := a.goal.Tell(g.PausedMessage())
+			a.goalInfo(g)
+			if told {
+				a.notice(stoppingNotice)
+			}
+			return
 		}
 		a.goalInfo(g)
 		return
@@ -326,13 +338,15 @@ func (a *App) restoreGoal(entries []session.Entry) {
 }
 
 // goalIndicator is the status indicator, drawn at the right of the status
-// line in magenta as codex's footer does (see renderStatus).
+// line in magenta as codex's footer does (see renderStatus). A goal on hold
+// shows as waiting only while idle: a running turn is pursuing it as far as
+// the user can tell.
 func (a *App) goalIndicator() string {
 	g := a.goal.Goal
 	if g == nil {
 		return ""
 	}
-	if s := g.Indicator(a.goal.Elapsed(), a.goal.Held()); s != "" {
+	if s := g.Indicator(a.goal.Elapsed(), a.goal.Held() && !a.busy); s != "" {
 		return tui.FG(5, s)
 	}
 	return ""
