@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -353,5 +354,45 @@ func TestResumePickerMarksRunning(t *testing.T) {
 	p = newResumePicker(a.cwd, "")
 	if got := tui.StripEscapes(strings.Join(p.Render(100), "\n")); !strings.Contains(got, "running") {
 		t.Fatalf("running not shown:\n%s", got)
+	}
+}
+
+// A session open in another terminal is not opened here: the two would
+// write over each other (and each other's goal). The terminal holds its
+// own session, and moves the lock when it opens another.
+func TestSessionOpenInAnotherTerminal(t *testing.T) {
+	a := treeApp(t)
+	if l, ok := session.LockedBy(a.sess.Path); !ok || l.Kind != session.KindTUI || l.PID != os.Getpid() {
+		t.Fatalf("the new session is not held: %+v %v", l, ok)
+	}
+	path := saveSession(t, a.cwd, "earlier")
+	body, _ := json.Marshal(session.LockInfo{PID: os.Getppid(), Kind: session.KindTUI}) // another atto, alive
+	if err := os.WriteFile(session.LockPath(path), body, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	before := a.sess.Path
+	a.resume(path)
+	if a.sess.Path != before || a.sess.ReadOnly() != "" {
+		t.Fatalf("opened: %s %q", a.sess.Path, a.sess.ReadOnly())
+	}
+	if got := goalText(a); !strings.Contains(got, "session is open in another atto (pid ") {
+		t.Fatalf("not said:\n%s", got)
+	}
+
+	// Once the other has closed it, it opens here and the lock moves.
+	os.Remove(session.LockPath(path))
+	a.resume(path)
+	if a.sess.Path != path {
+		t.Fatalf("not opened: %s", a.sess.Path)
+	}
+	if _, ok := session.LockedBy(before); ok {
+		t.Fatal("the previous session is still held")
+	}
+	if l, ok := session.LockedBy(path); !ok || l.PID != os.Getpid() {
+		t.Fatalf("not held: %+v", l)
+	}
+	a.closeSession()
+	if _, ok := session.LockedBy(path); ok {
+		t.Fatal("closing releases it")
 	}
 }

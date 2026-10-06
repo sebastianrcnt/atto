@@ -228,13 +228,14 @@ func (a *App) backgroundAfterRun(err error) bool {
 // startBackgroundRun starts the detached run and, if it started, exits.
 func (a *App) startBackgroundRun() {
 	a.recordSettings()
-	a.sess.Close() // every entry is already on disk
+	a.closeSession() // every entry is already on disk; the run takes the lock
 	spawn := a.bgx.spawn
 	if spawn == nil {
 		spawn = spawnContinue
 	}
 	_, log, err := spawn(a.sess.ID, a.sess.Path, a.cwd)
 	if err != nil {
+		a.lockSession() // still ours
 		a.errorNotice(fmt.Errorf("could not run in the background: %w", err))
 		return
 	}
@@ -300,7 +301,7 @@ func spawnContinue(id, path, cwd string) (int, string, error) {
 func (a *App) resumeLocked(saved core.Saved, file *session.Writer, l session.LockInfo) {
 	a.leaveSession("resume")
 	a.reset()
-	a.sess.Close()
+	a.closeSession()
 	file.SetReadOnly(session.ReadOnlyMessage(l))
 	a.sess = file
 	a.setLiveSession("") // the run owns the session's inbox and timers

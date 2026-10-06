@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/sebastianrcnt/atto/provider"
@@ -101,5 +102,31 @@ func TestListMarksRunning(t *testing.T) {
 	defer release()
 	if l, _ := List(cwd, false); len(l) != 1 || l[0].Running != os.Getpid() {
 		t.Fatalf("%+v", l)
+	}
+}
+
+// A terminal's lock refuses others with its own wording, still ErrLocked,
+// and makes the session's directory when the session has none yet.
+func TestLockTUI(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "2026", "10", "06", "s.jsonl")
+	release, err := LockTUI(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	l, ok := LockedBy(path)
+	if !ok || l.Kind != KindTUI || l.PID != os.Getpid() {
+		t.Fatalf("lock %+v %v", l, ok)
+	}
+	l.PID = os.Getppid() // as another terminal holds it
+	err = LockError(l)
+	if !errors.Is(err, ErrLocked) || !strings.Contains(err.Error(), "open in another atto (pid ") {
+		t.Fatalf("error %v", err)
+	}
+	if _, err := LockTUI(path); err != nil {
+		t.Fatalf("our own lock again: %v", err)
+	}
+	release()
+	if _, ok := LockedBy(path); ok {
+		t.Fatal("released")
 	}
 }

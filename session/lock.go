@@ -5,21 +5,26 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 )
 
-// Experimental (see app/background_exit.go): a session being written by a
-// process that other atto processes must not write to, such as a run left
-// in the background, holds a lock file next to the session file. It names
-// the process (pid and start time); a lock whose process is gone is stale
-// and ignored.
+// A session being written by a process that other atto processes must not
+// write to holds a lock file next to the session file: a run left in the
+// background (experimental, see app/background_exit.go), or a terminal
+// session that has it open. It names the process (pid and start time); a
+// lock whose process is gone is stale and ignored.
 
 // LockInfo is the content of a lock file.
 type LockInfo struct {
 	PID     int       `json:"pid"`
 	Started time.Time `json:"started"`
+	Kind    string    `json:"kind,omitempty"` // "" a background run, KindTUI a terminal
 }
+
+// KindTUI marks the lock of a session open in atto's terminal UI.
+const KindTUI = "tui"
 
 // ErrLocked is wrapped by Lock when a live process holds the session.
 var ErrLocked = errors.New("session is running in the background")
@@ -49,8 +54,18 @@ func LockedBy(path string) (LockInfo, bool) {
 
 // LockError describes a locked session for the user.
 func LockError(l LockInfo) error {
+	if l.Kind == KindTUI {
+		return openError(fmt.Sprintf("session is open in another atto (pid %d): continue it there, or close it there first", l.PID))
+	}
 	return fmt.Errorf("%w (pid %d): wait for it to finish, then try again", ErrLocked, l.PID)
 }
+
+// openError is ErrLocked for a session open in another terminal, worded
+// for that.
+type openError string
+
+func (e openError) Error() string        { return string(e) }
+func (e openError) Is(target error) bool { return target == ErrLocked }
 
 // ReadOnlyMessage is what the TUI shows for a locked session.
 func ReadOnlyMessage(l LockInfo) string {
@@ -65,9 +80,20 @@ func Lock(path string) (release func(), err error) { return LockFor(path, os.Get
 // LockFor takes the lock on behalf of the process with the given pid, so a
 // parent can hold a session for the background run it just started. That
 // process taking the lock itself then finds it its own.
-func LockFor(path string, pid int) (release func(), err error) {
+func LockFor(path string, pid int) (release func(), err error) { return lockAs(path, pid, "") }
+
+// LockTUI takes the lock for a terminal session: other terminals, runs and
+// clients are refused while it is held.
+func LockTUI(path string) (release func(), err error) {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil { // a new session's day may have no directory yet
+		return nil, err
+	}
+	return lockAs(path, os.Getpid(), KindTUI)
+}
+
+func lockAs(path string, pid int, kind string) (release func(), err error) {
 	lp := LockPath(path)
-	body, _ := json.Marshal(LockInfo{PID: pid, Started: time.Now()})
+	body, _ := json.Marshal(LockInfo{PID: pid, Started: time.Now(), Kind: kind})
 	for range 3 {
 		f, err := os.OpenFile(lp, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
 		if err == nil {

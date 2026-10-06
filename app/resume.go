@@ -2,6 +2,7 @@ package app
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -521,15 +522,21 @@ func (a *App) resume(path string) {
 		a.errorNotice(err)
 		return
 	}
-	if l, ok := session.LockedBy(path); ok { // left running in the background
-		a.resumeLocked(saved, file, l)
+	if l, ok := session.LockedBy(path); ok && !(l.Kind == session.KindTUI && l.PID == os.Getpid()) { // not our own
+		if l.Kind == session.KindTUI { // open in another terminal: two writers would undo each other
+			file.Close()
+			a.errorNotice(session.LockError(l))
+			return
+		}
+		a.resumeLocked(saved, file, l) // left running in the background
 		return
 	}
 	h := saved.Header
 	a.leaveSession("resume")
 	a.reset()
-	a.sess.Close()
+	a.closeSession()
 	a.sess = file
+	a.lockSession()
 	core.Bind(a.agent, a.hooks, a.sess, h.Time, true) // the session's own date keeps the prefix cache
 	a.setLiveSession(h.ID)
 	a.sessionStartHook("resume")

@@ -214,6 +214,8 @@ atto sessions delete [-y] <id>       permanent: also removes its jobs, inbox, go
 
 `delete` asks first on a terminal and refuses without `-y` elsewhere. Inside an atto agent only `list` and `show` work, so a model can't destroy session history.
 
+A session is open in one atto at a time: while a terminal has it, resuming it in another (or with `atto -p`, or from `atto serve`) is refused with the pid that holds it, since two writers would undo each other's work and goal.
+
 **Hooks** use the same format as Claude Code: `PreToolUse`, `PostToolUse`, `UserPromptSubmit`, `Stop`, `PreCompact`, `SessionStart`, `SessionEnd` and `Notification`.
 
 - Put them in `~/.atto/settings.json` or in the project's `.atto/settings.json`.

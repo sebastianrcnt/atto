@@ -52,6 +52,7 @@ type App struct {
 	models config.ModelsFile
 	agent  *agent.Agent
 	sess   *session.Writer
+	unlock func()        // releases this terminal's lock on sess
 	hooks  *hooks.Runner // nil when no hooks are configured
 	// ext runs the session's extensions (nil in tests that need none);
 	// extUI is what they show.
@@ -311,7 +312,7 @@ func Run(opts Options) error {
 		a.stopRemote()
 	})
 	a.ui.Stop()
-	a.sess.Close()
+	a.closeSession()
 	if a.printExit() { // the run goes on in the background
 		if a.ext != nil {
 			a.ext.Close() // the session's extensions run on there; no session_end
@@ -368,11 +369,33 @@ func (a *App) leaveSession(reason string) {
 	a.dropShell()
 }
 
+// lockSession holds the open session for this terminal, so another atto
+// does not open it as well: two processes writing one session (and its
+// goal) undo each other's work.
+func (a *App) lockSession() {
+	release, err := session.LockTUI(a.sess.Path)
+	if err != nil {
+		a.errorNotice(err)
+		return
+	}
+	a.unlock = release
+}
+
+// closeSession closes the session file and releases this terminal's lock.
+func (a *App) closeSession() {
+	a.sess.Close()
+	if a.unlock != nil {
+		a.unlock()
+		a.unlock = nil
+	}
+}
+
 // newSession starts recording into a fresh session file.
 func (a *App) newSession(reason string) {
 	a.leaveSession(reason)
-	a.sess.Close()
+	a.closeSession()
 	a.sess = session.New(a.cwd)
+	a.lockSession()
 	a.items.IDPrefix = a.sess.ID + "-i"
 	core.Bind(a.agent, a.hooks, a.sess, time.Now(), true)
 	a.setLiveSession(a.sess.ID)

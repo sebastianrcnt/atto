@@ -258,7 +258,11 @@ func sessionsShow(out io.Writer, path string) error {
 		status = "archived"
 	}
 	if l, ok := session.LockedBy(path); ok {
-		status += fmt.Sprintf(" (running in the background, pid %d)", l.PID)
+		if l.Kind == session.KindTUI {
+			status += fmt.Sprintf(" (open in atto, pid %d)", l.PID)
+		} else {
+			status += fmt.Sprintf(" (running in the background, pid %d)", l.PID)
+		}
 	}
 	f := func(k, v string) { fmt.Fprintf(out, "%-9s %s\n", k+":", v) }
 	f("id", h.ID)
