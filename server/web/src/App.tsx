@@ -10,6 +10,7 @@ import GoalBar, { type GoalAction } from "./components/GoalBar";
 import CommandMenu, { type Command } from "./components/CommandMenu";
 import { ArrowDown, Bolt, Branch, Flag, Info, Layers, Menu, More, Plus, Radio, Target } from "./components/icons";
 import Loading from "./components/Loading";
+import PendingList from "./components/PendingList";
 import PromptBar, { type Pending } from "./components/PromptBar";
 import PromptSheet, { type Answer } from "./components/PromptSheet";
 import Thinking from "./components/Thinking";
@@ -286,6 +287,9 @@ export default function App() {
           redraw();
           break;
         }
+        case "turn/pending":
+          setInfo((i) => (i ? { ...i, pending: p.pending } : i));
+          break;
         case "thread/usage":
           if (p.step) meter.step(p.step);
           setInfo((i) => (i ? { ...i, usage: p.usage, contextTokens: p.contextTokens ?? i.contextTokens } : i));
@@ -562,13 +566,11 @@ export default function App() {
           note("Images go with a new turn: send them once this one finishes.");
           return false;
         }
+        // Shown as pending until the turn takes it (turn/pending).
         await client.call("turn/steer", { threadId: t.threadId, input: text });
-        note("↳ steering: " + text);
         return true;
       }
-      const r = await client.call<{ status?: string }>("turn/start", { threadId: t.threadId, input: text, images: imgs });
-      if (r.status === "steered") note("↳ sent to the running turn (after its next command): " + text);
-      if (r.status === "queued") note("Queued: starts when the current run ends.");
+      await client.call("turn/start", { threadId: t.threadId, input: text, images: imgs });
       return true;
     } catch (e) {
       fail(e);
@@ -590,6 +592,17 @@ export default function App() {
     try {
       const t = await client.call<ThreadInfo>("thread/setEffort", { threadId: info.threadId, effort });
       setInfo((i) => (i ? { ...i, ...t, items: undefined } : i));
+    } catch (e) {
+      fail(e);
+    }
+  };
+
+  // take takes back pending input: into the field to edit, or for good.
+  const take = async (text: string, queued: boolean, edit: boolean) => {
+    if (!info) return;
+    try {
+      await client.call("turn/unsteer", { threadId: info.threadId, input: text, queued });
+      if (edit) setFill({ text, n: Date.now() });
     } catch (e) {
       fail(e);
     }
@@ -772,6 +785,7 @@ export default function App() {
             placeholder={live ? "Message the terminal session" : "Message atto"}
             toolbar={toolbar}
             fill={fill}
+            above={info?.pending && <PendingList pending={info.pending} live={live} onTake={take} />}
             activity={busy && <Activity label={activity(last, store.running(), meter.verb)} meter={meter} running={store.running()} />}
             footer={info && <StatusLine s={status(info)} />}
             onSend={send}

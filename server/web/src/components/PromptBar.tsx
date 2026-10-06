@@ -42,6 +42,7 @@ export default function PromptBar({
   placeholder,
   toolbar,
   activity,
+  above,
   footer,
   fill,
   onSend,
@@ -56,8 +57,10 @@ export default function PromptBar({
   placeholder: string;
   // the model and effort pickers, next to the attach button
   toolbar?: ReactNode;
-  // the activity line, left of Stop; the status line under the field
+  // the activity line, left of Stop; what goes above the field (pending
+  // input); the status line under it
   activity?: ReactNode;
+  above?: ReactNode;
   footer?: ReactNode;
   // text to put back into the field, before what is there (n: a new one)
   fill?: { text: string; n: number } | null;
@@ -148,6 +151,7 @@ export default function PromptBar({
           )}
         </div>
       )}
+      {above}
       <div
         role="presentation"
         onClick={() => ref.current?.focus()}
