@@ -417,6 +417,7 @@ func TestIsTransient(t *testing.T) {
 		errors.New(`Post "https://x/v1": read tcp: connection reset by peer`),
 		errors.New(`Post "https://x/v1": EOF`),
 		errors.New("request failed: dial tcp 1.2.3.4:443: i/o timeout"),
+		errors.New("Stream ended without finish_reason"), // the provider cut the stream off
 		&ai.ProviderError{Status: 502, StatusText: "Bad Gateway"},
 		&ai.ProviderError{Status: 429, Body: "slow down"},
 		context.DeadlineExceeded,

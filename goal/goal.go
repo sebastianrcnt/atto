@@ -354,8 +354,8 @@ func IsUsageLimit(err error) bool {
 
 // transientText matches the provider and network errors that pass by
 // themselves: an overloaded or unavailable model, a gateway or upstream
-// failure, a dropped connection, a timeout.
-var transientText = regexp.MustCompile(`(?i)unavailable|overloaded|upstream|bad gateway|gateway time-?out|time-?d? ?out|connection (reset|refused|closed|aborted)|reset by peer|broken pipe|unexpected eof|\beof\b|dial tcp|no such host|temporar|try again|too many requests|rate.?limit|server error|internal error|at capacity`)
+// failure, a dropped connection, a timeout, a stream cut off before its end.
+var transientText = regexp.MustCompile(`(?i)unavailable|overloaded|upstream|bad gateway|gateway time-?out|time-?d? ?out|connection (reset|refused|closed|aborted)|reset by peer|broken pipe|unexpected eof|\beof\b|dial tcp|no such host|temporar|try again|too many requests|rate.?limit|server error|internal error|at capacity|stream ended`)
 
 // errStatus is the HTTP status an error carries: the provider's, or the one
 // atto's messages start with ("503: ...", "Upstream request failed (400): ...").
