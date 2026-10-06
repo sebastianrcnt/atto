@@ -4,6 +4,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"github.com/sebastianrcnt/atto/fsutil"
 	"os"
 	"path/filepath"
 	"sort"
@@ -58,7 +59,7 @@ func AddTimer(session string, due time.Time, message string) (Timer, error) {
 	}
 	t := Timer{ID: randID()[:6], Due: due, Message: message, Created: time.Now()}
 	data, _ := json.Marshal(t)
-	return t, writeAtomic(filepath.Join(timerDir(session), t.ID+".json"), data)
+	return t, timerLock(session, func() error { return writeAtomic(filepath.Join(timerDir(session), t.ID+".json"), data) })
 }
 
 // AddRecurringTimer schedules a timer that fires every interval, first at
@@ -82,11 +83,47 @@ func AddRecurringTimer(session string, now time.Time, every time.Duration, count
 		t.Until = &until
 	}
 	data, _ := json.Marshal(t)
-	return t, writeAtomic(filepath.Join(timerDir(session), t.ID+".json"), data)
+	return t, timerLock(session, func() error { return writeAtomic(filepath.Join(timerDir(session), t.ID+".json"), data) })
 }
 
 // Timers lists pending timers, soonest first.
+func timerLock(session string, fn func() error) error {
+	if !validSession(session) {
+		return fmt.Errorf("invalid session id")
+	}
+	return fsutil.WithFileLock(filepath.Join(timerDir(session), ".timers"), fn)
+}
+
+// recoverTimerClaims runs under the directory lock: no live consumer can
+// still own a claim. A rescheduled JSON takes precedence over an old claim.
+func recoverTimerClaims(session string) {
+	dir := timerDir(session)
+	ents, _ := os.ReadDir(dir)
+	for _, e := range ents {
+		id := strings.TrimSuffix(strings.TrimPrefix(e.Name(), "."), ".claim")
+		if e.Name() != "."+id+".claim" || !validTimerID(id) {
+			continue
+		}
+		claim, path := filepath.Join(dir, e.Name()), filepath.Join(dir, id+".json")
+		if _, err := os.Stat(path); err == nil {
+			_ = os.Remove(claim)
+		} else if os.IsNotExist(err) {
+			_ = os.Rename(claim, path)
+		}
+	}
+}
+
 func Timers(session string) []Timer {
+	var out []Timer
+	_ = timerLock(session, func() error {
+		recoverTimerClaims(session)
+		out = timersLocked(session)
+		return nil
+	})
+	return out
+}
+
+func timersLocked(session string) []Timer {
 	ents, _ := os.ReadDir(timerDir(session))
 	var out []Timer
 	for _, e := range ents {
@@ -116,11 +153,23 @@ func CancelTimer(session, id string) error {
 	if !validSession(session) || !validTimerID(id) {
 		return fmt.Errorf("invalid timer or session id")
 	}
-	err := os.Remove(filepath.Join(timerDir(session), id+".json"))
-	if os.IsNotExist(err) {
+	return timerLock(session, func() error { return cancelTimerLocked(session, id) })
+}
+
+func cancelTimerLocked(session, id string) error {
+	found := false
+	for _, name := range []string{id + ".json", "." + id + ".claim"} {
+		err := os.Remove(filepath.Join(timerDir(session), name))
+		if err == nil {
+			found = true
+		} else if !os.IsNotExist(err) {
+			return err
+		}
+	}
+	if !found {
 		return fmt.Errorf("no timer %q", id)
 	}
-	return err
+	return nil
 }
 
 // FireDue moves due timers into the inbox and returns how many fired.
@@ -131,13 +180,23 @@ func CancelTimer(session, id string) error {
 // still count against -count, since they were scheduled firings.
 func FireDue(session string, now time.Time) int {
 	n := 0
-	for _, t := range Timers(session) {
+	_ = timerLock(session, func() error {
+		recoverTimerClaims(session)
+		n = fireDueLocked(session, now)
+		return nil
+	})
+	return n
+}
+
+func fireDueLocked(session string, now time.Time) int {
+	n := 0
+	for _, t := range timersLocked(session) {
 		if t.Due.After(now) {
 			continue
 		}
 		path := filepath.Join(timerDir(session), t.ID+".json")
 		if !t.Recurring() {
-			if CancelTimer(session, t.ID) != nil {
+			if cancelTimerLocked(session, t.ID) != nil {
 				continue // another consumer took it
 			}
 			text := fmt.Sprintf("Timer %s fired: %s (set %s ago)", t.ID, t.Message, now.Sub(t.Created).Round(time.Second))
@@ -145,8 +204,7 @@ func FireDue(session string, now time.Time) int {
 			n++
 			continue
 		}
-		// Claim by renaming: only one consumer wins, and Timers ignores
-		// dot files, so the timer is invisible until we write it back.
+		// Keep the old schedule in a claim until its replacement is durable.
 		claim := filepath.Join(timerDir(session), "."+t.ID+".claim")
 		if os.Rename(path, claim) != nil {
 			continue
