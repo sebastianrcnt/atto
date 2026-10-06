@@ -134,6 +134,9 @@ func wireItem(sid string, it *transcript.Item) Item {
 				w.ExitCode, w.Job, w.Background = nil, r.Job, r.Background
 			}
 		}
+		for _, im := range it.Images {
+			w.Images = append(w.Images, ItemImage{Name: im.Name, Width: im.Width, Height: im.Height})
+		}
 	case transcript.Shell:
 		// A command the user ran in the TUI ("!cmd"), shown as a command.
 		w.Type, w.Description, w.Command, w.Output = ItemCommand, "user command", it.Command, it.Output

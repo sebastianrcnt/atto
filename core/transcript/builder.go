@@ -235,7 +235,7 @@ func (b *Builder) apply(ev any, at time.Time) {
 		if r.Err != nil {
 			res.Err = r.Err.Error()
 		}
-		b.endTool(e.ID, res, r.Duration)
+		b.endTool(e.ID, res, r.Duration, e.Images...)
 	case agent.SteerCommitted:
 		// One item per message, as the server always sent them; the session
 		// holds them joined in one user message.
@@ -405,13 +405,17 @@ func (b *Builder) toolOutput(id, chunk string) {
 	b.delta(it, chunk)
 }
 
-func (b *Builder) endTool(id string, res ToolResult, d time.Duration) {
+func (b *Builder) endTool(id string, res ToolResult, d time.Duration, imgs ...provider.Image) {
 	it := b.tools[id]
 	if it == nil {
 		return
 	}
 	delete(b.tools, id)
 	it.Output = tidy(it.Output)
+	for _, im := range imgs {
+		im.Data = nil // the bytes stay in the image store
+		it.Images = append(it.Images, im)
+	}
 	it.Result, it.Duration = &res, d.Truncate(time.Millisecond)
 	it.Status = Completed
 	if res.Failed() {
@@ -556,7 +560,7 @@ func (b *Builder) replayResult(e session.Entry) {
 		d = time.Duration(t.DurationMs) * time.Millisecond
 	}
 	b.toolOutput(tc.ID, shownOutput(m.Content, e.Tool))
-	b.endTool(tc.ID, res, d)
+	b.endTool(tc.ID, res, d, m.Images...)
 }
 
 // interruptCalls ends tool calls that have no result: the turn was

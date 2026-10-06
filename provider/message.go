@@ -35,7 +35,8 @@ type Message struct {
 	// Reasoning carries opaque Responses API reasoning items so they can be
 	// replayed on later requests. Chat completions never sees it.
 	Reasoning *ReasoningState `json:"responses_reasoning,omitempty"`
-	// Images attached to a user message, sent after its text.
+	// Images attached to a user message, sent after its text, or to a
+	// tool result (atto view).
 	Images []Image `json:"images,omitempty"`
 
 	// Provider, API and Model record which model wrote an assistant

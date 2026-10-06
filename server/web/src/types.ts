@@ -43,6 +43,7 @@ export type Item = {
   job?: number;
   background?: string;
   pending?: boolean;
+  images?: { name?: string; width?: number; height?: number }[]; // attached by atto view
   auto?: boolean;
   tokensBefore?: number;
   tokensAfter?: number;

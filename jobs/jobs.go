@@ -22,6 +22,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -286,6 +287,18 @@ func start(session, cwd, name, command string, mon *Monitor, notify *Notify, env
 	return launch(dir, j, env)
 }
 
+// withoutView is env (nil: the caller's) without config.EnvView: a job
+// outlives the command that started it, so atto view in it has no result
+// to attach images to, and says so.
+func withoutView(env []string) []string {
+	if env == nil {
+		env = os.Environ()
+	}
+	return slices.DeleteFunc(slices.Clone(env), func(kv string) bool {
+		return strings.HasPrefix(kv, config.EnvView+"=")
+	})
+}
+
 // launch saves the new job j in dir and starts its supervisor.
 func launch(dir string, j Job, env []string) (Job, error) {
 	if err := save(dir, j); err != nil {
@@ -297,7 +310,7 @@ func launch(dir string, j Job, env []string) (Job, error) {
 	}
 	sup := exec.Command(exe, "_supervise", dir)
 	sup.Dir = j.Cwd
-	sup.Env = env // nil: the caller's
+	sup.Env = withoutView(env)
 	shell.Detach(sup)
 	if err := sup.Start(); err != nil {
 		j.Status, j.Error = Failed, err.Error()

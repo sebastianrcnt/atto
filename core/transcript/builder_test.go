@@ -294,3 +294,26 @@ func TestReplayBackgroundedCall(t *testing.T) {
 		t.Fatalf("%+v %+v", it, it.Result)
 	}
 }
+
+// Images atto view attached to a result are on the tool's item, live and
+// replayed, without their bytes.
+func TestToolImages(t *testing.T) {
+	im := provider.Image{File: "x.png", MIME: "image/png", Width: 3, Height: 2, Name: "shot.png", Data: []byte{1}}
+	var live Builder
+	live.Event(agent.ToolStart{ID: "a", Args: agent.BashArgs{Command: "atto view shot.png"}})
+	live.Event(agent.ToolEnd{ID: "a", Text: "attached", Images: []provider.Image{im}})
+	entries := []session.Entry{
+		{Type: session.TypeMessage, Message: &provider.Message{Role: "assistant", ToolCalls: []provider.ToolCall{
+			{ID: "a", Function: provider.FunctionCall{Name: "bash", Arguments: `{"command":"atto view shot.png"}`}},
+		}}},
+		{Type: session.TypeMessage, Message: &provider.Message{Role: "tool", ToolCallID: "a", Content: "attached", Images: []provider.Image{im}},
+			Tool: &session.ToolMeta{}},
+	}
+	replayed := FromEntries("", entries)
+	for _, items := range [][]Item{live.Items(), replayed} {
+		it := items[len(items)-1]
+		if len(it.Images) != 1 || it.Images[0].Name != "shot.png" || it.Images[0].Data != nil {
+			t.Fatalf("%+v", it)
+		}
+	}
+}

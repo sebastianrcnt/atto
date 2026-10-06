@@ -310,6 +310,7 @@ type toolBlock struct {
 	total   int // total output bytes seen
 	done    bool
 	res     agent.BashResult
+	images  []string // what atto view attached, as images.ViewLabel says
 	cache   tui.RenderCache[toolKey]
 }
 
@@ -323,6 +324,7 @@ type toolKey struct {
 	open                    bool
 	res                     agent.BashResult // without Err, which may not be comparable
 	err                     string
+	images                  string
 }
 
 // running reports whether the block shows a running time.
@@ -466,7 +468,8 @@ func (b *toolBlock) status() (icon, status string) {
 // shows the time, is made again on every call.
 func (b *toolBlock) Render(width int) []string {
 	key := toolKey{args: b.args, timeout: b.timeout, output: b.output.String(), total: b.total,
-		pending: b.pending, done: b.done, expanded: b.expanded(), open: b.opened(), res: b.res}
+		pending: b.pending, done: b.done, expanded: b.expanded(), open: b.opened(), res: b.res,
+		images: strings.Join(b.images, "\n")}
 	if key.res.Err != nil {
 		key.res.Err, key.err = nil, b.res.Err.Error()
 	}
@@ -516,7 +519,17 @@ func (b *toolBlock) line(width int) []string {
 			out = append(out, tui.Truncate(tui.Dim(prefix+l), width, tui.Dim("…")))
 		}
 	}
+	out = append(out, b.imageLines(width)...)
 	return b.clicks(true, out, false)
+}
+
+// imageLines are a dim line per image atto view attached to the result.
+func (b *toolBlock) imageLines(width int) []string {
+	var out []string
+	for _, l := range b.images {
+		out = append(out, tui.Truncate(tui.Dim("  ▣ "+l), width, tui.Dim("…")))
+	}
+	return out
 }
 
 // failedTailLines is how much of a failed call's output its folded block
@@ -577,6 +590,7 @@ func (b *toolBlock) render(width int) []string {
 			out = append(out, tui.Truncate(tui.Dim("    "+l), width, tui.Dim("…")))
 		}
 	}
+	out = append(out, b.imageLines(width)...)
 	foot := false
 	switch {
 	case expanded:

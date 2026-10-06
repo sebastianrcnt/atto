@@ -132,6 +132,27 @@ func TestImagesToParts(t *testing.T) {
 	}
 }
 
+// A tool result's images (atto view) go in the function_call_output
+// itself on the Responses API (Codex shares the conversion).
+func TestToolResultImagesResponses(t *testing.T) {
+	srv, bodies, _ := serveSSE(t, `{"type":"response.completed","response":{"status":"completed"}}`)
+	c := &Client{Model: ai.Model{ID: "gpt-x", Api: ai.ApiOpenAIResponses, Provider: "openai", BaseURL: srv.URL, Input: []string{"text", "image"}}, APIKey: "sk-1"}
+	msgs := []Message{
+		{Role: "user", Content: "look"},
+		{Role: "assistant", ToolCalls: []ToolCall{{ID: "call_1", Type: "function", Function: FunctionCall{Name: "bash", Arguments: "{}"}}}},
+		{Role: "tool", ToolCallID: "call_1", Content: "attached shot.png", Images: []Image{{MIME: "image/png", Data: []byte{1, 2}}}},
+	}
+	if _, err := c.Stream(context.Background(), Request{Messages: msgs}, Handler{}); err != nil {
+		t.Fatal(err)
+	}
+	b := (*bodies)[0]
+	for _, want := range []string{`"type":"function_call_output","call_id":"call_1","output":[{"type":"input_text","text":"attached shot.png"}`, `"type":"input_image","detail":"auto","image_url":"data:image/png;base64,AQI="`} {
+		if !strings.Contains(b, want) {
+			t.Errorf("request lacks %s: %s", want, b)
+		}
+	}
+}
+
 // A server that takes only tool_choice "auto" gets the request again
 // without it, and that model is sent none afterwards.
 func TestClientDropsRefusedToolChoice(t *testing.T) {

@@ -67,6 +67,11 @@ export default function ToolRow({ it }: { it: Item }) {
         </span>
         <Status it={it} />
       </button>
+      {it.images?.map((im, i) => (
+        <div key={i} className="ml-6 truncate font-mono text-[11.5px] text-ink-3">
+          ▣ {im.name || "image"} {im.width}×{im.height}
+        </div>
+      ))}
       <Expand open={open}>
         <div className="mt-1 mb-2 ml-[7px] border-l border-line pl-3.5">
           <div className="overflow-hidden rounded-card bg-surface shadow-card">

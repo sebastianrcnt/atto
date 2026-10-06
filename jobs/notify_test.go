@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/sebastianrcnt/atto/config"
 	"github.com/sebastianrcnt/atto/events"
 )
 
@@ -91,5 +92,18 @@ func TestNotifierTruncatesAndLimitsBatch(t *testing.T) {
 	evs := c.all()
 	if len(evs) != 1 || len(evs[0].Text) > 2000 || !strings.Contains(evs[0].Text, "6 more matching lines") {
 		t.Fatalf("events %+v", evs)
+	}
+}
+
+// A job outlives the command that started it, so atto view in it gets no
+// directory to leave images in.
+func TestJobsGetNoViewDir(t *testing.T) {
+	t.Setenv(config.EnvView, "/from/atto")
+	for _, env := range [][]string{nil, {"A=1", config.EnvView + "=/from/call"}} {
+		for _, kv := range withoutView(env) {
+			if strings.HasPrefix(kv, config.EnvView+"=") {
+				t.Fatalf("%v kept %s", env, kv)
+			}
+		}
 	}
 }

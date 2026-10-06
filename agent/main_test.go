@@ -4,8 +4,11 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"testing"
 
+	"github.com/sebastianrcnt/atto/config"
+	"github.com/sebastianrcnt/atto/images"
 	"github.com/sebastianrcnt/atto/jobs"
 )
 
@@ -29,6 +32,19 @@ func TestMain(m *testing.M) {
 				BashArgs{Description: "outlive", Command: os.Args[2], Timeout: 1}, nil)
 			fmt.Println(res.ForModel(BashArgs{Timeout: 1}))
 			os.Exit(0) // without waiting for the job
+		case "_view": // view_test.go: what atto view does, without package cli
+			for _, path := range os.Args[2:] {
+				im, err := images.ReadFile(path)
+				if err == nil {
+					err = images.Drop(os.Getenv(config.EnvView), filepath.Base(path), im)
+				}
+				if err != nil {
+					fmt.Println(err)
+					os.Exit(1)
+				}
+				fmt.Println("attached", filepath.Base(path))
+			}
+			os.Exit(0)
 		case "_supervise":
 			if len(os.Args) != 3 || jobs.Supervise(os.Args[2]) != nil {
 				os.Exit(1)

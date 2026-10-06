@@ -178,7 +178,7 @@ func ToContext(model *ai.Model, msgs []Message, tools []Tool) ai.Context {
 		case "tool":
 			c.Messages = append(c.Messages, &ai.ToolResultMessage{
 				Role: "toolResult", ToolCallID: m.ToolCallID, ToolName: toolNames[m.ToolCallID],
-				Content: []ai.Content{ai.NewText(m.Content)},
+				Content: append([]ai.Content{ai.NewText(m.Content)}, imageParts(m.Images)...),
 			})
 		}
 	}
@@ -193,14 +193,22 @@ func toUserMessage(m Message) *ai.UserMessage {
 	if m.Content != "" {
 		parts = append(parts, ai.NewText(m.Content))
 	}
-	for _, im := range m.Images {
+	return &ai.UserMessage{Role: "user", Parts: append(parts, imageParts(m.Images)...)}
+}
+
+// imageParts are the content blocks of a message's images. Package ai
+// sends a tool result's images as each API allows: in the result itself
+// (Responses), or in a user message after the results (chat completions).
+func imageParts(imgs []Image) []ai.Content {
+	var parts []ai.Content
+	for _, im := range imgs {
 		if d := im.base64Data(); d != "" {
 			parts = append(parts, ai.NewImage(d, im.MIME))
 		} else {
 			parts = append(parts, ai.NewText(ImageMissing))
 		}
 	}
-	return &ai.UserMessage{Role: "user", Parts: parts}
+	return parts
 }
 
 func toAssistantMessage(model *ai.Model, m Message) *ai.AssistantMessage {

@@ -67,7 +67,8 @@ type Item struct {
 	// (Handler.Saved fires then; "n<k>" when nothing is recorded). Front
 	// ends make the item's block ID of it with session.BlockID.
 	EntryID string
-	// Images are a user message's images, without their bytes.
+	// Images are a user message's images, or those atto view attached to
+	// a tool's result, without their bytes.
 	Images []provider.Image
 	// Duration is the thinking time (reasoning), the run time (tool) or
 	// how long a compaction or branch summary took, to the millisecond.

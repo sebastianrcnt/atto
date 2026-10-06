@@ -147,11 +147,13 @@ type (
 		Chunk string
 	}
 	// ToolEnd fires when the command has ended. Text is the result as
-	// the model receives it, before PostToolUse hooks add to it.
+	// the model receives it, before PostToolUse hooks add to it, and
+	// Images what atto view attached to it.
 	ToolEnd struct {
 		ID     string
 		Result BashResult
 		Text   string
+		Images []provider.Image
 	}
 	// MessageSaved fires when the model's response is complete and recorded,
 	// before StepEnd (and on its own for a response cut short by an error).
@@ -563,6 +565,7 @@ func (a *Agent) Breakdown() Breakdown {
 			}
 		case "tool":
 			b.ToolResults += len(m.Content)
+			b.Images += len(m.Images) * imageChars
 		}
 	}
 	return b
@@ -969,6 +972,7 @@ func (a *Agent) loop(ctx context.Context, emit func(any)) error {
 		stopTurn := false
 		for i, tc := range res.Message.ToolCalls {
 			var content string
+			var imgs []provider.Image
 			var meta session.Entry
 			if ctx.Err() != nil {
 				content = "[canceled by user]"
@@ -976,10 +980,10 @@ func (a *Agent) loop(ctx context.Context, emit func(any)) error {
 				drafts.end(i, "")
 			} else {
 				var stop bool
-				content, meta.Tool, stop = a.runTool(ctx, tc, i, drafts, emit)
+				content, imgs, meta.Tool, stop = a.runTool(ctx, tc, i, drafts, emit)
 				stopTurn = stopTurn || stop
 			}
-			a.appendMessage(provider.Message{Role: "tool", ToolCallID: tc.ID, Content: content}, meta)
+			a.appendMessage(provider.Message{Role: "tool", ToolCallID: tc.ID, Content: content, Images: imgs}, meta)
 		}
 		drafts.endAll() // drafts beyond the calls the response ended up with
 		if ctx.Err() != nil {
@@ -998,10 +1002,13 @@ func (a *Agent) loop(ctx context.Context, emit func(any)) error {
 	}
 }
 
-func (a *Agent) runTool(ctx context.Context, tc provider.ToolCall, index int, drafts *draftTracker, emit func(any)) (string, *session.ToolMeta, bool) {
-	fail := func(msg string) (string, *session.ToolMeta, bool) {
+// runTool runs one call and returns its result for the model: the text,
+// the images atto view attached, how it ran, and whether a hook stopped
+// the turn.
+func (a *Agent) runTool(ctx context.Context, tc provider.ToolCall, index int, drafts *draftTracker, emit func(any)) (string, []provider.Image, *session.ToolMeta, bool) {
+	fail := func(msg string) (string, []provider.Image, *session.ToolMeta, bool) {
 		drafts.end(index, msg)
-		return "error: " + msg, &session.ToolMeta{ExitCode: -1}, false
+		return "error: " + msg, nil, &session.ToolMeta{ExitCode: -1}, false
 	}
 	// Accept any shell tool name: a session started on another OS, or a
 	// model calling "bash" out of habit, still runs in this machine's shell.
@@ -1023,11 +1030,11 @@ func (a *Agent) runTool(ctx context.Context, tc provider.ToolCall, index int, dr
 		emitHook(emit, "PreToolUse", o)
 		if o.Stop {
 			drafts.end(index, "stopped by hook")
-			return "[stopped by hook: " + o.StopReason + "]", &session.ToolMeta{Description: args.Description, ExitCode: -1}, true
+			return "[stopped by hook: " + o.StopReason + "]", nil, &session.ToolMeta{Description: args.Description, ExitCode: -1}, true
 		}
 		if o.Block {
 			drafts.end(index, "blocked by hook")
-			return "Blocked by a PreToolUse hook: " + o.Reason, &session.ToolMeta{Description: args.Description, ExitCode: -1}, false
+			return "Blocked by a PreToolUse hook: " + o.Reason, nil, &session.ToolMeta{Description: args.Description, ExitCode: -1}, false
 		}
 		args = updated
 	}
@@ -1036,7 +1043,7 @@ func (a *Agent) runTool(ctx context.Context, tc provider.ToolCall, index int, dr
 		emitHook(emit, ExtensionEvent+"tool_call", o)
 		if o.Block {
 			drafts.end(index, "blocked by extension")
-			return "Blocked by an extension: " + o.Reason, &session.ToolMeta{Description: args.Description, ExitCode: -1}, false
+			return "Blocked by an extension: " + o.Reason, nil, &session.ToolMeta{Description: args.Description, ExitCode: -1}, false
 		}
 		args = updated
 	}
@@ -1045,6 +1052,17 @@ func (a *Agent) runTool(ctx context.Context, tc provider.ToolCall, index int, dr
 	a.cfgMu.Lock()
 	env := a.env
 	a.cfgMu.Unlock()
+	// A foreground call gets a directory for atto view, whose images are
+	// attached to its result. Other commands get none (the variable is
+	// cleared, in case atto's own environment has one).
+	viewDir := ""
+	if !args.Background {
+		if d, err := os.MkdirTemp("", "atto-view-"); err == nil {
+			viewDir = d
+			defer os.RemoveAll(d)
+		}
+	}
+	env = append(slices.Clip(env), config.EnvView+"="+viewDir)
 	var bg chan struct{}
 	if ShellHost && !args.Background && envValue(env, "ATTO_SESSION_ID") != "" {
 		bg = make(chan struct{}, 1)
@@ -1058,13 +1076,22 @@ func (a *Agent) runTool(ctx context.Context, tc provider.ToolCall, index int, dr
 		a.bg = nil
 		a.bgMu.Unlock()
 	}
+	imgs, note := a.viewed(viewDir)
+	if note != "" {
+		chunk := note + "\n"
+		if res.Output != "" && !strings.HasSuffix(res.Output, "\n") {
+			chunk = "\n" + chunk
+		}
+		res.Output += chunk
+		emit(ToolOutput{ID: tc.ID, Chunk: chunk})
+	}
 	out := res.ForModel(args)
 	if a.Extensions != nil {
 		var o HookOutcome
 		out, o = a.Extensions.ToolResult(ctx, args, res, out)
 		emitHook(emit, ExtensionEvent+"tool_result", o)
 	}
-	emit(ToolEnd{ID: tc.ID, Result: res, Text: out})
+	emit(ToolEnd{ID: tc.ID, Result: res, Text: out, Images: imgs})
 	stop := false
 	if a.Hooks != nil {
 		o := a.Hooks.PostToolUse(ctx, args, res, out)
@@ -1077,7 +1104,7 @@ func (a *Agent) runTool(ctx context.Context, tc provider.ToolCall, index int, dr
 		}
 		stop = o.Stop
 	}
-	return out, &session.ToolMeta{
+	return out, imgs, &session.ToolMeta{
 		Description: args.Description,
 		ExitCode:    res.ExitCode,
 		DurationMs:  res.Duration.Milliseconds(),
@@ -1086,6 +1113,34 @@ func (a *Agent) runTool(ctx context.Context, tc provider.ToolCall, index int, dr
 		Job:         res.Job,
 		Background:  res.Background,
 	}, stop
+}
+
+// ViewUnsupported is added to the result of a command that ran atto view
+// when the model takes no image input: nothing is attached.
+const ViewUnsupported = "[atto view: this model can't view images, so nothing was attached. Work from text instead, or ask the user to switch to a model with image input.]"
+
+// viewed collects the images atto view left in dir during a call and
+// stores them for the session. note, if not empty, is for the model: why
+// images were not attached.
+func (a *Agent) viewed(dir string) (imgs []provider.Image, note string) {
+	if dir == "" {
+		return nil, ""
+	}
+	imgs, err := images.Collect(dir)
+	if err != nil {
+		note = "[atto view: not attached: " + err.Error() + "]"
+	}
+	if len(imgs) == 0 {
+		return nil, note
+	}
+	if m, _ := a.Current(); !m.Model.Images() {
+		return nil, ViewUnsupported
+	}
+	for _, im := range imgs {
+		// Without its file a resumed session sends a note instead.
+		_ = images.Save(im)
+	}
+	return imgs, note
 }
 
 // FirstLine is the first line of a command, the description of a call
@@ -1338,6 +1393,7 @@ Commands time out after 60 seconds by default; set timeout for longer builds or 
 	fmt.Fprintf(&b, `
 The full transcript of this session, including anything removed by compaction, can be searched with "atto history grep <regexp>" and read with "atto history show <n>".
 After you change AGENTS.md files, skills or atto's settings, "atto reload" applies them to this session; "atto context" shows what is loaded.
+To look at an image file (a screenshot, a rendered plot), run "atto view <path>": the image is attached to that command's result.
 
 Background work: start long-running commands (dev servers, watchers, long builds) with "atto job start -- '<command>'" instead of blocking; quote the command so your shell passes it whole (e.g. atto job start -- 'npm run build && npm test'). When a job exits you receive an "[atto event]" message; check on it with "atto job output <id>", "atto job wait <id> -timeout 10m", or stop it with "atto job kill <id>". To wait for a condition, use "atto monitor -every 30s -until <regexp> -- '<check command>'"; to come back later, use "atto timer in 10m <note>". Then end your turn: you are woken with an [atto event]. "atto sleep <duration>" waits but returns early on events or user input. Run "atto job" for details. Jobs stop when the session ends.
 

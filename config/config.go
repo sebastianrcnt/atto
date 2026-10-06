@@ -46,6 +46,11 @@ const EnvSubagent = "ATTO_SUBAGENT"
 // InSubagent reports whether this process was started by a subagent.
 func InSubagent() bool { return os.Getenv(EnvSubagent) != "" }
 
+// EnvView names the directory "atto view" leaves images in for the
+// command that ran it: the agent sets it for each foreground shell call
+// and attaches what it finds there to that call's result.
+const EnvView = "ATTO_VIEW_DIR"
+
 // Dir returns the atto root directory.
 func Dir() string {
 	if d := os.Getenv(EnvDir); d != "" {

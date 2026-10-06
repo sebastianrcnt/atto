@@ -194,6 +194,8 @@ type Item struct {
 	// Pending: the model is still writing the command (description and
 	// command are what has arrived).
 	Pending bool `json:"pending,omitempty"`
+	// Images are what atto view attached to the command's result.
+	Images []ItemImage `json:"images,omitempty"`
 
 	// compaction
 	Auto         bool `json:"auto,omitempty"`
@@ -219,6 +221,14 @@ type Item struct {
 	Ext     string `json:"ext,omitempty"`
 	Lang    string `json:"lang,omitempty"`
 	Preview int    `json:"preview,omitempty"`
+}
+
+// ItemImage describes an image attached to a command's result: the file
+// it was read from and its size as sent.
+type ItemImage struct {
+	Name   string `json:"name,omitempty"`
+	Width  int    `json:"width,omitempty"`
+	Height int    `json:"height,omitempty"`
 }
 
 // BlockDisplay is what extensions show on a reasoning or agentMessage item

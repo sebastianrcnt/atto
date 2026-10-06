@@ -53,6 +53,8 @@ func TestBlockCacheInvalidation(t *testing.T) {
 			func(b cachedBlock) { b.(*toolBlock).res.Err = errors.New("no such command") }},
 		{"tool: background", func() cachedBlock { return newTool(d, "x", "", true) },
 			func(b cachedBlock) { b.(*toolBlock).res.Job = 3 }},
+		{"tool: image attached", func() cachedBlock { return newTool(d, "atto view a.png", "", true) },
+			func(b cachedBlock) { b.(*toolBlock).images = []string{"a.png 3×2"} }},
 		{"tool: done, folds", func() cachedBlock { return &toolBlock{expander: expander{d: d}, args: agent.BashArgs{Command: "ls"}} },
 			func(b cachedBlock) { b.(*toolBlock).done = true }},
 		{"tool: open", func() cachedBlock {
@@ -284,5 +286,18 @@ func TestActivityFrameWritesOneLine(t *testing.T) {
 		if allocs[80] > allocs[40]+20 {
 			t.Errorf("mode %v: frame allocations grow with the transcript: %.0f, then %.0f", mode, allocs[40], allocs[80])
 		}
+	}
+}
+
+// A done command shows the images atto view attached, folded or open.
+func TestToolBlockImages(t *testing.T) {
+	b := &toolBlock{expander: expander{d: &details{}}, args: agent.BashArgs{Description: "Look", Command: "atto view shot.png"},
+		done: true, images: []string{"shot.png 1136×1038"}}
+	if s := plainLines(b.Render(80)); !strings.Contains(s, "▣ shot.png 1136×1038") {
+		t.Fatalf("folded:\n%s", s)
+	}
+	b.Click(0)
+	if s := plainLines(b.Render(80)); !strings.Contains(s, "▣ shot.png 1136×1038") || !strings.Contains(s, "$ atto view") {
+		t.Fatalf("open:\n%s", s)
 	}
 }

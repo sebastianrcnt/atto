@@ -27,6 +27,12 @@ func TestMain(m *testing.M) {
 				os.Exit(1)
 			}
 			os.Exit(0)
+		case "view": // TestPrintView runs it as "atto view"
+			if err := RunView(os.Args[2:], os.Stdout); err != nil {
+				fmt.Fprintln(os.Stderr, err)
+				os.Exit(1)
+			}
+			os.Exit(0)
 		case "_agent-turn":
 			if err := RunAgentTurn(os.Args[2:], io.Discard); err != nil {
 				fmt.Fprintln(os.Stderr, err)

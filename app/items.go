@@ -9,6 +9,7 @@ import (
 	"github.com/sebastianrcnt/atto/core/transcript"
 	"github.com/sebastianrcnt/atto/events"
 	"github.com/sebastianrcnt/atto/goal"
+	"github.com/sebastianrcnt/atto/images"
 	"github.com/sebastianrcnt/atto/session"
 	"github.com/sebastianrcnt/atto/tui"
 )
@@ -194,6 +195,9 @@ func (a *App) itemCompleted(it *transcript.Item) {
 	case transcript.Tool:
 		if b := a.tools[it.ID]; b != nil {
 			b.pending, b.done = false, true
+			for _, im := range it.Images {
+				b.images = append(b.images, images.ViewLabel(im))
+			}
 			if r := it.Result; r != nil {
 				b.res = agent.BashResult{ExitCode: r.ExitCode, TimedOut: r.TimedOut, Canceled: r.Canceled, Duration: it.Duration,
 					Job: r.Job, Background: r.Background}
