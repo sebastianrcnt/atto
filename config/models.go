@@ -571,6 +571,16 @@ func mergeModel(base, over Model) Model {
 	base.ExtraBody = mergeMap(base.ExtraBody, over.ExtraBody)
 	base.Headers = mergeMap(base.Headers, over.Headers)
 	base.SamplingParams = mergeMap(base.SamplingParams, over.SamplingParams)
+	if len(over.SamplingParamsByThinkingLevel) > 0 {
+		levels := maps.Clone(base.SamplingParamsByThinkingLevel)
+		if levels == nil {
+			levels = map[string]map[string]any{}
+		}
+		for level, params := range over.SamplingParamsByThinkingLevel {
+			levels[level] = mergeMap(levels[level], params)
+		}
+		base.SamplingParamsByThinkingLevel = levels
+	}
 	return base
 }
 
