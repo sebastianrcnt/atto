@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/sebastianrcnt/atto/agent"
+	"github.com/sebastianrcnt/atto/goal"
 	"github.com/sebastianrcnt/atto/provider"
 	"github.com/sebastianrcnt/atto/session"
 )
@@ -65,4 +67,35 @@ func TestRollbackFollowsBranch(t *testing.T) {
 	if resp := s2.Handle(context.Background(), b); resp.Error == nil {
 		t.Fatal("rolling back more than there is should fail")
 	}
+}
+
+// rollbackOver resumes a thread of two user turns, the second followed by
+// one message atto sent in the user's role, and rolls back one turn. That
+// message is not a turn, so the rollback must land on the user's own "u2".
+func rollbackOver(t *testing.T, content string) {
+	t.Helper()
+	work := setup(t)
+	w := session.New(work)
+	for _, m := range []provider.Message{
+		{Role: "user", Content: "u1"}, {Role: "assistant", Content: "a1"},
+		{Role: "user", Content: "u2"}, {Role: "assistant", Content: "a2"},
+		{Role: "user", Content: content}, {Role: "assistant", Content: "a3"},
+	} {
+		w.Append(session.Entry{Type: session.TypeMessage, Message: &m})
+	}
+	w.Close()
+
+	s := New("test", work)
+	t.Cleanup(s.Close)
+	call(t, s, "thread/resume", map[string]any{"threadId": w.ID})
+	r := call(t, s, "thread/rollback", map[string]any{"threadId": w.ID})
+	if got := itemTexts(r); got != "u1;a1;" || r["input"] != "u2" {
+		t.Fatalf("rollback %q input %v, want the user's own u2", got, r["input"])
+	}
+}
+
+func TestRollbackSkipsGoalAndStopHookMessages(t *testing.T) {
+	t.Run("goal", func(t *testing.T) { rollbackOver(t, goal.OpenTag+"\nkeep going\n"+goal.CloseTag) })
+	t.Run("legacy goal", func(t *testing.T) { rollbackOver(t, "[atto goal] keep going") })
+	t.Run("stop hook", func(t *testing.T) { rollbackOver(t, agent.StopHookPrefix+"run the tests first") })
 }
