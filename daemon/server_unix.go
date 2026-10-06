@@ -54,7 +54,8 @@ func Serve(exe string) error {
 		return err
 	}
 	_ = os.Chmod(sock, 0o600)
-	d := &daemon{exe: exe, ln: ln, panes: map[int]*pane{}, idle: time.AfterFunc(idleExit, func() { ln.Close() })}
+	d := &daemon{exe: exe, ln: ln, panes: map[int]*pane{}, idleAfter: idleExit}
+	d.idle = time.AfterFunc(d.idleAfter, func() { ln.Close() })
 	defer os.Remove(sock)
 	for {
 		c, err := ln.Accept()
@@ -71,12 +72,13 @@ func Serve(exe string) error {
 }
 
 type daemon struct {
-	exe   string
-	ln    net.Listener
-	mu    sync.Mutex
-	panes map[int]*pane
-	next  int
-	idle  *time.Timer // ends the daemon when it fires with no pane
+	exe       string
+	ln        net.Listener
+	mu        sync.Mutex
+	panes     map[int]*pane
+	next      int
+	idle      *time.Timer // ends the daemon when it fires with no pane
+	idleAfter time.Duration
 }
 
 type pane struct {
@@ -96,7 +98,16 @@ type pane struct {
 type client struct {
 	conn net.Conn
 	wmu  sync.Mutex
-	size Size
+	size Size // guarded by its pane's mu
+
+	pmu  sync.Mutex
+	pane *pane // the pane it shows
+}
+
+func (c *client) current() *pane {
+	c.pmu.Lock()
+	defer c.pmu.Unlock()
+	return c.pane
 }
 
 func (c *client) send(typ byte, payload []byte) error {
@@ -155,6 +166,7 @@ func (d *daemon) serve(conn net.Conn) {
 			return
 		}
 		p.attach(c)
+		d.read(c)
 	case "attach":
 		p := d.find(h.Target)
 		if p == nil {
@@ -166,6 +178,7 @@ func (d *daemon) serve(conn net.Conn) {
 			return
 		}
 		p.attach(c)
+		d.read(c)
 	default:
 		fail("unknown request %q", h.Op)
 	}
@@ -269,7 +282,7 @@ func (p *pane) pump() {
 	d.mu.Lock()
 	delete(d.panes, p.info.ID)
 	if len(d.panes) == 0 {
-		d.idle.Reset(idleExit)
+		d.idle.Reset(d.idleAfter)
 	}
 	d.mu.Unlock()
 	p.mu.Lock()
@@ -286,7 +299,8 @@ func (p *pane) output(b []byte) {
 	p.mu.Lock()
 	out, markers := p.st.feed(b)
 	clients := slices.Clone(p.clients)
-	var detach *client
+	var detach, move *client
+	target := ""
 	for _, m := range markers {
 		cmd, rest, _ := strings.Cut(m, ";")
 		switch cmd {
@@ -296,6 +310,8 @@ func (p *pane) output(b []byte) {
 			p.info.Session, p.info.Name, _ = strings.Cut(rest, ";")
 		case "ready":
 			p.ready = true
+		case "switch":
+			move, target = p.last, rest
 		}
 	}
 	p.mu.Unlock()
@@ -309,6 +325,23 @@ func (p *pane) output(b []byte) {
 	if detach != nil {
 		p.detach(detach, true)
 	}
+	if move != nil {
+		p.d.move(move, p, target)
+	}
+}
+
+// move shows another pane on c's terminal: from's modes are undone and the
+// screen cleared before target's are set and it repaints.
+func (d *daemon) move(c *client, from *pane, target string) {
+	to := d.find(target)
+	if to == nil || to == from || !from.remove(c) {
+		return
+	}
+	from.mu.Lock()
+	reset := from.st.reset()
+	from.mu.Unlock()
+	_ = c.send(fOutput, []byte(reset+"\x1b[2J\x1b[H"))
+	to.attach(c)
 }
 
 // attach shows the pane on c's terminal: the terminal modes the program
@@ -324,6 +357,9 @@ func (p *pane) attach(c *client) {
 	if restore != "" {
 		_ = c.send(fOutput, []byte(restore))
 	}
+	c.pmu.Lock()
+	c.pane = p
+	c.pmu.Unlock()
 	p.mu.Lock()
 	p.clients = append(p.clients, c)
 	p.last = c
@@ -331,15 +367,17 @@ func (p *pane) attach(c *client) {
 	p.mu.Unlock()
 	p.resize(size)
 	p.redraw()
-	go p.read(c)
 }
 
-// read takes c's input until it leaves.
-func (p *pane) read(c *client) {
+// read takes c's input for the pane it shows until it leaves.
+func (d *daemon) read(c *client) {
 	for {
 		typ, b, err := readFrame(c.conn)
+		p := c.current()
 		if err != nil {
-			p.detach(c, false)
+			if p != nil {
+				p.detach(c, false)
+			}
 			return
 		}
 		switch typ {
@@ -367,13 +405,14 @@ func (p *pane) read(c *client) {
 	}
 }
 
-// detach ends c's attachment; the pane goes on. tell sends c the reason.
-func (p *pane) detach(c *client, tell bool) {
+// remove takes c off the pane, if it was on; the next client's size then
+// applies.
+func (p *pane) remove(c *client) bool {
 	p.mu.Lock()
 	i := slices.Index(p.clients, c)
 	if i < 0 {
 		p.mu.Unlock()
-		return
+		return false
 	}
 	p.clients = slices.Delete(p.clients, i, i+1)
 	if p.last == c {
@@ -388,13 +427,21 @@ func (p *pane) detach(c *client, tell bool) {
 		size = &s
 	}
 	p.mu.Unlock()
+	if size != nil {
+		p.resize(*size)
+	}
+	return true
+}
+
+// detach ends c's attachment; the pane goes on. tell sends c the reason.
+func (p *pane) detach(c *client, tell bool) {
+	if !p.remove(c) {
+		return
+	}
 	if tell {
 		_ = c.sendJSON(fExit, Exit{Detached: true})
 	}
 	c.conn.Close()
-	if size != nil {
-		p.resize(*size)
-	}
 }
 
 func (p *pane) resize(s Size) {

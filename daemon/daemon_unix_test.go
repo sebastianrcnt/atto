@@ -46,6 +46,8 @@ func helper() {
 		case len(f) == 0:
 		case f[0] == "detach":
 			fmt.Print(MarkerSeq("detach"))
+		case f[0] == "switch" && len(f) == 2:
+			fmt.Print(MarkerSeq("switch", f[1]))
 		case f[0] == "session" && len(f) == 3:
 			fmt.Print(MarkerSeq("session", f[1], f[2]))
 		case f[0] == "exit" && len(f) == 2:
@@ -215,6 +217,38 @@ func TestDaemonPaneLifecycle(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("daemon did not exit after its last pane")
 	}
+}
+
+func TestDaemonSwitchMovesTheTerminal(t *testing.T) {
+	startDaemon(t, 300*time.Millisecond)
+	a := open(t, Hello{Op: "new", Cwd: t.TempDir(), Env: os.Environ()})
+	a.until(fOutput, "hello pane 1")
+	b := open(t, Hello{Op: "new", Cwd: t.TempDir(), Env: os.Environ()})
+	b.until(fOutput, "hello pane 2")
+	b.typ("detach\n")
+	b.until(fExit, "detached")
+
+	// Pane 1 asks to show pane 2 on the terminal that typed: its modes are
+	// undone, the screen cleared, and pane 2 attaches and repaints.
+	a.typ("switch 2\n")
+	f, out := a.until(fAttached, `"id":2`)
+	if !strings.Contains(out, "\x1b[?2004l") || !strings.Contains(out, "\x1b[2J") {
+		t.Fatalf("switch output %q", out)
+	}
+	_ = f
+	a.until(fOutput, "redraw")
+	a.typ("where\n")
+	a.until(fOutput, "got where")
+	ps, _ := List()
+	if len(ps) != 2 || ps[0].Clients != 0 || ps[1].Clients != 1 {
+		t.Fatalf("panes after switch %+v", ps)
+	}
+	// Unknown targets and the pane itself are ignored.
+	a.typ("switch 9\n")
+	a.typ("switch 2\n")
+	a.typ("still\n")
+	a.until(fOutput, "got still")
+	_ = Stop(true)
 }
 
 func TestDaemonKillStopAndErrors(t *testing.T) {

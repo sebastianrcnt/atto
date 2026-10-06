@@ -593,7 +593,7 @@ func agentReport(st subagent.State) string {
 	if t.Error != "" {
 		fmt.Fprintf(&b, "error: %s\n", t.Error)
 	}
-	msg := lastAssistant(st.Session)
+	msg := session.LastAssistant(st.Session)
 	switch {
 	case msg != "":
 		b.WriteString("\n" + msg + "\n")
@@ -630,29 +630,7 @@ func writeAgentReport(out io.Writer, st subagent.State, jsonOut bool) error {
 		Error    string          `json:"error,omitempty"`
 		Worktree string          `json:"worktree,omitempty"`
 		Branch   string          `json:"branch,omitempty"`
-	}{st.Name, t.Status, t.N, t.Duration().Seconds(), tokens{t.PromptTokens, t.CachedTokens, t.OutputTokens}, t.Cost, st.Session, st.Model, lastAssistant(st.Session), t.Error, st.Worktree, st.Branch})
-}
-
-// lastAssistant is the text of the last assistant message on the
-// session's active branch.
-func lastAssistant(id string) string {
-	path, err := session.Find(id)
-	if err != nil {
-		return ""
-	}
-	_, entries, err := session.Load(path)
-	if err != nil {
-		return ""
-	}
-	branch := session.Active(entries)
-	for _, b := range slices.Backward(branch) {
-		if m := b.Message; b.Type == session.TypeMessage && m != nil && m.Role == "assistant" {
-			if text := strings.TrimSpace(m.Content); text != "" {
-				return text
-			}
-		}
-	}
-	return ""
+	}{st.Name, t.Status, t.N, t.Duration().Seconds(), tokens{t.PromptTokens, t.CachedTokens, t.OutputTokens}, t.Cost, st.Session, st.Model, session.LastAssistant(st.Session), t.Error, st.Worktree, st.Branch})
 }
 
 func agentList(out io.Writer, parent string) error {

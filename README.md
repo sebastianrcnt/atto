@@ -139,6 +139,7 @@ Leaving atto while a turn runs offers "Detach" instead of "Run in background". S
 | `Esc` | interrupt, or send pending steers now |
 | `Ctrl+Enter` | while the agent works, interrupt it and send the prompt (after pending steers) as a new turn at once; an active goal is not paused but waits for you after that turn. `Ctrl+G` does the same where the terminal can't tell `Ctrl+Enter` from `Enter` (atto asks for xterm modifyOtherKeys and the kitty keyboard protocol; Terminal.app, `screen`, the Windows console and tmux without `extended-keys on` don't send it) |
 | `Esc` `Esc` | on an empty prompt: open the session tree to go back to an earlier message and edit it |
+| `←` | on an empty prompt: the agent center (also `/agents`), as codex's agents view: every atto the daemon runs, with its directory, terminals and goal, and each one's subagents. `Enter` on another session shows it on this terminal (the daemon moves the terminal to that pane); `Enter` on a subagent shows its latest answer, read-only; `←` or `Esc` goes back |
 | `Shift+Tab` | cycle reasoning effort |
 | `Ctrl+T` | expand everything: thinking, command groups and every command's full output; again to fold it all back (or click one block) |
 | `Ctrl+B` | move the running command to the background: it keeps running as a job (`/jobs`), the agent goes on and gets an `[atto event]` when it exits |
@@ -191,6 +192,7 @@ To use the terminal's own selection instead, hold the key that bypasses mouse re
 | `/archive` | archive the session and start a new one |
 | `/clear` | start a new session |
 | `/goal [<objective>\|clear\|edit\|pause\|resume]` | set or view the goal for a long-running task, as in codex: bare `/goal` (or `status`) shows it with the time and tokens used, `help` shows the usage, `edit` opens a prompt, a new objective asks before replacing an unfinished goal. The words help and status alone never become an objective. Clearing or pausing while a turn runs is told to the model. A message sent while the goal is waiting, paused, stalled or usage limited carries a short note saying so, so the model answers instead of resuming goal work; a message sent while a goal turn runs says the goal is still active. A turn that fails for a transient reason (a 5xx, a timeout, an unavailable model) is retried after 10s, 30s and 90s before the goal stalls; Esc, `/goal pause` and `/goal clear` end the wait. The status shows at the right of the status line ("Pursuing goal (14m)"), Esc pauses it, and opening a session with a paused or stalled goal asks whether to resume |
+| `/agents` | the agent center: every running atto session, its goal and subagents; switch this terminal to another session (as `←` on an empty prompt) |
 | `/detach` | leave the session running in the daemon and return to the shell; `atto attach` comes back |
 | `/remote [on [port]\|off]` | control this session from a phone or browser: serves atto's web client on port 7879 (or `"remote": {"port": N}` in `settings.json`), prints its link and a QR code, and marks messages sent from there "from remote"; `off` closes every connection and revokes the link |
 | `/jobs`, `/stop` | list or stop background jobs |

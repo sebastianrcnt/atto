@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io/fs"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -154,4 +155,25 @@ func toolCallText(args string) (desc, cmd string) {
 		return "tool call", args
 	}
 	return a.Description, a.Command
+}
+
+// LastAssistant is the text of the last assistant message on the active
+// branch of session id; "" if there is none or it can't be read.
+func LastAssistant(id string) string {
+	path, err := Find(id)
+	if err != nil {
+		return ""
+	}
+	_, entries, err := Load(path)
+	if err != nil {
+		return ""
+	}
+	for _, e := range slices.Backward(Active(entries)) {
+		if m := e.Message; e.Type == TypeMessage && m != nil && m.Role == "assistant" {
+			if text := strings.TrimSpace(m.Content); text != "" {
+				return text
+			}
+		}
+	}
+	return ""
 }

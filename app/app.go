@@ -530,6 +530,12 @@ func (a *App) onInput(data string) bool {
 	case "shift+tab":
 		a.cycleEffort()
 		return true
+	case "left":
+		// As in codex: ← on an empty prompt opens the agent center.
+		if a.editor.Text() == "" {
+			a.openAgents()
+			return true
+		}
 	case "ctrl+t":
 		a.details.on = !a.details.on
 		a.details.gen++ // the expanded blocks are confirmation enough

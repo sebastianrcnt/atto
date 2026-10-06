@@ -210,6 +210,8 @@ func Run(h Hello) (code int, note string, err error) {
 		case fOutput:
 			b, _ = st.feed(b)
 			_, _ = out.Write(b)
+		case fAttached: // moved to another pane
+			_ = json.Unmarshal(b, &pane)
 		case fExit:
 			var x Exit
 			_ = json.Unmarshal(b, &x)

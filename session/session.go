@@ -505,6 +505,9 @@ func SameDir(a, b string) bool {
 	return a == b
 }
 
+// Summarize reads one session file's summary, as List does.
+func Summarize(path string) (Summary, error) { return summarize(path) }
+
 func summarize(path string) (Summary, error) {
 	h, entries, err := Load(path)
 	if err != nil {
