@@ -135,6 +135,33 @@ func TestCenterDirectResumesInPlace(t *testing.T) {
 	}
 }
 
+func TestCenterDefersResumeWhileBusy(t *testing.T) {
+	a, _ := paneApp(t, false)
+	original := a.sess.ID
+	other := session.New(a.cwd)
+	other.Append(session.Entry{Type: session.TypeName, Name: "other work"})
+	other.Close()
+	fakeCenter(t, nil, []session.Summary{{ID: other.ID, Cwd: a.cwd, Name: "other work", Updated: time.Now()}})
+
+	canceled := false
+	a.busy = true
+	a.cancel = func() { canceled = true }
+	a.cmdResume("")
+	c := a.modal.(*agentCenter)
+	c.HandleInput("\r")
+
+	if !canceled {
+		t.Fatal("opening another session did not cancel the active turn")
+	}
+	if a.pendingResume != other.Path {
+		t.Fatalf("pending resume %q, want %q", a.pendingResume, other.Path)
+	}
+	if a.sess.ID != original {
+		t.Fatalf("session changed while busy: got %s, want %s", a.sess.ID, original)
+	}
+	a.busy = false
+}
+
 func TestStandaloneCenterPicks(t *testing.T) {
 	t.Setenv("ATTO_DIR", t.TempDir())
 	t.Setenv(daemon.EnvPane, "")

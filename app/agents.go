@@ -112,7 +112,7 @@ func (a *App) openAgents(tab int) {
 			return
 		}
 		if path, err := session.Find(id); err == nil {
-			a.resume(path)
+			a.requestResume(path)
 		}
 	}
 	c.onNew = func(cwd string) {
