@@ -3,6 +3,7 @@ package jobs
 import (
 	"errors"
 	"fmt"
+	"github.com/sebastianrcnt/atto/fsutil"
 	"os"
 	"path/filepath"
 	"time"
@@ -11,6 +12,9 @@ import (
 const reservationLockTimeout = 10 * time.Second
 
 func lockReservations(session string) (func(), error) {
+	if !fsutil.ValidID(session) {
+		return nil, fmt.Errorf("invalid session id")
+	}
 	root := Root(session)
 	if err := os.MkdirAll(root, 0o755); err != nil {
 		return nil, err

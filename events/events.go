@@ -79,7 +79,14 @@ func SplitReload(evs []Event) (reload bool, rest []Event) {
 }
 
 // Dir is the inbox for a session.
-func Dir(session string) string { return filepath.Join(config.Dir(), "inbox", session) }
+func validSession(session string) bool { return fsutil.ValidID(session) }
+
+func Dir(session string) string {
+	if !validSession(session) {
+		session = ".invalid-session"
+	}
+	return filepath.Join(config.Dir(), "inbox", session)
+}
 
 func randID() string {
 	b := make([]byte, 4)
@@ -98,7 +105,7 @@ func writeAtomic(path string, data []byte) error {
 
 // Push adds an event to a session's inbox.
 func Push(session string, e Event) error {
-	if session == "" {
+	if !validSession(session) {
 		return fmt.Errorf("no session")
 	}
 	if e.Time.IsZero() {
@@ -159,7 +166,7 @@ func Pending(session string) bool {
 // Wake signals waiters (`atto sleep`, `atto job wait`) that the user sent
 // input, so they return early and the agent sees it sooner.
 func Wake(session string) {
-	if session != "" {
+	if validSession(session) {
 		_ = writeAtomic(filepath.Join(Dir(session), ".wake"), []byte(time.Now().Format(time.RFC3339Nano)))
 	}
 }

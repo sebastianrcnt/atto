@@ -131,7 +131,12 @@ func (j Job) Runtime() time.Duration {
 	return end.Sub(j.Started).Round(time.Second)
 }
 
-func Root(session string) string { return filepath.Join(config.Dir(), "jobs", session) }
+func Root(session string) string {
+	if !fsutil.ValidID(session) {
+		session = ".invalid-session"
+	}
+	return filepath.Join(config.Dir(), "jobs", session)
+}
 func dirOf(session string, id int) string {
 	return filepath.Join(Root(session), strconv.Itoa(id))
 }
@@ -162,6 +167,9 @@ const startGrace = time.Minute
 
 // Get loads a job, marking it lost if its supervisor is gone.
 func Get(session string, id int) (Job, error) {
+	if !fsutil.ValidID(session) || id <= 0 {
+		return Job{}, fmt.Errorf("invalid session or job id")
+	}
 	j, err := load(dirOf(session, id))
 	if errors.Is(err, os.ErrNotExist) {
 		return j, fmt.Errorf("no job %d", id)
@@ -272,7 +280,7 @@ func startArgs(session, cwd, name string, args []string, quiet bool, kind string
 
 // reserve checks that session may start another job and reserves its ID.
 func reserve(session string) (int, string, error) {
-	if session == "" {
+	if !fsutil.ValidID(session) {
 		return 0, "", fmt.Errorf("no session: run inside atto (ATTO_SESSION_ID) or pass --session")
 	}
 	release, err := lockReservations(session)

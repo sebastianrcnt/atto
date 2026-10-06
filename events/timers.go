@@ -1,6 +1,7 @@
 package events
 
 import (
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -52,7 +53,7 @@ func timerDir(session string) string { return filepath.Join(Dir(session), "timer
 
 // AddTimer schedules a timer and returns it.
 func AddTimer(session string, due time.Time, message string) (Timer, error) {
-	if session == "" {
+	if !validSession(session) {
 		return Timer{}, fmt.Errorf("no session")
 	}
 	t := Timer{ID: randID()[:6], Due: due, Message: message, Created: time.Now()}
@@ -64,7 +65,7 @@ func AddTimer(session string, due time.Time, message string) (Timer, error) {
 // now+every. count > 0 limits the number of firings; a non-zero until stops
 // it once the next firing would fall after that time.
 func AddRecurringTimer(session string, now time.Time, every time.Duration, count int, until time.Time, message string) (Timer, error) {
-	if session == "" {
+	if !validSession(session) {
 		return Timer{}, fmt.Errorf("no session")
 	}
 	if every < MinEvery {
@@ -94,7 +95,7 @@ func Timers(session string) []Timer {
 		}
 		data, err := os.ReadFile(filepath.Join(timerDir(session), e.Name()))
 		var t Timer
-		if err == nil && json.Unmarshal(data, &t) == nil {
+		if err == nil && json.Unmarshal(data, &t) == nil && validTimerID(t.ID) && e.Name() == t.ID+".json" {
 			out = append(out, t)
 		}
 	}
@@ -103,7 +104,18 @@ func Timers(session string) []Timer {
 }
 
 // CancelTimer removes a timer by ID.
+func validTimerID(id string) bool {
+	if len(id) != 6 || strings.ToLower(id) != id {
+		return false
+	}
+	_, err := hex.DecodeString(id)
+	return err == nil
+}
+
 func CancelTimer(session, id string) error {
+	if !validSession(session) || !validTimerID(id) {
+		return fmt.Errorf("invalid timer or session id")
+	}
 	err := os.Remove(filepath.Join(timerDir(session), id+".json"))
 	if os.IsNotExist(err) {
 		return fmt.Errorf("no timer %q", id)
