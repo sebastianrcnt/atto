@@ -92,6 +92,9 @@ var statusText = regexp.MustCompile(`^(?:(\d{3})\b|[^(:]*\((\d{3})\):)`)
 // StatusOf is the HTTP status an error carries: the provider's, or the one
 // its message starts with; 0 for none.
 func StatusOf(err error) int {
+	if err == nil {
+		return 0
+	}
 	if pe, ok := errors.AsType[*ProviderError](err); ok {
 		return pe.Status
 	}

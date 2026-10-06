@@ -60,3 +60,18 @@ func TestRetryWait(t *testing.T) {
 		t.Errorf("retry-after: %v", got)
 	}
 }
+
+func TestStatusOf(t *testing.T) {
+	cases := map[error]int{
+		nil:                         0,
+		errors.New("boom"):          0,
+		errors.New("503: overload"): 503,
+		errors.New("Upstream request failed (400): bad"): 400,
+		&ProviderError{Status: 429}:                      429,
+	}
+	for err, want := range cases {
+		if got := StatusOf(err); got != want {
+			t.Errorf("StatusOf(%v) = %d, want %d", err, got, want)
+		}
+	}
+}
