@@ -434,7 +434,7 @@ func TestAgentExternalModelFlags(t *testing.T) {
 	agentServer(t, func(int, string) string { return textAnswer("ok") })
 	t.Chdir(t.TempDir())
 	enableSubagents(t, "")
-	for _, env := range []string{"ATTO_SESSION_ID", config.EnvSubagent} {
+	for _, env := range []string{"ATTO_SESSION_ID", config.EnvAgent, config.EnvSubagent} {
 		t.Setenv(env, "inside")
 		for _, flags := range [][]string{{"-m", "fake/m"}, {"-effort", "high"}, {"-m", ""}} {
 			args := append([]string{"start", "a", "general", "task", "-session", "explicit"}, flags...)

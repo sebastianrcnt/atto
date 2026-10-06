@@ -88,7 +88,7 @@ func RunAgent(args []string, out io.Writer) error {
 			override = true
 		}
 	})
-	if override && (os.Getenv("ATTO_SESSION_ID") != "" || config.InSubagent()) {
+	if override && (os.Getenv("ATTO_SESSION_ID") != "" || config.InAgent() || config.InSubagent()) {
 		return fmt.Errorf("-m and -effort are for external callers only; inside atto use presets")
 	}
 	switch sub {
@@ -110,7 +110,8 @@ func RunAgent(args []string, out io.Writer) error {
 		}
 	}
 	if *session == "" {
-		if config.InSubagent() {
+		if config.InAgent() || config.InSubagent() { // atto's own commands always name their session
+
 			return requireSession(*session)
 		}
 		parentOut := out
