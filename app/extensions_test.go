@@ -123,7 +123,7 @@ func TestExtensionInTUI(t *testing.T) {
 	// The Loaded block lists it; /reload disposes of it: its status item
 	// and widget go, and the new code runs.
 	bs := loadedBlocks(a)
-	if got := plainLines(bs[len(bs)-1].Render(100)); !strings.Contains(got, "Extensions  2: demo, diff") {
+	if got := plainLines(bs[len(bs)-1].Render(100)); !strings.Contains(got, "Extensions  3: demo, autorename, diff") {
 		t.Fatalf("loaded block:\n%s", got)
 	}
 	writeTestFile(t, filepath.Join(config.ExtensionsDir(), "demo.ts"), `export default (atto: any) => atto.registerCommand("demo2", { handler() {} })`)
@@ -135,7 +135,7 @@ func TestExtensionInTUI(t *testing.T) {
 	if got := plainLines(bs[len(bs)-1].Render(100)); !strings.Contains(got, "changed  extension demo") {
 		t.Fatalf("reload block:\n%s", got)
 	}
-	if cs := a.extensionCommands(); len(cs) != 2 || cs[0].name != "demo2" || cs[1].name != "diff" {
+	if cs := a.extensionCommands(); len(cs) != 3 || cs[0].name != "demo2" || cs[2].name != "diff" {
 		t.Fatalf("%+v", cs)
 	}
 }

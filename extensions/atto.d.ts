@@ -22,6 +22,16 @@ interface AttoSession {
   /** provider/id of the model in use, "" without one. */
   readonly model: string;
   readonly cwd: string;
+  /** The session's name ("" without one), read from its file. */
+  readonly name: string;
+  /**
+   * The conversation's text so far, oldest first: the user's messages and
+   * the model's answers on the current branch, without commands and their
+   * output. The last `limit` (default 50).
+   */
+  messages(limit?: number): { role: "user" | "assistant"; text: string }[];
+  /** Names the session, as /name does. Throws in atto -p. */
+  setName(name: string): void;
 }
 
 interface AttoUI {

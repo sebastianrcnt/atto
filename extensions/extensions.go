@@ -38,6 +38,8 @@ import (
 	"github.com/sebastianrcnt/atto/agent"
 	"github.com/sebastianrcnt/atto/config"
 	"github.com/sebastianrcnt/atto/mcp"
+	"github.com/sebastianrcnt/atto/provider"
+	"github.com/sebastianrcnt/atto/session"
 )
 
 // Statuses of an extension.
@@ -428,4 +430,30 @@ func (e *ext) start(code string) {
 	e.mu.Unlock()
 	e.halt()
 	e.m.log(e.spec.Name, "failed to load: "+msg)
+}
+
+// sessionText reads the session's file: its latest name, and the last
+// limit user and assistant messages of the active branch that carry text.
+func (m *Manager) sessionText(limit int) (name string, msgs []provider.Message) {
+	id, _ := m.session()
+	path, err := session.Find(id)
+	if err != nil {
+		return "", nil // not written yet
+	}
+	_, entries, err := session.Load(path)
+	if err != nil {
+		return "", nil
+	}
+	for _, e := range session.Active(entries) {
+		switch {
+		case e.Type == session.TypeName:
+			name = e.Name
+		case e.Type == session.TypeMessage && e.Message != nil && (e.Message.Role == "user" || e.Message.Role == "assistant") && strings.TrimSpace(e.Message.Content) != "":
+			msgs = append(msgs, provider.Message{Role: e.Message.Role, Content: e.Message.Content})
+		}
+	}
+	if len(msgs) > limit {
+		msgs = msgs[len(msgs)-limit:]
+	}
+	return name, msgs
 }

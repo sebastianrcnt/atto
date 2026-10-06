@@ -108,6 +108,18 @@ func (h *tuiHost) ClearUI(ext string) {
 	})
 }
 
+// SetSessionName names the conversation, as /name does, and says so.
+func (h *tuiHost) SetSessionName(ext, name string) error {
+	h.do(func() {
+		if h.a.sess.ReadOnly() != "" {
+			h.a.notice("%s: this conversation is read-only; not named.", ext)
+			return
+		}
+		h.a.nameSession(name)
+	})
+	return nil
+}
+
 func (h *tuiHost) SendMessage(text string) {
 	h.do(func() { h.a.sendExtensionMessage(text) })
 }

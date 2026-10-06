@@ -33,7 +33,7 @@ func TestExtensionsInLoadedAndReload(t *testing.T) {
 			row = r.Text
 		}
 	}
-	if row != "2: guard, diff; 1 failed; 1 needs approval" {
+	if row != "3: guard, autorename, diff; 1 failed; 1 needs approval" {
 		t.Fatalf("summary %q", row)
 	}
 	var details []string
@@ -85,7 +85,7 @@ func TestExtensionsInLoadedAndReload(t *testing.T) {
 	if rep := r.ForModel(); !strings.Contains(rep, "Warning: extension guard failed: "+filepath.Join(user, "guard.ts")+":1:") {
 		t.Fatalf("the model learns where its extension broke: %s", rep)
 	}
-	if in := r.Loaded.Extensions; len(in) != 4 || in[0].Name != "broken" || in[0].Status != extensions.Loaded || in[2].Status != extensions.Loaded {
+	if in := r.Loaded.Extensions; len(in) != 5 || in[0].Name != "broken" || in[0].Status != extensions.Loaded || in[2].Status != extensions.Loaded {
 		t.Fatalf("%+v", in)
 	}
 }

@@ -111,6 +111,18 @@ func (h *threadHost) block(ext, id string, change func(*transcript.BlockDisplay)
 	h.publish("item/display", map[string]any{"itemId": b.item, "blockId": id, "display": WireDisplay(&b.disp)})
 }
 
+// SetSessionName names the thread and saves the name, as /name does in
+// the terminal.
+func (h *threadHost) SetSessionName(ext, name string) error {
+	t := h.t
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.name = name
+	t.sess.Append(session.Entry{Type: session.TypeName, Name: name})
+	h.publish("thread/updated", map[string]any{"thread": t.info()})
+	return nil
+}
+
 // ShowText adds an extText item, completed at once, and saves it in the
 // session.
 func (h *threadHost) ShowText(ext, title, text string, o extensions.TextOptions) {

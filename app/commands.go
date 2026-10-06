@@ -376,6 +376,14 @@ func (a *App) cmdClear(string) {
 
 func (a *App) cmdQuit(string) { a.requestQuit() }
 
+// nameSession names the conversation (/name, and extensions).
+func (a *App) nameSession(name string) {
+	a.sessName = name
+	a.sess.Append(session.Entry{Type: session.TypeName, Name: name})
+	a.statusTrigger()
+	a.remoteUpdated()
+}
+
 func (a *App) cmdName(arg string) {
 	if arg == "" {
 		if a.sessName == "" {
@@ -385,10 +393,8 @@ func (a *App) cmdName(arg string) {
 		}
 		return
 	}
-	a.sessName = arg
-	a.sess.Append(session.Entry{Type: session.TypeName, Name: arg})
+	a.nameSession(arg)
 	a.notice("Named this conversation %q.", arg)
-	a.statusTrigger()
 	a.remoteUpdated()
 }
 

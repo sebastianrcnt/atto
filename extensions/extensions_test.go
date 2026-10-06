@@ -36,6 +36,14 @@ type fakeHost struct {
 	blockStatus  map[string]string
 	blockDisplay map[string]string
 	texts        []shownText
+	names        []string // SetSessionName
+}
+
+func (h *fakeHost) SetSessionName(ext, name string) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.names = append(h.names, name)
+	return nil
 }
 
 // shownText is a call of ctx.ui.showText.
@@ -327,7 +335,7 @@ func TestDiscover(t *testing.T) {
 	for _, s := range Discover(sub) { // the project is found from below its root
 		got = append(got, s.Source+":"+s.Name+":"+filepath.Base(s.Path))
 	}
-	want := []string{"user:a:a.ts", "user:b:b.js", "user:folder:index.ts", "project:proj:proj.ts", "builtin:diff:diff.ts"}
+	want := []string{"user:a:a.ts", "user:b:b.js", "user:folder:index.ts", "project:proj:proj.ts", "builtin:autorename:autorename.ts", "builtin:diff:diff.ts"}
 	if !slices.Equal(got, want) {
 		t.Fatalf("got %v, want %v", got, want)
 	}
@@ -499,7 +507,7 @@ export default function (atto: any) {
 	h := newHost(true)
 	h.answers = []any{"b", true, "Ann"}
 	m := load(t, cwd, h)
-	if got := m.Commands(); len(got) != 3 || got[0] != (Command{"ask", "Ask things", "ui"}) || got[2].Ext != "diff" {
+	if got := m.Commands(); len(got) != 4 || got[0] != (Command{"ask", "Ask things", "ui"}) || got[3].Ext != "diff" {
 		t.Fatalf("%+v", got)
 	}
 	if m.RunCommand("nope", "") {

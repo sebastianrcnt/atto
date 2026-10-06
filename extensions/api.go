@@ -161,6 +161,31 @@ func (e *ext) sessionObject() *goja.Object {
 	get("id", func() string { id, _ := e.m.session(); return id })
 	get("model", func() string { _, model := e.m.session(); return model })
 	_ = o.Set("cwd", e.m.cwd)
+	get("name", func() string { name, _ := e.m.sessionText(0); return name })
+	// messages(limit) is the conversation's text so far, oldest first: the
+	// user's messages and the model's answers, without commands and their
+	// output.
+	_ = o.Set("messages", func(c goja.FunctionCall) goja.Value {
+		limit := 50
+		if v := c.Argument(0); !goja.IsUndefined(v) && !goja.IsNull(v) {
+			limit = int(v.ToInteger())
+		}
+		_, msgs := e.m.sessionText(max(0, limit))
+		out := make([]any, len(msgs))
+		for i, m := range msgs {
+			out[i] = map[string]any{"role": m.Role, "text": m.Content}
+		}
+		return vm.ToValue(out)
+	})
+	_ = o.Set("setName", func(name string) {
+		name = strings.Join(strings.Fields(name), " ")
+		if name == "" {
+			panic(vm.NewTypeError("the name is empty"))
+		}
+		if err := e.m.host().SetSessionName(e.spec.Name, name); err != nil {
+			panic(vm.NewGoError(err))
+		}
+	})
 	return o
 }
 

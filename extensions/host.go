@@ -1,6 +1,7 @@
 package extensions
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"sync"
@@ -39,6 +40,9 @@ type Host interface {
 	ClearUI(ext string)
 	// SendMessage queues text as a user message for the model.
 	SendMessage(text string)
+	// SetSessionName names the session, as /name does. A front end that
+	// cannot (atto -p) returns an error.
+	SetSessionName(ext, name string) error
 }
 
 // TextOptions shape the block ShowText adds.
@@ -109,6 +113,11 @@ func (h *Headless) Ask(_ string, q Question, answer func(any)) {
 		return
 	}
 	answer(nil)
+}
+
+// SetSessionName is refused: atto -p has no one to show the name to.
+func (h *Headless) SetSessionName(string, string) error {
+	return errors.New("naming the session needs the terminal or the server")
 }
 
 func (h *Headless) SendMessage(text string) {

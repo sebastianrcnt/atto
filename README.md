@@ -169,6 +169,7 @@ To use the terminal's own selection instead, hold the key that bypasses mouse re
 | `/tree` | go back to any point of the session; earlier branches are kept |
 | `/fork` | start a new session from an earlier message |
 | `/name` | name the session |
+| `/autorename` | have the current model name the session from what it is about |
 | `/archive` | archive the session and start a new one |
 | `/clear` | start a new session |
 | `/goal [<objective>\|clear\|edit\|pause\|resume]` | set or view the goal for a long-running task, as in codex: bare `/goal` shows it, `edit` opens a prompt, a new objective asks before replacing an unfinished goal; `budget <n>` caps its tokens. The status shows at the right of the status line ("Pursuing goal (12.5K / 50K)"), Esc pauses it, and opening a session with a paused or stalled goal asks whether to resume |

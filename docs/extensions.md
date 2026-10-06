@@ -29,9 +29,13 @@ files it imports); any change needs approval again. An agent cannot approve
 from its shell. User extensions need no approval.
 
 **Built-in extensions** ship inside the atto binary and are written against
-this same public API. Today there is one: `/diff`, which shows what changed
-in the session's working tree (`/diff [--staged] [path]`). It needs no
-approval, is listed as `builtin` in the Loaded block and in `atto extensions`,
+this same public API. There are two: `/diff`, which shows what changed
+in the session's working tree (`/diff [--staged] [path]`), and `/autorename`,
+which has the session's own model name the conversation from its latest
+messages
+([`extensions/builtin/autorename.ts`](../extensions/builtin/autorename.ts),
+an example of `atto.complete` and `ctx.session`). They need no
+approval, are listed as `builtin` in the Loaded block and in `atto extensions`,
 and can be turned off like any other (`"disabled": ["diff"]`). A user or
 project extension with the same name replaces it, so the way to change
 `/diff` is to copy its source,
@@ -186,6 +190,14 @@ p/m (1 failed)" per extension, and every call is a line in
 
 - `ctx.hasUI`: true in the TUI, false in `atto -p` and the server.
 - `ctx.cwd`, `ctx.session.id`, `ctx.session.model` (`provider/id`).
+- `ctx.session.name`: the session's name, `""` without one.
+- `ctx.session.messages(limit?)`: the conversation's text so far, oldest
+  first, as `[{role, text}]`: the user's messages and the model's answers on
+  the current branch, without commands and their output; the last `limit`
+  (default 50). Read from the session file, so a reply still streaming is
+  not in it.
+- `ctx.session.setName(name)`: names the session, as `/name` does (the
+  terminal and the server; throws in `atto -p`).
 - `ctx.ui.notify(text, level?)`: `info` (default), `warning`, `error`.
 - `ctx.ui.setStatus(key, text | null)`: an item in the status line.
 - `ctx.ui.setWidget(key, lines[] | null)`: lines shown above the input.

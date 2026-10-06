@@ -37,7 +37,7 @@ func TestBuiltinListedAndLoadedWithoutApproval(t *testing.T) {
 	if in.Status != Loaded || !slices.Equal(in.Commands, []string{"diff"}) {
 		t.Errorf("%+v", in)
 	}
-	if cs := m.Commands(); len(cs) != 1 || cs[0].Name != "diff" || cs[0].Ext != "diff" || cs[0].Description == "" {
+	if cs := m.Commands(); len(cs) != 2 || cs[1].Name != "diff" || cs[1].Ext != "diff" || cs[1].Description == "" || cs[0].Name != "autorename" {
 		t.Errorf("%+v", cs)
 	}
 	// Nothing to approve, and no types file written for it.
@@ -56,7 +56,7 @@ func TestBuiltinCanBeDisabled(t *testing.T) {
 	if in := info(t, m, "diff"); in.Status != Disabled {
 		t.Errorf("%+v", in)
 	}
-	if len(m.Commands()) != 0 || m.RunCommand("diff", "") {
+	if len(m.Commands()) != 1 || m.RunCommand("diff", "") {
 		t.Error("a disabled extension has no commands")
 	}
 }
@@ -72,7 +72,7 @@ func TestUserAndProjectExtensionsOverrideBuiltin(t *testing.T) {
 	if len(got) != 1 || got[0].Source != User || got[0].Status != Loaded {
 		t.Fatalf("%+v", m.Report())
 	}
-	if cs := m.Commands(); len(cs) != 1 || cs[0].Description != "mine" {
+	if cs := m.Commands(); len(cs) != 2 || cs[0].Description != "mine" {
 		t.Errorf("%+v", cs)
 	}
 	m.RunCommand("diff", "")
@@ -92,7 +92,7 @@ func TestUserAndProjectExtensionsOverrideBuiltin(t *testing.T) {
 		t.Fatal(err)
 	}
 	m2 := load(t, cwd, newHost(true))
-	if cs := m2.Commands(); len(cs) != 1 || cs[0].Description != "project" {
+	if cs := m2.Commands(); len(cs) != 2 || cs[0].Description != "project" {
 		t.Errorf("%+v", cs)
 	}
 }

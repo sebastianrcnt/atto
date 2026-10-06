@@ -51,7 +51,7 @@ func TestThreadExtensions(t *testing.T) {
 	th := call(t, s, "thread/start", map[string]any{"model": "fake/m"})
 	ctx, _ := th["context"].(map[string]any)
 	exts, _ := ctx["extensions"].([]any)
-	if len(exts) != 2 || exts[0].(map[string]any)["status"] != "loaded" || exts[1].(map[string]any)["name"] != "diff" {
+	if len(exts) != 3 || exts[0].(map[string]any)["status"] != "loaded" || exts[2].(map[string]any)["name"] != "diff" {
 		t.Fatalf("context %v", ctx["extensions"])
 	}
 	select {
