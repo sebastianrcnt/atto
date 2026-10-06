@@ -96,12 +96,13 @@ type output struct {
 
 // result of one hook invocation.
 type result struct {
-	out      output
-	parsed   bool // stdout was a JSON object
-	stdout   string
-	blocked  bool   // exit code 2
-	stderr   string // reason when blocked
-	errorMsg string // non-blocking failure
+	out        output
+	parsed     bool // stdout was a JSON object
+	stdout     string
+	blocked    bool   // exit code 2
+	stderr     string // reason when blocked
+	errorMsg   string // failure reported as a notice
+	incomplete bool   // response cannot be trusted for a blocking decision
 }
 
 func matches(pattern, tool string) bool {
@@ -171,7 +172,16 @@ func (r *Runner) execTimeout(ctx context.Context, h config.HookSpec, input []byt
 			return res
 		}
 		defer resp.Body.Close()
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+		const limit = 1 << 20
+		body, err := io.ReadAll(io.LimitReader(resp.Body, limit+1))
+		if err != nil {
+			res.errorMsg, res.incomplete = fmt.Sprintf("%s: reading response: %v", h.URL, err), true
+			return res
+		}
+		if len(body) > limit {
+			res.errorMsg, res.incomplete = fmt.Sprintf("%s: response exceeds 1 MiB", h.URL), true
+			return res
+		}
 		if resp.StatusCode/100 != 2 {
 			res.errorMsg = fmt.Sprintf("%s: %s", h.URL, resp.Status)
 			return res
@@ -219,6 +229,10 @@ func fold(results []result, event string) agent.HookOutcome {
 	for _, r := range results {
 		if r.errorMsg != "" {
 			o.Notices = append(o.Notices, event+" hook: "+r.errorMsg)
+			if r.incomplete && (event == "PreToolUse" || event == "PostToolUse" || event == "UserPromptSubmit" || event == "Stop") {
+				o.Block = true
+				o.Reason = joinReason(o.Reason, event+" hook: "+r.errorMsg)
+			}
 			continue
 		}
 		if r.blocked {
