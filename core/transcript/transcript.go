@@ -86,6 +86,7 @@ type Item struct {
 	Description string
 	Command     string
 	Timeout     time.Duration
+	Started     time.Time // when it began running (live only)
 	Output      string
 	Dropped     int
 	Result      *ToolResult // set when the command ended

@@ -73,7 +73,7 @@ func (a *App) itemStarted(it *transcript.Item) {
 		a.add(a.text)
 	case transcript.Tool:
 		b := &toolBlock{args: agent.BashArgs{Description: it.Description, Command: it.Command},
-			timeout: it.Timeout, pending: it.Pending, start: time.Now(), d: &a.details}
+			timeout: it.Timeout, pending: it.Pending, start: startedAt(it), d: &a.details}
 		if a.tools == nil {
 			a.tools = map[string]*toolBlock{}
 		}
@@ -143,6 +143,15 @@ func (a *App) itemDelta(it *transcript.Item, d string) {
 	}
 }
 
+// startedAt is when a tool item began running, as the runtime says (a
+// terminal that comes in while it runs counts from then), else now.
+func startedAt(it *transcript.Item) time.Time {
+	if !it.Started.IsZero() && !it.Started.After(time.Now()) {
+		return it.Started
+	}
+	return time.Now()
+}
+
 // itemUpdated follows a tool call the model is writing, and starts its
 // timer when the call begins running.
 func (a *App) itemUpdated(it *transcript.Item) {
@@ -150,7 +159,7 @@ func (a *App) itemUpdated(it *transcript.Item) {
 		b.args = agent.BashArgs{Description: it.Description, Command: it.Command}
 		b.timeout = it.Timeout
 		if b.pending && !it.Pending {
-			b.pending, b.start = false, time.Now()
+			b.pending, b.start = false, startedAt(it)
 		}
 	}
 }

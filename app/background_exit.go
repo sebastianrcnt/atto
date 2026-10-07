@@ -70,7 +70,11 @@ func (a *App) exitMenu() {
 	bg := tui.SelectItem{Label: "2. Run in background", Detail: "Exit atto and leave the task running", Value: exitBG}
 	if a.pane.on || a.conn.own == nil {
 		// In the daemon the task goes on as it is: leave the terminal only.
-		bg = tui.SelectItem{Label: "2. Detach", Detail: "Leave atto running; atto attach to return", Value: exitDetach}
+		back := "atto attach"
+		if !a.pane.on {
+			back = "atto connect"
+		}
+		bg = tui.SelectItem{Label: "2. Detach", Detail: "Leave atto running; " + back + " to return", Value: exitDetach}
 	}
 	l := &tui.SelectList{Items: []tui.SelectItem{
 		{Label: "1. Cancel task", Detail: "Stop the current task and stay in atto", Value: exitCancel},
@@ -154,7 +158,7 @@ func (a *App) renderReadOnly(width int) []string {
 }
 
 // readOnlyAllowed are the commands that work on a read-only session.
-var readOnlyAllowed = []string{"quit", "exit", "resume", "clear", "tui"}
+var readOnlyAllowed = []string{"quit", "exit", "resume", "clear", "tui", "agents"}
 
 // refuseReadOnly refuses text typed into a read-only session (restoring it
 // to the editor), except the commands of readOnlyAllowed.

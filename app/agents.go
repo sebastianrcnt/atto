@@ -605,8 +605,12 @@ func (c *agentCenter) HandleInput(data string) {
 		c.close()
 		switch {
 		case it.current:
-		case it.pane != nil:
+		case it.pane != nil && (c.a == nil || c.a.pane.on || it.pane.Session == ""):
 			c.onSwitch(it.pane.ID)
+		case it.pane != nil:
+			// Not a pane (atto connect, no daemon pane): its worker serves
+			// the session to this terminal too.
+			c.onOpen(it.pane.Session, it.cwd)
 		default:
 			c.onOpen(it.id, it.cwd)
 		}

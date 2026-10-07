@@ -149,3 +149,13 @@ func TestSubagentSessionsAreNotListed(t *testing.T) {
 		t.Fatalf("find: %s %v", p, err)
 	}
 }
+
+func TestPreviewOfGoalEnvelope(t *testing.T) {
+	msg := "<atto_internal_context source=\"goal\">\nContinue working toward the active goal.\n\n<objective>\nAdd Peek.\n</objective>\n</atto_internal_context>"
+	if got := previewOf(msg); got != "/goal Add Peek." {
+		t.Fatalf("got %q", got)
+	}
+	if got := previewOf("plain"); got != "plain" {
+		t.Fatalf("got %q", got)
+	}
+}

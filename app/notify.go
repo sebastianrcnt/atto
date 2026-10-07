@@ -141,6 +141,7 @@ func (a *App) onNotification(n server.Notification) {
 		}
 		a.doQuit()
 	case "thread/closed":
+		a.closed = true
 		if !p.Handoff && !a.quitting {
 			a.notice("This session was closed.")
 			a.busy = false
@@ -211,7 +212,9 @@ func (a *App) wireStarted(w server.Item) {
 	it := server.TranscriptItem(w)
 	a.kinds[w.ID] = it.Kind
 	if it.Kind == transcript.User {
-		remote := w.ClientID != "" && a.conn != nil && w.ClientID != a.conn.id
+		// Sent live from another client; a snapshot cannot tell (client
+		// IDs change as terminals reconnect).
+		remote := !a.replaying && w.ClientID != "" && a.conn != nil && w.ClientID != a.conn.id
 		if g := w.SteerGroup; g != "" && g == a.steerGroup && a.steerBlock != nil {
 			// The messages of one steer show as one block.
 			a.steerBlock.text += "\n\n" + it.Text

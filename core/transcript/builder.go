@@ -226,7 +226,7 @@ func (b *Builder) apply(ev any, at time.Time) {
 		}
 	case agent.ToolStart:
 		b.closeText(at)
-		b.startTool(e.ID, e.Index, e.Args, e.Timeout)
+		b.startTool(e.ID, e.Index, e.Args, e.Timeout, at)
 	case agent.ToolOutput:
 		b.toolOutput(e.ID, e.Chunk)
 	case agent.ToolEnd:
@@ -385,20 +385,20 @@ func (b *Builder) endDraft(it *Item, err string) {
 }
 
 // startTool starts a call that runs now: the item its draft made, if any.
-func (b *Builder) startTool(id string, index int, args agent.BashArgs, timeout time.Duration) {
+func (b *Builder) startTool(id string, index int, args agent.BashArgs, timeout time.Duration, at time.Time) {
 	if b.tools == nil {
 		b.tools = map[string]*Item{}
 	}
 	if it := b.drafts[index]; it != nil {
 		delete(b.drafts, index)
 		it.Pending, it.CallID = false, id
-		it.Description, it.Command, it.Timeout = args.Description, args.Command, timeout
+		it.Description, it.Command, it.Timeout, it.Started = args.Description, args.Command, timeout, at
 		b.tools[id] = it
 		b.updated(it)
 		return
 	}
 	b.tools[id] = b.start(Item{Kind: Tool, Status: InProgress, CallID: id,
-		Description: args.Description, Command: args.Command, Timeout: timeout})
+		Description: args.Description, Command: args.Command, Timeout: timeout, Started: at})
 }
 
 func (b *Builder) toolOutput(id, chunk string) {
@@ -421,6 +421,7 @@ func (b *Builder) endTool(id string, res ToolResult, d time.Duration, imgs ...pr
 		return
 	}
 	delete(b.tools, id)
+	it.Started = time.Time{} // live only: what a running command needs
 	it.Output = tidy(it.Output)
 	for _, im := range imgs {
 		im.Data = nil // the bytes stay in the image store

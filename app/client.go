@@ -109,6 +109,14 @@ func (a *App) rpc(method string, params map[string]any, done func(json.RawMessag
 		}
 		return
 	}
+	select {
+	case <-cn.c.Done():
+		if done != nil {
+			done(nil, errNotConnected)
+		}
+		return
+	default:
+	}
 	cn.mu.Lock()
 	cn.queue = append(cn.queue, rpcCall{method, params, done})
 	cn.mu.Unlock()
@@ -136,6 +144,7 @@ func (a *App) sendLoop(cn *conn) {
 			case <-cn.wake:
 				continue
 			case <-cn.c.Done():
+				cn.failQueued(a)
 				return
 			}
 		}
@@ -146,6 +155,23 @@ func (a *App) sendLoop(cn *conn) {
 		err := cn.c.Call(context.Background(), x.method, x.params, &raw)
 		if x.done != nil {
 			a.ui.Do(func() { x.done(raw, err) })
+		}
+	}
+}
+
+// errNotConnected is a request on a connection that has ended.
+var errNotConnected = errors.New("not connected to the session runtime")
+
+// failQueued fails the requests still waiting on a connection that ended,
+// so that their callers learn it (a message goes back to the editor).
+func (cn *conn) failQueued(a *App) {
+	cn.mu.Lock()
+	q := cn.queue
+	cn.queue = nil
+	cn.mu.Unlock()
+	for _, x := range q {
+		if x.done != nil {
+			a.ui.Do(func() { x.done(nil, errNotConnected) })
 		}
 	}
 }
@@ -181,8 +207,50 @@ func (a *App) disconnected() {
 	if a.quitting {
 		return
 	}
-	a.notice("The connection to the session runtime ended. Restart atto to continue (atto resume %s).", a.threadID)
 	a.busy = false
+	if a.conn != nil && a.conn.own == nil && a.threadID != "" && !a.closed {
+		a.notice("The session's runtime ended; reconnecting…")
+		a.reconnect(a.conn, 0)
+		return
+	}
+	a.notice("The connection to the session runtime ended. Restart atto to continue (atto resume %s).", a.threadID)
+}
+
+// reconnectDelays are the waits before each attempt to bring a crashed
+// worker's session back.
+var reconnectDelays = []time.Duration{200 * time.Millisecond, time.Second, 3 * time.Second, 10 * time.Second}
+
+// reconnect starts the session's worker again (its file has everything
+// it had saved) and shows the session from it. dead is the connection
+// that ended; attempt counts the tries so far.
+func (a *App) reconnect(dead *conn, attempt int) {
+	id := a.threadID
+	go func() {
+		time.Sleep(reconnectDelays[attempt])
+		cn, info, err := a.dialWorker(id, nil)
+		a.ui.Do(func() {
+			if a.quitting || a.conn != dead || a.threadID != id {
+				if cn != nil {
+					cn.c.Close()
+				}
+				return // the terminal went elsewhere meanwhile
+			}
+			if err != nil {
+				if attempt+1 < len(reconnectDelays) {
+					a.reconnect(dead, attempt+1)
+					return
+				}
+				a.errorNotice(fmt.Errorf("reconnecting: %w", err))
+				a.notice("Restart atto to continue (atto resume %s).", id)
+				return
+			}
+			if cn != nil {
+				a.use(cn)
+			}
+			a.show(info)
+			a.notice("Reconnected.")
+		})
+	}()
 }
 
 // --- the mirror ---

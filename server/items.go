@@ -40,6 +40,9 @@ func wireItem(sid string, it *transcript.Item) Item {
 	case transcript.Tool:
 		w.Type, w.Description, w.Command, w.Output, w.Pending = ItemCommand, it.Description, it.Command, it.Output, it.Pending
 		w.CallID, w.TimeoutMs, w.Dropped = it.CallID, it.Timeout.Milliseconds(), it.Dropped
+		if !it.Started.IsZero() {
+			w.StartedMs = it.Started.UnixMilli()
+		}
 		if r := it.Result; r != nil {
 			code := r.ExitCode
 			w.ExitCode, w.DurationMs, w.TimedOut = &code, it.Duration.Milliseconds(), r.TimedOut
@@ -112,6 +115,9 @@ func TranscriptItem(w Item) transcript.Item {
 		} else {
 			it.Description, it.Pending, it.CallID = w.Description, w.Pending, w.CallID
 			it.Timeout = time.Duration(w.TimeoutMs) * time.Millisecond
+			if w.StartedMs > 0 {
+				it.Started = time.UnixMilli(w.StartedMs)
+			}
 		}
 		if w.ExitCode != nil || w.Job > 0 || w.Canceled || w.Error != "" || w.TimedOut {
 			r := &transcript.ToolResult{TimedOut: w.TimedOut, Canceled: w.Canceled, Err: w.Error, Job: w.Job, Background: w.Background}

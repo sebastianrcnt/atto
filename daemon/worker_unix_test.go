@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -50,6 +51,8 @@ func TestSessionWorker(t *testing.T) {
 	if err != nil || readOnly != "" || w.Session == "" {
 		t.Fatalf("start: %+v %q %v", w, readOnly, err)
 	}
+	// The directory may be shared with the user's own workers.
+	others, _ := filepath.Glob(filepath.Join(filepath.Dir(w.Socket), "w-*.sock"))
 	again, _, err := StartWorker(w.Session, cwd, nil)
 	if err != nil || again.Socket != w.Socket || again.PID != w.PID {
 		t.Fatalf("a second start must find the same worker: %+v %v", again, err)
@@ -96,7 +99,10 @@ func TestSessionWorker(t *testing.T) {
 	if _, err := os.Stat(w.Socket); !os.IsNotExist(err) {
 		t.Fatalf("socket left: %v", err)
 	}
-	if matches, _ := filepath.Glob(filepath.Join(filepath.Dir(w.Socket), "w-*.sock")); len(matches) != 0 {
-		t.Fatalf("sockets left: %v", matches)
+	matches, _ := filepath.Glob(filepath.Join(filepath.Dir(w.Socket), "w-*.sock"))
+	for _, m := range matches {
+		if !slices.Contains(others, m) || m == w.Socket {
+			t.Fatalf("sockets left: %v", matches)
+		}
 	}
 }

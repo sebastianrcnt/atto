@@ -307,6 +307,9 @@ type Item struct {
 	// Pending: the model is still writing the command (description and
 	// command are what has arrived).
 	Pending bool `json:"pending,omitempty"`
+	// StartedMs is when a command began running (Unix ms; live only), so
+	// a client that comes in while it runs shows how long it has.
+	StartedMs int64 `json:"startedMs,omitempty"`
 	// Images are what atto view attached to the command's result.
 	Images []ItemImage `json:"images,omitempty"`
 

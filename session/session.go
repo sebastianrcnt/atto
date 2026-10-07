@@ -572,7 +572,7 @@ func summarize(path string) (Summary, error) {
 		// A preview from any branch keeps a session that went back to its
 		// start listed; the active branch's first message replaces it.
 		if e.Type == TypeMessage && e.Message != nil && e.Message.Role == "user" && s.Preview == "" {
-			s.Preview = e.Message.Content
+			s.Preview = previewOf(e.Message.Content)
 		}
 	}
 	first := true
@@ -584,7 +584,7 @@ func summarize(path string) (Summary, error) {
 		case "user":
 			s.Messages++
 			if first {
-				s.Preview, first = e.Message.Content, false
+				s.Preview, first = previewOf(e.Message.Content), false
 			}
 		case "assistant":
 			s.Messages++
@@ -595,6 +595,20 @@ func summarize(path string) (Summary, error) {
 		}
 	}
 	return s, nil
+}
+
+// previewOf is what a user message shows as in session lists: a goal's
+// envelope (a session /goal started) shows as its objective.
+func previewOf(content string) string {
+	if !strings.HasPrefix(content, `<atto_internal_context source="goal">`) {
+		return content
+	}
+	_, rest, ok := strings.Cut(content, "<objective>")
+	obj, _, ok2 := strings.Cut(rest, "</objective>")
+	if !ok || !ok2 || strings.TrimSpace(obj) == "" {
+		return content
+	}
+	return "/goal " + strings.TrimSpace(obj)
 }
 
 // Rename gives the session at path a name, as a "name" entry.

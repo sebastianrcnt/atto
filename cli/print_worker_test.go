@@ -5,7 +5,9 @@ package cli
 import (
 	"bytes"
 	"encoding/json"
+	"syscall"
 	"testing"
+	"time"
 
 	"github.com/sebastianrcnt/atto/config"
 	"github.com/sebastianrcnt/atto/daemon"
@@ -24,7 +26,16 @@ func TestPrintViaWorker(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer daemon.Stop(true)
+	defer func() {
+		// The worker ends its session as it goes: wait for it, before
+		// the temporary directories go.
+		daemon.Stop(true)
+		for deadline := time.Now().Add(10 * time.Second); time.Now().Before(deadline); time.Sleep(20 * time.Millisecond) {
+			if syscall.Kill(w.PID, 0) != nil {
+				break
+			}
+		}
+	}()
 
 	got, ok := workerFor(PrintOptions{Resume: w.Session})
 	if !ok || got.Session != w.Session {

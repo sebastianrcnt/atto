@@ -63,6 +63,7 @@ type App struct {
 	snapEvent int64 // the cursor of the last snapshot
 	pending   server.PendingInput
 	readOnly  string // why the session is read-only ("": it is not)
+	closed    bool   // the runtime closed the session shown (thread/closed)
 	// catalog is the session's slash commands (commands/list).
 	catalog []server.CommandInfo
 	// loaded is what the session loaded, as its latest Loaded item said.
@@ -312,6 +313,7 @@ func (a *App) open(opts Options) error {
 // show makes info the thread this terminal shows.
 func (a *App) show(info server.ThreadInfo) {
 	a.threadID = info.ID
+	a.closed = false
 	a.applySnapshot(info)
 	a.loadCatalog()
 	a.remoteSwitched()
