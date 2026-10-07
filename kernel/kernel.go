@@ -115,3 +115,5 @@ func (k *Kernel) EndRun(pure bool) {
 	}
 	k.ctx, k.cancel = nil, nil
 }
+
+func (k *Kernel) Granted(name string) bool { return k.grant[name] }

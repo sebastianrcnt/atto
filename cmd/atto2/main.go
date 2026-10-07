@@ -25,7 +25,7 @@ func main() {
 		fmt.Fprintln(os.Stderr, `usage: atto2 [-dir path] [-model id] "question"`)
 		os.Exit(2)
 	}
-	k, err := kernel.Project(*o.dir)
+	k, err := kernel.WithGrant(*o.dir, grantNames(*o.grant)...)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "atto2:", err)
 		os.Exit(1)
@@ -56,13 +56,14 @@ func envOr(key, fallback string) string {
 }
 
 type options struct {
-	dir, baseURL, modelID, metrics *string
-	verbose, quiet                 *bool
-	steps                          *int
+	dir, baseURL, modelID, metrics, grant *string
+	verbose, quiet                        *bool
+	steps                                 *int
 }
 
 func parseFlags() options {
 	var o options
+	o.grant = flag.String("grant", "bash,now,exit", "comma-separated syscall names")
 	o.dir = flag.String("dir", ".", "read-only project working directory for sys.bash")
 	o.baseURL = flag.String("base-url", envOr("ATTO2_BASE_URL", "http://192.168.0.235:8081/v1"), "chat completions endpoint")
 	o.modelID = flag.String("model", envOr("ATTO2_MODEL", "orca-local"), "model id")
@@ -88,4 +89,15 @@ func newAgent(o options, m *machine.Machine) *agent.Agent {
 		}
 	}
 	return a
+}
+
+func grantNames(value string) []string {
+	if strings.TrimSpace(value) == "" {
+		return nil
+	}
+	names := strings.Split(value, ",")
+	for i := range names {
+		names[i] = strings.TrimSpace(names[i])
+	}
+	return names
 }

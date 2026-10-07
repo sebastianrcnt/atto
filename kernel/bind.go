@@ -9,11 +9,11 @@ import (
 )
 
 // Bind installs closures: aliases still pass through exactly this boundary.
-// An ungranted registered syscall remains callable only to return a logged denial.
+// Absent names resolve through the same boundary, including logged denials.
 func (k *Kernel) Bind(L *lua.LState) {
 	t := L.NewTable()
 	names := make([]string, 0, len(k.registry))
-	for name := range k.registry {
+	for name := range k.grant {
 		names = append(names, name)
 	}
 	sort.Strings(names)
@@ -38,7 +38,7 @@ func (k *Kernel) boundCall(s Syscall) lua.LGFunction {
 		if k.Exited {
 			err = fmt.Errorf("agent exited")
 		} else if !k.grant[s.Name] {
-			err = fmt.Errorf("sys.%s: not granted", s.Name)
+			err = fmt.Errorf("sys.%s is not granted to this agent", s.Name)
 		}
 		var result any
 		if err == nil {
@@ -63,6 +63,10 @@ func (k *Kernel) boundCall(s Syscall) lua.LGFunction {
 
 func (k *Kernel) unknownCall(L *lua.LState) int {
 	name := L.CheckString(2)
+	if s, ok := k.registry[name]; ok {
+		L.Push(L.NewFunction(k.boundCall(s)))
+		return 1
+	}
 	L.Push(L.NewFunction(func(L *lua.LState) int {
 		err := "sys." + name + ": unknown syscall"
 		k.Log = append(k.Log, Entry{Time: time.Now(), Name: name, Args: snapshotArgs(L, Syscall{}), Error: err})

@@ -5,25 +5,24 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"time"
 )
 
 // Project registers the step-one world interface and grants it to this agent.
 func Project(dir string) (*Kernel, error) {
-	abs, err := filepath.Abs(dir)
-	if err != nil {
-		return nil, err
-	}
-	abs, err = filepath.EvalSymlinks(abs)
-	if err != nil {
-		return nil, err
-	}
-	info, err := os.Stat(abs)
-	if err != nil {
-		return nil, err
-	}
-	if !info.IsDir() {
-		return nil, fmt.Errorf("%s: not a directory", dir)
+	return WithGrant(dir, "bash", "now", "exit")
+}
+
+// WithGrant registers devices, checking the working directory only for bash.
+func WithGrant(dir string, names ...string) (*Kernel, error) {
+	abs := dir
+	if slices.Contains(names, "bash") {
+		var err error
+		abs, err = projectDir(dir)
+		if err != nil {
+			return nil, err
+		}
 	}
 	k := New()
 	for _, s := range []Syscall{
@@ -39,8 +38,27 @@ func Project(dir string) (*Kernel, error) {
 			return nil, err
 		}
 	}
-	if err := k.Grant("bash", "now", "exit"); err != nil {
+	if err := k.Grant(names...); err != nil {
 		return nil, err
 	}
 	return k, nil
+}
+
+func projectDir(dir string) (string, error) {
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		return "", err
+	}
+	abs, err = filepath.EvalSymlinks(abs)
+	if err != nil {
+		return "", err
+	}
+	info, err := os.Stat(abs)
+	if err != nil {
+		return "", err
+	}
+	if !info.IsDir() {
+		return "", fmt.Errorf("%s: not a directory", dir)
+	}
+	return abs, nil
 }

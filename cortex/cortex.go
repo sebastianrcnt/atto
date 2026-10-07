@@ -44,9 +44,23 @@ text.trim(s) -> string
 text.match_all(s, goPattern) -> array of full matches, or arrays of captures if the Go regexp has capture groups
 json.encode(v) -> string; json.decode(s) -> value; json.null represents null. Dense tables encode as arrays, string-key tables as objects; decoded empty objects/arrays preserve their shape.
 Everything that touches the world is a checked and logged syscall under sys. This agent has:
-%sCalls accept positional arguments in schema order or one table; Lua has no named arguments. sys.bash("ls") and sys.bash{cmd = "ls"} are equivalent.
-The project working directory for sys.bash is %q. Bash can read host files; it is not a read chroot. Writes outside its private temp directory and /dev/null are denied by the OS.
+%sCalls accept positional arguments in schema order or one table; Lua has no named arguments.%s
+%s
 Your own text is your stdout, shown to observers, not a result to anyone. Results leave through sys.exit{report = "..."}.
-`, k.Instructions(), project)
+`, k.Instructions(), bashExample(k), bashDirectory(k, project))
 	return b.String()
+}
+
+func bashExample(k *kernel.Kernel) string {
+	if !k.Granted("bash") {
+		return ""
+	}
+	return ` sys.bash("ls") and sys.bash{cmd = "ls"} are equivalent.`
+}
+
+func bashDirectory(k *kernel.Kernel, project string) string {
+	if !k.Granted("bash") {
+		return ""
+	}
+	return fmt.Sprintf("The project working directory for sys.bash is %q. Bash can read host files; it is not a read chroot. Writes outside its private temp directory and /dev/null are denied by the OS.\n", project)
 }

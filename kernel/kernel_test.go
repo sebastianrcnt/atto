@@ -194,3 +194,24 @@ func TestBashSandbox(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestPureGrant(t *testing.T) {
+	k, err := kernel.WithGrant("/does/not/exist", "now", "exit")
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := machine.New(k)
+	defer m.Close()
+	r, err := m.Run(context.Background(), `return rawget(sys,"bash"),rawget(sys,"now")~=nil`)
+	if err != nil || r.Output != "nil\ntrue\n" || !r.Pure {
+		t.Fatalf("%+v %v", r, err)
+	}
+	r, err = m.Run(context.Background(), `sys.bash("true")`)
+	want := "sys.bash is not granted to this agent"
+	if err == nil || !strings.HasSuffix(err.Error(), want) || r.Pure || len(k.Log) != 1 || k.Log[0].Error != want {
+		t.Fatalf("%+v %v %+v", r, err, k.Log)
+	}
+	if _, err := kernel.WithGrant("/does/not/exist", "bash"); err == nil {
+		t.Fatal("unchecked bash directory")
+	}
+}
