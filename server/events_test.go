@@ -71,7 +71,7 @@ func nextSSE(t *testing.T, ch <-chan sseEv) sseEv {
 
 func publishN(s *Server, n int) {
 	for i := range n {
-		s.Notify("test/n", map[string]any{"i": i})
+		s.publish("test/n", map[string]any{"i": i})
 	}
 }
 

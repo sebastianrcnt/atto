@@ -86,7 +86,24 @@
 // more (the server restarted, or the client was away for longer than the
 // server keeps events), the stream starts with
 //
-//	events/reset   {eventId}  (no threadId: read the thread again)
+//	events/reset   {eventId, serverInstanceId}  (no threadId: read the thread again)
+//
+// Every transport goes through one event hub (hub.go): each notification
+// carries eventId, its number in the hub, and over SSE also as the
+// event's id. On a JSON-lines connection (stdio, a Unix socket, or a
+// client in the same process, see Client) the client gets a clientId in
+// initialize's result and every notification from then on; requests are
+// handled in the order sent. A client that reads a thread drops the
+// notifications whose eventId is at most the read's (see ThreadView), so
+// a snapshot taken while events arrive is applied exactly once. Event IDs
+// start from 1 in each server; serverInstanceId tells runs apart.
+//
+// Revision 2 items carry what a client needs to show them as the
+// terminal does (see Item and TranscriptItem): entryId, the command's
+// timeout, cancellation and error, the user's images, a user command's
+// shell fields, the full goal state of a goalStatus. When a reasoning or
+// agentMessage item that already completed is saved, item/updated
+// brings its blockId, before any item/display names it.
 //
 // Live session (atto's /remote, see Live): the server has one thread, the
 // TUI's session. initialize says {live: true, threadId}; thread/start is
@@ -119,6 +136,7 @@ import (
 	"github.com/sebastianrcnt/atto/agent"
 	"github.com/sebastianrcnt/atto/config"
 	"github.com/sebastianrcnt/atto/core"
+	"github.com/sebastianrcnt/atto/goal"
 	"github.com/sebastianrcnt/atto/provider"
 	"github.com/sebastianrcnt/atto/session"
 )
@@ -190,6 +208,9 @@ type rpcNotification struct {
 	JSONRPC string `json:"jsonrpc"`
 	Method  string `json:"method"`
 	Params  any    `json:"params"`
+	// EventID is the hub's number for it (the cursor; SSE also sends it
+	// as the event's id).
+	EventID int64 `json:"eventId,omitempty"`
 }
 
 const (
@@ -268,6 +289,34 @@ type Item struct {
 	Ext     string `json:"ext,omitempty"`
 	Lang    string `json:"lang,omitempty"`
 	Preview int    `json:"preview,omitempty"`
+
+	// Revision 2: what a client needs to show an item as the terminal
+	// does (see TranscriptItem). EntryID is the session entry the item
+	// belongs to, when recorded.
+	EntryID   string `json:"entryId,omitempty"`
+	CallID    string `json:"callId,omitempty"`
+	TimeoutMs int64  `json:"timeoutMs,omitempty"`
+	// commandExecution: bytes of output not kept, and how it ended.
+	Dropped  int    `json:"dropped,omitempty"`
+	Canceled bool   `json:"canceled,omitempty"`
+	Error    string `json:"error,omitempty"`
+	// Shell marks a command the user ran ("!cmd"); Excluded one kept
+	// from the model ("!!"), Truncated an output cut for the model
+	// (FullOutput has all of it), and ContextPending one that finished
+	// during a run: the model gets it when the run ends.
+	Shell          bool   `json:"shell,omitempty"`
+	Excluded       bool   `json:"excluded,omitempty"`
+	Truncated      bool   `json:"truncated,omitempty"`
+	FullOutput     string `json:"fullOutput,omitempty"`
+	ContextPending bool   `json:"contextPending,omitempty"`
+	// goalStatus: the goal as it was.
+	GoalState *goal.Goal `json:"goalState,omitempty"`
+	// notice: "" (plain), "warning" or "error"; with Title, an info
+	// notice: Title, and Text under it.
+	Level string `json:"level,omitempty"`
+	// userMessage: the client that sent it, and its input ID.
+	ClientID string `json:"clientId,omitempty"`
+	InputID  string `json:"inputId,omitempty"`
 }
 
 // ItemImage describes an image attached to a command's result: the file
@@ -276,6 +325,10 @@ type ItemImage struct {
 	Name   string `json:"name,omitempty"`
 	Width  int    `json:"width,omitempty"`
 	Height int    `json:"height,omitempty"`
+	// File is the image's content-addressed name in the images
+	// directory (its ID), MIME its type.
+	File string `json:"file,omitempty"`
+	MIME string `json:"mimeType,omitempty"`
 }
 
 // BlockDisplay is what extensions show on a reasoning or agentMessage item

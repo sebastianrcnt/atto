@@ -25,7 +25,8 @@ import (
 )
 
 // Server holds threads and dispatches JSON-RPC requests. Notifications
-// go to the Notify function (a transport fan-out).
+// go through its event hub to every transport (see hub.go); Notify, when
+// set, observes them too (tests).
 type Server struct {
 	Version string
 	Cwd     string // default working directory for new threads
@@ -40,11 +41,12 @@ type Server struct {
 	stop     chan struct{}
 	live     Live    // set by NewLive: the one conversation served
 	instance string  // see newInstanceID
-	events   *broker // the HTTP transport's, for eventSeq
+	events   *broker // the event hub
+	clients  map[string]*clientConn
 }
 
 func New(version, cwd string) *Server {
-	s := &Server{Version: version, Cwd: cwd, threads: map[string]*thread{}, Notify: func(string, map[string]any) {}, stop: make(chan struct{}), instance: newInstanceID()}
+	s := &Server{Version: version, Cwd: cwd, threads: map[string]*thread{}, stop: make(chan struct{}), instance: newInstanceID(), events: newBroker(10000)}
 	go s.watchInbox()
 	return s
 }
@@ -230,14 +232,9 @@ func (s *Server) pendingChanged(t *thread) {
 	s.notify(t, "turn/pending", map[string]any{"pending": p})
 }
 
-// eventSeq is the ID of the latest event the HTTP transport published (0
-// without one): a client that reads a thread follows its events from there.
-func (s *Server) eventSeq() int64 {
-	if s.events == nil {
-		return 0
-	}
-	return s.events.last()
-}
+// eventSeq is the ID of the latest event published: a client that reads
+// a thread follows its events from there.
+func (s *Server) eventSeq() int64 { return s.events.last() }
 
 // --- dispatch ---
 
@@ -321,7 +318,7 @@ func (s *Server) call(ctx context.Context, method string, raw json.RawMessage) (
 	}
 	switch method {
 	case "initialize":
-		return s.initialize(p, nil)
+		return s.initialize(ctx, p, nil)
 	case "models/list":
 		return s.listModels()
 	case "thread/start":
@@ -660,7 +657,7 @@ func (s *Server) setEffort(p threadParams) (any, error) {
 
 func (s *Server) notify(t *thread, method string, params map[string]any) {
 	params["threadId"] = t.id
-	s.Notify(method, params)
+	s.publish(method, params)
 }
 
 // begin marks the thread busy and starts fn in the background.
