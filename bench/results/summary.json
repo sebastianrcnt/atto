@@ -1,0 +1,75 @@
+{
+  "repository_commit": "0308a097020fc591e5a3d32185c9a6b6bdad9f4e",
+  "base_url": "http://192.168.0.235:8081/v1",
+  "model": "orca-local",
+  "questions": [
+    {
+      "id": "definition",
+      "correct": true,
+      "exit_code": 0,
+      "impure_runs": 5,
+      "prompt_tokens": 1988,
+      "pure_runs": 0,
+      "report": "agent/agent.go\n\nThe function AutoCompactLimit is defined at agent/agent.go:676 (func AutoCompactLimit(m config.Model) int). The only other occurrence is a duplicate inside the .claude/worktrees/agent-aa6e23a152b36d00d git worktree.",
+      "steps": 7,
+      "syscalls": 5
+    },
+    {
+      "id": "bash-timeout",
+      "correct": true,
+      "exit_code": 0,
+      "impure_runs": 3,
+      "prompt_tokens": 2548,
+      "pure_runs": 0,
+      "report": "DefaultBashTimeout = 60 seconds (60 * time.Second), defined in /Volumes/t5/atto/agent/bash.go (const block, line 22), alongside MaxBashTimeout = 30 * time.Minute. It is the fallback used by BashArgs.timeout() at agent/bash.go:92 when no positive timeout is provided. (An identical copy exists in the worktree /Volumes/t5/atto/.claude/worktrees/agent-aa6e23a152b36d00d/agent/bash.go.)",
+      "steps": 8,
+      "syscalls": 3
+    },
+    {
+      "id": "instruction-cap",
+      "correct": true,
+      "exit_code": 0,
+      "impure_runs": 4,
+      "prompt_tokens": 4835,
+      "pure_runs": 0,
+      "report": "Combined AGENTS-file cap: maxInstructionBytes = 32768 bytes (32 * 1024 = 32 KiB).\n\nDefining file: agent/agentsmd.go line 15 (package agent):\n  // maxInstructionBytes caps all AGENTS files together, like codex's\n  // project_doc_max_bytes: a stray huge file must not eat the context window.\n  const maxInstructionBytes = 32 * 1024\n\nAlso re-exported as agent.MaxInstructionKiB = maxInstructionBytes / 1024 (agentsmd.go:18), used by core/loaded.go for cap/truncation display. The only other occurrence is a copy in the git worktree .claude/worktrees/agent-aa6e23a152b36d00d/agent/agentsmd.go, not a separate definition.",
+      "steps": 5,
+      "syscalls": 4
+    },
+    {
+      "id": "cache-key",
+      "correct": true,
+      "exit_code": 0,
+      "impure_runs": 3,
+      "prompt_tokens": 2250,
+      "pure_runs": 0,
+      "report": "OpenAIPromptCacheKeyMaxLength = 64. ClampOpenAIPromptCacheKey counts Unicode code points (converts to []rune, checks len(r) against 64, truncates via string(r[:64])), not bytes. Defining file: /Volumes/t5/atto/ai/providers.go (constant at line 94, function ~lines 96-103, ported from src/api/openai-prompt-cache.ts). An identical copy exists in worktree /Volumes/t5/atto/.claude/worktrees/agent-aa6e23a152b36d00d/ai/providers.go.",
+      "steps": 7,
+      "syscalls": 3
+    },
+    {
+      "id": "error-cap",
+      "correct": true,
+      "exit_code": 0,
+      "impure_runs": 3,
+      "prompt_tokens": 2197,
+      "pure_runs": 0,
+      "report": "MaxProviderErrorBodyChars = 4000, defined in ai/http.go (const at line 48, package ai, comment: 'MaxProviderErrorBodyChars caps error bodies in messages'). Used at line 61 in FormatProviderError via truncateErrorText. The only duplicate is an identical copy in git worktree .claude/worktrees/agent-aa6e23a152b36d00d/ai/http.go; the canonical defining file is ai/http.go.",
+      "steps": 7,
+      "syscalls": 3
+    },
+    {
+      "id": "import-count",
+      "correct": true,
+      "exit_code": 0,
+      "impure_runs": 11,
+      "prompt_tokens": 9355,
+      "pure_runs": 0,
+      "report": "6\n\nDistinct package directories (repository-relative) containing tracked non-test Go files that directly import github.com/sebastianrcnt/atto/ai:\n\n1. agent\n2. app\n3. config\n4. extensions\n5. goal\n6. provider\n\nDetails (9 files collapsing to 6 directories):\n- agent: agent/agent.go, agent/draft.go\n- app: app/context.go, app/debug.go\n- config: config/catalog.go, config/models.go\n- extensions: extensions/api_complete.go\n- goal: goal/goal.go\n- provider: provider/client.go\n\nMethod/notes: module is github.com/sebastianrcnt/atto (single root go.mod); enumerated via git ls-files '*.go' filtered with grep -v '_test\\.go$', then matched the exact quoted path \"github.com/sebastianrcnt/atto/ai\" (closing quote immediately after \"ai\") so subpackages under ai/ are not counted; each match was verified to lie inside an import (...) block. No matches occurred inside the ai/ tree itself, and there are no vendored or nested modules.",
+      "steps": 15,
+      "syscalls": 11
+    }
+  ],
+  "date": "2026-10-07",
+  "steps_limit": 30
+}

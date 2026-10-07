@@ -1,1 +1,3 @@
 /atto2
+/bench/results/*
+!/bench/results/summary.json

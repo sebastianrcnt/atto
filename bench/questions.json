@@ -1,0 +1,44 @@
+[
+  {
+    "id": "definition",
+    "question": "In this atto repository, which Go source file defines the function AutoCompactLimit? Report its repository-relative path.",
+    "patterns": ["\\bagent/agent\\.go\\b"],
+    "answer": "agent/agent.go",
+    "evidence": "git grep -n 'func AutoCompactLimit' -- '*.go'"
+  },
+  {
+    "id": "bash-timeout",
+    "question": "In this atto repository, what is the value of DefaultBashTimeout? Report the duration in seconds and the defining file.",
+    "patterns": ["\\b60\\s*(?:seconds?|s\\b|\\*\\s*time\\.Second)", "\\bagent/bash\\.go\\b"],
+    "answer": "60 seconds; agent/bash.go",
+    "evidence": "git grep -n DefaultBashTimeout -- agent/bash.go"
+  },
+  {
+    "id": "instruction-cap",
+    "question": "In this atto repository, what is the combined AGENTS-file size cap maxInstructionBytes, in bytes? Report the integer byte count and the defining file.",
+    "patterns": ["\\b32,?768\\b", "\\bagent/agentsmd\\.go\\b"],
+    "answer": "32768 bytes; agent/agentsmd.go",
+    "evidence": "git grep -n maxInstructionBytes -- agent/agentsmd.go"
+  },
+  {
+    "id": "cache-key",
+    "question": "In this atto repository, what is OpenAIPromptCacheKeyMaxLength, and does ClampOpenAIPromptCacheKey count bytes or Unicode code points? Report the integer limit, the counting unit, and the defining file.",
+    "patterns": ["\\b64\\b", "(?:code points|runes)", "\\bai/providers\\.go\\b"],
+    "answer": "64 Unicode code points (runes); ai/providers.go",
+    "evidence": "git grep -n -A10 OpenAIPromptCacheKeyMaxLength -- ai/providers.go"
+  },
+  {
+    "id": "error-cap",
+    "question": "In this atto repository, what integer value is MaxProviderErrorBodyChars, and which file defines it?",
+    "patterns": ["\\b4,?000\\b", "\\bai/http\\.go\\b"],
+    "answer": "4000; ai/http.go",
+    "evidence": "git grep -n MaxProviderErrorBodyChars -- ai/http.go"
+  },
+  {
+    "id": "import-count",
+    "question": "Among tracked non-test Go files in this atto repository, how many distinct package directories directly import github.com/sebastianrcnt/atto/ai? Count each repository-relative directory once, excluding files ending in _test.go. Report the count as a digit and list those directories.",
+    "patterns": ["\\b6\\b", "\\bagent\\b", "\\bapp\\b", "\\bconfig\\b", "\\bextensions\\b", "\\bgoal\\b", "\\bprovider\\b"],
+    "answer": "6: agent, app, config, extensions, goal, provider",
+    "evidence": "git grep -l '\"github.com/sebastianrcnt/atto/ai\"' -- '*.go' | grep -v '_test.go$' | xargs -n1 dirname | sort -u"
+  }
+]
