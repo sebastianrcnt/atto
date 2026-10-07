@@ -32,6 +32,7 @@ type Kernel struct {
 	registry             map[string]Syscall
 	grant                map[string]bool
 	Log                  []Entry
+	Exchange             func(Entry, func() Entry) Entry
 	PureRuns, ImpureRuns int
 	Exited               bool
 	Report               string

@@ -24,6 +24,8 @@ def run(binary, problem, mode, out):
     command = [binary, "-grant", "now,exit", "-steps", "30", "-v", "-metrics", str(metrics)]
     if mode == "baseline":
         command.append("-baseline")
+    else:
+        command.extend(["-record", str(stem.with_suffix(".jsonl"))])
     command.append(problem["prompt"])
     start = time.monotonic()
     with stem.with_suffix(".stdout").open("w") as stdout, stem.with_suffix(".trace").open("w") as stderr:

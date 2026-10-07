@@ -55,11 +55,38 @@ go build -o atto2 ./cmd/atto2
 ./atto2 -dir ~/some/project -v "Where is the config file read, and what keys does it take?"
 ```
 
+`-grant` selects comma-separated syscall names (default `bash,now,exit`).
+Without bash, `-dir` is neither required nor checked:
+
+```sh
+./atto2 -grant now,exit -record life.jsonl "How many primes are below 199933?"
+./atto2 -replay life.jsonl
+```
+
+Only granted names are stored in `sys` and described in instructions. Its
+metatable routes attempts to call absent names through the checked boundary;
+`sys.bash` without a grant fails with `sys.bash is not granted to this agent`.
+
+`-record` writes JSONL: input/grants/instructions, then each model reply and
+usage, Lua tool code/output, syscall arguments/results/errors, and the final
+report or life error. `-replay` needs no question or model server. It restores
+a fresh machine, feeds recorded replies, substitutes syscall results (including
+timestamps), and verifies tool outputs and the final report. Exit lifecycle
+semantics are checked afresh; replay does not execute world devices. Mismatches
+name the step and include recorded and actual values. Record/replay and
+`-baseline` are mutually exclusive. Records are not authenticated: an unused
+syscall result cannot be validated against an independent source of truth.
+
+`-baseline` makes exactly one chat completion with the question alone and no
+tools. It uses the same client and metrics path; its answer is the model text.
+The computational agent-versus-baseline experiment is in
+[`bench/pure/`](bench/pure/README.md).
+
 The CLI always prints the exit report on stdout, along with any model
 stdout. Lua trace is on stderr (`-q` hides it). `-v` prints one line per
 syscall at the end, including time, name, arguments and result/error
 summaries, followed by pure/impure run counts. `-metrics path.json` writes
-the report, steps, last prompt tokens, syscall count and run counts in JSON.
+the report, steps, last prompt tokens, total completion tokens, syscall count and run counts in JSON.
 Only `sys.exit` completes a life successfully; exhausting `-steps` (default
 30) is an error: `life ended without exit after N steps`.
 

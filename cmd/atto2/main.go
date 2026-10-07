@@ -21,31 +21,48 @@ import (
 
 func main() {
 	o := parseFlags()
-	if flag.NArg() == 0 {
-		fmt.Fprintln(os.Stderr, `usage: atto2 [-dir path] [-model id] "question"`)
+	input := strings.Join(flag.Args(), " ")
+	if input == "" && *o.replay == "" {
+		fmt.Fprintln(os.Stderr, `usage: atto2 [-grant names] [-dir path] [-model id] "question"`)
 		os.Exit(2)
+	}
+	if err := execute(o, input); err != nil {
+		fmt.Fprintln(os.Stderr, "atto2:", err)
+		os.Exit(1)
+	}
+}
+
+func execute(o options, input string) error {
+	j, closeFile, err := openJournal(o, input)
+	if err != nil {
+		return err
+	}
+	defer closeFile()
+	if j != nil {
+		input = j.Header.Input
 	}
 	k, err := kernel.WithGrant(*o.dir, grantNames(*o.grant)...)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "atto2:", err)
-		os.Exit(1)
+		return err
 	}
 	m := machine.New(k)
 	defer m.Close()
 	a := newAgent(o, m)
+	if err := attachJournal(a, j, *o.replay != ""); err != nil {
+		return err
+	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
-	answer, err := run(ctx, a, strings.Join(flag.Args(), " "), *o.baseline)
+	answer, err := run(ctx, a, input, *o.baseline)
 	if *o.verbose {
 		printSyscallLog(k)
 	}
 	err = writeMetrics(*o.metrics, a, answer, err)
 	fmt.Fprintf(os.Stderr, "\n[%d steps, %d tokens in last prompt, %d syscalls]\n", a.Steps, a.Cortex.Tokens, len(k.Log))
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "atto2:", err)
-		os.Exit(1)
+	if err == nil {
+		fmt.Println(answer)
 	}
-	fmt.Println(answer)
+	return err
 }
 
 func envOr(key, fallback string) string {
@@ -56,13 +73,15 @@ func envOr(key, fallback string) string {
 }
 
 type options struct {
-	dir, baseURL, modelID, metrics, grant *string
-	verbose, quiet, baseline              *bool
-	steps                                 *int
+	dir, baseURL, modelID, metrics, grant, record, replay *string
+	verbose, quiet, baseline                              *bool
+	steps                                                 *int
 }
 
 func parseFlags() options {
 	var o options
+	o.record = flag.String("record", "", "record a life as JSONL")
+	o.replay = flag.String("replay", "", "replay a recorded life without a model")
 	o.grant = flag.String("grant", "bash,now,exit", "comma-separated syscall names")
 	o.dir = flag.String("dir", ".", "read-only project working directory for sys.bash")
 	o.baseURL = flag.String("base-url", envOr("ATTO2_BASE_URL", "http://192.168.0.235:8081/v1"), "chat completions endpoint")

@@ -208,7 +208,7 @@ func TestPureGrant(t *testing.T) {
 	}
 	r, err = m.Run(context.Background(), `sys.bash("true")`)
 	want := "sys.bash is not granted to this agent"
-	if err == nil || !strings.HasSuffix(err.Error(), want) || r.Pure || len(k.Log) != 1 || k.Log[0].Error != want {
+	if err == nil || err.Error() != want || r.Pure || len(k.Log) != 1 || k.Log[0].Error != want {
 		t.Fatalf("%+v %v %+v", r, err, k.Log)
 	}
 	if _, err := kernel.WithGrant("/does/not/exist", "bash"); err == nil {

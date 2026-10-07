@@ -62,5 +62,5 @@ func bashDirectory(k *kernel.Kernel, project string) string {
 	if !k.Granted("bash") {
 		return ""
 	}
-	return fmt.Sprintf("The project working directory for sys.bash is %q. Bash can read host files; it is not a read chroot. Writes outside its private temp directory and /dev/null are denied by the OS.\n", project)
+	return fmt.Sprintf("The project working directory for sys.bash is %q. Bash can read host files; it is not a read chroot. Writes outside its private temp directory and /dev/null are denied by the OS.", project)
 }

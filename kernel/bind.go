@@ -40,23 +40,25 @@ func (k *Kernel) boundCall(s Syscall) lua.LGFunction {
 		} else if !k.grant[s.Name] {
 			err = fmt.Errorf("sys.%s is not granted to this agent", s.Name)
 		}
-		var result any
-		if err == nil {
-			result, err = s.Call(k.ctx, args)
-		}
-		entry.Result = result
 		if err != nil {
 			entry.Error = err.Error()
 		}
+		invoke := func() (any, error) {
+			if err != nil {
+				return nil, err
+			}
+			return s.Call(k.ctx, args)
+		}
+		entry = k.exchange(entry, invoke)
 		if k.Exited {
 			k.cancel()
 			L.RaiseError("agent exited")
 		}
-		if err != nil {
-			L.RaiseError("%s", err)
+		if entry.Error != "" {
+			L.Error(lua.LString(entry.Error), 0)
 			return 0
 		}
-		L.Push(ToLua(L, result))
+		L.Push(ToLua(L, entry.Result))
 		return 1
 	}
 }
@@ -69,9 +71,25 @@ func (k *Kernel) unknownCall(L *lua.LState) int {
 	}
 	L.Push(L.NewFunction(func(L *lua.LState) int {
 		err := "sys." + name + ": unknown syscall"
-		k.Log = append(k.Log, Entry{Time: time.Now(), Name: name, Args: snapshotArgs(L, Syscall{}), Error: err})
-		L.RaiseError("%s", err)
+		entry := k.exchange(Entry{Time: time.Now(), Name: name, Args: snapshotArgs(L, Syscall{}), Error: err}, func() (any, error) { return nil, fmt.Errorf("%s", err) })
+		k.Log = append(k.Log, entry)
+		L.RaiseError("%s", entry.Error)
 		return 0
 	}))
 	return 1
+}
+
+func (k *Kernel) exchange(entry Entry, invoke func() (any, error)) Entry {
+	call := func() Entry {
+		result, err := invoke()
+		entry.Result = result
+		if err != nil {
+			entry.Error = err.Error()
+		}
+		return entry
+	}
+	if k.Exchange != nil {
+		return k.Exchange(entry, call)
+	}
+	return call()
 }
