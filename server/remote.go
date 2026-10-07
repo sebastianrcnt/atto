@@ -5,12 +5,13 @@ import (
 	"net/http"
 	"strconv"
 	"time"
+
+	"github.com/sebastianrcnt/atto/config"
 )
 
-// A session's own gateway (remote/start): the /remote of a session that
-// runs in a daemon worker is served by the worker, scoped to that session,
-// so the browser reaches the runtime itself. It stops with remote/stop or
-// with the session.
+// A session's own gateway (remote/start): a client's /remote is served by
+// the session's runtime, scoped to that session, so the browser reaches
+// the runtime itself. It stops with remote/stop or with the session.
 
 type gateway struct {
 	srv   *http.Server
@@ -19,7 +20,20 @@ type gateway struct {
 	links []string
 }
 
-// startGateway serves thread t's session on host:port with a new token.
+// DefaultRemotePort is where remote/start listens when neither the
+// client nor settings.json's remote.port names a port.
+const DefaultRemotePort = 7879
+
+// remotePort is the port remote/start uses when the client names none.
+func remotePort() int {
+	if s, err := config.LoadSettings(); err == nil && s.Remote != nil && s.Remote.Port > 0 {
+		return s.Remote.Port
+	}
+	return DefaultRemotePort
+}
+
+// startGateway serves thread t's session on host:port with a new token
+// (host "": every interface; port 0: remotePort).
 func (s *Server) startGateway(t *thread, host string, port int) (*gateway, error) {
 	token, err := NewToken(16)
 	if err != nil {
@@ -27,6 +41,9 @@ func (s *Server) startGateway(t *thread, host string, port int) (*gateway, error
 	}
 	if host == "" {
 		host = "0.0.0.0"
+	}
+	if port == 0 {
+		port = remotePort()
 	}
 	ln, err := net.Listen("tcp", net.JoinHostPort(host, strconv.Itoa(port)))
 	if err != nil {

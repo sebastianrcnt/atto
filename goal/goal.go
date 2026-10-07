@@ -363,17 +363,6 @@ func IsMessage(text string) bool {
 	return strings.HasPrefix(text, OpenTag) || strings.HasPrefix(text, legacyPrefix)
 }
 
-// Body is a goal message without its wrapper (or old prefix); text that
-// is not a goal message comes back unchanged.
-func Body(text string) string {
-	if rest, ok := strings.CutPrefix(text, OpenTag); ok {
-		rest = strings.TrimPrefix(rest, "\n")
-		rest = strings.TrimSuffix(rest, CloseTag)
-		return strings.TrimSpace(rest)
-	}
-	return strings.TrimPrefix(text, legacyPrefix)
-}
-
 // escape keeps the objective from closing the tag it is wrapped in.
 func escape(s string) string {
 	return strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&gt;").Replace(s)

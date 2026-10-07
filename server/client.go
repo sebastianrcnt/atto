@@ -156,9 +156,6 @@ func (c *Client) pump() {
 // connection has ended and they were all read.
 func (c *Client) Events() <-chan Notification { return c.events }
 
-// Done is closed when the connection ends.
-func (c *Client) Done() <-chan struct{} { return c.done }
-
 // Call sends a request and decodes its result into result (when not nil).
 // A server error is a *RPCError.
 func (c *Client) Call(ctx context.Context, method string, params, result any) error {

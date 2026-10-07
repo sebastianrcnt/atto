@@ -104,42 +104,15 @@ type Settings struct {
 	DefaultProvider string      `json:"defaultProvider,omitempty"`
 	DefaultModel    string      `json:"defaultModel,omitempty"`
 	DefaultEffort   string      `json:"defaultEffort,omitempty"`
-	// Renderer is "fullscreen" (default) or "inline".
-	Renderer string `json:"renderer,omitempty"`
-	// StatusLine replaces the built-in status line with a command's output,
-	// like Claude Code's statusLine setting.
-	StatusLine *StatusLine `json:"statusLine,omitempty"`
 	// Hooks maps an event name (PreToolUse, PostToolUse, UserPromptSubmit,
 	// Stop, PreCompact, SessionStart, SessionEnd, Notification) to matchers,
 	// in Claude Code's format.
 	Hooks map[string][]HookMatcher `json:"hooks,omitempty"`
-	// UpdateCheck: false stops the once-a-day release check (a GET to the
-	// GitHub API). atto never installs updates by itself either way.
-	UpdateCheck *bool `json:"updateCheck,omitempty"`
-	// DoubleEscapeAction is what Esc twice on an empty prompt opens, as in
-	// pi: "tree" (default, the session tree), "fork" (pick a message to
-	// fork a new session from) or "none".
-	DoubleEscapeAction string `json:"doubleEscapeAction,omitempty"`
-	// Mouse: false leaves the mouse to the terminal in fullscreen mode, so
-	// its own selection works without a modifier key; atto then scrolls
-	// with PageUp/PageDown only. ATTO_NO_MOUSE=1 does the same.
-	Mouse *bool `json:"mouse,omitempty"`
 	// ToolGroups: false shows every command the model runs as its own
-	// block. By default consecutive commands collapse into one summary
+	// block. By default clients fold consecutive commands into one summary
 	// line of their descriptions (the last, and any that failed, stay
-	// shown); a click or ctrl+t expands it.
+	// shown); clients get it from initialize (clientSettings).
 	ToolGroups *bool `json:"toolGroups,omitempty"`
-	// SpinnerVerbs picks the words the activity line shows while a command
-	// runs, one per turn: "en" (default, made-up English verbs), "ko"
-	// (made-up Korean words), "ko-literary" (Korean verbs) or "off" (just
-	// "Working").
-	SpinnerVerbs string `json:"spinnerVerbs,omitempty"`
-	// SpinnerScanner: true puts a sweeping scanner (▰▱) before the
-	// activity line's word. Off by default: the word's shimmer is enough.
-	SpinnerScanner bool `json:"spinnerScanner,omitempty"`
-	// BranchSummary configures what going back in the session tree (/tree)
-	// does with the branch being left, as pi's setting of the same name.
-	BranchSummary *BranchSummary `json:"branchSummary,omitempty"`
 	// Extensions configures JavaScript extensions (package extensions).
 	Extensions *ExtensionSettings `json:"extensions,omitempty"`
 	// Skills configures skills.
@@ -150,29 +123,19 @@ type Settings struct {
 	// the middle, and the full output is saved to a file the model is told
 	// about.
 	ToolOutputTokenLimit int `json:"toolOutputTokenLimit,omitempty"`
-	// BackgroundExit: false turns off the exit menu that offers "Run in
-	// background" while a turn is running (experimental; default on).
-	BackgroundExit *bool `json:"backgroundExit,omitempty"`
 	// SessionRetention is how long a session the daemon runs stays
-	// loaded once no terminal shows it and nothing runs ("1m", the
+	// loaded once no client follows it and nothing runs ("1m", the
 	// default; "0" ends it at once). Work in progress (a turn, an active
 	// goal, a job or timer, a question) keeps it however long that takes.
 	SessionRetention string `json:"sessionRetention,omitempty"`
-	// Remote configures /remote, which serves the TUI's session to a
-	// phone or browser.
+	// Remote configures remote/start (a client's /remote), which serves
+	// a session to a phone or browser.
 	Remote *RemoteSettings `json:"remote,omitempty"`
 	// Agents configures atto agent: agents other agents start. "subagents",
 	// its old name, is read when "agents" is absent.
 	Agents    *SubagentSettings `json:"agents,omitempty"`
 	Subagents *SubagentSettings `json:"subagents,omitempty"`
-	// Daemon: false runs the TUI in the terminal's own process instead of
-	// a pane of the atto daemon (package daemon). ATTO_NO_DAEMON=1 does
-	// the same for one run.
-	Daemon *bool `json:"daemon,omitempty"`
 }
-
-// DaemonOn reports whether interactive atto runs in the daemon.
-func (s Settings) DaemonOn() bool { return s.Daemon == nil || *s.Daemon }
 
 // SubagentSettings is settings.json's "subagents".
 type SubagentSettings struct {
@@ -235,7 +198,8 @@ func (s Settings) SubagentLimit() int {
 
 // RemoteSettings is settings.json's "remote".
 type RemoteSettings struct {
-	// Port is where /remote listens (all interfaces); default 7879.
+	// Port is where remote/start listens when the client names none;
+	// default 7879.
 	Port int `json:"port,omitempty"`
 }
 
@@ -291,13 +255,6 @@ func RepoMCPPath(root string) string { return filepath.Join(root, ".atto", "mcp.
 
 // ProjectExtensionsDir is a project's own extensions directory.
 func ProjectExtensionsDir(root string) string { return filepath.Join(root, ".atto", "extensions") }
-
-// BranchSummary is settings.json's "branchSummary".
-type BranchSummary struct {
-	// SkipPrompt: true never asks "Summarize branch?" and goes back
-	// without a summary.
-	SkipPrompt bool `json:"skipPrompt,omitempty"`
-}
 
 // HookMatcher selects hooks by tool name (regexp; "" or "*" match all).
 type HookMatcher struct {
@@ -368,17 +325,6 @@ func LoadHooks(cwd string) (map[string][]HookMatcher, error) {
 		return nil, err
 	}
 	return MergeHooks(srcs), nil
-}
-
-// StatusLine configures a custom status line. The command runs with a JSON
-// description of the session on stdin; each line it prints becomes a status
-// line (ANSI colors allowed).
-type StatusLine struct {
-	Type    string `json:"type"` // "command"
-	Command string `json:"command"`
-	// RefreshInterval, in seconds, re-runs the command periodically even if
-	// nothing changed. 0 runs it only on changes.
-	RefreshInterval int `json:"refreshInterval,omitempty"`
 }
 
 // LoadSettings reads settings.json; a missing file yields zero settings.

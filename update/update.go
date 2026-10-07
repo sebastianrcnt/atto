@@ -22,8 +22,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-
-	"github.com/sebastianrcnt/atto/config"
 )
 
 // Install is the reinstall command for this system.
@@ -395,48 +393,4 @@ func Cleanup() {
 func fileExists(p string) bool {
 	_, err := os.Stat(p)
 	return err == nil
-}
-
-// checkFile caches the daily release check.
-func checkFile() string { return filepath.Join(config.Dir(), "update-check.json") }
-
-type check struct {
-	Checked time.Time `json:"checked"`
-	Channel string    `json:"channel,omitempty"`
-	Latest  string    `json:"latest"`
-}
-
-// Available returns a newer version on this binary's channel, or "". It
-// asks GitHub at most once a day (per channel) and otherwise answers from
-// the cache, so it is cheap to call at startup.
-func Available(ctx context.Context) string {
-	channel := Channel
-	if channel == "" {
-		return "" // dev builds aren't told about releases
-	}
-	var c check
-	if data, err := os.ReadFile(checkFile()); err == nil {
-		_ = json.Unmarshal(data, &c)
-	}
-	if c.Channel == "" {
-		c.Channel = Stable // caches written before channels existed
-	}
-	if c.Channel != channel || time.Since(c.Checked) > 24*time.Hour {
-		if c.Channel != channel {
-			c.Latest = "" // another channel's answer says nothing here
-		}
-		c.Channel = channel
-		rel, err := Latest(ctx, channel)
-		c.Checked = time.Now() // failures wait a day too
-		if err == nil {
-			c.Latest = rel.Version
-		}
-		if data, err := json.Marshal(c); err == nil {
-			_ = os.WriteFile(checkFile(), data, 0o644)
-		}
-	}
-	if _, ok := parse(Current()); ok && Newer(c.Latest, Current()) {
-		return c.Latest
-	}
-	return ""
 }

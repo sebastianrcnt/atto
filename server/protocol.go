@@ -80,6 +80,11 @@
 //	commands/list  {threadId}  → {commands: [CommandInfo]}; commands/run {threadId, name, args?}
 //	client/gate    {threadId, open}  (a picker of the client is open: automatic work waits)
 //	job/stopAll, timer/list, timer/create {when, message}, timer/cancel {id}
+//	remote/start   {threadId, host?, port?}  → {addr, token, links}
+//	               serves this thread's session to a browser (the web
+//	               client, scoped to it) with a new token; port 0:
+//	               settings.json remote.port, else 7879. remote/stop
+//	               {threadId} closes it and revokes the token.
 //
 // and notifications: input/recovered {clientId, text, images, ifEmpty}
 // (input given back to the client that sent it), turn/activity {activity},
@@ -94,7 +99,7 @@
 //
 // Notifications (all carry threadId):
 //
-//	turn/started   {turnId, startedAt, verb?}  (startedAt: Unix ms; verb: the word the terminal shows for "Working")
+//	turn/started   {turnId, startedAt, verb?}  (startedAt: Unix ms; verb: a word to show for "Working", unset by the runtime)
 //	item/started   {turnId, item}
 //	item/delta     {turnId, itemId, delta}
 //	item/updated   {turnId, item}  (a command the model is still writing, pending: its description and command so far; again when it starts running)

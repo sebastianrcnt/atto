@@ -6,6 +6,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/sebastianrcnt/atto/config"
 )
 
 func TestWebClientServedFromEmbed(t *testing.T) {
@@ -40,5 +42,20 @@ func TestWebClientServedFromEmbed(t *testing.T) {
 	}
 	if _, resp := get("/nope.js"); resp.StatusCode != 404 {
 		t.Fatalf("missing file: %d", resp.StatusCode)
+	}
+}
+
+// remote/start without a port listens on settings.json's remote.port, else
+// 7879 (the port /remote used in the terminal).
+func TestRemotePortDefault(t *testing.T) {
+	t.Setenv(config.EnvDir, t.TempDir())
+	if got := remotePort(); got != DefaultRemotePort {
+		t.Fatalf("no setting: %d", got)
+	}
+	if err := config.UpdateSettings(map[string]any{"remote": map[string]any{"port": 7999}}); err != nil {
+		t.Fatal(err)
+	}
+	if got := remotePort(); got != 7999 {
+		t.Fatalf("remote.port: %d", got)
 	}
 }

@@ -518,10 +518,6 @@ func (t *thread) replayKeepNotices(branch []session.Entry) {
 	t.items = append(kept, t.items...)
 }
 
-// ReadOffline reads a saved session without loading it: its items,
-// read-only.
-func ReadOffline(id string) (ThreadInfo, error) { return readOffline(id) }
-
 // readOffline reads a saved session without loading it: its items,
 // read-only.
 func readOffline(id string) (ThreadInfo, error) {

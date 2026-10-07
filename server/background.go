@@ -8,7 +8,7 @@ import (
 )
 
 // What runs beside a thread's turns, for the web client's panels: the
-// session's background jobs (atto job, like the TUI's /jobs) and its
+// session's background jobs (atto job, as /jobs lists them) and its
 // subagents (atto agent). Both live in files under ~/.atto keyed by the
 // session ID, so a live session reads them the same way.
 

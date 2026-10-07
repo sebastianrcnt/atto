@@ -68,17 +68,14 @@ func TestMessageWrapAndDetect(t *testing.T) {
 		if !IsMessage(m) || !strings.HasPrefix(m, `<atto_internal_context source="goal">`+"\n") || !strings.HasSuffix(m, "\n</atto_internal_context>") {
 			t.Errorf("not wrapped: %q", m)
 		}
-		if b := Body(m); strings.Contains(b, "atto_internal_context") || !strings.Contains(b, "ship it") {
-			t.Errorf("body keeps the wrapper or loses the objective:\n%s", b)
-		}
 	}
 	// Sessions written before the wrapper hold the old prefix.
 	old := "[atto goal] Continue working toward the active goal."
-	if !IsMessage(old) || Body(old) != "Continue working toward the active goal." {
-		t.Errorf("legacy prefix: %v %q", IsMessage(old), Body(old))
+	if !IsMessage(old) {
+		t.Errorf("legacy prefix: %q", old)
 	}
 	for _, text := range []string{"", "fix the bug", "[atto event] job done", "mention <atto_internal_context source=\"goal\"> inside"} {
-		if IsMessage(text) || Body(text) != text {
+		if IsMessage(text) {
 			t.Errorf("user text %q is no goal message", text)
 		}
 	}

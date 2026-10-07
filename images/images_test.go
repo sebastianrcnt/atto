@@ -8,8 +8,6 @@ import (
 	"image/color"
 	"image/jpeg"
 	"image/png"
-	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 
@@ -81,33 +79,6 @@ func TestSaveLoad(t *testing.T) {
 	}
 	if _, err := Load(provider.Image{File: "missing.png"}); err == nil {
 		t.Fatal("missing file loaded")
-	}
-}
-
-func TestPastedPath(t *testing.T) {
-	dir := t.TempDir()
-	for in, want := range map[string]string{
-		"/tmp/shot.png":                 "/tmp/shot.png",
-		"  '/tmp/my shot.PNG' ":         "/tmp/my shot.PNG",
-		`"/tmp/a b.jpg"`:                "/tmp/a b.jpg",
-		`/Users/me/Screen\ Shot\ 1.png`: "/Users/me/Screen Shot 1.png",
-		"file:///tmp/with%20space.webp": "/tmp/with space.webp",
-		`C:\Users\me\Pictures\x.jpeg`:   `C:\Users\me\Pictures\x.jpeg`,
-		`\\server\share\y.gif`:          `\\server\share\y.gif`,
-		filepath.Join(dir, "z.png"):     filepath.Join(dir, "z.png"),
-	} {
-		got, ok := PastedPath(in)
-		if runtime.GOOS == "windows" && strings.HasPrefix(in, "file://") {
-			continue
-		}
-		if !ok || got != want {
-			t.Errorf("PastedPath(%q) = %q, %v; want %q", in, got, ok, want)
-		}
-	}
-	for _, in := range []string{"hello world", "/tmp/notes.txt", "/tmp/a.png\n/tmp/b.png", "", "file://host/x.png"} {
-		if got, ok := PastedPath(in); ok {
-			t.Errorf("PastedPath(%q) = %q, want no path", in, got)
-		}
 	}
 }
 

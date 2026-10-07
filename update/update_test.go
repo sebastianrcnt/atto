@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -12,8 +11,6 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
-
-	"github.com/sebastianrcnt/atto/config"
 )
 
 func TestNewer(t *testing.T) {
@@ -192,57 +189,6 @@ func TestManaged(t *testing.T) {
 	}
 	if Managed("/Users/x/.local/bin/atto") != "" {
 		t.Fatal("the install script's location is ours")
-	}
-}
-
-func TestAvailableUsesCache(t *testing.T) {
-	t.Setenv(config.EnvDir, t.TempDir())
-	data, _ := json.Marshal(check{Checked: time.Now(), Latest: "v9.0.0"})
-	os.WriteFile(checkFile(), data, 0o644)
-
-	oldV, oldC := Version, Channel
-	defer func() { Version, Channel = oldV, oldC }()
-	Version, Channel = "v0.1.0", Stable
-	if got := Available(context.Background()); got != "v9.0.0" {
-		t.Fatalf("got %q", got)
-	}
-	Version = "dev"
-	if got := Available(context.Background()); got != "" {
-		t.Fatalf("dev builds get no notice, got %q", got)
-	}
-}
-
-func TestAvailableFollowsBinaryChannel(t *testing.T) {
-	t.Setenv(config.EnvDir, t.TempDir())
-	fakeGitHub(t, "v0.0.3-dev.14+abc1234")
-	oldV, oldC := Version, Channel
-	defer func() { Version, Channel = oldV, oldC }()
-	Version = "v0.0.2"
-
-	// No channel (go install, local build): no check at all.
-	Channel = ""
-	if got := Available(context.Background()); got != "" {
-		t.Fatalf("no channel: got %q", got)
-	}
-	if _, err := os.Stat(checkFile()); err == nil {
-		t.Fatal("a build without a channel must not even ask GitHub")
-	}
-	// Stable: v0.0.2 is the latest, nothing to report.
-	Channel = Stable
-	if got := Available(context.Background()); got != "" {
-		t.Fatalf("stable: got %q", got)
-	}
-	// The same cache file must not answer for the edge channel.
-	Channel = Edge
-	if got := Available(context.Background()); got != "v0.0.3-dev.14+abc1234" {
-		t.Fatalf("edge: got %q", got)
-	}
-	// A cache from before channels existed counts as stable.
-	data, _ := json.Marshal(map[string]any{"checked": time.Now(), "latest": "v9.0.0"})
-	os.WriteFile(checkFile(), data, 0o644)
-	Channel = Stable
-	if got := Available(context.Background()); got != "v9.0.0" {
-		t.Fatalf("old cache: got %q", got)
 	}
 }
 
