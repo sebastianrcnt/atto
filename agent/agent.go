@@ -17,12 +17,13 @@ import (
 // Agent is one agent: its mind (cortex), its computer (machine) and the
 // model it thinks with.
 type Agent struct {
-	Name     string // its path, e.g. /root
-	Cortex   *cortex.Cortex
-	Machine  *machine.Machine
-	Model    *model.Client
-	MaxSteps int
-	Steps    int
+	Name             string // its path, e.g. /root
+	Cortex           *cortex.Cortex
+	Machine          *machine.Machine
+	Model            *model.Client
+	MaxSteps         int
+	Steps            int
+	CompletionTokens int
 
 	// Trace, when set, sees each step: the code run and its output.
 	Trace func(Event)
@@ -61,6 +62,7 @@ func (a *Agent) Run(ctx context.Context, input string) (string, error) {
 			return "", err
 		}
 		a.Cortex.Tokens = usage.PromptTokens
+		a.CompletionTokens += usage.CompletionTokens
 		a.Cortex.Add(reply)
 		a.traceReply(reply)
 		if len(reply.ToolCalls) == 0 {

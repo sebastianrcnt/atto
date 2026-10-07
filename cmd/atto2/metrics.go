@@ -10,7 +10,7 @@ import (
 
 func writeMetrics(path string, a *agent.Agent, answer string, runErr error) error {
 	k := a.Machine.Kernel
-	stats := map[string]any{"report": answer, "steps": a.Steps, "prompt_tokens": a.Cortex.Tokens, "syscalls": len(k.Log), "pure_runs": k.PureRuns, "impure_runs": k.ImpureRuns}
+	stats := map[string]any{"report": answer, "steps": a.Steps, "prompt_tokens": a.Cortex.Tokens, "completion_tokens": a.CompletionTokens, "syscalls": len(k.Log), "pure_runs": k.PureRuns, "impure_runs": k.ImpureRuns}
 	if runErr != nil {
 		stats["error"] = runErr.Error()
 	}

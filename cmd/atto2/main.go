@@ -35,7 +35,7 @@ func main() {
 	a := newAgent(o, m)
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
-	answer, err := a.Run(ctx, strings.Join(flag.Args(), " "))
+	answer, err := run(ctx, a, strings.Join(flag.Args(), " "), *o.baseline)
 	if *o.verbose {
 		printSyscallLog(k)
 	}
@@ -57,7 +57,7 @@ func envOr(key, fallback string) string {
 
 type options struct {
 	dir, baseURL, modelID, metrics, grant *string
-	verbose, quiet                        *bool
+	verbose, quiet, baseline              *bool
 	steps                                 *int
 }
 
@@ -67,6 +67,7 @@ func parseFlags() options {
 	o.dir = flag.String("dir", ".", "read-only project working directory for sys.bash")
 	o.baseURL = flag.String("base-url", envOr("ATTO2_BASE_URL", "http://192.168.0.235:8081/v1"), "chat completions endpoint")
 	o.modelID = flag.String("model", envOr("ATTO2_MODEL", "orca-local"), "model id")
+	o.baseline = flag.Bool("baseline", false, "one chat completion without tools")
 	o.verbose = flag.Bool("v", false, "print syscall log at end")
 	o.metrics = flag.String("metrics", "", "write run metrics as JSON to this path")
 	o.quiet = flag.Bool("q", false, "hide Lua trace (agent stdout is still shown)")
@@ -100,4 +101,18 @@ func grantNames(value string) []string {
 		names[i] = strings.TrimSpace(names[i])
 	}
 	return names
+}
+
+func run(ctx context.Context, a *agent.Agent, input string, baseline bool) (string, error) {
+	if !baseline {
+		return a.Run(ctx, input)
+	}
+	reply, usage, err := a.Model.Complete(ctx, []model.Message{{Role: "user", Content: input}}, nil)
+	a.Steps = 1
+	a.Cortex.Tokens = usage.PromptTokens
+	a.CompletionTokens = usage.CompletionTokens
+	if reply.Reasoning != "" {
+		a.Trace(agent.Event{Kind: "thinking", Text: reply.Reasoning})
+	}
+	return reply.Content, err
 }

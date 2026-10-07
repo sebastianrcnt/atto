@@ -36,7 +36,7 @@ func TestWriteMetrics(t *testing.T) {
 		if err := json.Unmarshal(raw, &got); err != nil {
 			t.Fatal(err)
 		}
-		want := map[string]any{"report": "report", "steps": float64(3), "prompt_tokens": float64(123), "syscalls": float64(1), "pure_runs": float64(1), "impure_runs": float64(2)}
+		want := map[string]any{"report": "report", "steps": float64(3), "prompt_tokens": float64(123), "completion_tokens": float64(0), "syscalls": float64(1), "pure_runs": float64(1), "impure_runs": float64(2)}
 		if runErr != nil {
 			want["error"] = runErr.Error()
 		}
