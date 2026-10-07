@@ -837,6 +837,26 @@ ask workers for their state yet).
 Behaviour change in G (daemon users): quitting a pane no longer ends the
 session at once; an idle session stays loaded for `sessionRetention`.
 
+**H — agent turns and print mode: partial.** Done: `atto -p -session/-c` on
+a session a daemon worker runs goes through the worker as a protocol client
+(text and json output; stream-json, -goal, -image, -m, -effort and
+-max-steps are refused there with a pointer to `atto connect`). The
+mixed-version rule holds: a session an `_agent-turn` (run lease) or a
+`_continue` (background lease) writes opens read-only in the TUI and in
+workers (no second writer). Not done, and why: `RunPrint` (plain `atto -p`,
+`_continue`, `_agent-turn`) still runs its own agent and goal loop. Its
+contracts differ from the interactive runtime in ways that need their own
+design pass: the stream-json event shapes, `-no-save`, the subagent inbox
+policy (deliver at boundaries, a quiet finished turn takes nothing, a
+waking message after the final poll starts a successor turn), the run lease
+and `LeaveKeepingAgents`, and per-turn extension/MCP lifetimes. Moving
+`atto agent spawn/task/send` to child workers needs the slots, depth limit,
+worktrees and final-answer-once rules ported onto the registry; the
+recommended order is (1) a runtime option for subagent policy (prompt,
+inbox delivery, retirement), (2) `_agent-turn` as a worker client of the
+child's worker, (3) `RunPrint` on an in-process runtime with a printer
+fed by notifications, keeping its output contract byte-for-byte.
+
 Tests: execution semantics moved to `server/runtime_test.go`; the app keeps
 rendering tests (driven through the protocol form of items), live-vs-resume
 parity tests and end-to-end tests of the main flows (`app/client_test.go`).

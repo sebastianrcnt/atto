@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/sebastianrcnt/atto/config"
+	"github.com/sebastianrcnt/atto/daemon"
 	"github.com/sebastianrcnt/atto/jobs"
 	"github.com/sebastianrcnt/atto/mcp"
 	"github.com/sebastianrcnt/atto/mcp/mcptest"
@@ -36,6 +37,16 @@ func TestMain(m *testing.M) {
 		case "_agent-turn":
 			if err := RunAgentTurn(os.Args[2:], io.Discard); err != nil {
 				fmt.Fprintln(os.Stderr, err)
+				os.Exit(1)
+			}
+			os.Exit(0)
+		case "_daemon": // TestPrintViaWorker's daemon and its worker
+			if err := RunDaemonServe(nil, io.Discard); err != nil {
+				os.Exit(1)
+			}
+			os.Exit(0)
+		case "_session-server":
+			if err := daemon.RunWorker("test", os.Args[2:]); err != nil {
 				os.Exit(1)
 			}
 			os.Exit(0)
