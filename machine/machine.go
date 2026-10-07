@@ -1,192 +1,275 @@
-// Package machine is an agent's computer: a Lua VM of its own, with only
-// what the agent is given. Nothing reaches the host unless a device puts
-// it there; the standard libraries that would (os, io, load, require) are
-// not opened.
-//
-// Like a shell, commands print what they find (ls, cat, grep…); the fs
-// table gives the same as values for programs (fs.read, fs.list…). Paths
-// are inside the machine's root, which is "/" to the agent, as in a
-// chroot.
+// Package machine is an agent's pure Lua 5.1 computer. World access is
+// installed only through the kernel's checked Go-function boundary.
 package machine
 
 import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
+	"regexp"
+	"sort"
 	"strings"
 	"time"
 
+	"atto2/kernel"
 	lua "github.com/yuin/gopher-lua"
 )
 
-// Limits of one run.
 const (
 	RunTimeout = 30 * time.Second
-	MaxOutput  = 16 << 10 // bytes of output the agent gets back
+	MaxOutput  = 16 << 10
 )
 
-// Machine is one agent's Lua VM and its working directory.
+type Result struct {
+	Output string
+	Pure   bool
+}
 type Machine struct {
-	L    *lua.LState
-	root string // host path the agent sees as "/"
-	cwd  string // host path, inside root
-	out  *output
+	L         *lua.LState
+	Kernel    *kernel.Kernel
+	out       *output
+	ids       map[lua.LValue]int
+	jsonKinds map[*lua.LTable]bool // true: decoded JSON array; false: object
+	null      *lua.LUserData
 }
 
-// New makes a machine whose files are those under root, read only.
-func New(root string) (*Machine, error) {
-	abs, err := filepath.Abs(root)
-	if err != nil {
-		return nil, err
-	}
-	if abs, err = filepath.EvalSymlinks(abs); err != nil {
-		return nil, err
-	}
-	m := &Machine{root: abs, cwd: abs, out: &output{}}
+func New(k *kernel.Kernel) *Machine {
+	m := &Machine{Kernel: k, out: &output{}, ids: map[lua.LValue]int{}, jsonKinds: map[*lua.LTable]bool{}}
 	m.L = lua.NewState(lua.Options{SkipOpenLibs: true})
 	for _, lib := range []struct {
 		name string
 		open lua.LGFunction
 	}{
-		{lua.BaseLibName, lua.OpenBase},
-		{lua.TabLibName, lua.OpenTable},
-		{lua.StringLibName, lua.OpenString},
-		{lua.MathLibName, lua.OpenMath},
+		{lua.BaseLibName, lua.OpenBase}, {lua.TabLibName, lua.OpenTable}, {lua.StringLibName, lua.OpenString}, {lua.MathLibName, lua.OpenMath},
 	} {
 		m.L.Push(m.L.NewFunction(lib.open))
 		m.L.Push(lua.LString(lib.name))
 		m.L.Call(1, 0)
 	}
-	// What the base library has that reaches outside, or loads code the
-	// agent did not write in the run.
-	for _, name := range []string{"dofile", "loadfile", "load", "loadstring", "require", "module", "setfenv", "getfenv", "_printregs", "collectgarbage"} {
+	for _, name := range []string{"dofile", "loadfile", "load", "loadstring", "require", "module", "setfenv", "getfenv", "_printregs", "collectgarbage", "newproxy"} {
 		m.L.SetGlobal(name, lua.LNil)
 	}
+	m.L.GetGlobal("string").(*lua.LTable).RawSetString("dump", lua.LNil)
+	// Randomness is absent, rather than sharing gopher-lua's process-global RNG.
+	math := m.L.GetGlobal("math").(*lua.LTable)
+	math.RawSetString("random", lua.LNil)
+	math.RawSetString("randomseed", lua.LNil)
 	m.L.SetGlobal("print", m.L.NewFunction(m.print))
-	m.installFS()
-	return m, nil
+	m.L.SetGlobal("tostring", m.L.NewFunction(m.toString))
+	m.L.SetGlobal("next", m.L.NewFunction(deterministicNext))
+	m.L.SetGlobal("pairs", m.L.NewFunction(func(L *lua.LState) int {
+		t := L.CheckTable(1)
+		keys := orderedKeys(t)
+		index := 0
+		L.Push(L.NewFunction(func(L *lua.LState) int {
+			for index < len(keys) {
+				key := keys[index]
+				index++
+				if value := t.RawGet(key); value != lua.LNil {
+					L.Push(key)
+					L.Push(value)
+					return 2
+				}
+			}
+			L.Push(lua.LNil)
+			return 1
+		}))
+		L.Push(t)
+		L.Push(lua.LNil)
+		return 3
+	}))
+	// gopher-lua's format uses fmt.Sprintf; never pass host pointers to it.
+	format := m.L.GetGlobal("string").(*lua.LTable).RawGetString("format").(*lua.LFunction)
+	m.L.GetGlobal("string").(*lua.LTable).RawSetString("format", m.L.NewFunction(func(L *lua.LState) int {
+		n := L.GetTop()
+		L.Push(format)
+		for i := 1; i <= n; i++ {
+			v := L.Get(i)
+			if v.Type() == lua.LTTable || v.Type() == lua.LTFunction || v.Type() == lua.LTUserData || v.Type() == lua.LTThread {
+				v = lua.LString(m.identity(v))
+			}
+			L.Push(v)
+		}
+		L.Call(n, 1)
+		return 1
+	}))
+	m.installHelpers()
+	if k != nil {
+		k.Bind(m.L)
+	}
+	return m
 }
 
-// Close frees the VM.
 func (m *Machine) Close() { m.L.Close() }
 
-// Run runs code and returns what it printed (and what it returned), cut
-// to MaxOutput. A Lua error comes back in the output, after what was
-// printed before it, and as err.
-func (m *Machine) Run(ctx context.Context, code string) (string, error) {
-	ctx, cancel := context.WithTimeout(ctx, RunTimeout)
+var namedArgs = regexp.MustCompile(`\bsys\.([a-zA-Z_][a-zA-Z_0-9]*)\s*\(\s*([a-zA-Z_][a-zA-Z_0-9]*)\s*=\s*([^\)\n]+)\)`)
+
+func (m *Machine) Run(ctx context.Context, code string) (result Result, err error) {
+	result.Pure = true
+	if m.Kernel != nil && m.Kernel.Exited {
+		return result, fmt.Errorf("agent exited")
+	}
+	// Syscalls have their own timeout; the execution context limits pure computation.
+	// Use a generous run bound so a bash call can use its default 60-second timeout.
+	timeout := RunTimeout
+	if m.Kernel != nil {
+		timeout = 5 * time.Minute
+	}
+	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
+	before := 0
+	if m.Kernel != nil {
+		before = len(m.Kernel.Log)
+		m.Kernel.BeginRun(ctx, cancel)
+	}
+	defer func() {
+		result.Output = m.out.String()
+		if m.Kernel != nil {
+			result.Pure = len(m.Kernel.Log) == before
+			m.Kernel.EndRun(result.Pure)
+		}
+	}()
 	m.out = &output{}
 	m.L.SetContext(ctx)
 	defer m.L.RemoveContext()
-
 	fn, err := m.L.LoadString(code)
 	if err != nil {
-		return m.out.String(), fmt.Errorf("syntax: %v", err)
+		if args := namedArgs.FindStringSubmatch(code); args != nil {
+			return result, fmt.Errorf("Lua has no named arguments; use sys.%s{%s = %s}", args[1], args[2], strings.TrimSpace(args[3]))
+		}
+		return result, fmt.Errorf("syntax: %v", err)
 	}
 	top := m.L.GetTop()
 	m.L.Push(fn)
 	err = m.L.PCall(0, lua.MultRet, nil)
-	if err == nil {
-		// Like a REPL: what the chunk returns is shown.
+	if m.Kernel != nil && m.Kernel.Exited {
+		err = nil
+	} else if err == nil {
 		for i := top + 1; i <= m.L.GetTop(); i++ {
-			m.out.line(show(m.L.Get(i)))
+			m.out.line(m.show(m.L.Get(i), 0))
 		}
 	}
 	m.L.SetTop(top)
 	if err != nil {
 		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
-			err = fmt.Errorf("stopped after %s", RunTimeout)
-		}
-		if le, ok := errors.AsType[*lua.ApiError](err); ok {
-			err = errors.New(le.Object.String())
+			err = fmt.Errorf("stopped after %s", timeout)
+		} else if le, ok := errors.AsType[*lua.ApiError](err); ok {
+			err = errors.New(m.show(le.Object, 0))
 		}
 	}
-	return m.out.String(), err
+	return result, err
 }
 
-// Pwd is the working directory as the agent sees it.
-func (m *Machine) Pwd() string { return m.virtual(m.cwd) }
+// LTable.Next follows insertion-ordered keys, unlike ForEach's Go maps. But
+// libraries are themselves registered from Go maps: sort primitive keys and
+// preserve Next's insertion order for identity keys (tables/functions).
+func orderedKeys(t *lua.LTable) []lua.LValue {
+	var keys []lua.LValue
+	for k, _ := t.Next(lua.LNil); k != lua.LNil; {
+		keys = append(keys, k)
+		k, _ = t.Next(k)
+	}
+	sort.SliceStable(keys, func(i, j int) bool {
+		a, b := keys[i], keys[j]
+		if a.Type() != b.Type() {
+			return a.Type() < b.Type()
+		}
+		switch x := a.(type) {
+		case lua.LNumber:
+			return x < b.(lua.LNumber)
+		case lua.LString:
+			return x < b.(lua.LString)
+		case lua.LBool:
+			return !bool(x) && bool(b.(lua.LBool))
+		}
+		return false
+	})
+	return keys
+}
 
+func deterministicNext(L *lua.LState) int {
+	t := L.CheckTable(1)
+	previous := L.Get(2)
+	keys := orderedKeys(t)
+	found := previous == lua.LNil
+	for _, k := range keys {
+		if found {
+			L.Push(k)
+			L.Push(t.RawGet(k))
+			return 2
+		}
+		if k == previous {
+			found = true
+		}
+	}
+	if !found {
+		L.RaiseError("next: invalid key")
+	}
+	L.Push(lua.LNil)
+	return 1
+}
+
+func (m *Machine) identity(v lua.LValue) string {
+	id, ok := m.ids[v]
+	if !ok {
+		id = len(m.ids) + 1
+		m.ids[v] = id
+	}
+	return fmt.Sprintf("%s:%d", v.Type(), id)
+}
+func (m *Machine) toString(L *lua.LState) int {
+	v := L.CheckAny(1)
+	if fn := L.GetMetaField(v, "__tostring"); fn != lua.LNil {
+		L.Push(fn)
+		L.Push(v)
+		L.Call(1, 1)
+		return 1
+	}
+	if v.Type() == lua.LTTable {
+		L.Push(lua.LString(m.identity(v)))
+	} else {
+		L.Push(lua.LString(m.show(v, 0)))
+	}
+	return 1
+}
 func (m *Machine) print(L *lua.LState) int {
 	var parts []string
 	for i := 1; i <= L.GetTop(); i++ {
-		parts = append(parts, show(L.Get(i)))
+		parts = append(parts, m.show(L.Get(i), 0))
 	}
 	m.out.line(strings.Join(parts, "\t"))
 	return 0
 }
-
-// resolve turns a path the agent gave into a host path inside root.
-func (m *Machine) resolve(p string) (string, error) {
-	if p == "" {
-		p = "."
+func (m *Machine) show(v lua.LValue, depth int) string {
+	if v == m.null {
+		return "null"
 	}
-	var host string
-	if strings.HasPrefix(p, "/") {
-		host = filepath.Join(m.root, filepath.FromSlash(p))
-	} else {
-		host = filepath.Join(m.cwd, filepath.FromSlash(p))
-	}
-	if !m.inside(host) {
-		return "", fmt.Errorf("%s: outside the machine", p)
-	}
-	// A link must not lead out either.
-	if real, err := filepath.EvalSymlinks(host); err == nil && !m.inside(real) {
-		return "", fmt.Errorf("%s: outside the machine", p)
-	}
-	return host, nil
-}
-
-func (m *Machine) inside(host string) bool {
-	rel, err := filepath.Rel(m.root, host)
-	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
-}
-
-// virtual is the path the agent sees for a host path.
-func (m *Machine) virtual(host string) string {
-	rel, err := filepath.Rel(m.root, host)
-	if err != nil || rel == "." {
-		return "/"
-	}
-	return "/" + filepath.ToSlash(rel)
-}
-
-// show is how a value prints.
-func show(v lua.LValue) string {
 	if t, ok := v.(*lua.LTable); ok {
-		var b strings.Builder
-		b.WriteString("{")
-		n := 0
-		t.ForEach(func(k, val lua.LValue) {
-			if n > 0 {
-				b.WriteString(", ")
+		if depth >= 5 {
+			return "{…}"
+		}
+		var parts []string
+		for i, k := range orderedKeys(t) {
+			if i == 50 {
+				parts = append(parts, "…")
+				break
 			}
-			if n == 50 {
-				b.WriteString("…")
-				return
+			val := t.RawGet(k)
+			text := m.show(val, depth+1)
+			if s, ok := val.(lua.LString); ok {
+				text = fmt.Sprintf("%q", string(s))
 			}
-			if n < 50 {
-				if _, isNum := k.(lua.LNumber); !isNum {
-					b.WriteString(k.String() + " = ")
-				}
-				if s, ok := val.(lua.LString); ok {
-					b.WriteString(fmt.Sprintf("%q", string(s)))
-				} else {
-					b.WriteString(val.String())
-				}
-			}
-			n++
-		})
-		b.WriteString("}")
-		return b.String()
+			parts = append(parts, m.show(k, depth+1)+" = "+text)
+		}
+		return "{" + strings.Join(parts, ", ") + "}"
+	}
+	switch v.Type() {
+	case lua.LTFunction, lua.LTUserData, lua.LTThread:
+		return m.identity(v)
 	}
 	return v.String()
 }
 
-// output collects what a run prints, up to MaxOutput.
 type output struct {
 	b       strings.Builder
 	dropped int
@@ -200,19 +283,9 @@ func (o *output) line(s string) {
 	o.b.WriteString(s)
 	o.b.WriteByte('\n')
 }
-
 func (o *output) String() string {
 	if o.dropped > 0 {
 		return o.b.String() + fmt.Sprintf("[%d more bytes of output not shown]\n", o.dropped)
 	}
 	return o.b.String()
-}
-
-// statFile is os.Stat of a resolved path, with the agent's path in errors.
-func statFile(host, p string) (os.FileInfo, error) {
-	fi, err := os.Stat(host)
-	if errors.Is(err, os.ErrNotExist) {
-		return nil, fmt.Errorf("%s: no such file or directory", p)
-	}
-	return fi, err
 }

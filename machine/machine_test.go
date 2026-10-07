@@ -2,122 +2,98 @@ package machine
 
 import (
 	"context"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 )
 
-func newMachine(t *testing.T) (*Machine, string) {
-	t.Helper()
-	root := t.TempDir()
-	write := func(p, s string) {
-		full := filepath.Join(root, p)
-		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(full, []byte(s), 0o644); err != nil {
-			t.Fatal(err)
-		}
-	}
-	write("README.md", "# demo\nhello world\n")
-	write("src/main.go", "package main\n\n// TODO: greet\nfunc main() {}\n")
-	write("src/util.go", "package main\n\nfunc add(a, b int) int { return a + b }\n")
-	write(".hidden", "secret-ish\n")
-	m, err := New(root)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(m.Close)
-	return m, root
-}
-
+func newMachine(t *testing.T) *Machine { t.Helper(); m := New(nil); t.Cleanup(m.Close); return m }
 func run(t *testing.T, m *Machine, code string) string {
 	t.Helper()
-	out, err := m.Run(context.Background(), code)
+	r, err := m.Run(context.Background(), code)
 	if err != nil {
-		t.Fatalf("%s: %v\n%s", code, err, out)
+		t.Fatalf("%s: %v", code, err)
 	}
-	return out
+	if !r.Pure {
+		t.Fatal("pure machine reported impure")
+	}
+	return r.Output
 }
-
-func TestCommands(t *testing.T) {
-	m, _ := newMachine(t)
+func TestHelpers(t *testing.T) {
 	cases := []struct{ code, want string }{
-		{`pwd()`, "/\n"},
-		{`ls()`, "README.md\nsrc/\n"},
-		{`ls("-a")`, ".hidden\nREADME.md\nsrc/\n"},
-		{`cat("README.md")`, "# demo\nhello world\n"},
-		{`head("src/main.go", 1)`, "package main\n"},
-		{`tail("-n", "1", "src/main.go")`, "func main() {}\n"},
-		{`lines("src/main.go", 3, 4)`, "     3  // TODO: greet\n     4  func main() {}\n"},
-		{`grep("TODO")`, "src/main.go:3:// TODO: greet\n"},
-		{`grep("-l", "package")`, "src/main.go\nsrc/util.go\n"},
-		{`find(".", "*.go")`, "src/main.go\nsrc/util.go\n"},
-		{`cd("src") pwd() ls()`, "/src\nmain.go\nutil.go\n"},
-		{`return #fs.find("/", "*.go")`, "2\n"},
-		{`local n = 0 for l in fs.lines("src/main.go") do n = n + 1 end return n`, "4\n"},
-		{`return fs.grep("add", "src")[1].line`, "3\n"},
-		{`return fs.exists("nope"), fs.exists("README.md")`, "false\ntrue\n"},
+		{`return table.concat(text.split("a::b::", "::"), "|")`, "a|b|\n"},
+		{`return #text.lines(""), table.concat(text.lines("a\r\nb\n"), "|")`, "0\na|b\n"},
+		{`return text.trim(" \t hi\n")`, "hi\n"},
+		{`return table.concat(text.match_all("ab12 cd34", "[0-9]+"), ",")`, "12,34\n"},
+		{`local a=text.match_all("ab12 cd34", "([a-z]+)([0-9]+)");return a[1][1],a[2][2]`, "ab\n34\n"},
+		{`return json.encode({z=2,a={true,"x"}})`, "{\"a\":[true,\"x\"],\"z\":2}\n"},
+		{`return json.encode(json.decode('{"a":[],"b":{},"c":[null,false,3]}'))`, "{\"a\":[],\"b\":{},\"c\":[null,false,3]}\n"},
 	}
 	for _, c := range cases {
-		m2, _ := newMachine(t)
-		_ = m
-		if got := run(t, m2, c.code); got != c.want {
-			t.Errorf("%s:\ngot  %q\nwant %q", c.code, got, c.want)
-		}
+		t.Run(c.code, func(t *testing.T) {
+			if got := run(t, newMachine(t), c.code); got != c.want {
+				t.Fatalf("got %q want %q", got, c.want)
+			}
+		})
 	}
 }
-
-// Nothing reaches outside the root: not .., not an absolute path, not a
-// link, and none of the libraries that touch the host.
-func TestSandbox(t *testing.T) {
-	m, root := newMachine(t)
-	outside := filepath.Join(filepath.Dir(root), "outside.txt")
-	if err := os.WriteFile(outside, []byte("no"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Symlink(outside, filepath.Join(root, "link")); err != nil {
-		t.Fatal(err)
-	}
-	for _, code := range []string{
-		`cat("../outside.txt")`,
-		`cat("/../outside.txt")`,
-		`cd("..")`,
-		`cat("link")`,
-		`os.execute("true")`,
-		`io.open("/etc/passwd")`,
-		`require("os")`,
-		`load("return 1")`,
-		`dofile("/etc/passwd")`,
-	} {
-		out, err := m.Run(context.Background(), code)
-		if err == nil {
-			t.Errorf("%s ran: %q", code, out)
-		}
-		if strings.Contains(out, "no") && strings.Contains(code, "outside") {
-			t.Errorf("%s read outside: %q", code, out)
+func TestDeterminism(t *testing.T) {
+	code := `local t={} for i=150,1,-1 do t["key"..i]=i end
+ for k,v in pairs(t) do print(k,v) end
+ local k=nil repeat k=next(t,k);if k then print(k) end until not k
+ print(t, {b={z=2,a=1},a=3})
+ for k,v in pairs(math) do print(k,type(v)) end
+ for k,v in pairs(_G) do print(k,type(v)) end
+ print(tostring({}),tostring(function() end),string.format("%s",{}))`
+	want := run(t, newMachine(t), code)
+	for range 20 {
+		if got := run(t, newMachine(t), code); got != want {
+			t.Fatalf("non-deterministic output:\n%s\n---\n%s", want, got)
 		}
 	}
-	// "/" is the root, so an absolute path stays inside.
-	if got := run(t, m, `cat("/README.md")`); !strings.Contains(got, "hello") {
-		t.Errorf("absolute path: %q", got)
+	// Same code twice on the same persistent VM, for value computations.
+	m := newMachine(t)
+	code = `local t={} for i=100,1,-1 do t["s"..i]=i end for k,v in pairs(t) do print(k,v) end`
+	if a, b := run(t, m, code), run(t, m, code); a != b {
+		t.Fatal("same code on same VM differs")
 	}
 }
-
-func TestRunawayCodeStops(t *testing.T) {
-	m, _ := newMachine(t)
+func TestNoWorld(t *testing.T) {
+	m := newMachine(t)
+	for _, name := range []string{"fs", "ls", "cat", "head", "tail", "lines", "grep", "find", "wc", "stat", "pwd", "cd", "os", "io", "require", "load", "loadfile", "loadstring", "dofile", "sys"} {
+		if got := run(t, m, `return `+name); got != "nil\n" {
+			t.Errorf("%s: %s", name, got)
+		}
+	}
+	if got := run(t, m, `return math.random,math.randomseed,string.dump`); got != "nil\nnil\nnil\n" {
+		t.Fatal(got)
+	}
+}
+func TestRunawayAndErrors(t *testing.T) {
+	m := newMachine(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	if _, err := m.Run(ctx, `while true do end`); err == nil {
-		t.Fatal("an endless loop finished")
+		t.Fatal("endless loop finished")
+	}
+	r, err := m.Run(context.Background(), `print("before") error("failed")`)
+	if err == nil || !strings.Contains(err.Error(), "failed") || r.Output != "before\n" {
+		t.Fatalf("%+v %v", r, err)
+	}
+	for _, code := range []string{`local t={} t.x=t;return json.encode(t)`, `return json.encode({[3]=1})`, `return json.decode("no")`, `return text.match_all("s", "[")`} {
+		if _, err := m.Run(context.Background(), code); err == nil {
+			t.Errorf("accepted %s", code)
+		}
+	}
+	_, err = m.Run(context.Background(), `sys.bash(cmd="ls")`)
+	if err == nil || !strings.Contains(err.Error(), `Lua has no named arguments; use sys.bash{cmd = "ls"}`) {
+		t.Fatal(err)
 	}
 }
 
-func TestErrorsKeepOutput(t *testing.T) {
-	m, _ := newMachine(t)
-	out, err := m.Run(context.Background(), `print("before") cat("missing.txt")`)
-	if err == nil || !strings.Contains(err.Error(), "missing.txt: no such file") || out != "before\n" {
-		t.Fatalf("out %q err %v", out, err)
+func TestPairsDeletion(t *testing.T) {
+	m := newMachine(t)
+	code := `local t={a=1,b=2,c=3};for k,v in pairs(t) do print(k,v);t[k]=nil end;return next(t)==nil`
+	if got := run(t, m, code); got != "a\t1\nb\t2\nc\t3\ntrue\n" {
+		t.Fatal(got)
 	}
 }

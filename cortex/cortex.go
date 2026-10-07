@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strings"
 
+	"atto2/kernel"
 	"atto2/model"
 )
 
@@ -31,31 +32,21 @@ func (c *Cortex) Messages() []model.Message {
 	return append([]model.Message{{Role: "system", Content: c.System}}, c.messages...)
 }
 
-// Instructions is the system prompt of an agent with a read-only Lua
-// machine; cwd is where it starts.
-func Instructions(cwd string) string {
+// Instructions describes the computer and this agent's granted world interface.
+func Instructions(k *kernel.Kernel, project string) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, `You are an agent. You work by running Lua 5.1 code on your machine with the lua tool, then answering.
-
-Your machine can only read files. Its files are a project; "/" is the project's root and you start in %s.
-
-Shell-style commands print their result, like in bash:
-  pwd()  cd(path)
-  ls(path?)            ls("-la", "src")   (-a hidden files, -l sizes)
-  cat(path, ...)       cat("-n", path)    (-n line numbers)
-  head(path, n?)  tail(path, n?)          (default 10 lines)
-  lines(path, from, to?)                  numbered lines from..to, as sed -n 'from,top'
-  grep(pattern, path?) grep("-i", "todo", "src")   (pattern: Go regexp; -i ignore case, -l files only; recursive)
-  find(path?, glob?)   find(".", "*.go")
-  wc(path)  stat(path)
-The same as values, for programs:
-  fs.read(path) -> string        fs.lines(path) -> iterator over lines
-  fs.list(path?) -> {{name, dir, size}}   fs.find(path?, glob?) -> {paths}
-  fs.grep(pattern, path?) -> {{file, line, text}}
-  fs.stat(path) -> {dir, size, modified} or nil, err   fs.exists(path) -> bool
-print(...) shows values; a chunk's return values are shown too. Strings, tables, math and string functions work as in Lua 5.1; there is no os, io, require or load.
-
-One lua call may run many commands: combine them. Output is cut at 16 KB, so prefer grep, head and find over reading whole large files.
-When you know the answer, reply with it in plain text without calling the tool.`, cwd)
+	fmt.Fprintf(&b, `You are an agent with a Lua 5.1 machine. Use the lua tool to execute code; globals persist between runs. print and chunk returns are shown (16 KiB per run).
+The machine computes only: base, string, table, math; no files, OS, network, time, random, require, load, or string.dump. pairs/next sort primitive keys; identity keys retain insertion order.
+Pure helpers:
+text.split(s, sep) -> array (literal separator)
+text.lines(s) -> array (CRLF accepted, no final empty line)
+text.trim(s) -> string
+text.match_all(s, goPattern) -> array of full matches, or arrays of captures if the Go regexp has capture groups
+json.encode(v) -> string; json.decode(s) -> value; json.null represents null. Dense tables encode as arrays, string-key tables as objects; decoded empty objects/arrays preserve their shape.
+Everything that touches the world is a checked and logged syscall under sys. This agent has:
+%sCalls accept positional arguments in schema order or one table; Lua has no named arguments. sys.bash("ls") and sys.bash{cmd = "ls"} are equivalent.
+The project working directory for sys.bash is %q. Bash can read host files; it is not a read chroot. Writes outside its private temp directory and /dev/null are denied by the OS.
+Your own text is your stdout, shown to observers, not a result to anyone. Results leave through sys.exit{report = "..."}.
+`, k.Instructions(), project)
 	return b.String()
 }
