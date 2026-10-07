@@ -332,7 +332,9 @@ func (a *App) shutdown() error {
 		if a.remote != nil && a.remote.srv == nil { // the worker's /remote ends with this terminal
 			_ = cn.c.Call(context.Background(), "remote/stop", map[string]any{"threadId": a.threadID}, nil)
 		}
-		return cn.c.Close() // a worker's: it goes on
+		// A worker's session goes on; if it retires, SessionEnd says exit.
+		_ = cn.c.Call(context.Background(), "thread/detach", map[string]any{"threadId": a.threadID, "reason": "exit"}, nil)
+		return cn.c.Close()
 	}
 	if a.threadID != "" && a.bgLine == "" {
 		var r struct {

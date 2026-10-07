@@ -29,8 +29,12 @@ import (
 // transcript read-only, with the usual ctrl+r refresh. Ctrl+C closes the
 // center only, never interrupting the underlying session's work.
 
-// listPanes lists the daemon's panes; tests replace it.
-var listPanes = daemon.List
+// listPanes lists the daemon's panes, and listWorkers its session
+// workers; tests replace them.
+var (
+	listPanes   = daemon.List
+	listWorkers = daemon.Workers
+)
 
 // listSaved lists saved sessions, newest first; tests replace it.
 var listSaved = func() []session.Summary {
@@ -168,9 +172,10 @@ func (a *App) openAgents(tab int) {
 }
 
 type centerSnapshot struct {
-	panes  []daemon.Pane
-	saved  []session.Summary
-	agents []centerAgent
+	panes   []daemon.Pane
+	workers []daemon.Worker
+	saved   []session.Summary
+	agents  []centerAgent
 }
 
 type centerAgent struct {
@@ -180,7 +185,8 @@ type centerAgent struct {
 
 func scanCenter() centerSnapshot {
 	panes, _ := listPanes()
-	snapshot := centerSnapshot{panes: panes, saved: listSaved()}
+	workers, _ := listWorkers()
+	snapshot := centerSnapshot{panes: panes, workers: workers, saved: listSaved()}
 	for _, s := range subagent.ListAll() {
 		snapshot.agents = append(snapshot.agents, centerAgent{s, s.Latest()})
 	}
@@ -281,6 +287,16 @@ func (c *agentCenter) apply(snapshot centerSnapshot) {
 		}
 		items = append(items, it)
 		seen[it.id] = true
+	}
+	// Sessions a worker runs with no pane showing them: running, here to
+	// open (a terminal attaches to the worker).
+	for _, w := range snapshot.workers {
+		if seen[w.Session] {
+			continue
+		}
+		items = append(items, centerItem{id: w.Session, cwd: w.Cwd, updated: w.Started, tab: tabReady,
+			current: c.a != nil && w.Session == c.a.threadID})
+		seen[w.Session] = true
 	}
 	if a := c.a; a != nil && !seen[a.threadID] {
 		it := centerItem{id: a.threadID, title: a.sessName, cwd: a.cwd, current: true, updated: time.Now(), tab: tabReady}

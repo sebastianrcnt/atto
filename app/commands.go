@@ -58,6 +58,7 @@ func localCommands() map[string]func(a *App, arg string) bool {
 		"clear":      func(a *App, arg string) bool { a.cmdClear(arg); return true },
 		"agents":     func(a *App, arg string) bool { a.cmdAgents(arg); return true },
 		"detach":     func(a *App, arg string) bool { a.cmdDetach(arg); return true },
+		"close":      func(a *App, arg string) bool { a.stopAndQuit(); return true },
 		"quit":       func(a *App, arg string) bool { a.cmdQuit(arg); return true },
 		"exit":       func(a *App, arg string) bool { a.cmdQuit(arg); return true },
 	}

@@ -217,6 +217,32 @@ func TestCenterDaemonOpensAgent(t *testing.T) {
 	}
 }
 
+// A session a daemon worker runs with no pane showing it is listed as
+// running, once (a pane of it wins).
+func TestCenterListsWorkerSessions(t *testing.T) {
+	c := &agentCenter{}
+	c.apply(centerSnapshot{
+		workers: []daemon.Worker{{Session: "w1", Cwd: "/p"}, {Session: "shown", Cwd: "/p"}},
+		panes:   []daemon.Pane{{ID: 1, Session: "shown", State: "working"}},
+		saved:   []session.Summary{{ID: "w1", Cwd: "/p", Name: "background work"}},
+	})
+	if len(c.items) != 2 {
+		t.Fatalf("items %+v", c.items)
+	}
+	for _, it := range c.items {
+		switch it.id {
+		case "w1":
+			if it.tab != tabReady || it.title != "background work" {
+				t.Fatalf("worker session %+v", it)
+			}
+		case "shown":
+			if it.tab != tabWorking || it.pane == nil {
+				t.Fatalf("pane session %+v", it)
+			}
+		}
+	}
+}
+
 func TestCenterStateStatusVocabulary(t *testing.T) {
 	for _, test := range []struct {
 		status subagent.Status

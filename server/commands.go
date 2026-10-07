@@ -64,6 +64,7 @@ var Builtins = []CommandInfo{
 	{Name: "clear", Desc: "Start a new conversation", Local: true},
 	{Name: "agents", Desc: "Every atto session, its goal and subagents (also ← on an empty prompt)", Local: true},
 	{Name: "detach", Desc: "Leave atto running in the daemon (atto attach returns)", Local: true},
+	{Name: "close", Desc: "End this session: stop what it runs, then exit", Local: true},
 	{Name: "quit", Desc: "Exit atto", Local: true},
 	{Name: "exit", Desc: "Exit atto", Local: true},
 }

@@ -24,8 +24,17 @@ Interactive atto runs in a pane of the atto daemon, as a shell in tmux:
 closing the terminal, a dropped SSH connection or /detach leaves it
 running, and atto attach brings it back from any terminal of this user.`
 
+const connectUsage = `usage:
+  atto connect [session]     open a session in this terminal as a client of
+                             its daemon worker (default: the latest session
+                             here, else a new one)
+
+Each session the daemon runs lives in a worker of its own; any number of
+terminals can show it, each with its own editor. Leaving (/quit, closing
+the terminal) leaves the session running; /close ends it.`
+
 const daemonUsage = `usage:
-  atto daemon [status]       the daemon's panes (as atto attach -l)
+  atto daemon [status]       the daemon's panes and sessions (as atto attach -l)
   atto daemon kill ID        end a pane's atto, as closing its terminal would
   atto daemon stop [-force]  stop the daemon (-force: even with panes running)
 
@@ -62,6 +71,21 @@ func RunAttach(args []string, out io.Writer) error {
 		return ExitCode(code)
 	}
 	return nil
+}
+
+// RunConnect implements "atto connect": the TUI as an independent client
+// of a session's daemon worker, outside any pane.
+func RunConnect(args []string, out io.Writer) error {
+	fs := newFlags("connect")
+	words, err := parseWords(fs, args)
+	if err != nil || len(words) > 1 {
+		return fmt.Errorf("%s", connectUsage)
+	}
+	opts := app.Options{Workers: true, Continue: true}
+	if len(words) == 1 {
+		opts.Session, opts.Continue = words[0], false
+	}
+	return app.Run(opts)
 }
 
 // RunDaemon implements "atto daemon".
@@ -108,8 +132,8 @@ func listPanes(out io.Writer) error {
 		return err
 	}
 	if len(panes) == 0 {
-		fmt.Fprintln(out, "no atto is running in the daemon")
-		return nil
+		fmt.Fprintln(out, "no atto pane is running in the daemon")
+		return listWorkers(out)
 	}
 	tw := tabwriter.NewWriter(out, 0, 0, 2, ' ', 0)
 	fmt.Fprintln(tw, "ID\tSESSION\tNAME\tDIRECTORY\tSHOWN\tSTARTED")
@@ -127,6 +151,24 @@ func listPanes(out io.Writer) error {
 			}
 		}
 		fmt.Fprintf(tw, "%d\t%s\t%s\t%s\t%s\t%s ago\n", p.ID, orDash(p.Session), orDash(p.Name), dir, shown, age(p.Started))
+	}
+	if err := tw.Flush(); err != nil {
+		return err
+	}
+	return listWorkers(out)
+}
+
+// listWorkers lists the sessions the daemon's workers run.
+func listWorkers(out io.Writer) error {
+	ws, err := daemon.Workers()
+	if err != nil || len(ws) == 0 {
+		return err
+	}
+	fmt.Fprintln(out, "\nsessions (atto connect <session> opens one here):")
+	tw := tabwriter.NewWriter(out, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(tw, "SESSION\tPID\tDIRECTORY\tSTARTED")
+	for _, w := range ws {
+		fmt.Fprintf(tw, "%s\t%d\t%s\t%s ago\n", w.Session, w.PID, w.Cwd, age(w.Started))
 	}
 	return tw.Flush()
 }

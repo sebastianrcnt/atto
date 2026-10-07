@@ -823,6 +823,20 @@ registry (it still reads panes and files), and worker version handover
 (a TUI meeting a worker of another protocol revision refuses with a
 message; it does not restart the worker).
 
+**G — lifecycle.** In worker mode leaving detaches: `/quit`, Ctrl+D and a
+closed terminal leave the session to its worker (SessionEnd, with reason
+`exit`, runs when it retires); `/close` (and the exit menu's "Exit") ends
+the session and its work. The exit menu offers Detach instead of "Run in
+background" (the `_continue` handoff stays for the in-process runtime only).
+`atto connect [session]` opens a session as an independent client of its
+worker outside any pane (own editor, own size; PTY `atto attach` screen
+sharing is unchanged). `atto daemon status` lists the workers; the agent
+center lists worker sessions no pane shows (as Ready: the center does not
+ask workers for their state yet).
+
+Behaviour change in G (daemon users): quitting a pane no longer ends the
+session at once; an idle session stays loaded for `sessionRetention`.
+
 Tests: execution semantics moved to `server/runtime_test.go`; the app keeps
 rendering tests (driven through the protocol form of items), live-vs-resume
 parity tests and end-to-end tests of the main flows (`app/client_test.go`).
