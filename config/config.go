@@ -153,6 +153,11 @@ type Settings struct {
 	// BackgroundExit: false turns off the exit menu that offers "Run in
 	// background" while a turn is running (experimental; default on).
 	BackgroundExit *bool `json:"backgroundExit,omitempty"`
+	// SessionRetention is how long a session the daemon runs stays
+	// loaded once no terminal shows it and nothing runs ("10m", the
+	// default; "0" ends it at once). Work in progress (a turn, an active
+	// goal, a job or timer, a question) keeps it however long that takes.
+	SessionRetention string `json:"sessionRetention,omitempty"`
 	// Remote configures /remote, which serves the TUI's session to a
 	// phone or browser.
 	Remote *RemoteSettings `json:"remote,omitempty"`

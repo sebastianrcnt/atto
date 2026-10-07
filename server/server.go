@@ -176,6 +176,8 @@ type threadParams struct {
 	Exclude bool           `json:"exclude"` // shell/start
 	When    string         `json:"when"`    // timer/create
 	Message string         `json:"message"` // timer/create
+	Host    string         `json:"host"`    // remote/start
+	Port    int            `json:"port"`    // remote/start
 }
 
 type summaryParams struct {
@@ -516,6 +518,10 @@ func (t *thread) replayKeepNotices(branch []session.Entry) {
 	t.items = append(kept, t.items...)
 }
 
+// ReadOffline reads a saved session without loading it: its items,
+// read-only.
+func ReadOffline(id string) (ThreadInfo, error) { return readOffline(id) }
+
 // readOffline reads a saved session without loading it: its items,
 // read-only.
 func readOffline(id string) (ThreadInfo, error) {
@@ -705,6 +711,10 @@ func (s *Server) closeThread(t *thread, m closeMode) detachResult {
 		t.cancelGoalRetry()
 		t.cancelPrompt()
 		t.dropShell()
+		if t.gateway != nil {
+			t.gateway.srv.Close()
+			t.gateway = nil
+		}
 		if t.cancel != nil {
 			t.cancel()
 		}

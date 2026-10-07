@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"sync"
 	"time"
 
@@ -43,11 +44,10 @@ type rpcCall struct {
 	done   func(json.RawMessage, error) // on the UI goroutine; may be nil
 }
 
-// connect starts the TUI's connection: requests go out one at a time, in
-// order, from a goroutine of their own (the UI never waits for the
-// runtime), and notifications are applied on the UI goroutine.
-func (a *App) connect(c *server.Client, own *server.Server) error {
-	a.conn = &conn{c: c, own: own, wake: make(chan struct{}, 1)}
+// dialConn initializes a connection to a runtime on c. A runtime that
+// speaks no protocol revision this terminal does is refused here.
+func dialConn(c *server.Client, own *server.Server) (*conn, error) {
+	cn := &conn{c: c, own: own, wake: make(chan struct{}, 1)}
 	var init struct {
 		ClientID string `json:"clientId"`
 		Version  int    `json:"protocolVersion"`
@@ -58,12 +58,39 @@ func (a *App) connect(c *server.Client, own *server.Server) error {
 		"capabilities":     map[string]bool{"interactive": true, "images": true},
 	}, &init)
 	if err != nil {
+		c.Close()
+		var re *server.RPCError
+		if errors.As(err, &re) && re.Data != nil && re.Data.Reason == server.ReasonUnsupportedProtocol {
+			return nil, fmt.Errorf("the session runs in an atto of another version (%s): close it there (/quit, or atto daemon stop), then open it again", re.Message)
+		}
+		return nil, err
+	}
+	cn.id = init.ClientID
+	return cn, nil
+}
+
+// connect makes c the terminal's connection.
+func (a *App) connect(c *server.Client, own *server.Server) error {
+	cn, err := dialConn(c, own)
+	if err != nil {
 		return err
 	}
-	a.conn.id = init.ClientID
-	go a.sendLoop()
-	go a.eventLoop()
+	a.use(cn)
 	return nil
+}
+
+// use makes cn the connection requests go to and notifications come
+// from: requests go out one at a time, in order, from a goroutine of
+// their own (the UI never waits for the runtime), and notifications are
+// applied on the UI goroutine. The connection before it, if another, is
+// the caller's to close.
+func (a *App) use(cn *conn) {
+	if a.conn == cn {
+		return
+	}
+	a.conn = cn
+	go a.sendLoop(cn)
+	go a.eventLoop(cn)
 }
 
 // rpc sends a request; done, when set, gets the result on the UI
@@ -100,8 +127,7 @@ func (a *App) rpcErr(method string, params map[string]any) {
 	})
 }
 
-func (a *App) sendLoop() {
-	cn := a.conn
+func (a *App) sendLoop(cn *conn) {
 	for {
 		cn.mu.Lock()
 		if len(cn.queue) == 0 {
@@ -135,11 +161,19 @@ func (a *App) syncRPC(timeout time.Duration) {
 	}
 }
 
-func (a *App) eventLoop() {
-	for n := range a.conn.c.Events() {
-		a.ui.Do(func() { a.onNotification(n) })
+func (a *App) eventLoop(cn *conn) {
+	for n := range cn.c.Events() {
+		a.ui.Do(func() {
+			if a.conn == cn { // a connection left behind says nothing
+				a.onNotification(n)
+			}
+		})
 	}
-	a.ui.Do(a.disconnected)
+	a.ui.Do(func() {
+		if a.conn == cn {
+			a.disconnected()
+		}
+	})
 }
 
 // disconnected is the runtime gone: a worker that crashed or exited.

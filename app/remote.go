@@ -1,6 +1,7 @@
 package app
 
 import (
+	"encoding/json"
 	"fmt"
 	"net"
 	"net/http"
@@ -24,7 +25,8 @@ import (
 // "remote": {"port": N} or /remote on <port> says otherwise.
 const defaultRemotePort = 7879
 
-// remote is a running /remote gateway.
+// remote is a running /remote gateway: in this process (srv), or in the
+// session's worker.
 type remote struct {
 	srv     *http.Server
 	addr    string // what it listens on
@@ -87,14 +89,36 @@ func (a *App) startRemote(port int) {
 			port = *a.remotePort
 		}
 	}
+	host := a.remoteHost
+	if host == "" {
+		host = "0.0.0.0"
+	}
+	if a.workers() {
+		// The session's worker serves it.
+		a.rpc("remote/start", map[string]any{"host": host, "port": port}, func(raw json.RawMessage, err error) {
+			if err != nil {
+				a.errorNotice(fmt.Errorf("remote control: %w", err))
+				return
+			}
+			r := &remote{}
+			var res struct {
+				Addr  string   `json:"addr"`
+				Token string   `json:"token"`
+				Links []string `json:"links"`
+			}
+			if json.Unmarshal(raw, &res) != nil {
+				return
+			}
+			r.addr, r.token, r.links = res.Addr, res.Token, res.Links
+			a.remote = r
+			a.showRemote(r)
+		})
+		return
+	}
 	token, err := server.NewToken(16)
 	if err != nil {
 		a.errorNotice(err)
 		return
-	}
-	host := a.remoteHost
-	if host == "" {
-		host = "0.0.0.0"
 	}
 	ln, err := net.Listen("tcp", net.JoinHostPort(host, strconv.Itoa(port)))
 	if err != nil {
@@ -102,11 +126,6 @@ func (a *App) startRemote(port int) {
 		return
 	}
 	srv := a.conn.own
-	if srv == nil {
-		ln.Close()
-		a.notice("Remote control is not available for a session in the daemon yet; run atto serve, or atto without the daemon (ATTO_NO_DAEMON=1).")
-		return
-	}
 	r := &remote{token: token, addr: ln.Addr().String()}
 	srv.OnClients = func(n int) {
 		go a.ui.Do(func() {
@@ -148,6 +167,10 @@ func (a *App) stopRemote() {
 		return
 	}
 	a.remote = nil
+	if r.srv == nil {
+		a.rpc("remote/stop", nil, nil)
+		return
+	}
 	_ = r.srv.Close()
 }
 

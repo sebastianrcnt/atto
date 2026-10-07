@@ -135,6 +135,7 @@ type thread struct {
 	leaveReason string
 	retireTimer *time.Timer
 	inboxOff    atomic.Bool // closing: the inbox is left alone
+	gateway     *gateway    // remote/start's
 }
 
 // pendingInput is input waiting: a steer the turn has not taken, a

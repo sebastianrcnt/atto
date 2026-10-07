@@ -10,6 +10,7 @@ import (
 	"math/rand/v2"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -17,6 +18,7 @@ import (
 	"github.com/sebastianrcnt/atto/config"
 	"github.com/sebastianrcnt/atto/core"
 	"github.com/sebastianrcnt/atto/core/transcript"
+	"github.com/sebastianrcnt/atto/daemon"
 	"github.com/sebastianrcnt/atto/images"
 	"github.com/sebastianrcnt/atto/provider"
 	"github.com/sebastianrcnt/atto/server"
@@ -36,6 +38,9 @@ type Options struct {
 	Effort   string // effort to use instead of the default
 	Session  string // resume the session with this ID
 	Prompt   string // first message, submitted once the UI is up (atto "fix the build")
+	// Workers runs sessions in the daemon's session workers rather than
+	// in this process: as a daemon pane does, and atto connect.
+	Workers bool
 }
 
 // modal is a picker shown in place of the editor.
@@ -221,17 +226,23 @@ func Run(opts Options) error {
 	a.applySettings(settings)
 	a.ui.NoMouse = mouseDisabled(settings.Mouse, os.Getenv)
 
-	// The runtime runs in this process: a session left behind (/clear,
-	// /resume) closes once idle, as it always did, and everything ends
-	// with atto.
-	srv := server.New(Version, cwd)
-	srv.LockKind = session.KindTUI
-	srv.Retire = true
-	if err := a.connect(server.Connect(context.Background(), srv), srv); err != nil {
-		return err
+	// In a daemon pane, sessions run in the daemon's workers and go on
+	// when this terminal goes. Otherwise the runtime runs in this process:
+	// a session left behind (/clear, /resume) closes once idle, as it
+	// always did, and everything ends with atto.
+	var srv *server.Server
+	if !opts.Workers && !(os.Getenv(daemon.EnvPane) != "" && runtime.GOOS != "windows") {
+		srv = server.New(Version, cwd)
+		srv.LockKind = session.KindTUI
+		srv.Retire = true
+		if err := a.connect(server.Connect(context.Background(), srv), srv); err != nil {
+			return err
+		}
 	}
 	if err := a.open(opts); err != nil {
-		srv.Close()
+		if srv != nil {
+			srv.Close()
+		}
 		return err
 	}
 	a.statusCmd = settings.StatusLine != nil && settings.StatusLine.Command != ""
@@ -273,25 +284,24 @@ func Run(opts Options) error {
 
 // open opens the first session: the one asked for, or a new one.
 func (a *App) open(opts Options) error {
-	ctx := context.Background()
-	var info server.ThreadInfo
-	var err error
-	switch {
-	case opts.Session != "":
-		err = a.conn.c.Call(ctx, "thread/resume", map[string]any{"threadId": opts.Session, "cwd": a.cwd}, &info)
-	case opts.Continue:
+	id := opts.Session
+	if opts.Continue {
 		if s, ok := session.Latest(a.cwd); ok {
-			err = a.conn.c.Call(ctx, "thread/resume", map[string]any{"threadId": s.ID, "cwd": a.cwd}, &info)
+			id = s.ID
 		} else {
 			defer a.notice("No previous session in this directory.")
 		}
 	}
-	if err != nil {
-		defer a.errorNotice(err)
-		info = server.ThreadInfo{}
+	var info server.ThreadInfo
+	var err error
+	if id != "" {
+		info, err = a.openSync(id, nil)
+		if err != nil {
+			defer a.errorNotice(err)
+		}
 	}
 	if info.ID == "" {
-		if err := a.conn.c.Call(ctx, "thread/start", map[string]any{"cwd": a.cwd, "model": opts.Model, "effort": opts.Effort}, &info); err != nil {
+		if info, err = a.openSync("", map[string]any{"model": opts.Model, "effort": opts.Effort}); err != nil {
 			return err
 		}
 	}
@@ -315,7 +325,13 @@ func (a *App) shutdown() error {
 		fmt.Println(a.bgLine)
 	}
 	cn := a.conn
+	if cn == nil {
+		return nil
+	}
 	if cn.own == nil {
+		if a.remote != nil && a.remote.srv == nil { // the worker's /remote ends with this terminal
+			_ = cn.c.Call(context.Background(), "remote/stop", map[string]any{"threadId": a.threadID}, nil)
+		}
 		return cn.c.Close() // a worker's: it goes on
 	}
 	if a.threadID != "" && a.bgLine == "" {
@@ -357,47 +373,50 @@ func (a *App) build() {
 
 // switchTo shows thread info in place of the one shown, which this
 // terminal leaves (reason: clear, resume): it goes on until idle, then
-// ends. with runs on the new thread once shown.
-func (a *App) switchTo(info server.ThreadInfo, reason string, with func()) {
-	old := a.threadID
+// ends. old is the connection the session left was shown on. with runs
+// once the session left is let go.
+func (a *App) switchTo(info server.ThreadInfo, reason string, old *conn, with func()) {
+	prev := a.threadID
 	a.show(info)
-	if old != "" && old != info.ID {
-		a.rpc("thread/detach", map[string]any{"threadId": old, "reason": reason}, func(raw json.RawMessage, err error) {
-			var r struct {
-				StoppedJobs int      `json:"stoppedJobs"`
-				Notices     []string `json:"notices"`
-			}
-			if err == nil && json.Unmarshal(raw, &r) == nil {
-				for _, n := range r.Notices {
-					a.notice("%s", n)
-				}
-				if r.StoppedJobs > 0 {
-					a.notice("Stopped %d background job(s) of the previous conversation.", r.StoppedJobs)
-				}
-			}
-			if with != nil {
-				with()
-			}
-		})
+	if prev == "" || prev == info.ID {
+		if with != nil {
+			with()
+		}
 		return
 	}
-	if with != nil {
-		with()
+	left := func(raw json.RawMessage, err error) {
+		var r struct {
+			StoppedJobs int      `json:"stoppedJobs"`
+			Notices     []string `json:"notices"`
+		}
+		if err == nil && json.Unmarshal(raw, &r) == nil {
+			for _, n := range r.Notices {
+				a.notice("%s", n)
+			}
+			if r.StoppedJobs > 0 {
+				a.notice("Stopped %d background job(s) of the previous conversation.", r.StoppedJobs)
+			}
+		}
+		if with != nil {
+			with()
+		}
 	}
+	params := map[string]any{"threadId": prev, "reason": reason}
+	if old == nil || old == a.conn {
+		a.rpc("thread/detach", params, left)
+		return
+	}
+	go func() { // a worker's connection: leave it, then close it
+		var raw json.RawMessage
+		err := old.c.Call(context.Background(), "thread/detach", params, &raw)
+		old.c.Close()
+		a.ui.Do(func() { left(raw, err) })
+	}()
 }
 
 // newSession starts a new conversation and shows it.
 func (a *App) newSession(reason string, with func()) {
-	a.rpc("thread/start", map[string]any{"cwd": a.cwd, "threadId": ""}, func(raw json.RawMessage, err error) {
-		if err != nil {
-			a.errorNotice(err)
-			return
-		}
-		var info server.ThreadInfo
-		if json.Unmarshal(raw, &info) == nil {
-			a.switchTo(info, reason, with)
-		}
-	})
+	a.openThread("", nil, func(info server.ThreadInfo, old *conn) { a.switchTo(info, reason, old, with) })
 }
 
 // notifyAfter is how long a turn must have run for atto to notify the user

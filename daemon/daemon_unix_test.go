@@ -24,6 +24,12 @@ const helperEnv = "ATTO_DAEMON_TEST_HELPER"
 // TestMain lets the test binary be the program a pane runs: a line-based
 // stand-in for atto that speaks the markers.
 func TestMain(m *testing.M) {
+	if len(os.Args) > 1 && os.Args[1] == "_session-server" { // a session worker
+		if err := RunWorker("test", os.Args[2:]); err != nil {
+			os.Exit(1)
+		}
+		return
+	}
 	if os.Getenv(helperEnv) != "" {
 		helper()
 		return

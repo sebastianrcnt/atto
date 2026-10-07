@@ -802,6 +802,27 @@ terminal's own pickers (only the runtime's prompts); runtime notices are
 also shown to other clients and kept in snapshots; the Loaded block lists
 extensions; `noModel` on Enter still restores the draft locally.
 
+**F — session workers.** `atto _session-server` (`daemon.RunWorker`) runs
+one session's runtime behind a private Unix socket (peer-checked), holding
+the session's `KindTUI` lease; it says `ready <id>` once it holds the
+session and exits when the session closes. The daemon (protocol 3) keeps a
+registry by session: op `worker` finds or starts (serialized, so repeated
+starts converge), `workers` lists; the daemon stays while workers live, and
+`daemon stop -force` ends them (SIGTERM: sessions close as on exit). A pane's
+TUI (and `Options.Workers`) is a client of the worker of the session it
+shows; switching sessions switches connections, leaving the old worker to
+finish and retire (`sessionRetention`, default 10m; `KeepForWork`: a turn,
+active goal, job, timer or open prompt keeps it). A view that dies (terminal
+closed, TUI crash) leaves the turn running; reopening the session attaches
+to the same worker. A session locked by a background run opens read-only
+from its file. `/remote` in worker mode is served by the worker
+(`remote/start`), and stops with the terminal. Not done: an stdio bridge to
+a worker for SSH (`atto app-server` still runs its own runtime), routing
+`atto serve` through the registry, the agents center reading the worker
+registry (it still reads panes and files), and worker version handover
+(a TUI meeting a worker of another protocol revision refuses with a
+message; it does not restart the worker).
+
 Tests: execution semantics moved to `server/runtime_test.go`; the app keeps
 rendering tests (driven through the protocol form of items), live-vs-resume
 parity tests and end-to-end tests of the main flows (`app/client_test.go`).

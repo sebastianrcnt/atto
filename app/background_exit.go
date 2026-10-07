@@ -96,7 +96,9 @@ func (a *App) exitMenu() {
 			a.runInBackground()
 		case exitDetach:
 			a.closeModal()
-			a.detach()
+			if !a.detach() { // atto connect: leaving is detaching
+				a.doQuit()
+			}
 		case exitQuit:
 			a.closeModal()
 			a.stopAndQuit()

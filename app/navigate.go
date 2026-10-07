@@ -192,15 +192,6 @@ func (a *App) fork(id string) {
 			a.errorNotice(err)
 			return
 		}
-		a.rpc("thread/resume", map[string]any{"threadId": s.ID, "cwd": a.cwd}, func(raw json.RawMessage, err error) {
-			if err != nil {
-				a.errorNotice(err)
-				return
-			}
-			var info server.ThreadInfo
-			if json.Unmarshal(raw, &info) == nil {
-				a.switchTo(info, "resume", with)
-			}
-		})
+		a.openThread(s.ID, nil, func(info server.ThreadInfo, old *conn) { a.switchTo(info, "resume", old, with) })
 	})
 }
