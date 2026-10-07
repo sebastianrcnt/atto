@@ -22,7 +22,7 @@ import (
 	"github.com/sebastianrcnt/atto/jobs"
 	"github.com/sebastianrcnt/atto/session"
 	"github.com/sebastianrcnt/atto/subagent"
-	"github.com/sebastianrcnt/atto/tui"
+	"github.com/sebastianrcnt/atto/textfmt"
 )
 
 const agentUsage = `usage:
@@ -700,10 +700,10 @@ func agentReport(st subagent.State) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "agent %s · turn %d %s", subagent.PathOf(st.Session), t.N, t.Status)
 	if d := t.Duration(); d > 0 {
-		fmt.Fprintf(&b, " · %s", tui.FormatDuration(d))
+		fmt.Fprintf(&b, " · %s", textfmt.Duration(d))
 	}
 	if t.PromptTokens+t.OutputTokens > 0 {
-		fmt.Fprintf(&b, " · tokens %s in (%s cached), %s out", tui.FormatTokens(t.PromptTokens), tui.FormatTokens(t.CachedTokens), tui.FormatTokens(t.OutputTokens))
+		fmt.Fprintf(&b, " · tokens %s in (%s cached), %s out", textfmt.Tokens(t.PromptTokens), textfmt.Tokens(t.CachedTokens), textfmt.Tokens(t.OutputTokens))
 	}
 	if t.Cost > 0 {
 		fmt.Fprintf(&b, " · ≈$%.2f", t.Cost)
@@ -775,9 +775,9 @@ func agentList(out io.Writer, parent string) error {
 		t := s.Latest()
 		d := "-"
 		if t.Duration() > 0 {
-			d = tui.FormatDuration(t.Duration())
+			d = textfmt.Duration(t.Duration())
 		}
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n", subagent.PathOf(s.Session), s.Preset, s.Model, t.Status, d, tui.Truncate(tui.FirstLine(s.Task), 60, "…"))
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n", subagent.PathOf(s.Session), s.Preset, s.Model, t.Status, d, textfmt.Truncate(textfmt.FirstLine(s.Task), 60, "…"))
 	}
 	if err := tw.Flush(); err != nil {
 		return err
@@ -887,9 +887,9 @@ func turnEvent(st subagent.State, t subagent.Turn) events.Event {
 	if t.Status == subagent.Failed {
 		what = "failed"
 	}
-	detail := tui.FormatDuration(t.Duration())
+	detail := textfmt.Duration(t.Duration())
 	if n := t.PromptTokens + t.OutputTokens; n > 0 {
-		detail += ", " + tui.FormatTokens(n) + " tokens"
+		detail += ", " + textfmt.Tokens(n) + " tokens"
 	}
 	body := fmt.Sprintf("Turn %d %s (%s).", t.N, what, detail)
 	if t.Error != "" {
@@ -902,7 +902,7 @@ func turnEvent(st subagent.State, t subagent.Turn) events.Event {
 		body += "\n\n" + msg
 	}
 	return events.Event{Source: "agent", Text: subagent.Envelope(subagent.FinalAnswer, from, to, body),
-		Title: fmt.Sprintf("◆ agent %s %s after %s", from, what, tui.FormatDuration(t.Duration()))}
+		Title: fmt.Sprintf("◆ agent %s %s after %s", from, what, textfmt.Duration(t.Duration()))}
 }
 
 // canSpawn reports whether agent session may start agents of its own.

@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"context"
 	"fmt"
-	"github.com/sebastianrcnt/atto/tui"
 	"io"
 	"os"
 	"strings"
@@ -14,6 +13,7 @@ import (
 	"golang.org/x/term"
 
 	"github.com/sebastianrcnt/atto/config"
+	"github.com/sebastianrcnt/atto/textfmt"
 )
 
 // RunAuth implements "atto auth set <provider>": it reads an API key
@@ -71,7 +71,7 @@ func RunModels(args []string, out io.Writer) error {
 			key = "-"
 		}
 		fmt.Fprintf(tw, "%s/%s\t%s\t%s\t%s\t%s\n", r.ProviderName, r.Model.ID, r.Model.DisplayName(),
-			tui.FormatTokens(r.Model.ContextWindow), strings.Join(r.Model.Levels(), ","), key)
+			textfmt.Tokens(r.Model.ContextWindow), strings.Join(r.Model.Levels(), ","), key)
 	}
 	return tw.Flush()
 }

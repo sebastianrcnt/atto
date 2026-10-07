@@ -5,9 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/sebastianrcnt/atto/core"
-	"github.com/sebastianrcnt/atto/core/transcript"
-	"github.com/sebastianrcnt/atto/tui"
 	"io"
 	"os"
 	"os/signal"
@@ -19,12 +16,15 @@ import (
 
 	"github.com/sebastianrcnt/atto/agent"
 	"github.com/sebastianrcnt/atto/config"
+	"github.com/sebastianrcnt/atto/core"
+	"github.com/sebastianrcnt/atto/core/transcript"
 	"github.com/sebastianrcnt/atto/events"
 	"github.com/sebastianrcnt/atto/extensions"
 	"github.com/sebastianrcnt/atto/goal"
 	"github.com/sebastianrcnt/atto/images"
 	"github.com/sebastianrcnt/atto/provider"
 	"github.com/sebastianrcnt/atto/session"
+	"github.com/sebastianrcnt/atto/textfmt"
 )
 
 // PrintOptions configures a non-interactive run (atto -p).
@@ -511,7 +511,7 @@ func (p *printer) toolUse(it *transcript.Item) {
 	p.flushStep()
 	p.emit(map[string]any{"type": "tool_use", "id": it.CallID, "description": it.Description, "command": it.Command})
 	if p.verbose && p.textMode() {
-		fmt.Fprintf(p.errOut, "\n● %s  $ %s\n", it.Description, tui.FirstLine(it.Command))
+		fmt.Fprintf(p.errOut, "\n● %s  $ %s\n", it.Description, textfmt.FirstLine(it.Command))
 	}
 }
 
@@ -561,7 +561,7 @@ func (p *printer) completed(it *transcript.Item) {
 			case r.Job > 0:
 				status = fmt.Sprintf("background job %d", r.Job)
 			}
-			fmt.Fprintf(p.errOut, "  └ %s · %s\n", status, tui.FormatDuration(it.Duration))
+			fmt.Fprintf(p.errOut, "  └ %s · %s\n", status, textfmt.Duration(it.Duration))
 		}
 	case transcript.Compaction:
 		if it.Status == transcript.Completed {

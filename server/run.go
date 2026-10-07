@@ -14,7 +14,7 @@ import (
 	"github.com/sebastianrcnt/atto/goal"
 	"github.com/sebastianrcnt/atto/provider"
 	"github.com/sebastianrcnt/atto/session"
-	"github.com/sebastianrcnt/atto/tui"
+	"github.com/sebastianrcnt/atto/textfmt"
 )
 
 // Runs: a turn, a compaction or a branch summary. start runs fn on a
@@ -278,7 +278,7 @@ func (t *thread) afterRun(err error) {
 	if t.runKind == "turn" && err == nil {
 		took := "<1s"
 		if d := time.Since(t.runStart); d >= time.Second {
-			took = tui.FormatDuration(d.Truncate(100 * time.Millisecond))
+			took = textfmt.Duration(d.Truncate(100 * time.Millisecond))
 		}
 		t.notice("", "Worked for %s • %s", took, time.Now().Format("3:04 PM"))
 		if t.goal.Held() {
