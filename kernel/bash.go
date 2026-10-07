@@ -14,35 +14,32 @@ import (
 
 const OutputLimit = 64 << 10
 
-type capped struct {
-	b       strings.Builder
+type cappedOutput struct {
+	buffer  strings.Builder
 	dropped int
 }
 
-func (b *capped) Write(p []byte) (int, error) {
+func (b *cappedOutput) Write(p []byte) (int, error) {
 	n := len(p)
-	keep := min(n, OutputLimit-b.b.Len())
-	b.b.Write(p[:keep])
+	keep := min(n, OutputLimit-b.buffer.Len())
+	b.buffer.Write(p[:keep])
 	b.dropped += n - keep
 	return n, nil
 }
-func (b *capped) String() string {
+func (b *cappedOutput) String() string {
 	if b.dropped > 0 {
-		return b.b.String() + fmt.Sprintf("\n[%d bytes cut]\n", b.dropped)
+		return b.buffer.String() + fmt.Sprintf("\n[%d bytes cut]\n", b.dropped)
 	}
-	return b.b.String()
+	return b.buffer.String()
 }
 
 func bash(ctx context.Context, dir string, a Args) (any, error) {
 	if runtime.GOOS != "darwin" {
 		return nil, fmt.Errorf("sys.bash: read-only sandbox is only implemented on macOS (Linux TODO)")
 	}
-	seconds := 60.0
-	if v, ok := a["timeout"]; ok {
-		seconds = v.(float64)
-	}
-	if math.IsNaN(seconds) || math.IsInf(seconds, 0) || seconds <= 0 || seconds > float64(math.MaxInt64)/float64(time.Second) {
-		return nil, fmt.Errorf("sys.bash: field timeout expected positive finite seconds; use sys.bash{cmd = string, timeout = number (optional)}")
+	seconds, err := bashTimeout(a)
+	if err != nil {
+		return nil, err
 	}
 	tmp, err := os.MkdirTemp("", "atto2-bash-")
 	if err != nil {
@@ -53,25 +50,49 @@ func bash(ctx context.Context, dir string, a Args) (any, error) {
 	if err != nil {
 		return nil, err
 	}
+	profile := sandboxProfile(tmp)
+	ctx, cancel := context.WithTimeout(ctx, time.Duration(seconds*float64(time.Second)))
+	defer cancel()
+	cmd := sandboxCommand(ctx, dir, tmp, profile, a["cmd"].(string))
+	return runBash(ctx, cmd, seconds)
+}
+
+func bashTimeout(a Args) (float64, error) {
+	seconds := 60.0
+	if v, ok := a["timeout"]; ok {
+		seconds = v.(float64)
+	}
+	if math.IsNaN(seconds) || math.IsInf(seconds, 0) || seconds <= 0 || seconds > float64(math.MaxInt64)/float64(time.Second) {
+		return 0, fmt.Errorf("sys.bash: field timeout expected positive finite seconds; use sys.bash{cmd = string, timeout = number (optional)}")
+	}
+	return seconds, nil
+}
+
+func sandboxProfile(tmp string) string {
 	// Deny by default: no network, writes, IPC services, or signalling other agents.
 	// The temp exception is canonical, so symlinks cannot turn it into project writes.
-	profile := fmt.Sprintf(`(version 1)
+	return fmt.Sprintf(`(version 1)
 (deny default)
 (allow file-read* process-exec process-fork sysctl-read)
 (allow signal (target self))
 (allow file-write* (literal "/dev/null") (subpath %q))`, tmp)
-	ctx, cancel := context.WithTimeout(ctx, time.Duration(seconds*float64(time.Second)))
-	defer cancel()
-	cmd := exec.CommandContext(ctx, "/usr/bin/sandbox-exec", "-p", profile, "/bin/bash", "-c", a["cmd"].(string))
+}
+
+func sandboxCommand(ctx context.Context, dir, tmp, profile, command string) *exec.Cmd {
+	cmd := exec.CommandContext(ctx, "/usr/bin/sandbox-exec", "-p", profile, "/bin/bash", "-c", command)
 	cmd.Dir = dir
 	// Do not inherit credentials or shell startup configuration.
 	cmd.Env = []string{"PATH=/usr/bin:/bin:/usr/sbin:/sbin", "HOME=" + tmp, "TMPDIR=" + tmp, "LC_ALL=C", "GIT_OPTIONAL_LOCKS=0"}
+	return cmd
+}
+
+func runBash(ctx context.Context, cmd *exec.Cmd, seconds float64) (any, error) {
 	prepareProcess(cmd)
 	defer cleanupProcess(cmd)
-	var stdout, stderr capped
+	var stdout, stderr cappedOutput
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	cmd.WaitDelay = time.Second
-	err = cmd.Run()
+	err := cmd.Run()
 	code := 0
 	if err != nil {
 		if e, ok := err.(*exec.ExitError); ok {

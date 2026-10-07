@@ -62,12 +62,7 @@ func (a *Agent) Run(ctx context.Context, input string) (string, error) {
 		}
 		a.Cortex.Tokens = usage.PromptTokens
 		a.Cortex.Add(reply)
-		if reply.Reasoning != "" {
-			a.trace("thinking", reply.Reasoning)
-		}
-		if strings.TrimSpace(reply.Content) != "" {
-			a.trace("stdout", reply.Content)
-		}
+		a.traceReply(reply)
 		if len(reply.ToolCalls) == 0 {
 			a.Cortex.Add(model.Message{Role: "user", Content: "Your text is only your own stdout; results leave through sys.exit."})
 			continue
@@ -109,5 +104,14 @@ func (a *Agent) call(ctx context.Context, call model.ToolCall) (out string) {
 func (a *Agent) trace(kind, text string) {
 	if a.Trace != nil {
 		a.Trace(Event{kind, text})
+	}
+}
+
+func (a *Agent) traceReply(reply model.Message) {
+	if reply.Reasoning != "" {
+		a.trace("thinking", reply.Reasoning)
+	}
+	if strings.TrimSpace(reply.Content) != "" {
+		a.trace("stdout", reply.Content)
 	}
 }
