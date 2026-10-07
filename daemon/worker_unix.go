@@ -45,7 +45,7 @@ import (
 const workerStartWait = 20 * time.Second
 
 // defaultRetention is how long an idle session no terminal shows stays.
-const defaultRetention = 10 * time.Minute
+const defaultRetention = time.Minute
 
 // worker is a running session worker, in the daemon.
 type worker struct {

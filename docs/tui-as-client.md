@@ -736,7 +736,7 @@ follows these, and later changes should update this section.
    frontend detach it. Execution goes on while a turn, queued input, an
    active goal or a job is pending. A runtime with no clients and nothing
    pending retires after a retention period: `sessionRetention` in
-   settings.json, default 10 minutes for daemon workers. The in-process
+   settings.json, default 1 minute for daemon workers (codex unloads threads after 60s). The in-process
    runtime (no daemon) uses retention 0 and keeps the old exit cleanup, so
    a plain `atto` without the daemon behaves as before.
 2. **Unattended work goes on.** Timers, jobs and goals keep running in a
@@ -813,7 +813,7 @@ starts converge), `workers` lists; the daemon stays while workers live, and
 `daemon stop -force` ends them (SIGTERM: sessions close as on exit). A pane's
 TUI (and `Options.Workers`) is a client of the worker of the session it
 shows; switching sessions switches connections, leaving the old worker to
-finish and retire (`sessionRetention`, default 10m; `KeepForWork`: a turn,
+finish and retire (`sessionRetention`, default 1m; `KeepForWork`: a turn,
 active goal, job, timer or open prompt keeps it). A view that dies (terminal
 closed, TUI crash) leaves the turn running; reopening the session attaches
 to the same worker. A session locked by a background run opens read-only

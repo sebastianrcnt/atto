@@ -154,7 +154,7 @@ type Settings struct {
 	// background" while a turn is running (experimental; default on).
 	BackgroundExit *bool `json:"backgroundExit,omitempty"`
 	// SessionRetention is how long a session the daemon runs stays
-	// loaded once no terminal shows it and nothing runs ("10m", the
+	// loaded once no terminal shows it and nothing runs ("1m", the
 	// default; "0" ends it at once). Work in progress (a turn, an active
 	// goal, a job or timer, a question) keeps it however long that takes.
 	SessionRetention string `json:"sessionRetention,omitempty"`
