@@ -11,7 +11,6 @@ import (
 	"github.com/sebastianrcnt/atto/config"
 	"github.com/sebastianrcnt/atto/provider"
 	"github.com/sebastianrcnt/atto/server"
-	"github.com/sebastianrcnt/atto/session"
 	"github.com/sebastianrcnt/atto/tui"
 )
 
@@ -36,21 +35,6 @@ func (u *usageStats) add(x provider.Usage) {
 // fresh is the session's input that was neither read from nor written to
 // the cache: pi's "↑".
 func (u *usageStats) fresh() int { return max(0, u.input-u.cached-u.cacheWrite) }
-
-// fromEntries rebuilds totals from a resumed session.
-func (u *usageStats) fromEntries(entries []session.Entry, models config.ModelsFile) {
-	*u = usageStats{}
-	var model config.ModelRef
-	for _, e := range entries {
-		if e.Type == session.TypeModel {
-			model, _ = models.Find(e.Provider, e.Model)
-		}
-		if e.Usage != nil {
-			u.add(*e.Usage)
-			u.lastCost = model.Model.Cost
-		}
-	}
-}
 
 func pct(part, whole int) int {
 	if whole <= 0 {

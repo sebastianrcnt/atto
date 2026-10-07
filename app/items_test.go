@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/sebastianrcnt/atto/provider/providertest"
+	"github.com/sebastianrcnt/atto/server"
 	"github.com/sebastianrcnt/atto/tui"
 )
 
@@ -59,8 +60,10 @@ func lines(a *App) string {
 // runtime of its own: a cold resume.
 func reopen(t *testing.T, a *App) *App {
 	t.Helper()
-	id := a.threadID
-	if err := a.conn.c.Call(context.Background(), "thread/close", map[string]any{"threadId": id}, nil); err != nil {
+	var id string
+	var c *server.Client
+	a.ui.Do(func() { id, c = a.threadID, a.conn.c })
+	if err := c.Call(context.Background(), "thread/close", map[string]any{"threadId": id}, nil); err != nil {
 		t.Fatal(err)
 	}
 	return startApp(t, a.cwd, Options{Session: id})

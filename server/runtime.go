@@ -3,7 +3,6 @@ package server
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -448,5 +447,3 @@ func (t *thread) noModel() bool { return t.model().Model.ID == "" }
 var (
 	errNoTurn = failure(ReasonBusy, "no turn is running; use turn/start")
 )
-
-func isCanceled(err error) bool { return errors.Is(err, context.Canceled) }

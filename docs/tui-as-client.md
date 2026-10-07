@@ -1,8 +1,10 @@
 # The TUI as a client of atto's execution server
 
 Research/design, 2026-10-07. This is a plan for **atto's own protocol**, not
-Codex wire compatibility. Method names below are proposals unless explicitly
-identified as existing. No implementation change is part of this report.
+Codex wire compatibility. Sections 1–6 are the design as written before the
+implementation (method names there are proposals); §7 records the decisions
+taken and §8 what the first implementation does, where it differs, and what
+is left. `server/protocol.go` documents the protocol as implemented.
 
 ## Recommendation
 
@@ -856,6 +858,37 @@ recommended order is (1) a runtime option for subagent policy (prompt,
 inbox delivery, retirement), (2) `_agent-turn` as a worker client of the
 child's worker, (3) `RunPrint` on an in-process runtime with a printer
 fed by notifications, keeping its output contract byte-for-byte.
+
+**I — hardening: partial.** Added tests: a connection that falls behind the
+hub gets `events/reset` and never stalls publishing; a scoped gateway stays
+in its session; `ctx.hasUI` follows interactive clients; the TUI refuses a
+runtime of another protocol revision with an actionable message; the worker
+lifecycle through a real daemon; `atto -p` through a worker. `go test -race`
+is clean for `server`, `daemon` and `app`. Dead code of the old paths was
+removed (`server.Live`, App's execution state, app-side MCP approvals and
+remote mirroring). Open items before a release:
+
+* Durability: queued input, pending recoveries and open prompts live in
+  worker memory; a worker crash loses them (no journal). A crash mid-tool
+  does not re-run the tool on restart (no automatic resumption).
+* Protocol surface still missing from §4: `thread/tree` and `image/read`
+  (the TUI reads the session file and the image store itself, so a client
+  must run on the same machine and user), `workspace/list`, explicit
+  `extensions/*` and `mcp/*` RPCs (approval goes through commands and
+  prompts), `requestKey` dedupe and `expectedRevision`, `sessions/list` and
+  `sessions/changed` on the registry, the custom statusLine command in the
+  runtime (it still runs in the terminal).
+* Routing: `atto serve` and `atto app-server` run their own runtime; opening
+  a session a worker owns there is refused by the lease, not routed.
+* The agents center does not ask workers for their state; worker sessions
+  with no pane show as Ready.
+* Windows stays in-process (no workers), as decided.
+
+Rollout: the in-process runtime is the only path without the daemon and on
+Windows, so behaviour there is the parity target; daemon users get workers
+at once (protocol 3; an older daemon is refused with "stop it" advice, as
+before). `sessionRetention` bounds how long an idle, unattended session
+stays loaded.
 
 Tests: execution semantics moved to `server/runtime_test.go`; the app keeps
 rendering tests (driven through the protocol form of items), live-vs-resume

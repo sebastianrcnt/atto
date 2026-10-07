@@ -187,6 +187,3 @@ func (t *thread) applyReload(r core.Reloaded, err error) {
 	t.updated()
 	t.askMCPApprovals() // a project server the reload found
 }
-
-// isEvent reports whether a committed steer came from the inbox.
-func isEvent(s string) bool { return events.IsEvent(s) }

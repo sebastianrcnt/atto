@@ -421,10 +421,6 @@ func (a *App) newSession(reason string, with func()) {
 	a.openThread("", nil, func(info server.ThreadInfo, old *conn) { a.switchTo(info, reason, old, with) })
 }
 
-// notifyAfter is how long a turn must have run for atto to notify the user
-// when it finishes (the runtime's own counterpart decides; kept for tests).
-var notifyAfter = 15 * time.Second
-
 func (a *App) addHeader() {
 	a.ui.Body.Add(tui.Func(func(width int) []string {
 		return []string{

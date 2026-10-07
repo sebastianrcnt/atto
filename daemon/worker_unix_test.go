@@ -35,24 +35,6 @@ func workerClient(t *testing.T, w Worker) (*server.Client, server.ThreadInfo) {
 	return c, info
 }
 
-func waitEvent(t *testing.T, c *server.Client, method string) {
-	t.Helper()
-	deadline := time.After(15 * time.Second)
-	for {
-		select {
-		case n, ok := <-c.Events():
-			if !ok {
-				t.Fatalf("connection ended before %s", method)
-			}
-			if n.Method == method {
-				return
-			}
-		case <-deadline:
-			t.Fatalf("no %s", method)
-		}
-	}
-}
-
 // A session runs in a worker of the daemon: terminals come and go as
 // clients, a turn goes on while none is attached, and the worker ends
 // with its session.

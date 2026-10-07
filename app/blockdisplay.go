@@ -52,26 +52,6 @@ func (b *blockDisplay) shown(original string) string {
 	return original
 }
 
-// setStatus sets (text "" removes) the status of ext; it reports a change.
-func (b *blockDisplay) setStatus(ext, text string) bool {
-	if !b.state.SetStatus(ext, text) {
-		return false
-	}
-	b.ver++
-	return true
-}
-
-// setDisplay sets (text "" restores) the text ext shows in place of the
-// block's own; it reports a change. The latest extension to set a text
-// owns the override, and only the owner can restore the original.
-func (b *blockDisplay) setDisplay(ext, text string) bool {
-	if !b.state.SetDisplay(ext, text) {
-		return false
-	}
-	b.ver++
-	return true
-}
-
 // header is the statuses as a dim suffix (" · translating…"), "" when none.
 func (b *blockDisplay) header() string {
 	var out strings.Builder

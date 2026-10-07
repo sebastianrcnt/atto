@@ -2,7 +2,6 @@ package app
 
 import (
 	"encoding/json"
-	"errors"
 	"time"
 
 	"github.com/sebastianrcnt/atto/core/transcript"
@@ -434,5 +433,3 @@ func isBlank(s string) bool {
 	}
 	return true
 }
-
-var errNoThread = errors.New("no session is open")

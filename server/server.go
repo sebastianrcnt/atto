@@ -768,6 +768,3 @@ func (s *Server) closeThread(t *thread, m closeMode) detachResult {
 	}
 	return res
 }
-
-// notify publishes a notification of thread t.
-func (s *Server) notify(t *thread, method string, params map[string]any) { t.publish(method, params) }

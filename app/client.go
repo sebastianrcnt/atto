@@ -154,7 +154,7 @@ func (a *App) sendLoop(cn *conn) {
 // (tests). Call it off the UI goroutine.
 func (a *App) syncRPC(timeout time.Duration) {
 	done := make(chan struct{})
-	a.rpc("ping", nil, func(json.RawMessage, error) { close(done) })
+	a.ui.Do(func() { a.rpc("ping", nil, func(json.RawMessage, error) { close(done) }) })
 	select {
 	case <-done:
 	case <-time.After(timeout):
