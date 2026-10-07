@@ -113,6 +113,7 @@ func (d *daemon) startWorker(h Hello) workerAnswer {
 	case <-time.After(workerStartWait):
 		_ = cmd.Process.Kill()
 		_ = cmd.Wait()
+		_ = os.Remove(sock)
 		return workerAnswer{Error: "the session's runtime did not start (see " + LogPath() + ")"}
 	}
 	verb, rest, _ := strings.Cut(first, " ")
@@ -120,9 +121,11 @@ func (d *daemon) startWorker(h Hello) workerAnswer {
 	case "ready":
 	case "readonly":
 		_ = cmd.Wait()
+		_ = os.Remove(sock)
 		return workerAnswer{ReadOnly: rest}
 	default:
 		_ = cmd.Wait()
+		_ = os.Remove(sock)
 		if rest == "" {
 			rest = "the session's runtime ended at once (see " + LogPath() + ")"
 		}
