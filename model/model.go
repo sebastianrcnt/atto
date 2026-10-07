@@ -67,7 +67,7 @@ func (c *Client) Complete(ctx context.Context, msgs []Message, tools []Tool) (Me
 	if len(tools) > 0 {
 		var ts []tool
 		for _, t := range tools {
-			ts = append(ts, tool{Type: "function", Function: fn{t.Name, t.Description, t.Parameters}})
+			ts = append(ts, tool{Type: "function", Function: fn(t)})
 		}
 		req["tools"] = ts
 	}

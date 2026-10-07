@@ -135,6 +135,7 @@ func (m *Machine) Run(ctx context.Context, code string) (result Result, err erro
 	fn, err := m.L.LoadString(code)
 	if err != nil {
 		if args := namedArgs.FindStringSubmatch(code); args != nil {
+			//lint:ignore ST1005 Lua is a proper noun; preserve the syntax hint.
 			return result, fmt.Errorf("Lua has no named arguments; use sys.%s{%s = %s}", args[1], args[2], strings.TrimSpace(args[3]))
 		}
 		return result, fmt.Errorf("syntax: %v", err)

@@ -1,0 +1,15 @@
+#!/bin/bash
+set -euo pipefail
+cd "$(git rev-parse --show-toplevel)"
+
+snapshot=$(mktemp -d "${TMPDIR:-/tmp}/atto2-index.XXXXXX")
+trap 'rm -rf "$snapshot"' EXIT
+# Export the index, not the working tree: unstaged edits must not affect checks.
+if ! git checkout-index --all --prefix="$snapshot/"; then
+    printf 'pre-commit: FAILED: export staged state\n' >&2
+    exit 1
+fi
+if ! (cd "$snapshot" && bash scripts/check.sh --no-tests); then
+    printf 'pre-commit: staged checks failed (see failed check above)\n' >&2
+    exit 1
+fi

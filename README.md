@@ -81,12 +81,17 @@ Only `sys.exit` completes a life successfully; exhausting `-steps` (default
   an empty table was an object or array. An untagged empty table encodes as
   `[]`. Numbers use Lua's floating-point representation.
 
-## Verification
+## Checks
+
+Run `scripts/check.sh` for formatting, vet, modernize, module tidiness,
+staticcheck, and uncached race tests. The pre-commit hook runs the same
+checks without tests on a temporary snapshot of the staged repository.
+
+The hook is per-worktree; enabling it here does not change atto's hook:
 
 ```sh
-go test ./...
-go vet ./...
-go run golang.org/x/tools/go/analysis/passes/modernize/cmd/modernize@v0.51.0 -fix ./...
+git config extensions.worktreeConfig true
+git config --worktree core.hooksPath .githooks
 ```
 
 Tests cover deterministic replay, helper semantics, removed world access,
