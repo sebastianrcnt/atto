@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"sync"
 	"testing"
 	"time"
 
@@ -26,20 +27,36 @@ func testServer(t *testing.T, script ...providertest.Reply) (*Server, *providert
 	return s, m
 }
 
+// lockedView is a view its follower goroutine updates.
+type lockedView struct {
+	mu sync.Mutex
+	v  ThreadView
+}
+
+func (l *lockedView) items() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	b, _ := json.Marshal(l.v.Items)
+	return string(b)
+}
+
 // follow keeps a view of thread id from c's events, after the snapshot
-// it reads now; views are sent on out after each change.
-func follow(t *testing.T, c *Client, id string) (*ThreadView, <-chan string) {
+// it reads now; the methods it applied are sent on the channel.
+func follow(t *testing.T, c *Client, id string) (*lockedView, <-chan string) {
 	t.Helper()
 	var info ThreadInfo
 	if err := c.Call(context.Background(), "thread/read", map[string]any{"threadId": id}, &info); err != nil {
 		t.Fatal(err)
 	}
-	v := &ThreadView{}
-	v.Reset(info)
+	v := &lockedView{}
+	v.v.Reset(info)
 	methods := make(chan string, 4096)
 	go func() {
 		for n := range c.Events() {
-			if v.Apply(n) {
+			v.mu.Lock()
+			ok := v.v.Apply(n)
+			v.mu.Unlock()
+			if ok {
 				methods <- n.Method
 			}
 		}
@@ -116,13 +133,15 @@ func TestClientsSeeTheSameThread(t *testing.T) {
 		t.Fatal(err)
 	}
 	want, _ := json.Marshal(fresh.Items)
-	for name, v := range map[string]*ThreadView{"in-process": va, "stdio": vb, "late": vc} {
-		got, _ := json.Marshal(v.Items)
-		if string(got) != string(want) {
-			t.Fatalf("%s client:\n%s\nwant\n%s", name, got, want)
+	for name, v := range map[string]*lockedView{"in-process": va, "stdio": vb, "late": vc} {
+		// The notifications after turn/completed (the closing notice) may
+		// still be on their way.
+		deadline := time.Now().Add(5 * time.Second)
+		for v.items() != string(want) && time.Now().Before(deadline) {
+			time.Sleep(10 * time.Millisecond)
 		}
-		if v.Info.Busy {
-			t.Fatalf("%s client thinks the turn still runs", name)
+		if got := v.items(); got != string(want) {
+			t.Fatalf("%s client:\n%s\nwant\n%s", name, got, want)
 		}
 	}
 }

@@ -46,12 +46,12 @@ func TestScriptedModelTurn(t *testing.T) {
 	t.Cleanup(s.Close)
 	ch := make(chan string, 100)
 	s.Notify = func(method string, _ map[string]any) { ch <- method }
-	info, err := s.startThread(threadParams{})
+	info, err := s.startThread("", threadParams{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	id := info.(ThreadInfo).ID
-	if _, err := s.startTurn(threadParams{ThreadID: id, Input: "go"}); err != nil {
+	if _, err := s.call(context.Background(), "turn/start", json.RawMessage(`{"threadId":"`+id+`","input":"go"}`)); err != nil {
 		t.Fatal(err)
 	}
 	for method := range ch {

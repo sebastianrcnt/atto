@@ -29,6 +29,9 @@ func itemTexts(r map[string]any) string {
 	items, _ := r["items"].([]any)
 	s := ""
 	for _, it := range items {
+		if it.(map[string]any)["type"] == ItemNotice { // atto's own, not the conversation's
+			continue
+		}
 		s += fmt.Sprint(it.(map[string]any)["text"]) + ";"
 	}
 	return s

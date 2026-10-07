@@ -1,7 +1,6 @@
 package server
 
 import (
-	"fmt"
 	"strings"
 
 	"github.com/sebastianrcnt/atto/core/transcript"
@@ -13,8 +12,8 @@ import (
 // as data: statuses and replacement texts on reasoning and agentMessage
 // items (item/display), text blocks (extText items) and status items and
 // widgets (extension/ui). Blocks and text blocks are saved in the session
-// as the TUI saves them (block_display and ext_text entries), so either
-// front end shows them on resume.
+// (block_display and ext_text entries), so every client shows them on
+// resume.
 
 // block is a reasoning or agentMessage item extensions can name.
 type block struct {
@@ -47,92 +46,114 @@ func (bl blocks) attach(w Item) Item {
 	return w
 }
 
-// withDisplay is w with what extensions show on its block. Call with t.mu
-// held.
-func (t *thread) withDisplay(w Item) Item { return t.blocks.attach(w) }
+// threadHost is the Host of a thread's extensions. Extensions call it
+// from their own goroutines while the lane may be waiting for them (a
+// reload, session_end), so it never waits for the lane: each call is
+// queued on it, in order.
+type threadHost struct{ t *thread }
 
-// threadHost is the Host of a thread's extensions: notices, dialogs and
-// messages as without a UI (see extensions.Headless), and what they show
-// kept on the thread for its clients. Its methods take t.mu, never s.mu.
-type threadHost struct {
-	*extensions.Headless
-	s *Server
-	t *thread
+func (h threadHost) do(fn func()) { h.t.do(fn) }
+
+// HasUI is true while an interactive client is attached.
+func (h threadHost) HasUI() bool { return h.t.s.interactiveClients() > 0 }
+
+func (h threadHost) Notify(ext, text, level string) {
+	h.do(func() {
+		lv := ""
+		if level == "warning" || level == "error" {
+			lv = level
+		}
+		h.t.notice(lv, "[%s] %s", ext, text)
+		h.t.publish("extension/notify", map[string]any{"extension": ext, "message": text, "level": level})
+	})
 }
 
-// publish sends a notification of the thread while t.mu is held, so that
-// a snapshot (which reads the event ID under t.mu too) either has the
-// change or is followed by its notification.
-func (h *threadHost) publish(method string, params map[string]any) { h.s.notify(h.t, method, params) }
-
-func (h *threadHost) SetStatus(ext, key, text string) {
+func (h threadHost) SetStatus(ext, key, text string) {
 	h.ui(func(u *extensions.UIState) { u.SetStatus(ext+"/"+key, text) })
 }
 
-func (h *threadHost) SetWidget(ext, key string, lines []string) {
+func (h threadHost) SetWidget(ext, key string, lines []string) {
 	h.ui(func(u *extensions.UIState) { u.SetWidget(ext+"/"+key, lines) })
 }
 
-func (h *threadHost) ClearUI(ext string) {
+func (h threadHost) ClearUI(ext string) {
 	h.ui(func(u *extensions.UIState) { u.Clear(ext) })
 }
 
-func (h *threadHost) ui(change func(*extensions.UIState)) {
-	t := h.t
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	change(&t.ui)
-	h.publish("extension/ui", map[string]any{"ui": WireExtensionUI(&t.ui)})
+func (h threadHost) ui(change func(*extensions.UIState)) {
+	h.do(func() {
+		change(&h.t.ui)
+		h.t.publish("extension/ui", map[string]any{"ui": WireExtensionUI(&h.t.ui)})
+	})
 }
 
-func (h *threadHost) SetBlockStatus(ext, id, text string) {
+func (h threadHost) SetBlockStatus(ext, id, text string) {
 	h.block(ext, id, func(d *transcript.BlockDisplay) bool { return d.SetStatus(ext, text) })
 }
 
-func (h *threadHost) SetBlockDisplay(ext, id, text string) {
+func (h threadHost) SetBlockDisplay(ext, id, text string) {
 	h.block(ext, id, func(d *transcript.BlockDisplay) bool { return d.SetDisplay(ext, text) })
 }
 
 // block changes what ext shows on block id, saves ext's state for it in
 // the session and tells the clients. A block that is not the thread's (the
 // branch changed) is ignored.
-func (h *threadHost) block(ext, id string, change func(*transcript.BlockDisplay) bool) {
-	t := h.t
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	b := t.blocks[id]
-	if b == nil || !change(&b.disp) {
-		return
-	}
-	if !strings.HasPrefix(b.entryID, "n") { // "n<k>": not recorded, nothing to attach to
-		status, display := b.disp.Snapshot(ext)
-		t.sess.Append(session.Entry{Type: session.TypeBlockDisplay, TargetID: b.entryID, Block: b.kind, Ext: ext, Status: status, Display: display})
-	}
-	h.publish("item/display", map[string]any{"itemId": b.item, "blockId": id, "display": WireDisplay(&b.disp)})
+func (h threadHost) block(ext, id string, change func(*transcript.BlockDisplay) bool) {
+	h.do(func() {
+		t := h.t
+		b := t.blocks[id]
+		if b == nil || !change(&b.disp) {
+			return
+		}
+		if !strings.HasPrefix(b.entryID, "n") { // "n<k>": not recorded, nothing to attach to
+			status, display := b.disp.Snapshot(ext)
+			t.sess.Append(session.Entry{Type: session.TypeBlockDisplay, TargetID: b.entryID, Block: b.kind, Ext: ext, Status: status, Display: display})
+		}
+		t.publish("item/display", map[string]any{"itemId": b.item, "blockId": id, "display": WireDisplay(&b.disp)})
+	})
 }
 
-// SetSessionName names the thread and saves the name, as /name does in
-// the terminal.
-func (h *threadHost) SetSessionName(ext, name string) error {
-	t := h.t
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	t.name = name
-	t.sess.Append(session.Entry{Type: session.TypeName, Name: name})
-	h.publish("thread/updated", map[string]any{"thread": t.info()})
+// SetSessionName names the thread and saves the name, as /name does.
+func (h threadHost) SetSessionName(ext, name string) error {
+	h.do(func() {
+		if h.t.readOnly != "" {
+			h.t.notice("", "%s: this conversation is read-only; not named.", ext)
+			return
+		}
+		h.t.nameSession(name)
+	})
 	return nil
 }
 
 // ShowText adds an extText item, completed at once, and saves it in the
 // session.
-func (h *threadHost) ShowText(ext, title, text string, o extensions.TextOptions) {
-	t := h.t
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	t.extTexts++
-	it := Item{ID: fmt.Sprintf("%s-x%d", t.id, t.extTexts), Type: ItemExtText, Status: string(transcript.Completed),
-		Title: title, Ext: ext, Text: text, Lang: o.Lang, Preview: o.Preview}
-	t.items = append(t.items, it)
-	t.sess.Append(session.Entry{Type: session.TypeExtText, Ext: ext, Title: title, Display: text, Lang: o.Lang, Preview: o.Preview})
-	h.publish("item/completed", map[string]any{"turnId": t.turnID, "item": it})
+func (h threadHost) ShowText(ext, title, text string, o extensions.TextOptions) {
+	h.do(func() {
+		h.t.tr.Add(transcript.Item{Kind: transcript.ExtText, Ext: ext, Title: title, Text: text, Lang: o.Lang, Preview: o.Preview})
+		h.t.sess.Append(session.Entry{Type: session.TypeExtText, Ext: ext, Title: title, Display: text, Lang: o.Lang, Preview: o.Preview})
+	})
+}
+
+// Ask is a prompt of the runtime (prompts.go).
+func (h threadHost) Ask(ext string, q extensions.Question, answer func(any)) {
+	h.do(func() { h.t.askExtension(ext, q, answer) })
+}
+
+// SendMessage is atto.sendMessage: it steers a running turn, follows a
+// compaction, or starts a turn.
+func (h threadHost) SendMessage(text string) {
+	h.do(func() {
+		t := h.t
+		switch {
+		case strings.TrimSpace(text) == "":
+		case t.noModel():
+		case t.busy && t.runKind == "turn":
+			t.steer("", text)
+		case t.busy:
+			t.enqueue("", text, nil)
+		default:
+			t.runTurn(t.newInput("", text, nil), false)
+		}
+		t.pendingChanged()
+	})
 }

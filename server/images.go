@@ -20,6 +20,13 @@ import (
 type ImageInput struct {
 	MIMEType string `json:"mimeType"`
 	Data     string `json:"data"`
+	// File, instead of data, names an image already in the image store
+	// (input/submit from a client on the same machine), with its size and
+	// the name it was read from.
+	File   string `json:"file,omitempty"`
+	Width  int    `json:"width,omitempty"`
+	Height int    `json:"height,omitempty"`
+	Name   string `json:"name,omitempty"`
 }
 
 const (

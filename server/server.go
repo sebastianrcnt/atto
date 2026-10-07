@@ -6,27 +6,18 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"slices"
 	"strings"
 	"sync"
 	"time"
 
-	"github.com/sebastianrcnt/atto/agent"
 	"github.com/sebastianrcnt/atto/config"
 	"github.com/sebastianrcnt/atto/core"
-	"github.com/sebastianrcnt/atto/core/transcript"
-	"github.com/sebastianrcnt/atto/events"
-	"github.com/sebastianrcnt/atto/extensions"
-	"github.com/sebastianrcnt/atto/hooks"
-	"github.com/sebastianrcnt/atto/images"
-	"github.com/sebastianrcnt/atto/mcp"
-	"github.com/sebastianrcnt/atto/provider"
 	"github.com/sebastianrcnt/atto/session"
 )
 
-// Server holds threads and dispatches JSON-RPC requests. Notifications
-// go through its event hub to every transport (see hub.go); Notify, when
-// set, observes them too (tests).
+// Server holds threads (session runtimes, see thread) and dispatches
+// JSON-RPC requests. Notifications go through its event hub to every
+// transport (see hub.go); Notify, when set, observes them too (tests).
 type Server struct {
 	Version string
 	Cwd     string // default working directory for new threads
@@ -36,12 +27,26 @@ type Server struct {
 	// as it changes (set before HTTPHandler).
 	OnClients func(n int)
 
+	// LockKind is the writer lease threads take (session.KindServer by
+	// default; the terminal's own runtime takes session.KindTUI).
+	LockKind string
+	// Retire closes a thread no client is attached to once it has been
+	// idle for Retention: no run, no queued input, no active goal and, with
+	// KeepForWork, no running job, pending timer or open prompt either.
+	// Off (atto serve), threads live until the server closes.
+	Retire      bool
+	Retention   time.Duration
+	KeepForWork bool
+	// OnThreadClosed, when set, hears that a thread closed (the worker of
+	// a daemon exits with its session).
+	OnThreadClosed func(id string)
+
 	mu       sync.Mutex
 	threads  map[string]*thread
 	stop     chan struct{}
-	live     Live    // set by NewLive: the one conversation served
-	instance string  // see newInstanceID
-	events   *broker // the event hub
+	live     Live   // set by NewLive: the one conversation served
+	instance string // see newInstanceID
+	events   *broker
 	clients  map[string]*clientConn
 }
 
@@ -51,190 +56,32 @@ func New(version, cwd string) *Server {
 	return s
 }
 
-// watchInbox delivers inbox events (job exits, timers, monitors) to loaded
-// threads: a new turn when idle, a steer while a turn runs.
-func (s *Server) watchInbox() {
-	tick := time.NewTicker(500 * time.Millisecond)
-	defer tick.Stop()
-	for {
-		select {
-		case <-s.stop:
-			return
-		case <-tick.C:
-		}
-		s.mu.Lock()
-		threads := make([]*thread, 0, len(s.threads))
-		for _, t := range s.threads {
-			threads = append(threads, t)
-		}
-		s.mu.Unlock()
-		for _, t := range threads {
-			reload, evs := events.SplitReload(core.Poll(t.id))
-			if reload {
-				s.reload(t)
-			}
-			if len(evs) == 0 {
-				continue
-			}
-			t.mu.Lock()
-			busy := t.busy
-			t.mu.Unlock()
-			if !busy && !events.Wakes(evs) {
-				events.Requeue(t.id, evs) // quiet: for the next turn
-				continue
-			}
-			for _, e := range evs {
-				s.notify(t, "event", map[string]any{"title": e.Title, "source": e.Source})
-			}
-			text := events.Format(evs)
-			if busy {
-				t.agent.Steer(text)
-				continue
-			}
-			s.beginInboxTurn(t, evs)
-		}
-	}
-}
+// Close ends every thread: runs are interrupted, SessionEnd hooks and
+// extensions run, background jobs stop and session files close (Windows
+// cannot delete or move a file that is still open).
+func (s *Server) Close() { s.CloseWith("other") }
 
-// beginInboxTurn preserves the inbox if a concurrent request claimed the turn.
-func (s *Server) beginInboxTurn(t *thread, evs []events.Event) {
-	text := events.Format(evs)
-	if _, err := s.begin(t, func(ctx context.Context, emit func(any)) error {
-		emit(transcript.Input{Text: text})
-		return t.agent.Run(ctx, text, emit)
-	}); err != nil {
-		events.Requeue(t.id, evs)
-	}
-}
-
-type thread struct {
-	mu sync.Mutex
-	// feed is held while the transcript builder takes an event and its
-	// item notifications go out, so a snapshot of the items (see
-	// snapshot) and the event ID to follow them from agree. Take it
-	// before mu.
-	feed      sync.Mutex
-	id        string
-	cwd       string
-	name      string
-	agent     *agent.Agent
-	sess      *session.Writer
-	release   func()
-	closing   bool
-	done      chan struct{}
-	hooks     *hooks.Runner
-	ext       *extensions.Manager
-	mcp       *mcp.Manager
-	hookSrc   []config.HookSource
-	models    config.ModelsFile  // the configured models, for the names clients show
-	loaded    core.Loaded        // what it loaded, as of the last reload
-	tr        transcript.Builder // used by the running turn, or by restore while idle
-	items     []Item             // completed items
-	busy      bool
-	turnID    string
-	cancel    context.CancelFunc
-	turnSeq   int
-	ctxTokens int
-	usage     provider.Usage // totals for the running turn
-	total     Usage          // the session's totals
-	turn      TurnInfo       // the running turn, for the activity line
-	steers    []string       // the user's steers the turn has not taken
-	// What the extensions show (see extui.go): on the blocks of the
-	// items, around the input, and how many text blocks they added.
-	blocks   blocks
-	ui       extensions.UIState
-	extTexts int
-}
-
-// Close interrupts running turns, stops background jobs and closes session
-// files (Windows cannot delete or move a file that is still open).
-func (s *Server) Close() {
+// CloseWith is Close with the reason SessionEnd hooks are given.
+func (s *Server) CloseWith(reason string) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	select {
 	case <-s.stop:
+		s.mu.Unlock()
 		return
 	default:
 		close(s.stop)
 	}
-	var ending sync.WaitGroup
+	threads := make([]*thread, 0, len(s.threads))
 	for _, t := range s.threads {
-		core.Leave(t.id)
-		t.mu.Lock()
-		t.closing = true
-		done := t.done
-		if t.cancel != nil {
-			t.cancel()
-		}
-		t.mu.Unlock()
-		if done != nil {
-			<-done
-		}
-		if t.hooks != nil { // threads end together, so one slow hook costs little
-			ending.Go(func() {
-				t.hooks.SessionEnd(context.Background(), "other")
-			})
-		}
-		if t.mcp != nil {
-			ending.Go(func() {
-				_ = t.mcp.Close() // its servers end with the thread
-			})
-		}
-		if t.ext != nil {
-			ending.Go(func() {
-				t.ext.SessionEnd("other")
-				t.ext.Close()
-			})
-		}
+		threads = append(threads, t)
 	}
-	ending.Wait()
-	// Last: SessionEnd hooks and extensions may still write to the session.
-	for _, t := range s.threads {
-		t.sess.Close()
-		if t.release != nil {
-			t.release()
-		}
+	s.mu.Unlock()
+	var wg sync.WaitGroup
+	for _, t := range threads {
+		wg.Go(func() { s.closeThread(t, closeMode{reason: reason}) })
 	}
+	wg.Wait()
 }
-
-func (t *thread) info() ThreadInfo {
-	m, effort := t.agent.Current()
-	info := ThreadInfo{ID: t.id, Cwd: t.cwd, Name: t.name, Effort: effort, ContextTokens: t.ctxTokens, Busy: t.busy, TurnID: t.turnID}
-	SetModel(&info, m, t.models)
-	info.AutoCompactLimit, _ = t.agent.CompactionLimit()
-	total := t.total
-	info.Usage = &total
-	if t.busy {
-		turn := t.turn
-		info.Turn = &turn
-	}
-	info.Pending = t.pending()
-	return info
-}
-
-// pending is the input the turn has not taken (nil when none). Call with
-// t.mu held.
-func (t *thread) pending() *PendingInput {
-	if len(t.steers) == 0 {
-		return nil
-	}
-	return &PendingInput{Steers: slices.Clone(t.steers)}
-}
-
-// pendingChanged tells clients what input is pending now.
-func (s *Server) pendingChanged(t *thread) {
-	t.mu.Lock()
-	p := t.pending()
-	t.mu.Unlock()
-	if p == nil {
-		p = &PendingInput{Steers: []string{}}
-	}
-	s.notify(t, "turn/pending", map[string]any{"pending": p})
-}
-
-// eventSeq is the ID of the latest event published: a client that reads
-// a thread follows its events from there.
-func (s *Server) eventSeq() int64 { return s.events.last() }
 
 // --- dispatch ---
 
@@ -289,23 +136,52 @@ type threadParams struct {
 	Input    string `json:"input"`
 	Archived bool   `json:"archived"`
 	NumTurns int    `json:"numTurns"`
-	// Images go with turn/start's input (see images.go).
+	// Images go with turn/start's and input/submit's input (see images.go).
 	Images []ImageInput `json:"images"`
-	// prompt/answer (live sessions)
+	// input/submit: auto, queue, replace or steer.
+	Intent string `json:"intent"`
+	// turn/interrupt: cancel (Ctrl+C: steers come back) or sendPending
+	// (Esc: they go out at once, the default).
+	Mode string `json:"mode"`
+	// prompt/answer
 	ID     string  `json:"id"`
 	Index  *int    `json:"index"`
 	Text   *string `json:"text"`
 	Cancel bool    `json:"cancel"`
-	// turn/unsteer: a queued follow-up rather than a steer
-	Queued bool `json:"queued"`
-	// initialize
-	ProtocolVersions []int         `json:"protocolVersions"`
-	Client           *ClientInfo   `json:"clientInfo"`
-	Capabilities     *Capabilities `json:"capabilities"`
+	// turn/unsteer: an input ID, or a queued follow-up rather than a steer
+	// (revision 1, by text)
+	InputID string `json:"inputId"`
+	Queued  bool   `json:"queued"`
 	// job/output, job/stop; subagent/read
 	Job   int    `json:"job"`
 	Lines int    `json:"lines"`
 	Name  string `json:"name"`
+	// initialize
+	ProtocolVersions []int         `json:"protocolVersions"`
+	Client           *ClientInfo   `json:"clientInfo"`
+	Capabilities     *Capabilities `json:"capabilities"`
+	// thread/setModel, thread/setEffort: also make it the default.
+	SaveDefault bool `json:"saveDefault"`
+	// thread/setContextMode: normal or long
+	ContextMode string `json:"contextMode"`
+	// thread/navigate, thread/fork, thread/setLabel
+	EntryID string         `json:"entryId"`
+	Summary *summaryParams `json:"summary"`
+	Label   string         `json:"label"`
+	Reason  string         `json:"reason"`  // thread/detach, thread/close
+	Open    bool           `json:"open"`    // client/gate
+	View    string         `json:"view"`    // thread/context
+	Offline bool           `json:"offline"` // thread/read: from the file, not loading it
+	Args    string         `json:"args"`    // commands/run
+	Command string         `json:"command"` // shell/start
+	Exclude bool           `json:"exclude"` // shell/start
+	When    string         `json:"when"`    // timer/create
+	Message string         `json:"message"` // timer/create
+}
+
+type summaryParams struct {
+	Mode         string `json:"mode"` // none, auto or custom
+	Instructions string `json:"instructions"`
 }
 
 func (s *Server) call(ctx context.Context, method string, raw json.RawMessage) (any, error) {
@@ -316,101 +192,54 @@ func (s *Server) call(ctx context.Context, method string, raw json.RawMessage) (
 	if s.live != nil {
 		return s.liveCall(method, p)
 	}
+	client := clientOf(ctx)
 	switch method {
 	case "initialize":
 		return s.initialize(ctx, p, nil)
 	case "models/list":
 		return s.listModels()
 	case "thread/start":
-		return s.startThread(p)
+		return s.startThread(client, p)
 	case "thread/resume":
-		return s.resumeThread(p.ThreadID)
-	case "thread/read":
+		return s.resumeThread(client, p)
+	case "thread/attach":
 		t, err := s.thread(p.ThreadID)
 		if err != nil {
 			return nil, err
 		}
-		return s.snapshot(t), nil
+		return t.attach(client)
+	case "thread/detach":
+		t, err := s.thread(p.ThreadID)
+		if err != nil {
+			return nil, err
+		}
+		return s.detach(t, client, p.Reason), nil
+	case "thread/close":
+		t, err := s.thread(p.ThreadID)
+		if err != nil {
+			return nil, err
+		}
+		reason := p.Reason
+		if reason == "" {
+			reason = "other"
+		}
+		return s.closeThread(t, closeMode{reason: reason}), nil
+	case "thread/read":
+		if p.Offline {
+			return readOffline(p.ThreadID)
+		}
+		t, err := s.thread(p.ThreadID)
+		if err != nil {
+			return nil, err
+		}
+		var info ThreadInfo
+		err = t.call(func() error { info = t.snapshot(); return nil })
+		return info, err
 	case "thread/list":
 		return s.listThreads(p)
-	case "thread/setModel":
-		return s.setModel(p)
-	case "thread/setEffort":
-		return s.setEffort(p)
-	case "thread/compact":
-		return s.startCompact(p.ThreadID)
-	case "thread/rollback":
-		return s.rollback(p)
-	case "turn/start":
-		return s.startTurn(p)
-	case "turn/steer":
-		t, err := s.thread(p.ThreadID)
-		if err != nil {
-			return nil, err
-		}
-		t.mu.Lock()
-		busy := t.busy
-		t.mu.Unlock()
-		if !busy {
-			return nil, &rpcError{Code: codeServer, Message: "no turn is running; use turn/start"}
-		}
-		if strings.TrimSpace(p.Input) == "" {
-			return nil, invalid("input is required")
-		}
-		t.agent.Steer(p.Input)
-		t.mu.Lock()
-		t.steers = append(t.steers, p.Input)
-		t.mu.Unlock()
-		s.pendingChanged(t)
-		return nil, nil
-	case "turn/unsteer":
-		t, err := s.thread(p.ThreadID)
-		if err != nil {
-			return nil, err
-		}
-		if p.Queued {
-			return nil, invalid("only a live session queues follow-ups")
-		}
-		t.mu.Lock()
-		i := slices.Index(t.steers, p.Input)
-		t.mu.Unlock()
-		if i < 0 || !t.agent.Unsteer(p.Input) {
-			return nil, &rpcError{Code: codeServer, Message: "that message is no longer pending: the turn has taken it"}
-		}
-		t.mu.Lock()
-		if i = slices.Index(t.steers, p.Input); i >= 0 {
-			t.steers = slices.Delete(t.steers, i, i+1)
-		}
-		t.mu.Unlock()
-		s.pendingChanged(t)
-		return nil, nil
-	case "job/list", "job/output", "job/stop", "subagent/list", "subagent/read":
-		t, err := s.thread(p.ThreadID)
-		if err != nil {
-			return nil, err
-		}
-		return background(method, t.id, p)
-	case "turn/background":
-		// Ctrl+B: the running command moves to the background.
-		t, err := s.thread(p.ThreadID)
-		if err != nil {
-			return nil, err
-		}
-		if !t.agent.Background() {
-			return nil, &rpcError{Code: codeServer, Message: "no command is running that can move to the background"}
-		}
-		return nil, nil
-	case "turn/interrupt":
-		t, err := s.thread(p.ThreadID)
-		if err != nil {
-			return nil, err
-		}
-		t.mu.Lock()
-		if t.cancel != nil {
-			t.cancel()
-		}
-		t.mu.Unlock()
-		return nil, nil
+	}
+	if out, ok, err := s.threadCall(ctx, client, method, p); ok {
+		return out, err
 	}
 	return nil, &rpcError{Code: codeMethodNotFound, Message: "unknown method " + method}
 }
@@ -420,9 +249,15 @@ func (s *Server) thread(id string) (*thread, error) {
 	defer s.mu.Unlock()
 	t := s.threads[id]
 	if t == nil {
-		return nil, invalid("unknown thread %q (thread/start or thread/resume first)", id)
+		return nil, &rpcError{Code: codeInvalidParams, Message: fmt.Sprintf("unknown thread %q (thread/start or thread/resume first)", id), Data: &ErrorData{Reason: ReasonNotFound}}
 	}
 	return t, nil
+}
+
+// Loaded reports whether thread id is loaded.
+func (s *Server) Loaded(id string) bool {
+	_, err := s.thread(id)
+	return err == nil
 }
 
 // --- threads ---
@@ -443,41 +278,73 @@ func (s *Server) listModels() (any, error) {
 	return map[string]any{"models": out}, nil
 }
 
-// newThread wires an agent, its hooks and a session file for cwd.
-// modelFrom and effortFrom say where model and effort came from.
-func (s *Server) newThread(cwd string, model config.ModelRef, models config.ModelsFile, effort string, file *session.Writer, release func(), start time.Time, modelFrom, effortFrom core.Origin) (*thread, error) {
-	ag, hk, src, err := core.NewAgentSources(cwd, model, effort)
+// threadOptions build a thread.
+type threadOptions struct {
+	cwd                   string
+	model                 config.ModelRef
+	models                config.ModelsFile
+	effort                string
+	file                  *session.Writer
+	release               func()
+	start                 time.Time
+	modelFrom, effortFrom core.Origin
+}
+
+// newThread wires an agent, its hooks, extensions and MCP and a session
+// file for cwd, and starts the thread's lane.
+func (s *Server) newThread(o threadOptions) (*thread, error) {
+	ag, hk, src, err := core.NewAgentSources(o.cwd, o.model, o.effort)
 	if err != nil {
 		return nil, err
 	}
-	t := &thread{id: file.ID, cwd: cwd, models: models, agent: ag, sess: file, release: release, hooks: hk, hookSrc: src, blocks: blocks{}}
-	// Extensions show what they show to the clients (see threadHost);
-	// notices go to them as extension/notify, dialogs get their default
-	// answers, and sendMessage steers the thread's turn.
-	t.ext = core.LoadExtensions(ag, &threadHost{s: s, t: t, Headless: &extensions.Headless{Send: ag.Steer, OnNotify: func(ext, text, level string) {
-		s.notify(t, "extension/notify", map[string]any{"extension": ext, "message": text, "level": level})
-	}}})
-	t.mcp = core.LoadMCP(ag)
-	ag.NoGoals = true
-	core.Bind(ag, hk, file, start, true)
-	t.loaded = core.Collect(ag, src, modelFrom, effortFrom)
+	t := &thread{s: s, id: o.file.ID, cwd: o.cwd, models: o.models, agent: ag, sess: o.file, release: o.release,
+		hooks: hk, hookSrc: src, blocks: blocks{}, modelFrom: o.modelFrom, effortFrom: o.effortFrom,
+		itemMeta: map[string]userMeta{}, gates: map[string]int{}, attached: map[string]bool{}, lastActive: time.Now()}
 	t.tr.IDPrefix = itemPrefix(t.id)
+	t.tr.Handler = t.handler()
+	t.resetGoal()
+	ag.SteerNote = t.goal.SteerNote // a message sent while the goal runs says so
+	t.ext = core.LoadExtensions(ag, threadHost{t})
+	t.mcp = core.LoadMCP(ag)
+	core.Bind(ag, hk, o.file, o.start, true)
+	t.loaded = core.Collect(ag, src, o.modelFrom, o.effortFrom)
+	t.catalogVer = t.catalogVersion()
+	t.startLane()
 	s.mu.Lock()
 	s.threads[t.id] = t
 	s.mu.Unlock()
 	return t, nil
 }
 
-func (s *Server) startThread(p threadParams) (any, error) {
+// pickModel chooses the model and effort for a thread: given, saved in
+// the session, or the defaults. Without any model configured the thread
+// starts anyway (first run: /login still works).
+func pickModel(flagModel, flagEffort, savedModel, savedEffort string) (config.ModelRef, config.ModelsFile, string, core.Origin, core.Origin, error) {
 	settings, models, err := core.Load()
+	if err != nil {
+		return config.ModelRef{}, models, "", "", "", err
+	}
+	model, modelFrom, err := core.PickModelFrom(models, settings, flagModel, savedModel)
+	if err != nil && !errors.Is(err, core.ErrNoModels) {
+		return model, models, "", "", "", invalid("%v", err)
+	}
+	effort, effortFrom := core.EffortFrom(settings, flagEffort, savedEffort)
+	return model, models, effort, modelFrom, effortFrom, nil
+}
+
+func (s *Server) lockKind() string {
+	if s.LockKind != "" {
+		return s.LockKind
+	}
+	return session.KindServer
+}
+
+// startThread is thread/start: a new session for client.
+func (s *Server) startThread(client string, p threadParams) (any, error) {
+	model, models, effort, modelFrom, effortFrom, err := pickModel(p.Model, p.Effort, "", "")
 	if err != nil {
 		return nil, err
 	}
-	model, modelFrom, err := core.PickModelFrom(models, settings, p.Model, "")
-	if err != nil {
-		return nil, invalid("%v", err)
-	}
-	effort, effortFrom := core.EffortFrom(settings, p.Effort, "")
 	cwd := p.Cwd
 	if cwd == "" {
 		cwd = s.Cwd
@@ -486,53 +353,89 @@ func (s *Server) startThread(p threadParams) (any, error) {
 		return nil, invalid("cwd %q is not a directory", cwd)
 	}
 	file := session.New(cwd)
-	release, err := session.LockKind(file.Path, session.KindServer)
+	release, err := session.LockKind(file.Path, s.lockKind())
 	if err != nil {
 		return nil, err
 	}
-	t, err := s.newThread(cwd, model, models, effort, file, release, time.Now(), modelFrom, effortFrom)
+	t, err := s.newThread(threadOptions{cwd: cwd, model: model, models: models, effort: effort, file: file, release: release,
+		start: time.Now(), modelFrom: modelFrom, effortFrom: effortFrom})
 	if err != nil {
 		file.Close()
 		release()
 		return nil, err
 	}
-	s.sessionStart(t, "startup")
-	info := s.snapshot(t)
-	t.mu.Lock()
-	loaded := t.loaded
-	t.mu.Unlock()
-	info.Context = &loaded
-	return info, nil
+	var info ThreadInfo
+	err = t.call(func() error {
+		t.attachClient(client)
+		if model.Model.ID == "" {
+			t.notice("", "%s", core.NoModelsHint())
+		}
+		t.showLoaded(false, nil, "")
+		t.sessionStart("startup")
+		t.askMCPApprovals()
+		info = t.snapshot()
+		loaded := t.loaded
+		info.Context = &loaded
+		return nil
+	})
+	return info, err
 }
 
-func (s *Server) sessionStart(t *thread, source string) {
+// sessionStart runs SessionStart hooks (in the background) and tells the
+// extensions.
+func (t *thread) sessionStart(source string) {
 	if t.ext != nil {
 		t.ext.SessionStart(source)
 	}
-	if t.hooks == nil {
+	hk := t.hooks
+	if hk == nil {
 		return
 	}
 	go func() {
-		for _, n := range t.hooks.SessionStart(context.Background(), source) {
-			s.notify(t, "hook", map[string]any{"event": "SessionStart", "message": n})
-		}
+		notices := hk.SessionStart(context.Background(), source)
+		t.do(func() {
+			for _, n := range notices {
+				t.notice("", "%s", n)
+				t.publish("hook", map[string]any{"event": "SessionStart", "message": n})
+			}
+		})
 	}()
 }
 
-func (s *Server) resumeThread(id string) (any, error) {
+// showLoaded adds the "Loaded" item: what the session loaded, or after a
+// reload what changed.
+func (t *thread) showLoaded(reloaded bool, changes []core.Change, note string) {
+	l := t.loaded
+	text := strings.Join(append([]string{"Loaded"}, core.FormatRows(l.Summary(), "  ", 12)...), "\n")
+	t.addNotice(Item{Level: "loaded", Text: text, Loaded: &l, Reloaded: reloaded, Changes: changes, Note: note})
+}
+
+// resumeThread is thread/resume: the thread when loaded (the client
+// attaches to it), else the session opened from disk. A session another
+// process writes (a background run) is read without loading it,
+// read-only.
+func (s *Server) resumeThread(client string, p threadParams) (any, error) {
 	s.mu.Lock()
-	existing := s.threads[id]
+	existing := s.threads[p.ThreadID]
 	s.mu.Unlock()
-	if existing != nil { // already loaded: same as read
-		return s.snapshot(existing), nil
+	if existing != nil {
+		return existing.attach(client)
 	}
-	path, err := session.Find(id)
+	path, err := session.Find(p.ThreadID)
 	if err != nil {
 		return nil, invalid("%v", err)
 	}
-	release, err := session.LockKind(path, session.KindServer)
+	if l, locked := session.LockedBy(path); locked && (l.Kind == "" || l.Kind == session.KindBackground || l.Kind == session.KindRun) {
+		info, err := readOffline(p.ThreadID)
+		if err != nil {
+			return nil, err
+		}
+		info.ReadOnly = session.ReadOnlyMessage(l)
+		return info, nil
+	}
+	release, err := session.LockKind(path, s.lockKind())
 	if err != nil {
-		return nil, invalid("%v", err)
+		return nil, &rpcError{Code: codeServer, Message: err.Error(), Data: &ErrorData{Reason: ReasonOwnedElsewhere}}
 	}
 	keep := false
 	defer func() {
@@ -544,58 +447,87 @@ func (s *Server) resumeThread(id string) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	settings, models, err := core.Load()
+	model, models, effort, modelFrom, effortFrom, err := pickModel("", "", saved.Model, saved.Effort)
 	if err != nil {
 		file.Close()
 		return nil, err
 	}
-	model, modelFrom, err := core.PickModelFrom(models, settings, "", saved.Model)
-	if err != nil {
-		file.Close()
-		return nil, err
+	// The session runs where it was started, unless the client says
+	// otherwise (the terminal keeps its own directory, as it always did).
+	cwd := saved.Header.Cwd
+	if p.Cwd != "" {
+		cwd = p.Cwd
 	}
-	effort, effortFrom := core.EffortFrom(settings, "", saved.Effort)
-	t, err := s.newThread(saved.Header.Cwd, model, models, effort, file, release, saved.Header.Time, modelFrom, effortFrom)
+	if st, err := os.Stat(cwd); err != nil || !st.IsDir() {
+		cwd = s.Cwd
+	}
+	t, err := s.newThread(threadOptions{cwd: cwd, model: model, models: models, effort: effort, file: file, release: release,
+		start: saved.Header.Time, modelFrom: modelFrom, effortFrom: effortFrom})
 	if err != nil {
 		file.Close()
 		return nil, err
 	}
 	keep = true
-	t.name = saved.Name
-	t.restore(saved.Entries)
-	t.agent.SetLongContext(saved.LongContext)
-	s.sessionStart(t, "resume")
-	info := s.snapshot(t)
-	t.mu.Lock()
-	loaded := t.loaded
-	t.mu.Unlock()
-	info.Context = &loaded
-	return info, nil
+	var info ThreadInfo
+	err = t.call(func() error {
+		t.attachClient(client)
+		t.name = saved.Name
+		branch := saved.Branch()
+		t.agent.Restore(branch)
+		t.agent.SetLongContext(saved.LongContext)
+		t.ctx = t.agent.ContextTokens()
+		t.total = UsageOf(saved.Entries)
+		if m := t.model(); saved.Model != "" && m.ProviderName+"/"+m.Model.ID == saved.Model {
+			t.recModel = saved.Model
+		}
+		if saved.Effort != "" {
+			t.recEffort = saved.Effort
+		}
+		t.sessionStart("resume")
+		t.showLoaded(false, nil, "")
+		t.replayKeepNotices(branch)
+		t.restoreGoal(saved.Entries)
+		if h := saved.Header; h.Cwd != t.cwd {
+			t.notice("", "Resumed a session from %s; commands run in %s.", core.ShortPath(h.Cwd), core.ShortPath(t.cwd))
+		}
+		label := saved.Header.Time.Local().Format("2006-01-02 15:04")
+		if t.name != "" {
+			label = fmt.Sprintf("%q (%s)", t.name, label)
+		}
+		t.notice("", "Resumed session %s.", label)
+		t.askMCPApprovals()
+		info = t.snapshot()
+		loaded := t.loaded
+		info.Context = &loaded
+		return nil
+	})
+	return info, err
 }
 
-// snapshot describes a thread with its items, those still in progress
-// included as they stand, and the event to follow them from: no item
-// notification of the thread goes out while it is taken.
-func (s *Server) snapshot(t *thread) ThreadInfo {
-	t.feed.Lock()
-	defer t.feed.Unlock()
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	info := t.info()
-	info.Items = make([]Item, 0, len(t.items))
-	for _, it := range t.items {
-		info.Items = append(info.Items, t.withDisplay(it))
+// replayKeepNotices replays the branch after the notices already added
+// (the Loaded item).
+func (t *thread) replayKeepNotices(branch []session.Entry) {
+	kept := t.items
+	t.replay(branch)
+	t.items = append(kept, t.items...)
+}
+
+// readOffline reads a saved session without loading it: its items,
+// read-only.
+func readOffline(id string) (ThreadInfo, error) {
+	path, err := session.Find(id)
+	if err != nil {
+		return ThreadInfo{}, &rpcError{Code: codeInvalidParams, Message: err.Error(), Data: &ErrorData{Reason: ReasonNotFound}}
 	}
-	if t.busy {
-		for _, it := range t.tr.Open() {
-			info.Items = append(info.Items, t.withDisplay(wireItem(t.id, &it)))
-		}
+	saved, err := core.Read(path)
+	if err != nil {
+		return ThreadInfo{}, err
 	}
-	if !t.ui.Empty() {
-		info.ExtensionUI = WireExtensionUI(&t.ui)
-	}
-	info.EventID = s.eventSeq()
-	return info
+	info := ThreadInfo{ID: saved.Header.ID, Cwd: saved.Header.Cwd, Name: saved.Name, Model: saved.Model, Effort: saved.Effort, Offline: true, SessionPath: path}
+	info.Items = ItemsFromEntries(saved.Header.ID, saved.Branch())
+	u := UsageOf(saved.Entries)
+	info.Usage = &u
+	return info, nil
 }
 
 func (s *Server) listThreads(p threadParams) (any, error) {
@@ -616,171 +548,212 @@ func (s *Server) listThreads(p threadParams) (any, error) {
 	return map[string]any{"threads": out}, nil
 }
 
-func (s *Server) setModel(p threadParams) (any, error) {
-	t, err := s.thread(p.ThreadID)
-	if err != nil {
-		return nil, err
-	}
-	settings, models, err := core.Load()
-	if err != nil {
-		return nil, err
-	}
-	model, err := core.PickModel(models, settings, p.Model)
-	if err != nil {
-		return nil, invalid("%v", err)
-	}
-	t.agent.SetModel(model)
-	t.sess.Append(session.Entry{Type: session.TypeModel, Provider: model.ProviderName, Model: model.Model.ID})
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	t.models = models
-	return t.info(), nil
+// --- attachment and lifetime ---
+
+// attach is thread/attach: client follows the thread from its snapshot.
+func (t *thread) attach(client string) (ThreadInfo, error) {
+	var info ThreadInfo
+	err := t.call(func() error {
+		t.attachClient(client)
+		info = t.snapshot()
+		loaded := t.loaded
+		info.Context = &loaded
+		return nil
+	})
+	return info, err
 }
 
-func (s *Server) setEffort(p threadParams) (any, error) {
-	t, err := s.thread(p.ThreadID)
-	if err != nil {
-		return nil, err
+func (t *thread) attachClient(client string) {
+	if client == "" {
+		return
 	}
-	m, _ := t.agent.Current()
-	if err := core.CheckEffort(m, p.Effort); err != nil {
-		return nil, invalid("%v", err)
-	}
-	t.agent.SetEffort(p.Effort)
-	t.sess.Append(session.Entry{Type: session.TypeEffort, Effort: p.Effort})
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	return t.info(), nil
+	t.attached[client] = true
+	t.lastActive = time.Now()
+	t.cancelRetire()
 }
 
-// --- turns ---
-
-func (s *Server) notify(t *thread, method string, params map[string]any) {
-	params["threadId"] = t.id
-	s.publish(method, params)
+// detachResult is thread/detach's and thread/close's result.
+type detachResult struct {
+	Closed      bool     `json:"closed"`
+	StoppedJobs int      `json:"stoppedJobs,omitempty"`
+	Notices     []string `json:"notices,omitempty"`
 }
 
-// begin marks the thread busy and starts fn in the background.
-func (s *Server) begin(t *thread, fn func(ctx context.Context, emit func(any)) error) (string, error) {
-	t.mu.Lock()
-	if t.busy || t.closing {
-		t.mu.Unlock()
-		return "", &rpcError{Code: codeServer, Message: "a turn is already running; use turn/steer or turn/interrupt"}
+// detach is thread/detach: client stops following the thread, which goes
+// on. With retention 0, a thread left idle closes now (reason: what the
+// client did: clear, resume or exit).
+func (s *Server) detach(t *thread, client, reason string) detachResult {
+	now := false
+	_ = t.call(func() error {
+		delete(t.attached, client)
+		delete(t.gates, client)
+		if reason != "" {
+			t.leaveReason = reason
+		}
+		now = s.Retire && s.Retention == 0 && t.retirable()
+		if !now {
+			t.maybeRetire()
+		}
+		return nil
+	})
+	if !now {
+		return detachResult{}
 	}
-	t.done = make(chan struct{})
-	done := t.done
-	t.turnSeq++
-	turnID := fmt.Sprintf("%s-t%d", t.id, t.turnSeq)
-	ctx, cancel := context.WithCancel(context.Background())
-	t.busy, t.turnID, t.cancel, t.usage = true, turnID, cancel, provider.Usage{}
-	t.turn = TurnInfo{StartedAt: time.Now().UnixMilli()}
-	started := t.turn.StartedAt
-	t.mu.Unlock()
+	return s.closeThread(t, closeMode{reason: t.leaveReasonOr("other")})
+}
 
-	s.notify(t, "turn/started", map[string]any{"turnId": turnID, "startedAt": started})
-	m := &itemMapper{s: s, t: t, turnID: turnID}
-	t.feed.Lock()
-	t.tr.Handler = m.handler()
-	t.feed.Unlock()
-	go func() {
-		defer close(done)
-		err := fn(ctx, m.event)
-		m.closeOpen()
-		// A reload no step boundary reached runs now, while the thread is
-		// still busy; its report for the model waits in the inbox.
-		for _, f := range t.agent.TakeBoundary() {
-			if text := f(); text != "" {
-				_ = events.Push(t.id, events.Event{Source: sourceReloaded, Title: "reload applied", Text: strings.TrimPrefix(text, events.Prefix)})
+// clientGone releases what a detached client held: its gates and its
+// attachments. Nothing it started stops.
+func (s *Server) clientGone(id string) {
+	s.mu.Lock()
+	threads := make([]*thread, 0, len(s.threads))
+	for _, t := range s.threads {
+		threads = append(threads, t)
+	}
+	s.mu.Unlock()
+	for _, t := range threads {
+		t.do(func() {
+			if !t.attached[id] && t.gates[id] == 0 {
+				return
 			}
-		}
-		t.mu.Lock()
-		t.busy, t.cancel, t.turnID = false, nil, ""
-		t.ctxTokens = t.agent.ContextTokens()
-		usage, ctxTokens := t.usage, t.ctxTokens
-		t.mu.Unlock()
-		cancel()
-		status, msg := "completed", ""
-		switch {
-		case errors.Is(err, context.Canceled):
-			status = "interrupted"
-		case err != nil:
-			status, msg = "failed", err.Error()
-		}
-		params := map[string]any{"turnId": turnID, "status": status, "contextTokens": ctxTokens,
-			"usage": map[string]int{"inputTokens": usage.PromptTokens, "cachedInputTokens": usage.CachedTokens, "outputTokens": usage.CompletionTokens}}
-		if msg != "" {
-			params["error"] = msg
-		}
-		s.notify(t, "turn/completed", params)
-	}()
-	return turnID, nil
+			delete(t.attached, id)
+			delete(t.gates, id)
+			t.maybeSendNextQueued()
+			t.maybeRetire()
+		})
+	}
 }
 
-func (s *Server) startTurn(p threadParams) (any, error) {
-	t, err := s.thread(p.ThreadID)
-	if err != nil {
-		return nil, err
+// retirable reports whether the thread has nothing going on and no
+// client: it may close.
+func (t *thread) retirable() bool {
+	if t.closing || len(t.attached) > 0 || t.busy || t.shell != nil || len(t.queued) > 0 || len(t.pendingEvents) > 0 || t.sendNow != nil {
+		return false
 	}
-	if strings.TrimSpace(p.Input) == "" && len(p.Images) == 0 {
-		return nil, invalid("input is required")
+	if t.goal.Active() && !t.goal.Held() {
+		return false
 	}
-	m, _ := t.agent.Current()
-	imgs, err := turnImages(p.Images, m)
-	if err != nil {
-		return nil, err
+	if t.s.KeepForWork && (t.jobCount > 0 || t.timerCount > 0 || t.prompt != nil || t.retryTimer != nil) {
+		return false
 	}
-	input := images.WithPlaceholders(p.Input, imgs)
-	var turnID string
-	turnID, err = s.begin(t, func(ctx context.Context, emit func(any)) error {
-		emit(transcript.Input{Text: input, Images: imgs})
-		return t.agent.RunWithImages(ctx, input, imgs, emit)
+	return true
+}
+
+// maybeRetire closes the thread once it has been retirable for the
+// retention period.
+func (t *thread) maybeRetire() {
+	if !t.s.Retire || !t.retirable() {
+		t.cancelRetire()
+		return
+	}
+	if t.retireTimer != nil {
+		return
+	}
+	var tm *time.Timer
+	tm = time.AfterFunc(t.s.Retention, func() {
+		t.do(func() {
+			if t.retireTimer != tm {
+				return
+			}
+			t.retireTimer = nil
+			if t.retirable() {
+				go t.s.closeThread(t, closeMode{reason: t.leaveReasonOr("other")})
+			}
+		})
 	})
-	if err != nil {
-		return nil, err
-	}
-	return map[string]any{"turnId": turnID}, nil
+	t.retireTimer = tm
 }
 
-func (s *Server) startCompact(id string) (any, error) {
-	t, err := s.thread(id)
-	if err != nil {
-		return nil, err
+func (t *thread) cancelRetire() {
+	if t.retireTimer != nil {
+		t.retireTimer.Stop()
+		t.retireTimer = nil
 	}
-	turnID, err := s.begin(t, t.agent.Compact)
-	if err != nil {
-		return nil, err
-	}
-	return map[string]any{"turnId": turnID}, nil
 }
 
-// sourceReloaded is the source of the event that reports a reload.
-const sourceReloaded = "reloaded"
+func (t *thread) leaveReasonOr(def string) string {
+	if t.leaveReason != "" {
+		return t.leaveReason
+	}
+	return def
+}
 
-// reload applies an `atto reload` the thread's agent asked for: between
-// steps when a turn runs, else in a turn of its own that tells the model
-// the result.
-func (s *Server) reload(t *thread) {
-	apply := func() string {
-		t.mu.Lock()
-		prev, path := t.loaded, t.sess.Path
-		t.mu.Unlock()
-		r, err := core.Reload(t.agent, t.id, path, prev)
-		if err != nil {
-			s.notify(t, "thread/reloaded", map[string]any{"error": err.Error()})
-			return events.Format([]events.Event{{Text: "Reload failed, nothing changed: " + err.Error()}})
+// closeMode says how a thread closes.
+type closeMode struct {
+	reason  string // for SessionEnd
+	handoff bool   // a background run took the session over: end nothing
+}
+
+var closeHandoff = closeMode{handoff: true}
+
+// closeThread ends thread t: its run is interrupted and awaited, its
+// prompt closed, SessionEnd hooks and extensions run, its background jobs
+// stop (unless handed off), MCP servers end, and the session file and
+// lease are let go. Clients are told (thread/closed). Safe to call twice.
+func (s *Server) closeThread(t *thread, m closeMode) detachResult {
+	var done chan struct{}
+	if t.call(func() error {
+		if t.closing {
+			return errThreadClosed
 		}
-		t.mu.Lock()
-		t.loaded, t.hooks, t.hookSrc = r.Loaded, r.Hooks, r.HookSrc
-		t.mu.Unlock()
-		s.notify(t, "thread/reloaded", map[string]any{"context": r.Loaded, "changes": r.Changes, "promptChanged": r.PromptChanged})
-		return events.Format([]events.Event{{Text: r.ForModel()}})
+		t.closing = true
+		t.cancelRetire()
+		t.cancelGoalRetry()
+		t.cancelPrompt()
+		t.dropShell()
+		if t.cancel != nil {
+			t.cancel()
+		}
+		done = t.runDone
+		return nil
+	}) != nil {
+		return detachResult{}
 	}
-	_, err := s.begin(t, func(ctx context.Context, emit func(any)) error {
-		text := apply()
-		emit(transcript.Input{Text: text})
-		return t.agent.Run(ctx, text, emit)
+	if done != nil {
+		<-done
+	}
+	_ = t.call(func() error { return nil }) // the run's end reaches the lane first
+	t.inboxOff.Store(true)
+	var res detachResult
+	if !m.handoff {
+		if t.sess.ReadOnly() == "" && t.readOnly == "" {
+			res.StoppedJobs = core.Leave(t.id)
+		}
+		if t.hooks != nil {
+			res.Notices = t.hooks.SessionEnd(context.Background(), m.reason)
+		}
+		if t.ext != nil {
+			t.ext.SessionEnd(m.reason)
+		}
+	}
+	if t.ext != nil {
+		t.ext.Close()
+	}
+	if t.mcp != nil {
+		_ = t.mcp.Close()
+	}
+	// Last: SessionEnd hooks and extensions may still write to the session.
+	_ = t.call(func() error {
+		t.sess.Close()
+		if t.release != nil {
+			t.release()
+			t.release = nil
+		}
+		t.publish("thread/closed", map[string]any{"reason": m.reason, "handoff": m.handoff})
+		return nil
 	})
-	if err != nil { // a turn is running: apply it at its next step boundary
-		t.agent.AtBoundary(apply)
+	t.stopLane()
+	s.mu.Lock()
+	if s.threads[t.id] == t {
+		delete(s.threads, t.id)
 	}
+	s.mu.Unlock()
+	res.Closed = true
+	if s.OnThreadClosed != nil {
+		s.OnThreadClosed(t.id)
+	}
+	return res
 }
+
+// notify publishes a notification of thread t.
+func (s *Server) notify(t *thread, method string, params map[string]any) { t.publish(method, params) }

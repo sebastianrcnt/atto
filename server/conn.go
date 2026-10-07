@@ -163,7 +163,3 @@ func (s *Server) interactiveClients() int {
 	}
 	return n
 }
-
-// clientGone releases what a detached client held: its modal gates (see
-// gate.go). Nothing it started stops.
-func (s *Server) clientGone(id string) {}

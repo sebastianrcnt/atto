@@ -129,6 +129,10 @@ func (s *Server) publish(method string, params map[string]any) {
 	}
 }
 
+// eventSeq is the ID of the latest event published: a client that reads
+// a thread follows its events from there.
+func (s *Server) eventSeq() int64 { return s.events.last() }
+
 // resetNotification tells a client its events have a gap: it reads its
 // threads again, following from eventId.
 func (s *Server) resetNotification() []byte {

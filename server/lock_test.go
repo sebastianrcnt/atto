@@ -11,8 +11,9 @@ import (
 	"github.com/sebastianrcnt/atto/session"
 )
 
-// A session a background run is writing is not resumed.
-func TestResumeRefusesLockedSession(t *testing.T) {
+// A session a background run is writing is not loaded: thread/resume
+// reads it from its file, read-only.
+func TestResumeReadsLockedSessionReadOnly(t *testing.T) {
 	work := setup(t)
 	w := session.New(work)
 	w.Append(session.Entry{Type: session.TypeMessage, Message: &provider.Message{Role: "user", Content: "u1"}})
@@ -24,7 +25,8 @@ func TestResumeRefusesLockedSession(t *testing.T) {
 	t.Cleanup(s.Close)
 	b, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": 1, "method": "thread/resume", "params": map[string]any{"threadId": w.ID}})
 	resp := s.Handle(context.Background(), b)
-	if resp.Error == nil || !strings.Contains(resp.Error.Message, "running in the background") {
+	info, ok := resp.Result.(ThreadInfo)
+	if resp.Error != nil || !ok || !strings.Contains(info.ReadOnly, "Running in background") || len(info.Items) != 1 || s.Loaded(w.ID) {
 		t.Fatalf("resume: %+v", resp)
 	}
 }
@@ -33,7 +35,7 @@ func TestStandaloneServerHoldsWriterLease(t *testing.T) {
 	work := setup(t)
 	s := New("test", work)
 	defer s.Close()
-	got, err := s.startThread(threadParams{})
+	got, err := s.startThread("", threadParams{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -49,28 +51,30 @@ func TestStandaloneServerHoldsWriterLease(t *testing.T) {
 	}
 	s2 := New("test", work)
 	defer s2.Close()
-	if _, err := s2.resumeThread(id); err == nil {
+	if _, err := s2.resumeThread("", threadParams{ThreadID: id}); err == nil {
 		t.Fatal("second writer opened session")
 	}
 	if _, err := session.LockTUI(path); err == nil {
 		t.Fatal("terminal opened server session")
 	}
 	s.Close()
-	if _, err := s2.resumeThread(id); err != nil {
+	if _, err := s2.resumeThread("", threadParams{ThreadID: id}); err != nil {
 		t.Fatal("lease not released:", err)
 	}
 }
 
-func TestStandalonePromptDoesNotAdvertiseGoals(t *testing.T) {
+// The server runs goals as the terminal does (revision 2): the prompt
+// tells the model about them.
+func TestServerPromptAdvertisesGoals(t *testing.T) {
 	work := setup(t)
 	s := New("test", work)
 	defer s.Close()
-	got, err := s.startThread(threadParams{})
+	got, err := s.startThread("", threadParams{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	prompt := s.threads[got.(ThreadInfo).ID].agent.SystemPrompt()
-	if strings.Contains(prompt, "Goals:") || strings.Contains(prompt, "atto goal set") {
-		t.Fatal("standalone prompt advertises unsupported goals")
+	if !strings.Contains(prompt, "atto goal") {
+		t.Fatal("server prompt does not advertise goals")
 	}
 }

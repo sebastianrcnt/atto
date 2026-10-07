@@ -46,6 +46,52 @@
 //	               a subagent's transcript (its own session), read only,
 //	               and its last message
 //
+// Revision 2 runs every thread in a session runtime with the terminal's
+// scheduling (see thread): steers, a queue, send-now, the goal, inbox
+// events, user shell commands, prompts and commands. More requests:
+//
+//	input/submit   {threadId, input, images?, intent?}  → {inputId?, status, turnId?}
+//	               the input as typed: intent auto (Enter: a turn, a steer,
+//	               queued while something else runs, "/command", "!shell",
+//	               empty: resume the queue or a held goal), queue (Tab),
+//	               replace (Ctrl+Enter: interrupt and send now) or steer.
+//	               status: started, steered, queued or done. images may
+//	               name a file of the image store instead of data.
+//	turn/unsteer   {threadId, inputId?}  → {inputId, text, images}  (the last when no ID)
+//	turn/interrupt {threadId, mode?}  → {interrupted}  (mode cancel: steers come
+//	               back instead of going out)
+//	queue/resume   {threadId}
+//	shell/start    {threadId, command, exclude?}; shell/interrupt {threadId}
+//	thread/attach  {threadId}  → thread + items (the client follows it)
+//	thread/detach  {threadId, reason?}  → {closed, stoppedJobs?, notices?}
+//	               the thread goes on; one with retention 0 that is left
+//	               idle closes (reason: clear, resume, exit)
+//	thread/close   {threadId, reason?}  → {closed, stoppedJobs?, notices?}
+//	thread/read    {threadId, offline?}  (offline: from the file, not loading it)
+//	thread/setModel, thread/setEffort  {..., saveDefault?}
+//	thread/setContextMode {threadId, contextMode: normal|long}
+//	thread/setName {threadId, name}; thread/setLabel {threadId, entryId, label}
+//	thread/navigate {threadId, entryId, summary?: {mode: none|auto|custom, instructions?}}
+//	thread/fork    {threadId, entryId}  → {path, input, images}
+//	thread/context {threadId, view?: system}  → ContextInfo
+//	thread/reload  {threadId}; thread/debugRequest {threadId} → {request}
+//	thread/handoff {threadId}  ("Run in background" without a daemon)
+//	goal/read, goal/set {input}, goal/edit {input}, goal/pause, goal/resume, goal/clear
+//	commands/list  {threadId}  → {commands: [CommandInfo]}; commands/run {threadId, name, args?}
+//	client/gate    {threadId, open}  (a picker of the client is open: automatic work waits)
+//	job/stopAll, timer/list, timer/create {when, message}, timer/cancel {id}
+//
+// and notifications: input/recovered {clientId, text, images, ifEmpty}
+// (input given back to the client that sent it), turn/activity {activity},
+// thread/status {jobs, timers}, thread/branchChanged (read the thread
+// again), thread/closed {reason, handoff}, thread/handedOff {line?,
+// finished?}, commands/changed, goal/retry {at}. turn/pending carries
+// items with IDs and paused; goal/updated the goal's state. Prompts
+// (prompt/open, prompt/answer, prompt/closed) are the runtime's own
+// questions: extension dialogs, MCP approvals, goal confirmations; every
+// client sees them and the first answer wins (a late one: reason
+// stalePrompt). With no client attached they wait.
+//
 // Notifications (all carry threadId):
 //
 //	turn/started   {turnId, startedAt, verb?}  (startedAt: Unix ms; verb: the word the terminal shows for "Working")
@@ -314,9 +360,17 @@ type Item struct {
 	// notice: "" (plain), "warning" or "error"; with Title, an info
 	// notice: Title, and Text under it.
 	Level string `json:"level,omitempty"`
-	// userMessage: the client that sent it, and its input ID.
-	ClientID string `json:"clientId,omitempty"`
-	InputID  string `json:"inputId,omitempty"`
+	// userMessage: the client that sent it, and its input ID; the user
+	// messages of one committed steer share SteerGroup.
+	ClientID   string `json:"clientId,omitempty"`
+	InputID    string `json:"inputId,omitempty"`
+	SteerGroup string `json:"steerGroup,omitempty"`
+	// notice of level "loaded": what the session loaded, or after a
+	// reload (Reloaded) what changed and what that did to the prompt.
+	Loaded   *core.Loaded  `json:"loaded,omitempty"`
+	Reloaded bool          `json:"reloaded,omitempty"`
+	Changes  []core.Change `json:"changes,omitempty"`
+	Note     string        `json:"note,omitempty"`
 }
 
 // ItemImage describes an image attached to a command's result: the file
@@ -405,6 +459,39 @@ type ThreadInfo struct {
 	// ExtensionUI, in thread/read and thread/resume results, is what the
 	// extensions show around the input (nil when nothing).
 	ExtensionUI *ExtensionUI `json:"extensionUi,omitempty"`
+
+	// Revision 2. RunKind is what runs (turn, compact, branchSummary) and
+	// Activity what it does; Jobs and Timers count the session's running
+	// jobs and pending timers. ReadOnly says why the session cannot be
+	// written (another process runs it); Offline marks a snapshot read
+	// from the file without loading the session. ServerInstance goes with
+	// EventID: the cursor.
+	RunKind        string    `json:"runKind,omitempty"`
+	Activity       *Activity `json:"activity,omitempty"`
+	Jobs           int       `json:"jobs,omitempty"`
+	Timers         int       `json:"timers,omitempty"`
+	ReadOnly       string    `json:"readOnly,omitempty"`
+	Offline        bool      `json:"offline,omitempty"`
+	SessionPath    string    `json:"sessionPath,omitempty"`
+	LongContext    bool      `json:"longContext,omitempty"`
+	ServerInstance string    `json:"serverInstanceId,omitempty"`
+}
+
+// Activity is what a run is doing, as the activity line shows it
+// (turn/activity).
+type Activity struct {
+	Phase        string `json:"phase"` // Thinking, Working, Retrying, Compacting context...
+	RunKind      string `json:"runKind"`
+	StartedAt    int64  `json:"startedAt"`
+	ToolsRunning int    `json:"toolsRunning"`
+}
+
+// Timer is a pending timer of the session (timer/list).
+type Timer struct {
+	ID       string `json:"id"`
+	Due      int64  `json:"due"` // Unix milliseconds
+	Message  string `json:"message"`
+	Schedule string `json:"schedule,omitempty"` // recurring
 }
 
 // SetModel fills in what a thread's info says of its model m; models is
@@ -478,6 +565,19 @@ type TurnInfo struct {
 type PendingInput struct {
 	Steers []string `json:"steers"`
 	Queued []string `json:"queued,omitempty"`
+	// Revision 2: each pending input with its ID (turn/unsteer takes it),
+	// and whether the queue is paused (after a failed turn).
+	Items  []PendingItem `json:"items,omitempty"`
+	Paused bool          `json:"paused,omitempty"`
+}
+
+// PendingItem is one pending input.
+type PendingItem struct {
+	ID       string      `json:"id"`
+	Kind     string      `json:"kind"` // steer or queued
+	Text     string      `json:"text"`
+	ClientID string      `json:"clientId,omitempty"`
+	Images   []ItemImage `json:"images,omitempty"`
 }
 
 // Job is a background job of the thread's session (package jobs).
@@ -544,6 +644,11 @@ type Prompt struct {
 	// input: the text so far and a placeholder.
 	Text        string `json:"text,omitempty"`
 	Placeholder string `json:"placeholder,omitempty"`
+
+	// Revision 2: who asks (extension, mcp, goal), and a select that is a
+	// yes/no confirmation.
+	Origin  string `json:"origin,omitempty"`
+	Confirm bool   `json:"confirm,omitempty"`
 }
 
 type PromptOption struct {
@@ -578,4 +683,8 @@ type GoalInfo struct {
 	// Held: an active goal waiting for the user to continue it ("/goal
 	// resume"), after a turn that took their input.
 	Held bool `json:"held,omitempty"`
+	// Revision 2: the goal itself, and when the running turn started (a
+	// client adds the time since to Seconds).
+	Goal          *goal.Goal `json:"state,omitempty"`
+	TurnStartedAt int64      `json:"turnStartedAt,omitempty"`
 }
