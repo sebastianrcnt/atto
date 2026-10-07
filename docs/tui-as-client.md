@@ -1,5 +1,10 @@
 # The TUI as a client of atto's execution server
 
+> **Removed in atto2.** The TUI (packages `app` and `tui`, daemon panes,
+> `atto attach`/`connect`/`agents`) was deleted after 1a9dc7a; atto2's UI
+> is a separate desktop client of the protocol. This document is kept as
+> the record of the runtime's design; see [atto2.md](atto2.md).
+
 Research/design, 2026-10-07. This is a plan for **atto's own protocol**, not
 Codex wire compatibility. Sections 1–6 are the design as written before the
 implementation (method names there are proposals); §7 records the decisions

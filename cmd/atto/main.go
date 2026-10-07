@@ -314,7 +314,7 @@ func main() {
 			os.Exit(2)
 		}
 		if len(positional) > 0 {
-			fmt.Fprintln(os.Stderr, "atto: atto has no interactive mode; run atto -p \"prompt\", or use the desktop or web client (atto serve)")
+			fmt.Fprintln(os.Stderr, "atto: there is no interactive mode; run atto -p \"prompt\", or use the desktop or web client (atto serve)")
 		} else {
 			fmt.Fprint(os.Stderr, shortUsage)
 		}

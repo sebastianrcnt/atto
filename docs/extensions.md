@@ -2,7 +2,7 @@
 
 An extension is a TypeScript or JavaScript file that atto loads into every
 session. It can watch and steer the agent's shell commands, add to prompts,
-add slash commands, and show things in the TUI. atto compiles it with esbuild
+add slash commands, and show things in atto's clients. atto compiles it with esbuild
 and runs it in an embedded JavaScript engine (goja); there is no Node.js, so
 `require`, `process` and npm modules that need Node are not available.
 
@@ -23,7 +23,7 @@ and runs it in an embedded JavaScript engine (goja); there is no Node.js, so
 names starting with `.` are ignored.
 
 **Project extensions need approval**, since a repository brings them: run
-`/extensions approve <name>` in the TUI or `atto extensions approve <name>`.
+`/extensions approve <name>` in a client or `atto extensions approve <name>`.
 The approval covers the code as it is (the bundle's hash, including the
 files it imports); any change needs approval again. An agent cannot approve
 from its shell. User extensions need no approval.
@@ -124,7 +124,8 @@ blocks wins before extensions see the call.
 
 When the model's response is complete and saved, atto fires `message_end`
 for its text (one block) and `reasoning_end` for its thinking (another),
-in the TUI, in `atto -p` and in the server alike. `model` is `provider/id`.
+in the session runtime (whatever client follows it) and in `atto -p`
+alike. `model` is `provider/id`.
 `blockId` names the block for as long as the session exists: it is built
 from the session entry of the response, so it is the same after a resume,
 and it cannot clash with a block of another session. (Events fire when the
@@ -137,23 +138,20 @@ An extension can change how a block is shown, never what the model sees:
 - `ctx.ui.setBlockStatus(blockId, text | null)`: a short dim suffix on the
   block's header ("translating…", "failed"). Each extension has its own.
 - `ctx.ui.setBlockDisplay(blockId, text | null)`: shows `text` (Markdown)
-  in place of the block's own text; `null` restores it. atto adds a line
-  under the block, `· shown: <extension> (click or ctrl+o to show original)`:
-  a click on that line flips that block between the replacement and the
-  original, and ctrl+o flips all of them. (Clicking the header still
-  expands and collapses a reasoning block.) The latest extension to set a
-  text owns it; only the owner can restore the original.
+  in place of the block's own text; `null` restores it. Clients say under
+  the block which extension replaced it and can show the original. The
+  latest extension to set a text owns it; only the owner can restore the
+  original.
 
 The model's context and the session's messages are never changed:
 requests are built from what the model wrote, and "copy last answer"
 copies the original. What the extension showed is saved in the session
 file as `block_display` entries (the status and text as last set), so a
 resumed session shows it without the extension running again; a result for
-a block that no longer exists (the session was switched meanwhile) is
-ignored, and the view does not jump when a block above it changes height.
-The web client (`atto serve`, and `/remote` from the TUI) shows them too,
-with a "show original" link under a replaced block; the server saves them
-the same way. In `atto -p` they do nothing and nothing is saved. Example,
+a block that no longer exists (the session was closed meanwhile) is
+ignored. The web client (`atto serve`, `/remote`) shows a "show original"
+link under a replaced block. In `atto -p` they do nothing and nothing is
+saved. Example,
 in a few lines:
 
 ```ts
@@ -188,7 +186,8 @@ p/m (1 failed)" per extension, and every call is a line in
 
 `ctx` (also `atto.ui`, `atto.session`, `atto.cwd` outside handlers):
 
-- `ctx.hasUI`: true in the TUI, false in `atto -p` and the server.
+- `ctx.hasUI`: true while an interactive client follows the session, false
+  in `atto -p` and with no client attached.
 - `ctx.cwd`, `ctx.session.id`, `ctx.session.model` (`provider/id`).
 - `ctx.session.name`: the session's name, `""` without one.
 - `ctx.session.messages(limit?)`: the conversation's text so far, oldest
@@ -196,8 +195,8 @@ p/m (1 failed)" per extension, and every call is a line in
   the current branch, without commands and their output; the last `limit`
   (default 50). Read from the session file, so a reply still streaming is
   not in it.
-- `ctx.session.setName(name)`: names the session, as `/name` does (the
-  terminal and the server; throws in `atto -p`).
+- `ctx.session.setName(name)`: names the session, as `/name` does (throws
+  in `atto -p`).
 - `ctx.ui.notify(text, level?)`: `info` (default), `warning`, `error`.
 - `ctx.ui.setStatus(key, text | null)`: an item in the status line.
 - `ctx.ui.setWidget(key, lines[] | null)`: lines shown above the input.
@@ -207,7 +206,7 @@ p/m (1 failed)" per extension, and every call is a line in
   the transcript for longer output, such as a diff or a report. It is display
   only (the model never sees it) and saved in the session, so a resumed
   session shows it again. While collapsed it shows the first `preview` lines
-  (default 10) and a "+N lines" row; click it or press ctrl+t to expand.
+  (default 10) and a "+N lines" row that expands it.
   `lang: "diff"` colours added lines green, removed lines red, `@@` lines
   cyan and file headers dim; any other value is plain text. The web client
   shows the same block; in `atto -p` the title and text arrive as a notice.
@@ -215,19 +214,22 @@ p/m (1 failed)" per extension, and every call is a line in
 - `ctx.ui.confirm(text)`: `Promise<boolean>`.
 - `ctx.ui.input(prompt)`: `Promise<string | undefined>`.
 
-Without a UI (`atto -p`, the server), `notify` goes to stderr (`-p`) or to
-the client as an `extension/notify` notification (server); status items and
-widgets are dropped (`-p`) or shown above the web client's input (server,
-as `/remote` shows the TUI's); `select` and `input` resolve to `undefined` and
-`confirm` to `false` at once. In the TUI, a dialog asked while another
-dialog is open gets that default answer too. Time the user spends on a
-dialog does not count against the handler timeout.
+In a session runtime, `notify` reaches every client as an
+`extension/notify` notification and status items and widgets as
+`extension/ui` (the web client shows them above its input). Dialogs are the
+runtime's prompts: every client of the session sees them, the first answer
+wins, and with no client attached they wait. A dialog asked while another
+is open gets its default answer at once: `select` and `input` resolve to
+`undefined`, `confirm` to `false`. In `atto -p` every dialog gets that
+default, `notify` goes to stderr and status items and widgets are dropped.
+Time the user spends on a dialog does not count against the handler
+timeout.
 
 ## Other APIs
 
 - `atto.registerCommand(name, {description?, handler(args, ctx)})`: a
-  slash command (`/name args`) in the TUI's command list, marked as the
-  extension's. A built-in command of the same name wins.
+  slash command (`/name args`) in the session's command list
+  (`commands/list`), marked as the extension's. A built-in command of the same name wins.
 - `atto.exec(command, {cwd?, timeout?})`: runs `command` with the agent's
   shell (bash, PowerShell on Windows); resolves to `{stdout, stderr, code,
   killed}`. `timeout` is in ms (default 60000); at it the command and its
@@ -252,8 +254,8 @@ dialog does not count against the handler timeout.
 - `fetch(url, {method?, headers?, body?, timeout?})` (also `atto.fetch`):
   resolves to `{status, ok, headers, text(), json()}`; rejects on network
   errors only. Bodies over 10 MiB are cut.
-- `atto.sendMessage(text)`: a user message to the model. In the TUI it
-  steers a running turn or starts one; in `-p` and the server it steers the
+- `atto.sendMessage(text)`: a user message to the model. In a session
+  runtime it steers a running turn or starts one; in `-p` it steers the
   running turn.
 - `atto.onDispose(fn)`: runs before the extension is unloaded (reload,
   exit); up to 1 s.
