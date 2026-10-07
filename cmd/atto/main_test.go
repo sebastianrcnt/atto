@@ -29,17 +29,6 @@ func TestUnknownCommand(t *testing.T) {
 	}
 }
 
-func TestInitialPrompt(t *testing.T) {
-	for _, args := range [][]string{{"fix the build"}, {"fix", "the", "build"}} {
-		if got := initialPrompt(args); got != "fix the build" {
-			t.Errorf("%q -> %q", args, got)
-		}
-	}
-	if initialPrompt(nil) != "" {
-		t.Error("no words, no prompt")
-	}
-}
-
 func TestEditDistance(t *testing.T) {
 	for _, c := range []struct {
 		a, b string
@@ -51,25 +40,6 @@ func TestEditDistance(t *testing.T) {
 	}
 }
 
-func TestResumeArgs(t *testing.T) {
-	cases := []struct{ in, want string }{
-		{"atto resume", "atto -resume"},
-		{"atto resume ab12", "atto -session ab12"},
-		{"atto resume -m x ab12", "atto -m x -session ab12"},
-		{"atto resume -m x", "atto -m x -resume"},
-	}
-	for _, c := range cases {
-		got := strings.Join(resumeArgs(strings.Fields(c.in)), " ")
-		if got != c.want {
-			t.Errorf("%q: got %q, want %q", c.in, got, c.want)
-		}
-	}
-	if !nestedRefused["resume"] {
-		t.Error("resume starts an agent and must be refused inside one")
-	}
-}
-
-// The agent may reload its own session and look at what it loaded.
 func TestNestedAllowsReloadAndContext(t *testing.T) {
 	for _, cmd := range []string{"reload", "context"} {
 		if nestedRefused[cmd] {
@@ -108,6 +78,15 @@ func TestNestedAllowsAgent(t *testing.T) {
 // "atto -h" is the only place the subcommands are listed, so a new one that
 // is not mentioned there is invisible: every command a user can run must
 // appear in the usage text (hidden ones, "_foo", are deliberately not).
+// The removed terminal UI's commands are gone, not just unlisted.
+func TestNoTerminalUICommands(t *testing.T) {
+	for _, cmd := range []string{"attach", "connect", "agents", "resume"} {
+		if subcommands()[cmd] != nil {
+			t.Errorf("%s is a terminal UI command and was removed", cmd)
+		}
+	}
+}
+
 func TestUsageListsEverySubcommand(t *testing.T) {
 	listed := map[string]bool{}
 	for f := range strings.FieldsSeq(strings.ReplaceAll(usage, "|", " ")) {

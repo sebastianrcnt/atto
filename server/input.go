@@ -321,7 +321,7 @@ func (t *thread) interrupt(mode string) bool {
 }
 
 // readOnlyAllowed are the commands that work on a read-only session.
-var readOnlyAllowed = []string{"quit", "exit", "resume", "clear", "tui"}
+var readOnlyAllowed = []string{"quit", "exit", "resume", "clear"}
 
 func readOnlyCommand(text string) bool {
 	rest, ok := strings.CutPrefix(text, "/")

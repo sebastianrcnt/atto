@@ -60,10 +60,10 @@ func workerFor(o PrintOptions) (daemon.Worker, bool) {
 // json (the result object).
 func printViaWorker(o PrintOptions, w daemon.Worker, out, errOut io.Writer) error {
 	if o.Format == "stream-json" {
-		return errors.New("this session runs in the atto daemon: use -output-format text or json, or atto connect")
+		return errors.New("this session runs in the atto daemon: use -output-format text or json, or a client of the session")
 	}
 	if o.Goal != "" || len(o.Images) > 0 || o.Model != "" || o.Effort != "" || o.MaxSteps > 0 {
-		return errors.New("this session runs in the atto daemon: -goal, -image, -m, -effort and -max-steps are not taken there; use atto connect")
+		return errors.New("this session runs in the atto daemon: -goal, -image, -m, -effort and -max-steps are not taken there; use a client of the session")
 	}
 	nc, err := daemon.DialWorker(w)
 	if err != nil {

@@ -34,7 +34,7 @@ const sessionsUsage = `usage:
                                                             inbox, goal and unshared images
 
 -all lists every directory, -archived the archive, -json prints JSON.
-An <id> may be a unique prefix. Resume one with: atto resume <id>.
+An <id> may be a unique prefix. Continue one with: atto -p -session <id> "...".
 The full transcript: atto history show -session <id> <n>.
 Inside an atto agent only list and show are allowed.`
 

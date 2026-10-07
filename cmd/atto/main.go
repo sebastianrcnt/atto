@@ -1,4 +1,6 @@
-// Command atto is a terminal coding harness.
+// Command atto is a coding harness: the session runtime, its servers and
+// the command line the agent and scripts use. Its user interface is a
+// separate desktop client that speaks atto's protocol.
 package main
 
 import (
@@ -7,13 +9,11 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"runtime"
 	"slices"
 	"sort"
 	"strings"
 
 	"github.com/sebastianrcnt/atto/agent"
-	"github.com/sebastianrcnt/atto/app"
 	"github.com/sebastianrcnt/atto/cli"
 	"github.com/sebastianrcnt/atto/config"
 	"github.com/sebastianrcnt/atto/daemon"
@@ -21,38 +21,30 @@ import (
 	"github.com/sebastianrcnt/atto/provider"
 	"github.com/sebastianrcnt/atto/server"
 	"github.com/sebastianrcnt/atto/update"
-	"golang.org/x/term"
 )
 
-const usage = `atto — a terminal coding harness
+const usage = `atto — a coding harness
 
 usage:
-  atto [flags]                      interactive session
-  atto [flags] "prompt"             interactive session, starting with this message
   atto -p [flags] "prompt"          run one prompt and print the result
   cat file | atto -p "explain"      stdin is appended to the prompt
   atto -p -image shot.png "why?"    attach an image (repeatable); an image on
                                     stdin is attached too
   atto models [refresh]             list available models
   atto auth set <provider>          store an API key
-  atto login [provider]             sign in (ChatGPT, …); /login inside atto
+  atto login [provider]             sign in (ChatGPT, …)
   atto logout <provider>            remove stored credentials
-  atto resume [id]                  resume a session (no id: pick one)
-  atto attach [ID] | attach -l      return to an atto running in the daemon
-                                    (closed terminal, SSH drop, /detach)
-  atto connect [session]            open a session the daemon runs as a client of
-                                    its worker, alongside any other terminal
-  atto agents                       every atto the daemon runs, with goals and
-                                    subagents; enter attaches (← in atto too)
-  atto daemon [status|kill|stop]    the daemon interactive atto runs in
+  atto app-server                   atto's protocol (JSON-RPC) over stdio, for clients
+  atto serve [-listen addr]         the protocol over HTTP + SSE, with a web client
+  atto daemon [status|stop]         the daemon that runs session workers
   atto sessions [list|show|rename|archive|unarchive|delete]
                                     manage saved sessions (atto sessions -h)
   atto history grep|show ...        search a session transcript
   atto job|monitor|timer|sleep ...  background jobs and wake-ups (atto job for details)
-  atto goal [status|set|complete|...]  the session goal (or /goal, -goal)
+  atto goal [status|set|complete|...]  the session goal (or -goal)
   atto view <image>...              from the agent's shell: show the model an image file
-  atto agent start|steer|next|wait|report|list|stop ...
-                                    subagents: background child sessions (atto agent -h)
+  atto agent spawn|task|send|wait|report|list|close ...
+                                    agents: background child sessions (atto agent -h)
   atto context [-json]              what a session here loads: AGENTS.md, skills,
                                     hooks, settings, model
   atto reload                       from the agent's shell: reload AGENTS.md, skills,
@@ -63,18 +55,32 @@ usage:
                                     JavaScript/TypeScript extensions (docs: atto extensions docs)
   atto update [-check]              install the latest release
   atto channel [stable|edge]        show or switch the release channel this build follows
-  atto serve [-listen addr]         JSON-RPC over HTTP + SSE, with a web client
-  atto app-server                   JSON-RPC over stdio (JSON lines)
+
+atto has no terminal UI: use the desktop client, the web client (atto serve)
+or atto -p.
 
 flags:
 `
 
+// shortUsage is what atto with no arguments prints.
+const shortUsage = `atto — a coding harness
+
+  atto -p "prompt"     run one prompt and print the result
+  atto serve           the web client, over HTTP
+  atto app-server      atto's protocol over stdio, for clients
+  atto -h              every command and flag
+
+atto has no terminal UI: its user interface is the desktop client, which
+speaks atto's protocol (atto app-server). The web client (atto serve) and
+atto -p work without it.
+`
+
 // nestedRefused are the commands an atto agent may not run from its shell:
 // starting another agent (which would recurse and spend tokens unseen) or
-// changing credentials. "" is atto itself (interactive or -p). Commands
+// changing credentials. "" is atto itself (atto -p). Commands
 // that work on the agent's own session (history, job, goal, reload...) or
 // only read (context, models) are allowed.
-var nestedRefused = map[string]bool{"": true, "attach": true, "connect": true, "agents": true, "daemon": true, "_daemon": true, "_session-server": true, "serve": true, "app-server": true, "resume": true, "login": true, "logout": true, "auth": true, "update": true, "channel": true, "_continue": true}
+var nestedRefused = map[string]bool{"": true, "daemon": true, "_daemon": true, "_session-server": true, "serve": true, "app-server": true, "login": true, "logout": true, "auth": true, "update": true, "channel": true, "_continue": true}
 
 func refuseNested(cmd string) {
 	if !config.InAgent() || !nestedRefused[cmd] {
@@ -124,9 +130,6 @@ func subcommands() map[string]func([]string, io.Writer) error {
 		"_supervise":  cli.RunSupervise,
 		"_shell":      cli.RunShellHost,
 		"_continue":   cli.RunContinue,
-		"attach":      cli.RunAttach,
-		"connect":     cli.RunConnect,
-		"agents":      cli.RunAgents,
 		"daemon":      cli.RunDaemon,
 		"_daemon":     cli.RunDaemonServe,
 		"_session-server": func(args []string, _ io.Writer) error {
@@ -229,42 +232,12 @@ func parseInterleaved(fs *flag.FlagSet, args []string) []string {
 	}
 }
 
-// initialPrompt joins positional words into the first message, so
-// atto fix the build and atto "fix the build" start the same session.
-func initialPrompt(positional []string) string { return strings.Join(positional, " ") }
-
-// resumeArgs rewrites "atto resume [id] [flags]" into the flags it means:
-// -session <id>, or -resume for the picker. Other flags pass through.
-func resumeArgs(args []string) []string {
-	out := []string{args[0]}
-	var id string
-	for i, a := range args[2:] {
-		// A bare word right after -m or -effort is that flag's value.
-		valueOf := i > 0 && (args[i+1] == "-m" || args[i+1] == "-effort")
-		if id == "" && !strings.HasPrefix(a, "-") && !valueOf {
-			id = a
-			continue
-		}
-		out = append(out, a)
-	}
-	if id != "" {
-		return append(out, "-session", id)
-	}
-	return append(out, "-resume")
-}
-
 func main() {
-	daemon.ConsumePaneToken()
 	update.Cleanup()
 	mcp.Version = update.Current()
 	// This binary serves `atto _shell`, so the agent's commands can run
 	// under shell hosts and move to the background.
 	agent.ShellHost = true
-	if len(os.Args) > 1 && os.Args[1] == "resume" {
-		// Not a subcommand function: it starts the TUI, like -resume / -session.
-		refuseNested("resume")
-		os.Args = resumeArgs(os.Args)
-	}
 	if len(os.Args) > 1 {
 		refuseNested(os.Args[1])
 		sub := subcommands()[os.Args[1]]
@@ -293,8 +266,6 @@ func main() {
 	effort := fs.String("effort", "", "reasoning effort for this run")
 	cont := fs.Bool("c", false, "continue the most recent session in this directory")
 	sessionID := fs.String("session", "", "continue the session with this ID")
-	resume := fs.Bool("resume", false, "pick a saved session to resume (interactive)")
-	inline := fs.Bool("inline", false, "render inline in the main screen instead of fullscreen")
 	format := fs.String("output-format", "text", "print mode output: text, json or stream-json")
 	partial := fs.Bool("include-partial", false, "stream-json: also emit text and reasoning deltas")
 	verbose := fs.Bool("v", false, "print mode: show tool activity on stderr")
@@ -304,6 +275,10 @@ func main() {
 	var imagePaths stringList
 	fs.Var(&imagePaths, "image", "print mode: attach the image file at `path` (PNG, JPEG, GIF or WebP) to the prompt; repeatable.\nAn image piped to stdin is attached as well. The model must accept images")
 
+	if len(os.Args) == 1 {
+		fmt.Print(shortUsage)
+		return
+	}
 	positional := parseInterleaved(fs, os.Args[1:])
 
 	if *showVersion {
@@ -338,17 +313,12 @@ func main() {
 			fmt.Fprintln(os.Stderr, msg)
 			os.Exit(2)
 		}
-		if useDaemon() {
-			code, note, derr := daemon.Run(daemon.Hello{Op: "new", Args: os.Args[1:], Cwd: cwd(), Env: os.Environ()})
-			if derr == nil {
-				if note != "" {
-					fmt.Fprintln(os.Stderr, note)
-				}
-				os.Exit(code)
-			}
-			fmt.Fprintf(os.Stderr, "atto: running without the daemon: %v\n", derr)
+		if len(positional) > 0 {
+			fmt.Fprintln(os.Stderr, "atto: atto has no interactive mode; run atto -p \"prompt\", or use the desktop or web client (atto serve)")
+		} else {
+			fmt.Fprint(os.Stderr, shortUsage)
 		}
-		err = app.Run(app.Options{Prompt: initialPrompt(positional), Inline: *inline, Continue: *cont, Resume: *resume, Model: *model, Session: *sessionID, Effort: *effort})
+		os.Exit(2)
 	}
 	if errors.Is(err, cli.ErrPrintFailed) {
 		os.Exit(1)
@@ -357,23 +327,4 @@ func main() {
 		fmt.Fprintln(os.Stderr, "atto:", err)
 		os.Exit(1)
 	}
-}
-
-// useDaemon reports whether interactive atto should run in a pane of the
-// daemon (package daemon): on a terminal, not already in a pane, unless
-// turned off.
-func useDaemon() bool {
-	if runtime.GOOS == "windows" || os.Getenv(daemon.EnvPane) != "" || os.Getenv("ATTO_NO_DAEMON") != "" {
-		return false
-	}
-	if !term.IsTerminal(int(os.Stdin.Fd())) || !term.IsTerminal(int(os.Stdout.Fd())) {
-		return false
-	}
-	s, err := config.LoadSettings()
-	return err != nil || s.DaemonOn()
-}
-
-func cwd() string {
-	d, _ := os.Getwd()
-	return d
 }

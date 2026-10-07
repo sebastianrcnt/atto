@@ -3,11 +3,9 @@ module github.com/sebastianrcnt/atto
 go 1.27.1
 
 require (
-	github.com/creack/pty v1.1.24
 	github.com/dop251/goja v0.0.0-20261004200024-481fdb442bb4
 	github.com/evanw/esbuild v0.28.2
 	github.com/modelcontextprotocol/go-sdk v1.6.0
-	github.com/rivo/uniseg v0.4.7
 	golang.org/x/image v0.45.0
 	golang.org/x/sys v0.48.0
 	golang.org/x/term v0.46.0

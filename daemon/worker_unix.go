@@ -29,12 +29,11 @@ import (
 	"github.com/sebastianrcnt/atto/session"
 )
 
-// Session workers. Besides panes, the daemon runs one worker per session
-// a terminal shows: "atto _session-server", the session's runtime
-// (package server) behind a Unix socket of its own. A pane's TUI is a
-// client of the worker, so closing the terminal, or the TUI crashing,
-// ends a view and never the work; any number of terminals can show the
-// same session, each with its own editor. The daemon finds or starts the
+// Session workers. The daemon runs one worker per session a client opens:
+// "atto _session-server", the session's runtime (package server) behind
+// a Unix socket of its own. Closing a client, or a client crashing, ends
+// a view and never the work; any number of clients can follow the same
+// session. The daemon finds or starts the
 // worker of a session (one per session: it holds the session's writer
 // lease) and forgets it when it exits. A worker exits when its session
 // closes: explicitly, or once it has been idle with no client for the
@@ -44,7 +43,7 @@ import (
 // is ready.
 const workerStartWait = 20 * time.Second
 
-// defaultRetention is how long an idle session no terminal shows stays.
+// defaultRetention is how long an idle session no client follows stays.
 const defaultRetention = time.Minute
 
 // worker is a running session worker, in the daemon.
@@ -85,9 +84,7 @@ func (d *daemon) startWorker(h Hello) workerAnswer {
 	args = append(args, h.Args...)
 	cmd := exec.Command(d.exe, args...)
 	cmd.Dir = h.Cwd
-	cmd.Env = slices.DeleteFunc(slices.Clone(h.Env), func(e string) bool {
-		return strings.HasPrefix(e, EnvPane+"=") || strings.HasPrefix(e, EnvPaneToken+"=")
-	})
+	cmd.Env = h.Env
 	out, err := cmd.StdoutPipe()
 	if err != nil {
 		return workerAnswer{Error: err.Error()}
@@ -143,7 +140,7 @@ func (d *daemon) startWorker(h Hello) workerAnswer {
 		if d.workers[w.info.Session] == w {
 			delete(d.workers, w.info.Session)
 		}
-		if len(d.panes) == 0 && len(d.workers) == 0 {
+		if len(d.workers) == 0 {
 			d.idle.Reset(d.idleAfter)
 		}
 		d.mu.Unlock()

@@ -141,7 +141,7 @@ func (t *thread) startBackgroundRun() {
 	if name == "" {
 		name = t.id
 	}
-	line := fmt.Sprintf("Running in background: %s · atto resume %s to check · log: %s", name, t.id, log)
+	line := fmt.Sprintf("Running in background: %s · atto sessions show %s to check · log: %s", name, t.id, log)
 	t.publish("thread/handedOff", map[string]any{"line": line})
 	// The background run owns the session, its jobs and its goal now:
 	// close without ending any of it.

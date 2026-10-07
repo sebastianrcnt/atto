@@ -17,8 +17,8 @@ import (
 
 // Slash commands. The runtime runs the ones that act on the session (they
 // may be queued behind a turn, and work the same from every client);
-// Local ones are the terminal's own (pickers, the renderer, quitting) and
-// clients that have no such thing say so. commands/list is the whole
+// Local ones are the client's own (pickers, copying, signing in, leaving)
+// and clients that have no such thing say so. commands/list is the whole
 // catalog: built-in commands, then the extensions' and one /skill:<name>
 // per skill.
 
@@ -33,13 +33,12 @@ type CommandInfo struct {
 	Ext    string `json:"extension,omitempty"`
 }
 
-// Builtins are atto's built-in commands, in the order the terminal lists
-// them.
+// Builtins are atto's built-in commands, in the order clients list them.
 var Builtins = []CommandInfo{
 	{Name: "model", Args: "[id]", Desc: "Switch model"},
-	{Name: "effort", Args: "[level]", Desc: "Set reasoning effort (also shift+tab)"},
+	{Name: "effort", Args: "[level]", Desc: "Set reasoning effort"},
 	{Name: "compact", Desc: "Compact the conversation into handoff notes"},
-	{Name: "copy", Desc: "Copy the last answer (works over SSH via OSC 52)", Local: true},
+	{Name: "copy", Desc: "Copy the last answer", Local: true},
 	{Name: "context", Args: "[system|long|normal]", Desc: "Show what fills the context and cache use"},
 	{Name: "reload", Desc: "Re-read AGENTS.md, skills, hooks, extensions, settings and models"},
 	{Name: "extensions", Args: "[approve <name>]", Desc: "List extensions, or approve a project extension"},
@@ -47,9 +46,9 @@ var Builtins = []CommandInfo{
 	{Name: "debug", Desc: "Save a heap profile and memory figures to ~/.atto/debug", Local: true},
 	{Name: "login", Args: "[provider]", Desc: "Sign in with an account or save an API key", Local: true},
 	{Name: "logout", Args: "[provider]", Desc: "Remove stored credentials", Local: true},
-	{Name: "resume", Desc: "Resume a saved conversation (the agent center's Inactive tab)", Local: true},
+	{Name: "resume", Desc: "Resume a saved conversation", Local: true},
 	{Name: "sessions", Desc: "Pick, archive, rename or preview saved conversations", Local: true},
-	{Name: "tree", Desc: "Go back to any point of the conversation (also esc esc)", Local: true},
+	{Name: "tree", Desc: "Go back to any point of the conversation", Local: true},
 	{Name: "fork", Desc: "Start a new conversation from an earlier message", Local: true},
 	{Name: "name", Args: "<name>", Desc: "Name this conversation"},
 	{Name: "rename", Args: "<name>", Desc: "Rename this conversation"},
@@ -59,14 +58,12 @@ var Builtins = []CommandInfo{
 	{Name: "stop", Desc: "Stop all background jobs"},
 	{Name: "timer", Args: "<when> <msg>", Desc: "Wake the agent later (10m, 15:30)"},
 	{Name: "timers", Desc: "List pending timers", Local: true},
-	{Name: "tui", Args: "[auto|fullscreen|inline]", Desc: "Choose the renderer (fullscreen or inline)", Local: true},
 	{Name: "remote", Args: "[on [port]|off]", Desc: "Control this session from a phone or browser (QR code)", Local: true},
 	{Name: "clear", Desc: "Start a new conversation", Local: true},
-	{Name: "agents", Desc: "Every atto session, its goal and subagents (also ← on an empty prompt)", Local: true},
-	{Name: "detach", Desc: "Leave atto running in the daemon (atto attach returns)", Local: true},
+	{Name: "agents", Desc: "Every atto session, its goal and subagents", Local: true},
 	{Name: "close", Desc: "End this session: stop what it runs, then exit", Local: true},
-	{Name: "quit", Desc: "Exit atto", Local: true},
-	{Name: "exit", Desc: "Exit atto", Local: true},
+	{Name: "quit", Desc: "Leave the session (it goes on while it has work)", Local: true},
+	{Name: "exit", Desc: "Leave the session (it goes on while it has work)", Local: true},
 }
 
 func init() {
