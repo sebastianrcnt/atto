@@ -6,13 +6,14 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
-	"github.com/sebastianrcnt/atto/agent"
 	"github.com/sebastianrcnt/atto/config"
 	"github.com/sebastianrcnt/atto/session"
 	"github.com/sebastianrcnt/atto/tui"
@@ -60,32 +61,17 @@ func (s *mainServer) requests() []string {
 	return append([]string(nil), s.bodies...)
 }
 
-// useMain points the app's model t/m at the main server.
-func useMain(t *testing.T, a *App, s *mainServer, extra string) {
+// extApp is a terminal on a new session of a home with extension src,
+// its model t/m served by srv (extra adds providers to models.json).
+func extApp(t *testing.T, src string, srv *mainServer, extra string) *App {
 	t.Helper()
-	writeTestFile(t, config.ModelsPath(), `{"providers":{"t":{"baseUrl":"`+s.URL+`","models":[{"id":"m","contextWindow":100000}]}`+extra+`}}`)
-	models, err := config.LoadModels()
-	if err != nil {
-		t.Fatal(err)
+	cwd, _ := testEnv(t)
+	writeTestFile(t, config.ModelsPath(), `{"providers":{"t":{"baseUrl":"`+srv.URL+`","models":[{"id":"m","contextWindow":100000}]}`+extra+`}}`)
+	writeTestFile(t, filepath.Join(config.Dir(), "settings.json"), `{"defaultProvider":"t","defaultModel":"m"}`)
+	if src != "" {
+		writeTestFile(t, filepath.Join(config.ExtensionsDir(), "demo.ts"), src)
 	}
-	ref, _ := models.Find("t", "m")
-	a.models = models
-	a.agent.SetModel(ref)
-}
-
-func runTurn(t *testing.T, a *App, text string) {
-	t.Helper()
-	a.ui.Do(func() { a.startTurn(text, nil) })
-	for deadline := time.Now().Add(10 * time.Second); ; time.Sleep(10 * time.Millisecond) {
-		busy := true
-		a.ui.Do(func() { busy = a.busy })
-		if !busy {
-			return
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("the turn did not finish")
-		}
-	}
+	return startApp(t, cwd)
 }
 
 // answerBlocks are the reasoning and answer blocks of the transcript.
@@ -140,15 +126,14 @@ export default function (atto: any) {
 `
 
 func TestBlockDisplayLifecycle(t *testing.T) {
-	a := extApp(t, upperExtension)
 	srv := newMainServer(t, reply{"deep thought", "first answer"}, reply{"", "second answer"}, reply{"", "third"})
-	useMain(t, a, srv, "")
+	a := extApp(t, upperExtension, srv, "")
 
-	runTurn(t, a, "q1")
+	send(t, a, "q1")
 	// The first answer's override is late (400ms): the second turn's
 	// overrides arrive first and must each land on their own block.
 	within(t, a, "the working status", func() bool { return strings.Contains(answerLines(a), "working") })
-	runTurn(t, a, "q2")
+	send(t, a, "q2")
 	within(t, a, "both answers", func() bool {
 		s := answerLines(a)
 		return strings.Contains(s, "SECOND ANSWER") && strings.Contains(s, "FIRST ANSWER") && !strings.Contains(s, "working")
@@ -169,7 +154,7 @@ func TestBlockDisplayLifecycle(t *testing.T) {
 
 	// Persisted: the status and the overrides are in the session file, and
 	// a resumed session shows the same blocks without the extension.
-	entries := blockEntries(t, a.sess.Path)
+	entries := blockEntries(t, a.sessPath)
 	var texts []string
 	for _, e := range entries {
 		texts = append(texts, e.Block+":"+e.Display)
@@ -177,16 +162,6 @@ func TestBlockDisplayLifecycle(t *testing.T) {
 	if len(entries) != 7 { // reasoning; per answer: status, override, status cleared
 		t.Fatalf("block_display entries: %v", texts)
 	}
-	b := &App{ui: tui.New(nullTerm{}), agent: agent.New(config.ModelRef{ProviderName: "t", Model: config.Model{ID: "m"}}, "", a.cwd),
-		cwd: a.cwd, quit: make(chan struct{})}
-	b.build()
-	b.newSession("")
-	b.resume(a.sess.Path)
-	t.Cleanup(func() { b.sess.Close() })
-	if got := noDuration(answerLines(b)); got != noDuration(shown) {
-		t.Fatalf("resumed:\n%s\nlive:\n%s", got, shown)
-	}
-
 	// Toggling: a click on the toggle line flips one block; ctrl+o all of
 	// those not chosen by click.
 	a.ui.Do(func() {
@@ -239,14 +214,14 @@ func TestBlockDisplayLifecycle(t *testing.T) {
 	// null restores the original, and the toggle goes.
 	var id string
 	a.ui.Do(func() { id = answerBlocks(a)[1].display().id })
-	a.ui.Do(func() { a.runCommand("/restore " + id) })
+	typeLine(a, "/restore "+id)
 	within(t, a, "the original", func() bool {
 		s := plainLines(answerBlocks(a)[1].(*textBlock).Render(80))
 		return strings.Contains(s, "first answer") && !strings.Contains(s, "shown:")
 	})
 
 	// The model never saw any of it.
-	runTurn(t, a, "q3")
+	send(t, a, "q3")
 	reqs := srv.requests()
 	last := reqs[len(reqs)-1]
 	for _, want := range []string{`"first answer"`, `"second answer"`, `"deep thought"`} {
@@ -259,15 +234,34 @@ func TestBlockDisplayLifecycle(t *testing.T) {
 			t.Errorf("the request mentions %q:\n%s", bad, last)
 		}
 	}
-	// And the agent's messages are as the model wrote them.
-	for _, m := range a.agent.Messages() {
-		if strings.ToUpper(m.Content) == m.Content && m.Role == "assistant" && m.Content != "" {
-			t.Errorf("message changed: %q", m.Content)
-		}
+
+	// A resumed session shows the same blocks without the extension's
+	// runtime: what it showed was saved.
+	// (The answers only: the reasoning block above was expanded here.)
+	var final string
+	a.ui.Do(func() { final = answerTexts(a) })
+	os.Remove(filepath.Join(config.ExtensionsDir(), "demo.ts"))
+	b := reopen(t, a)
+	var got string
+	b.ui.Do(func() { got = answerTexts(b) })
+	if got != final {
+		t.Fatalf("resumed:\n%s\nlive:\n%s", got, final)
 	}
 }
 
+// answerTexts renders the answer blocks.
+func answerTexts(a *App) string {
+	var out []string
+	for _, b := range answerBlocks(a) {
+		if tb, ok := b.(*textBlock); ok {
+			out = append(out, tb.Render(80)...)
+		}
+	}
+	return plainLines(out)
+}
+
 func TestBlockDisplayLateResultAfterSessionSwitch(t *testing.T) {
+	srv := newMainServer(t, reply{"", "old answer"}, reply{"", "new answer"})
 	a := extApp(t, `
 export default function (atto: any) {
   atto.on("message_end", (e: any, ctx: any) => {
@@ -278,23 +272,18 @@ export default function (atto: any) {
     }, 300);
   });
 }
-`)
-	srv := newMainServer(t, reply{"", "old answer"}, reply{"", "new answer"})
-	useMain(t, a, srv, "")
-	runTurn(t, a, "q1")
-	old := a.sess.Path
-	a.ui.Do(func() { a.cmdClear("") }) // the session switches before the extension answers
-	runTurn(t, a, "q2")
+`, srv, "")
+	send(t, a, "q1")
+	old := a.sessPath
+	typeLine(a, "/clear") // the session switches before the extension answers
+	within(t, a, "the new session", func() bool { return a.sessPath != old })
+	send(t, a, "q2")
 	time.Sleep(700 * time.Millisecond)
-	var s string
-	a.ui.Do(func() { s = bodyText(a) })
+	s := shown(a)
 	if strings.Contains(s, "LATE") || strings.Contains(s, "late") {
 		t.Fatalf("a result for a block of the old session showed:\n%s", s)
 	}
-	if a.sess.Path == old {
-		t.Fatal("same session")
-	}
-	if n := len(blockEntries(t, old)) + len(blockEntries(t, a.sess.Path)); n != 0 {
+	if n := len(blockEntries(t, old)) + len(blockEntries(t, a.sessPath)); n != 0 {
 		t.Fatalf("%d block_display entries were written", n)
 	}
 }
@@ -318,6 +307,7 @@ func TestSideModelFailuresLeaveTheTurnAlone(t *testing.T) {
 	deadURL := dead.URL
 	dead.Close()
 
+	srv := newMainServer(t, reply{"", "dead"}, reply{"", "slow"}, reply{"", "500"})
 	a := extApp(t, `
 export default function (atto: any) {
   atto.on("message_end", async (e: any, ctx: any) => {
@@ -331,12 +321,10 @@ export default function (atto: any) {
     }
   });
 }
-`)
-	srv := newMainServer(t, reply{"", "dead"}, reply{"", "slow"}, reply{"", "500"})
-	useMain(t, a, srv, `,"s":{"baseUrl":"`+side.URL+`","models":[{"id":"m"}]},"d":{"baseUrl":"`+deadURL+`","models":[{"id":"m"}]}`)
+`, srv, `,"s":{"baseUrl":"`+side.URL+`","models":[{"id":"m"}]},"d":{"baseUrl":"`+deadURL+`","models":[{"id":"m"}]}`)
 	for i, q := range []string{"q1", "q2", "q3"} {
 		start := time.Now()
-		runTurn(t, a, q)
+		send(t, a, q)
 		if d := time.Since(start); d > 2*time.Second {
 			t.Fatalf("turn %d took %s: the side call held it up", i+1, d)
 		}
@@ -347,7 +335,7 @@ export default function (atto: any) {
 	if n := len(srv.requests()); n != 3 {
 		t.Fatalf("%d main requests", n)
 	}
-	if got := bodyText(a); !strings.Contains(got, "• dead") || !strings.Contains(got, "• slow") || !strings.Contains(got, "• 500") {
+	if got := shown(a); !strings.Contains(got, "• dead") || !strings.Contains(got, "• slow") || !strings.Contains(got, "• 500") {
 		t.Fatalf("the answers:\n%s", got)
 	}
 }

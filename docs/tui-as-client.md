@@ -760,6 +760,56 @@ follows these, and later changes should update this section.
    started (documented gap; no journal).
 8. **Windows** keeps the in-process runtime; no durable transport.
 
+## 8. Implementation status (first draft)
+
+**A — contract.** `initialize` negotiates `protocolVersions` (revision 2),
+returns `serverInstanceId` and `clientId`; errors carry `data.reason`.
+`provider/providertest` is the scripted model every protocol and TUI test
+uses (gates, slow streams, request bodies).
+
+**B — hub and client.** `server/hub.go` is the one event hub for every
+transport; each notification carries `eventId`. `ServeConn` serves a
+JSON-lines client (pipe, stdio, socket) with a client ID; EOF detaches.
+`server.Client` is the Go client (ordered unbounded event queue, `Connect`
+for the same process); `ThreadView` reduces snapshot + events exactly once.
+Items are lossless for the TUI (`TranscriptItem`), and a late block ID
+arrives as `item/updated`.
+
+**C/D — the runtime.** `server/runtime.go` and friends: a lane per thread
+runs requests, agent events, inbox ticks, timers and extension calls in
+order; the TUI's scheduling was ported, not re-invented (input intents,
+IDs, takeback, send-now, Esc vs Ctrl+C, queue pause, inbox priorities with
+the picker gate, GoalDriver with retries, user shell with deferred context,
+prompts, commands catalog and dispatch, tree navigation with summaries,
+fork, labels, reload, context, debug request, the legacy handoff, and
+attach/detach/close with retirement). The standalone server now runs goals.
+Notices are items (kept for snapshots while the runtime lives).
+
+**E — TUI as client.** `app/client.go`, `notify.go`, `prompts.go`: App owns
+no agent, writer, hooks, extensions, MCP, goal or inbox; it renders the
+notifications (items through `TranscriptItem` into the existing blocks) and
+sends requests from a single ordered request goroutine (the UI never waits).
+Without the daemon the runtime runs in-process (`server.Connect`), with
+`Retire` and retention 0: a session left by /clear or /resume goes on while
+busy and closes (SessionEnd, jobs stopped) once idle, and exit closes all
+sessions with reason `exit`. `server.Live` is gone: `/remote` is a scoped
+HTTP gateway over the same runtime (`server.Scope`).
+
+Behaviour changes in E: /clear and /resume no longer interrupt or queue
+behind a running turn — the old session finishes in the background (in the
+same process) and then ends; the web client of /remote no longer sees the
+terminal's own pickers (only the runtime's prompts); runtime notices are
+also shown to other clients and kept in snapshots; the Loaded block lists
+extensions; `noModel` on Enter still restores the draft locally.
+
+Tests: execution semantics moved to `server/runtime_test.go`; the app keeps
+rendering tests (driven through the protocol form of items), live-vs-resume
+parity tests and end-to-end tests of the main flows (`app/client_test.go`).
+Deleted app tests whose subject moved and that were not ported one-to-one:
+goal (25 cases; partly covered by server and e2e tests), exit menu/handoff
+variants, hooks Notification cases, branch summary on navigate, context mode,
+inbox requeue, archive lease. These are the main coverage gaps.
+
 ## Source map
 
 Primary ownership/input: `app/app.go`, `queue.go`, `goal.go`, `inbox.go`,

@@ -1,16 +1,15 @@
 package app
 
 import (
-	"fmt"
+	"encoding/json"
 	"os"
 	"strings"
 	"time"
 
 	"golang.org/x/term"
 
-	"github.com/sebastianrcnt/atto/agent"
-	"github.com/sebastianrcnt/atto/goal"
-	"github.com/sebastianrcnt/atto/images"
+	"github.com/sebastianrcnt/atto/events"
+	"github.com/sebastianrcnt/atto/server"
 	"github.com/sebastianrcnt/atto/session"
 	"github.com/sebastianrcnt/atto/tui"
 )
@@ -22,6 +21,8 @@ import (
 // its text in the editor to edit and resend. /fork copies the path up to a
 // user message into a new session instead. Esc twice on an empty prompt
 // opens one of them (settings.json "doubleEscapeAction": tree, fork, none).
+// The tree is read here (the session file, read-only); the runtime moves
+// (thread/navigate) and every client follows (thread/branchChanged).
 
 // doubleEscWindow is pi's: the second Esc must follow within 500ms.
 const doubleEscWindow = 500 * time.Millisecond
@@ -72,7 +73,7 @@ func (a *App) onEscape() bool {
 // loadSession reads the open session file; a session with no entries yet
 // has no file.
 func (a *App) loadSession() []session.Entry {
-	_, entries, err := session.Load(a.sess.Path)
+	_, entries, err := session.Load(a.sessPath)
 	if err != nil && !os.IsNotExist(err) {
 		a.errorNotice(err)
 	}
@@ -103,7 +104,7 @@ func (a *App) cmdTree(string) {
 		a.selectTreeEntry(id)
 	}
 	p.onLabel = func(id, label string) {
-		a.sess.Append(session.Entry{Type: session.TypeLabel, TargetID: id, Label: label})
+		a.rpcErr("thread/setLabel", map[string]any{"entryId": id, "label": label})
 	}
 	p.onCopy = func(text string) {
 		if strings.TrimSpace(text) == "" {
@@ -116,130 +117,19 @@ func (a *App) cmdTree(string) {
 }
 
 // navigateTree moves the active leaf to entry id: before it for a user
-// message (whose text goes to the editor), onto it otherwise.
+// message (whose text comes back to the editor), onto it otherwise.
 func (a *App) navigateTree(id string) { a.moveTo(id, nil) }
 
 // moveTo is navigateTree, first summarizing the branch being left when
-// sum is set (see branchsummary.go).
+// sum is set (see branchsummary.go). A running turn is interrupted first;
+// its pending input comes back to the editor.
 func (a *App) moveTo(id string, sum *summaryRequest) {
-	if a.busy {
-		// Queued and pending input belonged to the old branch: back to the
-		// editor, as pi does before aborting.
-		a.pendingTree, a.pendingSummary, a.pendingResume = id, sum, ""
-		a.stashPending()
-		a.cancel()
-		return
-	}
-	entries := a.loadSession()
-	if id == session.Leaf(entries) {
-		a.notice("Already at this point.")
-		return
-	}
-	leaf, text, ok := session.BranchPoint(entries, id)
-	if !ok {
-		a.notice("That entry is no longer in the session.")
-		return
-	}
+	params := map[string]any{"entryId": id}
 	if sum != nil {
-		if left := session.Abandoned(entries, session.Leaf(entries), leaf); agent.HasBranchContent(left) {
-			a.summarizeBranch(id, leaf, text, left, sum.instructions)
-			return
-		}
+		params["summary"] = map[string]any{"mode": "auto", "instructions": sum.instructions}
+		a.summaryAsked = true
 	}
-	a.finishMove(entries, id, leaf, text, nil)
-}
-
-// finishMove moves the leaf to leaf, recording summary (if any) there,
-// and shows the branch. id is the entry picked in the tree and text the
-// message to edit.
-func (a *App) finishMove(entries []session.Entry, id, leaf, text string, summary *session.Entry) {
-	a.stashPending()
-	if summary != nil {
-		a.sess.BranchSummary(leaf, *summary)
-	} else {
-		a.sess.Branch(leaf)
-	}
-	if err := a.sess.Err(); err != nil {
-		a.errorNotice(err)
-		return
-	}
-	a.showBranch(a.loadSession())
-	if text != "" && strings.TrimSpace(a.editor.Text()) == "" {
-		a.editor.SetText(text, editorImages(entries, id)...)
-	}
-	a.notice("Navigated to the selected point. The earlier branch is kept (/tree).")
-	a.afterGoingBack()
-}
-
-// stashPending moves queued messages and unsent steers to the editor.
-func (a *App) stashPending() {
-	var texts []string
-	var att []tui.Attachment
-	for _, s := range a.agent.DrainSteers() {
-		if !isEvent(s) {
-			texts = append(texts, s)
-		}
-	}
-	for _, q := range a.queued {
-		texts, att = append(texts, q.text), append(att, q.att...)
-	}
-	if n := a.sendNow; n != nil {
-		texts, att = append(texts, n.text), append(att, n.att...)
-	}
-	a.queued, a.pendingSteers, a.queuePaused, a.sendSteersAfterInterrupt, a.sendNow = nil, nil, false, false, nil
-	if len(texts) > 0 {
-		a.restoreToEditor(texts, att...)
-	}
-}
-
-// editorImages turns the images of user message id back into editor
-// attachments, labeled like the placeholders in its text ("[image 1: …]").
-func editorImages(entries []session.Entry, id string) []tui.Attachment {
-	var out []tui.Attachment
-	for _, e := range entries {
-		if e.ID != id || e.Message == nil {
-			continue
-		}
-		for i, im := range e.Message.Images {
-			if loaded, err := images.Load(im); err == nil {
-				im = loaded
-			}
-			out = append(out, tui.Attachment{Label: fmt.Sprintf("[image %d: %s]", i+1, images.Label(im)), Value: im})
-		}
-		break
-	}
-	return out
-}
-
-// showBranch loads the active branch into the agent and redraws the
-// transcript from it, like a resume. The agent gets the branch's messages
-// exactly as they were recorded, so the next request repeats the old
-// prefix byte for byte and hits the cache.
-func (a *App) showBranch(entries []session.Entry) {
-	branch := session.Active(entries)
-	a.agent.Restore(branch)
-	a.ctxTokens = a.agent.ContextTokens()
-	a.ui.Body.Clear()
-	a.ui.Redraw()
-	a.ui.ScrollToBottom()
-	a.addHeader()
-	a.replay(branch)
-	a.statusTrigger()
-}
-
-// afterGoingBack pauses an active goal (its progress may be gone) and
-// points out background jobs, which keep running: going back does not undo
-// what commands already did.
-func (a *App) afterGoingBack() {
-	if g := a.goal.Goal; g != nil && g.Status == goal.Active {
-		g.Status, g.Note = goal.Paused, "went back in the session"
-		a.goal.Set(g)
-		a.notice("The goal is paused. /goal resume to continue.")
-	}
-	if a.jobCount > 0 {
-		a.notice("%d background job(s) keep running (/jobs).", a.jobCount)
-	}
-	a.notice("Files changed by commands on the old branch stay changed.")
+	a.rpcErr("thread/navigate", params)
 }
 
 // cmdFork lists the session's user messages (on every branch, as pi does)
@@ -249,7 +139,7 @@ func (a *App) cmdFork(string) {
 	sel := &tui.SelectList{Title: "Fork from a message (enter to choose, esc to cancel)", Filterable: true, MaxVisible: 10}
 	for _, e := range entries {
 		m := e.Message
-		if e.Type != session.TypeMessage || m == nil || m.Role != "user" || strings.TrimSpace(m.Content) == "" || isEvent(m.Content) {
+		if e.Type != session.TypeMessage || m == nil || m.Role != "user" || strings.TrimSpace(m.Content) == "" || events.IsEvent(m.Content) {
 			continue
 		}
 		sel.Items = append(sel.Items, tui.SelectItem{Label: oneLine(m.Content), Value: e.ID})
@@ -272,29 +162,45 @@ func (a *App) cmdFork(string) {
 }
 
 // fork switches to a new session holding the path to just before user
-// message id, with its text in the editor. Like /resume, it stops the
-// background jobs of the session it leaves.
+// message id, with its text in the editor.
 func (a *App) fork(id string) {
-	entries := a.loadSession()
-	leaf, text, ok := session.BranchPoint(entries, id)
-	if !ok {
-		return
-	}
-	a.stashPending()
-	w := session.Fork(a.sess.Path, a.cwd, entries, leaf)
-	w.Close()
-	if err := w.Err(); err != nil {
-		a.errorNotice(err)
-		return
-	}
-	if _, err := os.Stat(w.Path); err == nil {
-		a.resume(w.Path)
-	} else { // forked before the first message: nothing to copy
-		a.reset()
-		a.newSession("other")
-	}
-	if strings.TrimSpace(a.editor.Text()) == "" {
-		a.editor.SetText(text, editorImages(entries, id)...)
-	}
-	a.notice("Forked to a new session.")
+	a.rpc("thread/fork", map[string]any{"entryId": id}, func(raw json.RawMessage, err error) {
+		if err != nil {
+			a.errorNotice(err)
+			return
+		}
+		var r struct {
+			Path   string             `json:"path"`
+			Input  string             `json:"input"`
+			Images []server.ItemImage `json:"images"`
+		}
+		if json.Unmarshal(raw, &r) != nil {
+			return
+		}
+		with := func() {
+			if a.editorEmpty() {
+				a.editor.SetText(r.Input, attachments(r.Images)...)
+			}
+			a.notice("Forked to a new session.")
+		}
+		if _, err := os.Stat(r.Path); err != nil { // forked before the first message: nothing to copy
+			a.newSession("other", with)
+			return
+		}
+		s, err := session.Summarize(r.Path)
+		if err != nil {
+			a.errorNotice(err)
+			return
+		}
+		a.rpc("thread/resume", map[string]any{"threadId": s.ID, "cwd": a.cwd}, func(raw json.RawMessage, err error) {
+			if err != nil {
+				a.errorNotice(err)
+				return
+			}
+			var info server.ThreadInfo
+			if json.Unmarshal(raw, &info) == nil {
+				a.switchTo(info, "resume", with)
+			}
+		})
+	})
 }

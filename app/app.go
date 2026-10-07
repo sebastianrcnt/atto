@@ -1,10 +1,11 @@
-// Package app is the interactive terminal front end: it wires the agent's
-// events into TUI components and handles input and slash commands.
+// Package app is the interactive terminal front end: a client of atto's
+// session runtime (package server) that renders its items and state and
+// sends what is typed as requests (see client.go).
 package app
 
 import (
 	"context"
-	"errors"
+	"encoding/json"
 	"fmt"
 	"math/rand/v2"
 	"os"
@@ -13,16 +14,12 @@ import (
 	"sync"
 	"time"
 
-	"github.com/sebastianrcnt/atto/agent"
 	"github.com/sebastianrcnt/atto/config"
 	"github.com/sebastianrcnt/atto/core"
 	"github.com/sebastianrcnt/atto/core/transcript"
-	"github.com/sebastianrcnt/atto/events"
-	"github.com/sebastianrcnt/atto/extensions"
-	"github.com/sebastianrcnt/atto/hooks"
 	"github.com/sebastianrcnt/atto/images"
-	"github.com/sebastianrcnt/atto/mcp"
 	"github.com/sebastianrcnt/atto/provider"
+	"github.com/sebastianrcnt/atto/server"
 	"github.com/sebastianrcnt/atto/session"
 	"github.com/sebastianrcnt/atto/tui"
 	"github.com/sebastianrcnt/atto/update"
@@ -50,24 +47,21 @@ type modal interface {
 type App struct {
 	ui     *tui.TUI
 	models config.ModelsFile
-	agent  *agent.Agent
-	sess   *session.Writer
-	unlock func()        // releases this terminal's lock on sess
-	pane   pane          // the daemon pane this atto runs in, if any
-	hooks  *hooks.Runner // nil when no hooks are configured
-	// ext runs the session's extensions (nil in tests that need none);
-	// extUI is what they show.
-	ext *extensions.Manager
-	mcp *mcp.Manager
-	// mcpAsked are the approval prompts shown this run (name#hash).
-	mcpAsked map[string]bool
-	extUI    extensions.UIState // touched on the UI goroutine only
-	// hookSrc are the settings files the hooks came from, loaded what the
-	// session loaded (the "Loaded" block), and modelFrom/effortFrom where
-	// the model and effort in use came from.
-	hookSrc               []config.HookSource
-	loaded                core.Loaded
-	modelFrom, effortFrom core.Origin
+	pane   pane // the daemon pane this atto runs in, if any
+
+	// conn is the connection to the session runtime; threadID the thread
+	// this terminal shows and info its state as the runtime last said.
+	conn      *conn
+	threadID  string
+	sessPath  string
+	info      server.ThreadInfo
+	snapEvent int64 // the cursor of the last snapshot
+	pending   server.PendingInput
+	readOnly  string // why the session is read-only ("": it is not)
+	// catalog is the session's slash commands (commands/list).
+	catalog []server.CommandInfo
+	// loaded is what the session loaded, as its latest Loaded item said.
+	loaded core.Loaded
 
 	editor *tui.Editor
 	modal  modal
@@ -79,13 +73,10 @@ type App struct {
 	copyEnv copyEnv
 	toast   toast
 
-	busy    bool
-	runKind string // "turn", "compact" or "branchSummary" while busy
-	// typed is the message the user typed that started the running turn (nil
-	// for any other run); replied is set once the model has answered it.
-	typed    *queuedInput
-	replied  bool
-	cancel   context.CancelFunc
+	// The run, as the runtime says: whether one runs and which kind
+	// ("turn", "compact" or "branchSummary").
+	busy     bool
+	runKind  string
 	runStart time.Time
 	activity string
 	// Activity line state (activity.go): the turn's verb, the setting it
@@ -98,49 +89,34 @@ type App struct {
 	// usage, plus streamChars (text and thinking so far of the call in
 	// progress) at about four characters a token.
 	turnOut, streamChars int
-	// draftChars is how much of each tool call (by index) the call in
+	// draftChars is how much of each tool call (by item) the call in
 	// progress has written.
-	draftChars map[int]int
-	// turnIn counts the run's input tokens the server had not cached
-	// (as the status line's ↑): what each call added to the context.
+	draftChars map[string]int
+	// turnIn counts the run's input tokens the server had not cached.
 	turnIn       int
 	lastEvent    time.Time
 	toolsRunning int
 	now          func() time.Time
 	verbRand     *rand.Rand
-	// ctxTokens mirrors the agent's context estimate; updated from events so
-	// rendering never reads agent state while a turn runs.
-	ctxTokens int
-	usage     usageStats
+	stopTicker   func()
+	ctxTokens    int
+	usage        usageStats
+	// goalRetryAt is when a goal retry waiting starts (zero: none).
+	goalRetryAt time.Time
 
-	// Codex-style pending input: Enter during a turn steers it (delivered
-	// after the next tool call); Tab queues a follow-up turn.
-	pendingSteers            []string
-	queued                   []queuedInput
-	sendSteersAfterInterrupt bool
-	sendNow                  *queuedInput // Ctrl+Enter's message, sent once the turn it interrupted ends
-	queuePaused              bool
-
-	// items makes the transcript's items from agent events and session
-	// entries (see items.go); these are the blocks of the items being
-	// streamed, tools by item ID.
-	items    transcript.Builder
-	thinking *thinkingBlock
-	text     *textBlock
-	tools    map[string]*toolBlock
-	compact  *compactBlock
-	// summaryBlk is the branch summary block being streamed.
+	// The blocks of the items being streamed: kinds by item ID until
+	// completed, tools by item ID; steerGroup and steerBlock join the user
+	// messages of one steer.
+	kinds      map[string]transcript.Kind
+	thinking   *thinkingBlock
+	text       *textBlock
+	tools      map[string]*toolBlock
+	compact    *compactBlock
 	summaryBlk *summaryBlock
-	// shell is the command the user is running with "!", shellBlk the
-	// block of the latest one, and pendingShell those that finished during
-	// a run (see usershell.go).
-	shell        *shellRun
-	shellBlk     *shellBlock
-	pendingShell []pendingShell
-	// steered collects the user messages of a committed steer, shown as
-	// one block; replaying is set while blocks come from saved entries.
-	steered   []string
-	replaying bool
+	shellBlk   *shellBlock
+	steerGroup string
+	steerBlock *userBlock
+	replaying  bool
 
 	// details expands every collapsible block (ctrl+t); origView shows the
 	// original text of blocks an extension replaced (ctrl+o).
@@ -151,35 +127,25 @@ type App struct {
 	// (see blockdisplay.go).
 	itemBlocks map[string]displayBlock
 	blocks     map[string]displayBlock
-	// Last model/effort written to the session, to record changes.
-	recModel, recEffort string
-	sessName            string
-	// pendingResume is a session to switch to once the running turn stops.
-	pendingResume string
-	// pendingTree is a /tree entry to move to once the running turn stops,
-	// and pendingSummary how to summarize the branch left (nil: no summary).
-	pendingTree    string
-	pendingSummary *summaryRequest
-	// summary is the branch summary being written (runKind "branchSummary"),
-	// and skipSummary settings.json's branchSummary.skipPrompt.
-	summary     *summaryRun
-	skipSummary bool
+	sessName   string
+	// summaryAsked: this terminal asked for a branch summary; canceled, the
+	// tree opens again. skipSummary is settings.json's
+	// branchSummary.skipPrompt.
+	summaryAsked bool
+	skipSummary  bool
 	// noToolGroups is settings.json's "toolGroups": false (see toolRun).
 	noToolGroups bool
 	// esc detects Esc twice on an empty prompt; escAction is what it opens.
 	esc       doubleEsc
 	escAction string
 
-	// Inbox: events waiting for delivery, and counts for the status line.
-	pendingEvents        []events.Event
+	// Status line counts, as the runtime says.
 	jobCount, timerCount int
 
-	goal core.GoalDriver
-	// retryTimer starts the goal again after a transient failure
-	// (scheduleGoalRetry); UI goroutine only.
-	retryTimer *time.Timer
-	// bgx is the experimental exit menu (background_exit.go).
-	bgx bgExit
+	// bgx is the exit menu (background_exit.go); bgLine is printed when
+	// atto exits after the session went to a background run.
+	bgx    bgExit
+	bgLine string
 
 	// Slash command list: selection, the text it belongs to, and the text
 	// for which Esc closed it.
@@ -197,26 +163,46 @@ type App struct {
 	statusLines []string // its latest output
 	statusWake  chan struct{}
 
-	// remote is the /remote server while it runs (remote.go); remoteHost
-	// and remotePort override where it listens (tests). fromRemote is set
-	// while input from it is submitted, and remoteSteers are its steers
-	// not yet delivered: their user messages get a "from remote" mark.
+	// remote is the /remote gateway while it runs (remote.go); remoteHost
+	// and remotePort override where it listens (tests).
 	remote       *remote
+	remoteThread string // the session its clients were last told about
 	remoteHost   string
 	remotePort   *int
-	fromRemote   bool
-	remoteSteers map[string]int
-	// prompt is the open modal as /remote's clients see it
-	// (remoteprompt.go), whether or not /remote is on; promptHow and
-	// promptByRemote say how it is being closed.
-	prompt         *openPrompt
-	promptSeq      int
-	promptHow      string
-	promptByRemote bool
+	// prompt is the runtime's open prompt this terminal shows, and
+	// promptWaiting one that waits for a picker of this terminal to close.
+	prompt        *shownPrompt
+	promptWaiting *server.Prompt
 
 	cwd      string
 	quit     chan struct{}
 	quitOnce sync.Once
+	quitting bool
+}
+
+// newApp makes the App with what it shows, before it connects.
+func newApp(term tui.Terminal, models config.ModelsFile, cwd string) *App {
+	a := &App{
+		ui:         tui.New(term),
+		models:     models,
+		tools:      map[string]*toolBlock{},
+		kinds:      map[string]transcript.Kind{},
+		draftChars: map[string]int{},
+		cwd:        cwd,
+		quit:       make(chan struct{}),
+		clipboard:  images.SystemClipboardImage,
+	}
+	a.build()
+	return a
+}
+
+// applySettings takes what of settings.json the terminal follows.
+func (a *App) applySettings(s config.Settings) {
+	a.escAction = s.DoubleEscapeAction
+	a.spinnerVerbs, a.spinnerScan = s.SpinnerVerbs, s.SpinnerScanner
+	a.bgx.off = s.BackgroundExit != nil && !*s.BackgroundExit
+	a.skipSummary = s.BranchSummary != nil && s.BranchSummary.SkipPrompt
+	a.noToolGroups = s.ToolGroups != nil && !*s.ToolGroups
 }
 
 func Run(opts Options) error {
@@ -224,74 +210,36 @@ func Run(opts Options) error {
 	if err != nil {
 		return err
 	}
-	model, modelFrom, err := core.PickModelFrom(models, settings, opts.Model, "")
-	noModels := errors.Is(err, core.ErrNoModels)
-	if err != nil && !noModels {
-		return err
-	}
 	cwd, err := os.Getwd()
 	if err != nil {
 		return err
 	}
-	effort, effortFrom := core.EffortFrom(settings, opts.Effort, "")
-	ag, hk, hookSrc, err := core.NewAgentSources(cwd, model, effort)
-	if err != nil {
-		return err
-	}
-
-	a := &App{
-		ui:         tui.New(tui.NewProcessTerminal()),
-		models:     models,
-		agent:      ag,
-		hooks:      hk,
-		hookSrc:    hookSrc,
-		modelFrom:  modelFrom,
-		effortFrom: effortFrom,
-		tools:      map[string]*toolBlock{},
-		cwd:        cwd,
-		quit:       make(chan struct{}),
-
-		clipboard: images.SystemClipboardImage,
-	}
-	ag.SteerNote = a.goal.SteerNote // a message sent while the goal runs says so
+	a := newApp(tui.NewProcessTerminal(), models, cwd)
 	if opts.Inline || rendererMode(settings.Renderer) == tui.Inline {
 		a.ui.Mode = tui.Inline
 	}
-	a.escAction = settings.DoubleEscapeAction
-	a.spinnerVerbs, a.spinnerScan = settings.SpinnerVerbs, settings.SpinnerScanner
-	a.bgx.off = settings.BackgroundExit != nil && !*settings.BackgroundExit
-	a.skipSummary = settings.BranchSummary != nil && settings.BranchSummary.SkipPrompt
+	a.applySettings(settings)
 	a.ui.NoMouse = mouseDisabled(settings.Mouse, os.Getenv)
-	a.noToolGroups = settings.ToolGroups != nil && !*settings.ToolGroups
-	a.build()
-	a.ext = core.LoadExtensions(ag, newTUIHost(a))
-	a.mcp = core.LoadMCP(ag)
-	if noModels {
-		// First run: start anyway and say how to get a model, like pi.
-		a.notice("%s", core.NoModelsHint())
+
+	// The runtime runs in this process: a session left behind (/clear,
+	// /resume) closes once idle, as it always did, and everything ends
+	// with atto.
+	srv := server.New(Version, cwd)
+	srv.LockKind = session.KindTUI
+	srv.Retire = true
+	if err := a.connect(server.Connect(context.Background(), srv), srv); err != nil {
+		return err
 	}
-	a.newSession("") // its "Loaded" block lists skill files that were skipped
-	a.sessionStartHook("startup")
+	if err := a.open(opts); err != nil {
+		srv.Close()
+		return err
+	}
 	a.statusCmd = settings.StatusLine != nil && settings.StatusLine.Command != ""
 	a.startStatusLine(settings.StatusLine)
 	if config.CatalogStale() {
 		go a.refreshCatalog()
 	}
-
-	switch {
-	case opts.Session != "":
-		if path, err := session.Find(opts.Session); err == nil {
-			a.resume(path)
-		} else {
-			a.errorNotice(err)
-		}
-	case opts.Continue:
-		if s, ok := session.Latest(cwd); ok {
-			a.resume(s.Path)
-		} else {
-			a.notice("No previous session in this directory.")
-		}
-	case opts.Resume:
+	if opts.Resume {
 		a.cmdResume("")
 	}
 
@@ -304,8 +252,6 @@ func Run(opts Options) error {
 		// As if typed: goes through submit, so a leading "/" is a command too.
 		a.ui.Do(func() { a.submit(opts.Prompt, nil) })
 	}
-	a.ui.Do(a.askMCPApprovals)
-	go a.watchInbox()
 	if a.ui.Mode == tui.Fullscreen && !a.ui.NoMouse {
 		go func() {
 			if tmuxMouseOff(os.Getenv, runTmux) {
@@ -318,33 +264,75 @@ func Run(opts Options) error {
 	}
 	<-a.quit
 	a.ui.Do(func() {
-		if a.cancel != nil {
-			a.cancel()
-		}
+		a.quitting = true
 		a.stopRemote()
 	})
 	a.ui.Stop()
-	a.closeSession()
-	if a.printExit() { // the run goes on in the background
-		if a.ext != nil {
-			a.ext.Close() // the session's extensions run on there; no session_end
+	return a.shutdown()
+}
+
+// open opens the first session: the one asked for, or a new one.
+func (a *App) open(opts Options) error {
+	ctx := context.Background()
+	var info server.ThreadInfo
+	var err error
+	switch {
+	case opts.Session != "":
+		err = a.conn.c.Call(ctx, "thread/resume", map[string]any{"threadId": opts.Session, "cwd": a.cwd}, &info)
+	case opts.Continue:
+		if s, ok := session.Latest(a.cwd); ok {
+			err = a.conn.c.Call(ctx, "thread/resume", map[string]any{"threadId": s.ID, "cwd": a.cwd}, &info)
+		} else {
+			defer a.notice("No previous session in this directory.")
 		}
-		_ = a.mcp.Close()
-		return nil
 	}
-	if n := a.leaveCore(); n > 0 {
-		fmt.Printf("atto: stopped %d background job(s)\n", n)
+	if err != nil {
+		defer a.errorNotice(err)
+		info = server.ThreadInfo{}
 	}
-	if a.hooks != nil {
-		for _, n := range a.hooks.SessionEnd(context.Background(), "exit") {
+	if info.ID == "" {
+		if err := a.conn.c.Call(ctx, "thread/start", map[string]any{"cwd": a.cwd, "model": opts.Model, "effort": opts.Effort}, &info); err != nil {
+			return err
+		}
+	}
+	a.ui.Do(func() { a.show(info) })
+	return nil
+}
+
+// show makes info the thread this terminal shows.
+func (a *App) show(info server.ThreadInfo) {
+	a.threadID = info.ID
+	a.applySnapshot(info)
+	a.loadCatalog()
+	a.remoteSwitched()
+}
+
+// shutdown ends the session as atto exits. Without the daemon, the
+// runtime goes with this process: its sessions end (SessionEnd, jobs
+// stop), unless one went to a background run.
+func (a *App) shutdown() error {
+	if a.bgLine != "" {
+		fmt.Println(a.bgLine)
+	}
+	cn := a.conn
+	if cn.own == nil {
+		return cn.c.Close() // a worker's: it goes on
+	}
+	if a.threadID != "" && a.bgLine == "" {
+		var r struct {
+			StoppedJobs int      `json:"stoppedJobs"`
+			Notices     []string `json:"notices"`
+		}
+		_ = cn.c.Call(context.Background(), "thread/close", map[string]any{"threadId": a.threadID, "reason": "exit"}, &r)
+		if r.StoppedJobs > 0 {
+			fmt.Printf("atto: stopped %d background job(s)\n", r.StoppedJobs)
+		}
+		for _, n := range r.Notices {
 			fmt.Fprintln(os.Stderr, n)
 		}
 	}
-	if a.ext != nil {
-		a.ext.SessionEnd("exit")
-		a.ext.Close()
-	}
-	_ = a.mcp.Close()
+	cn.c.Close()
+	cn.own.CloseWith("exit")
 	return nil
 }
 
@@ -367,123 +355,54 @@ func (a *App) build() {
 	a.addHeader()
 }
 
-// leaveSession ends the session being left (/clear, /resume): its
-// SessionEnd hooks run with reason, and like codex, its background
-// processes stop, as they belong to their session.
-func (a *App) leaveSession(reason string) {
-	if a.sess == nil {
+// switchTo shows thread info in place of the one shown, which this
+// terminal leaves (reason: clear, resume): it goes on until idle, then
+// ends. with runs on the new thread once shown.
+func (a *App) switchTo(info server.ThreadInfo, reason string, with func()) {
+	old := a.threadID
+	a.show(info)
+	if old != "" && old != info.ID {
+		a.rpc("thread/detach", map[string]any{"threadId": old, "reason": reason}, func(raw json.RawMessage, err error) {
+			var r struct {
+				StoppedJobs int      `json:"stoppedJobs"`
+				Notices     []string `json:"notices"`
+			}
+			if err == nil && json.Unmarshal(raw, &r) == nil {
+				for _, n := range r.Notices {
+					a.notice("%s", n)
+				}
+				if r.StoppedJobs > 0 {
+					a.notice("Stopped %d background job(s) of the previous conversation.", r.StoppedJobs)
+				}
+			}
+			if with != nil {
+				with()
+			}
+		})
 		return
 	}
-	a.sessionEndHook(reason)
-	if n := a.leaveCore(); n > 0 {
-		a.notice("Stopped %d background job(s) of the previous conversation.", n)
-	}
-	a.jobCount, a.timerCount, a.pendingEvents = 0, 0, nil
-	a.dropShell()
-}
-
-// lockSession holds the open session for this terminal, so another atto
-// does not open it as well: two processes writing one session (and its
-// goal) undo each other's work.
-func (a *App) lockSession() {
-	release, err := session.LockTUI(a.sess.Path)
-	if err != nil {
-		a.errorNotice(err)
-		return
-	}
-	a.unlock = release
-}
-
-// closeSession closes the session file and releases this terminal's lock.
-func (a *App) closeSession() {
-	a.sess.Close()
-	if a.unlock != nil {
-		a.unlock()
-		a.unlock = nil
+	if with != nil {
+		with()
 	}
 }
 
-// newSession starts recording into a fresh session file.
-func (a *App) newSession(reason string) {
-	a.leaveSession(reason)
-	a.closeSession()
-	a.sess = session.New(a.cwd)
-	a.lockSession()
-	a.items.IDPrefix = a.sess.ID + "-i"
-	core.Bind(a.agent, a.hooks, a.sess, time.Now(), true)
-	a.setLiveSession(a.sess.ID)
-	a.resetGoal()
-	a.recModel, a.recEffort, a.sessName = "", "", ""
-	a.editor.Title = a.sessName
-	a.showLoaded()
-	a.statusTrigger()
-	a.remoteSwitched()
-}
-
-// sessionEndHook runs SessionEnd hooks and waits for them (they are bounded
-// by a short timeout): the hooks must see the session being left, which the
-// next Bind replaces.
-func (a *App) sessionEndHook(reason string) {
-	if a.ext != nil {
-		a.ext.SessionEnd(reason)
-	}
-	if a.hooks == nil {
-		return
-	}
-	for _, n := range a.hooks.SessionEnd(context.Background(), reason) {
-		a.notice("%s", n)
-	}
+// newSession starts a new conversation and shows it.
+func (a *App) newSession(reason string, with func()) {
+	a.rpc("thread/start", map[string]any{"cwd": a.cwd, "threadId": ""}, func(raw json.RawMessage, err error) {
+		if err != nil {
+			a.errorNotice(err)
+			return
+		}
+		var info server.ThreadInfo
+		if json.Unmarshal(raw, &info) == nil {
+			a.switchTo(info, reason, with)
+		}
+	})
 }
 
 // notifyAfter is how long a turn must have run for atto to notify the user
-// when it finishes; shorter turns end while the user is likely still looking.
+// when it finishes (the runtime's own counterpart decides; kept for tests).
 var notifyAfter = 15 * time.Second
-
-// notify runs Notification hooks in the background, for when atto needs
-// the user's attention (kind is the notification type).
-func (a *App) notify(kind, message string) {
-	hk := a.hooks // /reload may replace a.hooks while this runs
-	if hk == nil {
-		return
-	}
-	go func() {
-		notices := hk.Notification(context.Background(), kind, message)
-		a.ui.Do(func() {
-			for _, n := range notices {
-				a.notice("%s", n)
-			}
-		})
-	}()
-}
-
-// sessionStartHook runs SessionStart hooks in the background.
-func (a *App) sessionStartHook(source string) {
-	if a.ext != nil {
-		a.ext.SessionStart(source)
-	}
-	hk := a.hooks // /reload may replace a.hooks while this runs
-	if hk == nil {
-		return
-	}
-	go func() {
-		notices := hk.SessionStart(context.Background(), source)
-		a.ui.Do(func() {
-			for _, n := range notices {
-				a.notice("%s", n)
-			}
-		})
-	}()
-}
-
-func (a *App) model() config.ModelRef {
-	m, _ := a.agent.Current()
-	return m
-}
-
-func (a *App) effort() string {
-	_, e := a.agent.Current()
-	return e
-}
 
 func (a *App) addHeader() {
 	a.ui.Body.Add(tui.Func(func(width int) []string {
@@ -503,15 +422,14 @@ func (a *App) headerModel() string {
 
 func (a *App) add(c tui.Component) { a.ui.Body.Add(gap{c}) }
 
+// notice shows a notice of the terminal's own (not the runtime's: it is
+// not kept for other clients or a later attach).
 func (a *App) notice(format string, args ...any) {
-	text := fmt.Sprintf(format, args...)
-	a.add(&noticeBlock{text: text, style: tui.Dim})
-	a.remoteNotice(text)
+	a.add(&noticeBlock{text: fmt.Sprintf(format, args...), style: tui.Dim})
 }
 
 func (a *App) errorNotice(err error) {
 	a.add(&noticeBlock{text: "Error: " + err.Error(), style: func(s string) string { return tui.FG(1, s) }})
-	a.remoteNotice("Error: " + err.Error())
 }
 
 func (a *App) doQuit() { a.quitOnce.Do(func() { close(a.quit) }) }
@@ -558,9 +476,11 @@ func (a *App) onInput(data string) bool {
 		return a.onEscape()
 	case "ctrl+c":
 		switch {
-		case a.cancelShell():
+		case a.shellRunning():
+			a.rpcErr("shell/interrupt", nil)
 		case a.busy:
-			a.cancel()
+			// Ctrl+C: steers not taken come back to the editor.
+			a.rpcErr("turn/interrupt", map[string]any{"mode": "cancel"})
 		case a.editor.Text() != "":
 			a.editor.SetText("")
 		default:
@@ -575,7 +495,8 @@ func (a *App) onInput(data string) bool {
 	case "ctrl+b":
 		// As in Claude Code: the running command moves to the background
 		// and the turn goes on. Otherwise it is the editor's cursor-left.
-		if a.busy && a.agent.Background() {
+		if a.busy && a.toolsRunning > 0 {
+			a.rpcErr("turn/background", nil)
 			return true
 		}
 	case "ctrl+l":
@@ -590,11 +511,7 @@ func (a *App) onInput(data string) bool {
 			return true
 		}
 	case "shift+left":
-		if a.editLastSteer() {
-			return true
-		}
-		if len(a.queued) > 0 {
-			a.editLastQueued()
+		if a.takeBackLast() {
 			return true
 		}
 	}
@@ -605,186 +522,62 @@ func (a *App) onInput(data string) bool {
 	return false
 }
 
+// shellRunning reports whether a "!" command of the session runs.
+func (a *App) shellRunning() bool { return a.shellBlk != nil && !a.shellBlk.done }
+
 // interrupt is Esc while something runs: it stops a "!" command, else the
-// turn (pending steers then go out at once). False when nothing runs.
+// run (pending steers then go out at once), else pauses a goal retry
+// waiting. False when nothing runs.
 func (a *App) interrupt() bool {
-	if a.cancelShell() {
-		return true
+	switch {
+	case a.shellRunning():
+		a.rpcErr("shell/interrupt", nil)
+	case a.busy:
+		a.rpcErr("turn/interrupt", map[string]any{"mode": "sendPending"})
+	case !a.goalRetryAt.IsZero():
+		a.goalRetryAt = time.Time{}
+		a.rpcErr("turn/interrupt", nil)
+	default:
+		return false
 	}
-	if !a.busy {
-		return a.interruptGoalRetry()
-	}
-	if len(a.pendingSteers) > 0 {
-		a.sendSteersAfterInterrupt = true
-	}
-	a.cancel()
 	return true
 }
 
+// submit sends what was typed (Enter): the terminal's own commands run
+// here, everything else goes to the runtime as typed.
 func (a *App) submit(text string, att []tui.Attachment) {
 	if a.refuseReadOnly(text) {
 		return
 	}
 	a.ui.ScrollToBottom()
-	if cmd, exclude, ok := parseShell(text); ok && len(att) == 0 {
-		a.submitShell(text, cmd, exclude)
+	if strings.HasPrefix(text, "/") && a.runLocal(text) {
 		return
 	}
-	if len(att) > 0 && !strings.HasPrefix(text, "/") {
-		a.submitWithImages(text, att)
+	if strings.TrimSpace(text) != "" && !strings.HasPrefix(text, "/") && shellMode(text) == "" && a.noModel() {
+		a.restoreToEditor([]string{text}, att...)
 		return
 	}
-	switch {
-	case text == "":
-		// Enter on an empty prompt resumes a paused queue, or else a goal
-		// waiting for the user.
-		switch {
-		case a.busy:
-		case len(a.queued) > 0:
-			a.queuePaused = false
-			a.maybeSendNextQueued()
-		case a.goal.Held():
-			a.goal.Release()
-			a.remoteGoal()
-			a.continueGoal()
-		}
-	case strings.HasPrefix(text, "/"):
-		a.runCommand(text)
-	case a.noModel():
-		a.restoreToEditor([]string{text})
-	case a.busy && a.runKind == "turn":
-		a.steer(text)
-	case a.busy:
-		a.enqueue(text, nil)
-	default:
-		a.startTurn(text, nil)
-	}
+	a.send(text, att, "auto")
 }
 
-// recordSettings writes model/effort entries when they changed since the
-// last one, so a resumed session picks them back up.
-func (a *App) recordSettings() {
-	m, e := a.agent.Current()
-	if id := m.ProviderName + "/" + m.Model.ID; id != a.recModel {
-		a.sess.Append(session.Entry{Type: session.TypeModel, Provider: m.ProviderName, Model: m.Model.ID})
-		a.recModel = id
-	}
-	if e != a.recEffort {
-		a.sess.Append(session.Entry{Type: session.TypeEffort, Effort: e})
-		a.recEffort = e
-	}
-}
-
-// startTurn runs a message the user typed, with its image attachments, as a
-// turn. If the turn fails before the model answers, the text goes back to
-// the editor (see start).
-func (a *App) startTurn(text string, att []tui.Attachment) {
-	a.runTurn(text, att, true)
-}
-
-// runTurn is startTurn for any message that starts a turn; typed says the
-// user wrote text themselves, as opposed to a skill, an extension's message
-// or steers that came back.
-func (a *App) runTurn(text string, att []tui.Attachment, typed bool) {
-	if a.refuseReadOnly(text) {
+// send is input/submit; a refusal gives the input back to the editor.
+func (a *App) send(text string, att []tui.Attachment, intent string) {
+	imgs, err := imageInputs(att)
+	if err != nil {
+		a.errorNotice(fmt.Errorf("saving image: %w", err))
+		a.restoreToEditor([]string{text}, att...)
 		return
 	}
-	imgs := attachedImages(att)
-	for _, im := range imgs {
-		if err := images.Save(im); err != nil {
-			a.errorNotice(fmt.Errorf("saving image: %w", err))
+	params := map[string]any{"input": text, "intent": intent}
+	if len(imgs) > 0 {
+		params["images"] = imgs
+	}
+	a.rpc("input/submit", params, func(_ json.RawMessage, err error) {
+		if err != nil {
+			a.errorNotice(err)
 			a.restoreToEditor([]string{text}, att...)
-			return
 		}
-	}
-	a.tr().Event(transcript.Input{Text: text, Images: imgs})
-	// A goal that is not running by itself says so, to this message only.
-	a.agent.SetInputNote(a.goal.StateNote())
-	a.goal.UserInput() // a turn the user started: the goal waits for them after it
-	a.runKind = "turn"
-	a.recordSettings()
-	a.start("Thinking", func(ctx context.Context, emit func(any)) error {
-		return a.agent.RunWithImages(ctx, text, imgs, emit)
 	})
-	if typed && !a.fromRemote { // after start, which forgets the last one
-		a.typed = &queuedInput{text, att, false}
-	}
-}
-
-// start runs fn in the background, routing its events into the UI.
-func (a *App) start(activity string, fn func(context.Context, func(any)) error) {
-	a.typed, a.replied = nil, false
-	ctx, cancel := context.WithCancel(context.Background())
-	a.busy, a.cancel = true, cancel
-	a.runStart, a.activity = a.clock(), activity
-	a.cancelGoalRetry() // whatever starts, a goal retry waiting is moot
-	a.lastEvent, a.toolsRunning = a.runStart, 0
-	a.turnOut, a.streamChars, a.turnIn, a.draftChars = 0, 0, 0, nil
-	a.turnVerb = a.pickVerb()
-	if a.runKind == "turn" {
-		a.goal.BeginTurn()
-	}
-	a.remoteTurnStarted()
-	a.remoteGoal() // a goal on hold is pursued while the turn runs
-
-	go func() { // keep the spinner and timers moving
-		t := time.NewTicker(a.ui.AnimationInterval())
-		defer t.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-t.C:
-				a.ui.RequestRender()
-			}
-		}
-	}()
-	go func() {
-		err := fn(ctx, func(ev any) { a.ui.Do(func() { a.onEvent(ev) }) })
-		// A reload that no step boundary reached (the turn ended first, or
-		// this was a compaction) runs now; its report for the model is
-		// delivered like an event.
-		var reported []events.Event
-		for _, f := range a.agent.TakeBoundary() {
-			if text := f(); text != "" {
-				reported = append(reported, events.Event{Source: sourceReloaded, Title: "Reload result sent to the agent", Text: strings.TrimPrefix(text, events.Prefix)})
-			}
-		}
-		ctxTokens := a.agent.ContextTokens() // safe: the run is over
-		a.ui.Do(func() {
-			a.pendingEvents = append(a.pendingEvents, reported...)
-			a.tr().End() // a compaction that did not finish disappears
-			a.busy = false
-			a.ctxTokens = ctxTokens
-			cancel()
-			a.cancel = nil
-			switch {
-			case errors.Is(err, context.Canceled) && a.runKind == "branchSummary":
-				a.notice("Branch summary canceled.")
-			case errors.Is(err, context.Canceled):
-				a.notice("Interrupted.")
-			case errors.Is(err, agent.ErrPromptBlocked), errors.Is(err, agent.ErrStoppedByHook):
-				// The hook's reason was already shown.
-			case err != nil:
-				a.errorNotice(err)
-				// The model never answered: the message stays in the session
-				// (sending it again adds no copy), and its text comes back
-				// unless the user has started on something else.
-				if t := a.typed; t != nil && !a.replied && strings.TrimSpace(a.editor.Text()) == "" {
-					a.restoreToEditor([]string{t.text}, t.att...)
-				}
-			}
-			a.typed = nil
-			if werr := a.sess.Err(); werr != nil {
-				a.errorNotice(fmt.Errorf("saving session: %w", werr))
-			}
-			a.statusTrigger()
-			a.remoteTurnCompleted(err)
-			a.afterRun(err)
-			a.remoteGoal()
-			a.remotePending()
-		})
-	}()
 }
 
 // --- effort ---
@@ -805,14 +598,12 @@ func (a *App) cycleEffort() {
 	a.setEffort(levels[i%len(levels)], false)
 }
 
+// setEffort sets the session's effort and makes it the default, as the
+// terminal always did.
 func (a *App) setEffort(level string, announce bool) {
-	a.agent.SetEffort(level)
-	a.effortFrom = core.FromCommand
+	a.info.Effort = level
 	a.statusTrigger()
-	a.remoteUpdated()
-	if err := config.UpdateSettings(map[string]any{"defaultEffort": level}); err != nil {
-		a.errorNotice(err)
-	}
+	a.rpcErr("thread/setEffort", map[string]any{"effort": level, "saveDefault": true})
 	if announce {
 		a.notice("Effort set to %s.", level)
 	}

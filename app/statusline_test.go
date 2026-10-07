@@ -14,7 +14,9 @@ import (
 func statusApp(t *testing.T, cost *ai.ModelCost) *App {
 	t.Helper()
 	ref := config.ModelRef{Model: config.Model{ID: "m", Name: "Orca", ContextWindow: 262000, Cost: cost}}
-	a := &App{ui: tui.New(nil), agent: agent.New(ref, "", t.TempDir()), cwd: "/work/proj", gitBranch: "main", sessName: "fix"}
+	a := newApp(nil, config.ModelsFile{}, "/work/proj")
+	a.gitBranch, a.sessName = "main", "fix"
+	setTestModel(a, ref)
 	a.ctxTokens = 31000
 	a.usage.add(provider.Usage{PromptTokens: 94000, CachedTokens: 80000, CacheWriteTokens: 2000, CompletionTokens: 3400, Cost: 0.1234})
 	return a
@@ -147,7 +149,7 @@ func TestStatusSubscriptionCostIsEstimate(t *testing.T) {
 	}
 	ref := config.ModelRef{ProviderName: "opencode-go", Provider: config.Provider{Subscription: true},
 		Model: config.Model{ID: "m", Name: "Orca", ContextWindow: 262000, Cost: &ai.ModelCost{Output: 5}}}
-	a.agent = agent.New(ref, "", t.TempDir())
+	setTestModel(a, ref)
 	if s := tui.StripEscapes(strings.Join(a.builtinStatus(160, 160), "\n")); !strings.Contains(s, "≈$0.123") {
 		t.Errorf("subscription cost is an estimate: %q", s)
 	}
@@ -196,7 +198,7 @@ func TestStatusModelNameShowsProviderOnCollision(t *testing.T) {
 	} {
 		a := statusApp(t, nil)
 		a.models = models
-		a.agent.SetModel(config.ModelRef{ProviderName: c.provider, Model: c.model})
+		a.info.Model = c.provider + "/" + c.model.ID
 		if got := first(a); !strings.HasPrefix(strings.TrimSpace(got), c.want+" ") {
 			t.Errorf("%s/%s: %q, want %q", c.provider, c.model.ID, got, c.want)
 		}
@@ -209,7 +211,7 @@ func TestStatusModelNameShowsProviderOnCollision(t *testing.T) {
 	// (or the provider list) changes.
 	a := statusApp(t, nil)
 	a.models = models
-	a.agent.SetModel(config.ModelRef{ProviderName: "openai", Model: luna})
+	a.info.Model = "openai/luna"
 	if got := first(a); !strings.Contains(got, "GPT-6 Luna · openai") {
 		t.Fatalf("before: %q", got)
 	}
@@ -217,4 +219,17 @@ func TestStatusModelNameShowsProviderOnCollision(t *testing.T) {
 	if got := first(a); !strings.Contains(got, "◆ GPT-6 Luna ") || strings.Contains(got, "openai") {
 		t.Fatalf("after the other provider went: %q", got)
 	}
+}
+
+// setTestModel makes ref the model the runtime reports, in models of its
+// own (provider "t" when it has none).
+func setTestModel(a *App, ref config.ModelRef) {
+	if ref.ProviderName == "" {
+		ref.ProviderName = "t"
+	}
+	p := ref.Provider
+	p.Models = []config.Model{ref.Model}
+	a.models = config.ModelsFile{Providers: map[string]config.Provider{ref.ProviderName: p}}
+	a.info.Model = ref.ProviderName + "/" + ref.Model.ID
+	a.info.AutoCompactLimit = agent.AutoCompactLimit(ref.Model)
 }

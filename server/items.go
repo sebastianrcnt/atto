@@ -9,6 +9,9 @@ import (
 	"github.com/sebastianrcnt/atto/session"
 )
 
+// WireItem is the protocol form of a transcript item of session sid.
+func WireItem(sid string, it *transcript.Item) Item { return wireItem(sid, it) }
+
 // wireItem is the protocol form of a transcript item of session sid.
 func wireItem(sid string, it *transcript.Item) Item {
 	w := Item{ID: it.ID, Text: it.Text, Status: string(it.Status), EntryID: it.EntryID}

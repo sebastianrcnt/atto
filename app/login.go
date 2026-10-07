@@ -211,11 +211,8 @@ func (a *App) afterLogin(p config.LoginProvider, action string) {
 	}
 	a.models = models
 	cur := a.model()
-	if cur.Model.ID != "" {
-		if ref, ok := models.Find(cur.ProviderName, cur.Model.ID); ok {
-			a.agent.SetModel(ref)
-		}
-	}
+	a.rpcErr("models/reload", nil) // the runtime takes the new key
+
 	n := 0
 	for _, r := range models.List() {
 		if r.ProviderName == p.ID {

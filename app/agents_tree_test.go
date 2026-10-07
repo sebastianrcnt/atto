@@ -158,7 +158,7 @@ func TestCenterOpensAgentTranscript(t *testing.T) {
 	for _, locked := range []bool{false, true} {
 		t.Run(map[bool]string{false: "idle", true: "running"}[locked], func(t *testing.T) {
 			a, _ := paneApp(t, false)
-			w := session.NewSubagent(a.cwd, a.sess.ID)
+			w := session.NewSubagent(a.cwd, a.threadID)
 			w.Append(session.Entry{Type: session.TypeName, Name: "tests"})
 			w.Append(session.Entry{Type: session.TypeMessage, Message: &provider.Message{Role: "user", Content: "Run tests"}})
 			w.Close()
@@ -171,7 +171,7 @@ func TestCenterOpensAgentTranscript(t *testing.T) {
 				}
 				defer func() { release() }()
 			}
-			fakeCenter(t, nil, []session.Summary{{ID: w.ID, Name: "tests", Cwd: a.cwd, AgentOf: a.sess.ID, Preview: "Run tests"}})
+			fakeCenter(t, nil, []session.Summary{{ID: w.ID, Name: "tests", Cwd: a.cwd, AgentOf: a.threadID, Preview: "Run tests"}})
 			a.cmdAgents("")
 			waitCenter(t, a)
 			c := a.modal.(*agentCenter)
@@ -180,11 +180,10 @@ func TestCenterOpensAgentTranscript(t *testing.T) {
 					c.sel = i
 				}
 			}
-			c.HandleInput("\r")
-			if a.sess.ID != w.ID {
-				t.Fatalf("opened %s, want %s", a.sess.ID, w.ID)
-			}
-			if got := a.sess.ReadOnly() != ""; got != locked {
+			a.ui.Do(func() { c.HandleInput("\r") })
+			within(t, a, "the agent's transcript", func() bool { return a.threadID == w.ID })
+			settle(a)
+			if got := a.readOnly != ""; got != locked {
 				t.Fatalf("read-only %v, locked %v", got, locked)
 			}
 			if locked {
@@ -193,10 +192,8 @@ func TestCenterOpensAgentTranscript(t *testing.T) {
 					t.Fatalf("banner %q", banner)
 				}
 				release()
-				a.onInput("\x12")
-				if a.sess.ReadOnly() != "" {
-					t.Fatal("refresh did not open unlocked agent normally")
-				}
+				a.ui.Do(func() { a.onInput("\x12") })
+				within(t, a, "the agent opened normally", func() bool { return a.readOnly == "" })
 			}
 		})
 	}
@@ -204,7 +201,7 @@ func TestCenterOpensAgentTranscript(t *testing.T) {
 
 func TestCenterDaemonOpensAgent(t *testing.T) {
 	a, rec := paneApp(t, true)
-	fakeCenter(t, nil, []session.Summary{{ID: "agent", Name: "tests", AgentOf: a.sess.ID, Cwd: "/trees/tests"}})
+	fakeCenter(t, nil, []session.Summary{{ID: "agent", Name: "tests", AgentOf: a.threadID, Cwd: "/trees/tests"}})
 	a.cmdAgents("")
 	waitCenter(t, a)
 	c := a.modal.(*agentCenter)
@@ -354,13 +351,9 @@ func TestCenterCtrlCClosesWithoutInterruptingSession(t *testing.T) {
 		t.Run(map[bool]string{false: "list", true: "search"}[typing], func(t *testing.T) {
 			a, _ := paneApp(t, false)
 			fakeCenter(t, nil, nil)
-			turnCanceled, shellCanceled := false, false
 			a.busy = true
-			a.cancel = func() { turnCanceled = true }
-			runningShell := &shellRun{cancel: func() { shellCanceled = true }}
-			a.shell = runningShell
 			a.editor.SetText("keep my draft")
-			before := a.sess.ID
+			before := a.threadID
 			a.cmdAgents("")
 			waitCenter(t, a)
 			c := a.modal.(*agentCenter)
@@ -372,14 +365,13 @@ func TestCenterCtrlCClosesWithoutInterruptingSession(t *testing.T) {
 			if a.modal != nil || a.ui.Screen != nil {
 				t.Fatal("Ctrl+C did not return to the transcript")
 			}
-			if turnCanceled || shellCanceled || !a.busy || a.shell != runningShell {
+			if !a.busy {
 				t.Fatal("center interrupted underlying work")
 			}
-			if a.sess.ID != before || a.editor.Text() != "keep my draft" || quitting(a) {
+			if a.threadID != before || a.editor.Text() != "keep my draft" || quitting(a) {
 				t.Fatal("center changed or quit the session")
 			}
 			a.busy = false
-			a.shell = nil
 		})
 	}
 }

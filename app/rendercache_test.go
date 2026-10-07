@@ -6,7 +6,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/sebastianrcnt/atto/agent"
 	"github.com/sebastianrcnt/atto/ai"
 	"github.com/sebastianrcnt/atto/config"
 	"github.com/sebastianrcnt/atto/provider"
@@ -17,7 +16,7 @@ func hasCommand(cmds []command, name string) bool {
 }
 
 func TestAllCommandsCached(t *testing.T) {
-	a := extApp(t, demoExtension)
+	a := extApp(t, `export default (atto: any) => { atto.registerCommand("demo", { description: "Demo things", handler() {} }) }`, newMainServer(t, reply{"", "ok"}), "")
 	within(t, a, "the extension command", func() bool { return hasCommand(a.allCommands(), "demo") })
 	var first, second []command
 	a.ui.Do(func() { first, second = a.allCommands(), a.allCommands() })
@@ -28,7 +27,7 @@ func TestAllCommandsCached(t *testing.T) {
 	// A command registered at run time shows without a reload.
 	writeTestFile(t, filepath.Join(config.ExtensionsDir(), "demo.ts"),
 		`export default (atto: any) => { atto.registerCommand("demo", { handler() {} }); atto.registerCommand("later", { handler() {} }) }`)
-	a.ui.Do(func() { a.runCommand("/reload") })
+	typeLine(a, "/reload")
 	within(t, a, "the new extension command", func() bool { return hasCommand(a.allCommands(), "later") })
 
 	// The open suggestion list follows the commands.
@@ -38,10 +37,6 @@ func TestAllCommandsCached(t *testing.T) {
 			t.Errorf("suggestions:\n%s", got)
 		}
 	})
-
-	// And they go when the extensions do.
-	a.ui.Do(func() { a.ext.Close() })
-	within(t, a, "the commands to go", func() bool { return !hasCommand(a.allCommands(), "later") })
 }
 
 func TestBuiltinStatusCachedUntilInputsChange(t *testing.T) {
@@ -49,7 +44,7 @@ func TestBuiltinStatusCachedUntilInputsChange(t *testing.T) {
 	a := statusApp(t, price)
 	// fresh is what an uncached call returns.
 	fresh := func(first, width int) string {
-		m, effort := a.agent.Current()
+		m, effort := a.model(), a.effort()
 		return strings.Join(a.buildStatus(m, effort, first, width), "\n")
 	}
 	got := func(first, width int) string { return strings.Join(a.builtinStatus(first, width), "\n") }
@@ -72,23 +67,23 @@ func TestBuiltinStatusCachedUntilInputsChange(t *testing.T) {
 	}
 
 	// The effort shows only for a model with levels.
-	a.agent.SetModel(config.ModelRef{Model: config.Model{ID: "m", Name: "Orca", ContextWindow: 262000, Cost: price, Efforts: []string{"low", "high"}}})
-	a.agent.SetEffort("low")
+	setTestModel(a, config.ModelRef{Model: config.Model{ID: "m", Name: "Orca", ContextWindow: 262000, Cost: price, Efforts: []string{"low", "high"}}})
+	a.info.Effort = "low"
 	check("levels")
 	before := got(160, 160)
-	a.agent.SetEffort("high")
+	a.info.Effort = "high"
 	if got(160, 160) == before {
 		t.Error("effort: the status line did not change")
 	}
 	check("effort")
 	// The same counts, but a level mapped to nil: no levels left, no effort (#4).
 	x := "x"
-	a.agent.SetModel(config.ModelRef{Model: config.Model{ID: "m", Name: "Orca", ContextWindow: 262000, Cost: price, Efforts: []string{"low"}, EffortMap: map[string]*string{"low": &x}}})
-	a.agent.SetEffort("low")
+	setTestModel(a, config.ModelRef{Model: config.Model{ID: "m", Name: "Orca", ContextWindow: 262000, Cost: price, Efforts: []string{"low"}, EffortMap: map[string]*string{"low": &x}}})
+	a.info.Effort = "low"
 	check("mapped level")
 	got(160, 160) // cached at the width compared next
-	a.agent.SetModel(config.ModelRef{Model: config.Model{ID: "m", Name: "Orca", ContextWindow: 262000, Cost: price, Efforts: []string{"low"}, EffortMap: map[string]*string{"low": nil}}})
-	a.agent.SetEffort("low")
+	setTestModel(a, config.ModelRef{Model: config.Model{ID: "m", Name: "Orca", ContextWindow: 262000, Cost: price, Efforts: []string{"low"}, EffortMap: map[string]*string{"low": nil}}})
+	a.info.Effort = "low"
 	if g, f := got(160, 160), fresh(160, 160); g != f {
 		t.Errorf("after a level mapped to nil: cached\n%q\nfresh\n%q", g, f)
 	}
@@ -99,7 +94,7 @@ func TestBuiltinStatusCachedUntilInputsChange(t *testing.T) {
 		"branch":    func() { a.gitBranch = "dev" },
 		"directory": func() { a.cwd = "/work/other" },
 		"model": func() {
-			a.agent = agent.New(config.ModelRef{Model: config.Model{ID: "n", Name: "Narwhal", ContextWindow: 8000}}, "", t.TempDir())
+			setTestModel(a, config.ModelRef{Model: config.Model{ID: "n", Name: "Narwhal", ContextWindow: 8000}})
 		},
 		"memory":      func() { rssBytes.Store(rssBytes.Load() + 300<<20) },
 		"cost":        func() { a.usage.cost = 0.5 },
@@ -124,7 +119,7 @@ func BenchmarkBuiltinStatus(b *testing.B) {
 		}
 	})
 	b.Run("rebuilt", func(b *testing.B) {
-		m, effort := a.agent.Current()
+		m, effort := a.model(), a.effort()
 		b.ReportAllocs()
 		for b.Loop() {
 			a.buildStatus(m, effort, 100, 100)

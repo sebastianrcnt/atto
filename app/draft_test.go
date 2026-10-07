@@ -5,22 +5,45 @@ import (
 	"testing"
 
 	"github.com/sebastianrcnt/atto/agent"
+	"github.com/sebastianrcnt/atto/core/transcript"
+	"github.com/sebastianrcnt/atto/server"
 )
 
-// feed applies agent events as the UI goroutine would and returns the
-// rendered transcript after each.
-func feed(a *App, evs ...any) (lines []string) {
+// feeder makes items of agent events as the runtime does and hands them
+// to the terminal as notifications would, through their protocol form.
+type feeder struct {
+	a *App
+	b transcript.Builder
+}
+
+func newFeeder(a *App) *feeder {
+	f := &feeder{a: a}
+	f.b.IDPrefix = "s-i"
+	f.b.Handler = transcript.Handler{
+		Started:   func(it *transcript.Item) { a.wireStarted(server.WireItem("s", it)) },
+		Delta:     func(it *transcript.Item, d string) { a.wireDelta(it.ID, d) },
+		Updated:   func(it *transcript.Item) { a.wireUpdated(server.WireItem("s", it)) },
+		Completed: func(it *transcript.Item) { a.wireCompleted(server.WireItem("s", it)) },
+	}
+	return f
+}
+
+// feed applies agent events and returns the rendered transcript after
+// each.
+func (f *feeder) feed(evs ...any) (lines []string) {
 	for _, ev := range evs {
-		a.ui.Do(func() {
-			a.onEvent(ev)
-			lines = append(lines, transcriptLines(a))
+		f.a.ui.Do(func() {
+			f.b.Event(ev)
+			lines = append(lines, transcriptLines(f.a))
 		})
 	}
 	return lines
 }
 
+func feed(a *App, evs ...any) []string { return newFeeder(a).feed(evs...) }
+
 func TestPendingToolBlockBecomesRunning(t *testing.T) {
-	a := treeApp(t)
+	a := testApp(t)
 	got := feed(a,
 		agent.ToolDraft{Index: 0},
 		agent.ToolDraft{Index: 0, Args: agent.BashArgs{Description: "Write file", Command: "cat > a <<'EOF'\nhi"}},
@@ -42,7 +65,7 @@ func TestPendingToolBlockBecomesRunning(t *testing.T) {
 }
 
 func TestPendingToolBlockEndsWhenTurnIsInterrupted(t *testing.T) {
-	a := treeApp(t)
+	a := testApp(t)
 	feed(a, agent.ToolDraft{Index: 0, Args: agent.BashArgs{Description: "Write file"}}, agent.ToolDraftEnd{Index: 0})
 	var out string
 	a.ui.Do(func() { out = transcriptLines(a) })
@@ -51,9 +74,10 @@ func TestPendingToolBlockEndsWhenTurnIsInterrupted(t *testing.T) {
 	}
 
 	// A call the response ended on without a ToolDraftEnd is closed by End.
-	b := treeApp(t)
-	feed(b, agent.ToolDraft{Index: 0, Args: agent.BashArgs{Description: "Run tests"}})
-	b.ui.Do(func() { b.tr().End(); out = transcriptLines(b) })
+	b := testApp(t)
+	fb := newFeeder(b)
+	fb.feed(agent.ToolDraft{Index: 0, Args: agent.BashArgs{Description: "Run tests"}})
+	b.ui.Do(func() { fb.b.End(); out = transcriptLines(b) })
 	if strings.Contains(out, "writing") || !strings.Contains(out, "✗ Run tests · canceled") {
 		t.Fatalf("End leaves nothing pending:\n%s", out)
 	}

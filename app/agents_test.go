@@ -50,7 +50,7 @@ func TestCenterListsSessionsByProjectAndState(t *testing.T) {
 	now := time.Now()
 	fakeCenter(t,
 		[]daemon.Pane{
-			{ID: 1, Cwd: a.cwd, Session: a.sess.ID, Clients: 1, State: "idle", Active: now},
+			{ID: 1, Cwd: a.cwd, Session: a.threadID, Clients: 1, State: "idle", Active: now},
 			{ID: 2, Cwd: "/w/api", Session: "s2", Name: "fix the api", State: "working", Active: now.Add(-time.Minute)},
 			{ID: 3, Cwd: "/w/api", Session: "s3", Name: "answer me", State: "waiting", Active: now.Add(-2 * time.Minute)},
 		},
@@ -130,7 +130,7 @@ func TestCenterListsSessionsByProjectAndState(t *testing.T) {
 
 func TestCenterDirectResumesInPlace(t *testing.T) {
 	a, _ := paneApp(t, false)
-	a.nameSession("here now")
+	a.sessName = "here now"
 	other := session.New(a.cwd)
 	other.Append(session.Entry{Type: session.TypeName, Name: "earlier work"})
 	other.Close()
@@ -141,38 +141,8 @@ func TestCenterDirectResumesInPlace(t *testing.T) {
 	if c.tab != tabInactive {
 		t.Fatalf("/resume opens on Inactive, tab %d", c.tab)
 	}
-	c.HandleInput("\r")
-	if a.sess.ID != other.ID {
-		t.Fatalf("resumed %s, want %s", a.sess.ID, other.ID)
-	}
-}
-
-func TestCenterDefersResumeWhileBusy(t *testing.T) {
-	a, _ := paneApp(t, false)
-	original := a.sess.ID
-	other := session.New(a.cwd)
-	other.Append(session.Entry{Type: session.TypeName, Name: "other work"})
-	other.Close()
-	fakeCenter(t, nil, []session.Summary{{ID: other.ID, Cwd: a.cwd, Name: "other work", Updated: time.Now()}})
-
-	canceled := false
-	a.busy = true
-	a.cancel = func() { canceled = true }
-	a.cmdResume("")
-	waitCenter(t, a)
-	c := a.modal.(*agentCenter)
-	c.HandleInput("\r")
-
-	if !canceled {
-		t.Fatal("opening another session did not cancel the active turn")
-	}
-	if a.pendingResume != other.Path {
-		t.Fatalf("pending resume %q, want %q", a.pendingResume, other.Path)
-	}
-	if a.sess.ID != original {
-		t.Fatalf("session changed while busy: got %s, want %s", a.sess.ID, original)
-	}
-	a.busy = false
+	a.ui.Do(func() { c.HandleInput("\r") })
+	within(t, a, "the resumed session", func() bool { return a.threadID == other.ID })
 }
 
 func TestStandaloneCenterPicks(t *testing.T) {

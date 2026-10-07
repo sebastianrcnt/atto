@@ -151,28 +151,27 @@
 // agentMessage item that already completed is saved, item/updated
 // brings its blockId, before any item/display names it.
 //
-// Live session (atto's /remote, see Live): the server has one thread, the
-// TUI's session. initialize says {live: true, threadId}; thread/start is
-// refused (send /clear); thread/rollback takes back the last turn as
-// /tree does, idle only; turn/start and turn/steer both send the
-// input as if typed in the terminal (a turn, a steer or a queued turn:
-// {status, turnId}). More notifications:
+// Live session (atto's /remote, a scoped gateway: see Scope): the web
+// client follows the session the terminal shows. initialize says {live:
+// true, threadId}; thread/start is refused (send /clear); thread/rollback
+// takes back the last turn as /tree does, idle only; turn/start and
+// turn/steer both send the input as if typed (input/submit auto: a turn,
+// a steer or a queued turn: {status, turnId}). More notifications:
 //
 //	thread/switched {threadId, previousThreadId}  (/clear, /resume or /tree in the terminal: thread/read again)
 //	thread/updated  {thread}  (model, effort, name or busy changed)
 //	goal/updated    {goal}  (the goal changed; null when cleared; see GoalInfo)
-//	prompt/open     {prompt}  (the terminal opened a picker or an input; see Prompt)
-//	prompt/closed   {id, how, by}  (how: answered, cancelled or closed; by: terminal or remote)
 //
-// and one more request:
+// Every client, live or not, gets the runtime's prompts (prompt/open,
+// prompt/closed {id, how, by}) and answers them with
 //
 //	prompt/answer  {threadId, id, index? | text? | cancel?}  → {}
-//	               answers the open prompt as if in the terminal: index
-//	               picks an option of a select, text submits an input,
-//	               cancel is Esc. The first answer wins, from either side;
-//	               a prompt that is no longer open is refused.
+//	               index picks an option of a select, text submits an
+//	               input, cancel is Esc. The first answer wins; a prompt
+//	               that is no longer open is refused (reason stalePrompt).
 //
-// thread/read's result carries the open prompt and the goal as well.
+// thread/read's result carries the open prompt and the goal as well. The
+// terminal's own pickers (/model, /resume, /tree) are not prompts.
 package server
 
 import (

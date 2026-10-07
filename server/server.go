@@ -44,7 +44,6 @@ type Server struct {
 	mu       sync.Mutex
 	threads  map[string]*thread
 	stop     chan struct{}
-	live     Live   // set by NewLive: the one conversation served
 	instance string // see newInstanceID
 	events   *broker
 	clients  map[string]*clientConn
@@ -189,8 +188,11 @@ func (s *Server) call(ctx context.Context, method string, raw json.RawMessage) (
 	if err != nil {
 		return nil, err
 	}
-	if s.live != nil {
-		return s.liveCall(method, p)
+	if sc := scopeOf(ctx); sc != nil {
+		if out, err, ok := s.scopedCall(ctx, sc, method, p); ok {
+			return out, err
+		}
+		p.ThreadID = sc.Thread()
 	}
 	client := clientOf(ctx)
 	switch method {
@@ -198,6 +200,8 @@ func (s *Server) call(ctx context.Context, method string, raw json.RawMessage) (
 		return s.initialize(ctx, p, nil)
 	case "models/list":
 		return s.listModels()
+	case "ping": // answered after every request sent before it
+		return nil, nil
 	case "thread/start":
 		return s.startThread(client, p)
 	case "thread/resume":

@@ -139,6 +139,20 @@ var threadMethods = map[string]func(t *thread, client string, p threadParams) (a
 		}
 		return t.info(), nil
 	},
+	"models/reload": func(t *thread, client string, p threadParams) (any, error) {
+		_, models, err := core.Load()
+		if err != nil {
+			return nil, err
+		}
+		t.models = models
+		if m := t.model(); m.Model.ID != "" {
+			if ref, ok := models.Find(m.ProviderName, m.Model.ID); ok {
+				t.agent.SetModel(ref)
+			}
+		}
+		t.updated()
+		return nil, nil
+	},
 	"thread/setEffort": func(t *thread, client string, p threadParams) (any, error) {
 		if err := core.CheckEffort(t.model(), p.Effort); err != nil {
 			return nil, invalid("%v", err)

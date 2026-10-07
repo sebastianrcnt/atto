@@ -1,12 +1,13 @@
 package app
 
 import (
-	"github.com/sebastianrcnt/atto/provider"
 	"math/rand/v2"
 	"slices"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/sebastianrcnt/atto/provider"
 
 	"github.com/sebastianrcnt/atto/agent"
 	"github.com/sebastianrcnt/atto/tui"

@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	"github.com/sebastianrcnt/atto/core/transcript"
+	"github.com/sebastianrcnt/atto/server"
 	"github.com/sebastianrcnt/atto/session"
 	"github.com/sebastianrcnt/atto/tui"
 )
@@ -112,72 +113,40 @@ type displayBlock interface {
 func (t *textBlock) display() *blockDisplay     { return &t.disp }
 func (t *thinkingBlock) display() *blockDisplay { return &t.disp }
 
-// itemSaved gives the block of a saved reasoning or assistant item its
-// block ID, so extensions can name it. Live and on replay alike.
-func (a *App) itemSaved(it *transcript.Item) {
-	b := a.itemBlocks[it.ID]
-	if b == nil || a.sess == nil {
+// bindBlock gives the block of a saved reasoning or assistant item its
+// block ID, so the runtime's item/display can name it.
+func (a *App) bindBlock(w server.Item) {
+	b := a.itemBlocks[w.ID]
+	if b == nil || w.BlockID == "" {
 		return
 	}
 	kind := session.BlockText
-	if it.Kind == transcript.Reasoning {
+	if w.Type == server.ItemReasoning {
 		kind = session.BlockReasoning
 	}
 	d := b.display()
-	d.entryID, d.kind, d.item = it.EntryID, kind, it.ID
-	d.id = session.BlockID(a.sess.ID, it.EntryID, kind)
+	d.entryID, d.kind, d.item, d.id = w.EntryID, kind, w.ID, w.BlockID
 	if a.blocks == nil {
 		a.blocks = map[string]displayBlock{}
 	}
 	a.blocks[d.id] = b
-	delete(a.itemBlocks, it.ID)
+	delete(a.itemBlocks, w.ID)
 }
 
-// itemDisplay applies a saved block_display entry on replay.
-func (a *App) itemDisplay(d transcript.Display) {
-	if a.sess == nil {
+// wireDisplay applies what extensions show on block id (item/display).
+func (a *App) wireDisplay(id string, w *server.BlockDisplay) {
+	b := a.blocks[id]
+	if b == nil || id == "" {
 		return
 	}
-	b := a.blocks[session.BlockID(a.sess.ID, d.EntryID, d.Block)]
-	if b == nil {
-		return
+	var st transcript.BlockDisplay
+	if w != nil {
+		st.Owner, st.Text = w.Ext, w.Text
+		for _, s := range w.Statuses {
+			st.Statuses = append(st.Statuses, transcript.BlockStatus{Ext: s.Ext, Text: s.Text})
+		}
 	}
-	bd := b.display()
-	bd.setStatus(d.Ext, d.Status)
-	bd.setDisplay(d.Ext, d.Text)
-}
-
-// blockStatus is ctx.ui.setBlockStatus: a block that is gone (the session
-// changed) is ignored.
-func (a *App) blockStatus(ext, id, text string) {
-	if b := a.blocks[id]; b != nil && b.display().setStatus(ext, text) {
-		a.recordBlock(b.display(), ext)
-	}
-}
-
-// blockText is ctx.ui.setBlockDisplay.
-func (a *App) blockText(ext, id, text string) {
-	if b := a.blocks[id]; b != nil && b.display().setDisplay(ext, text) {
-		a.recordBlock(b.display(), ext)
-	}
-}
-
-// recordBlock saves ext's state for the block in the session, and tells
-// the /remote clients.
-func (a *App) recordBlock(d *blockDisplay, ext string) {
-	a.remoteDisplay(d)
-	if a.sess == nil || d.entryID == "" || strings.HasPrefix(d.entryID, "n") { // not recorded: nothing to attach to
-		return
-	}
-	status, display := d.state.Snapshot(ext)
-	a.sess.Append(session.Entry{Type: session.TypeBlockDisplay, TargetID: d.entryID, Block: d.kind, Ext: ext, Status: status, Display: display})
-}
-
-// blockState is what extensions show on the block blockID; nil for a
-// block not known ("" is an item that has no block ID yet).
-func (a *App) blockState(blockID string) *transcript.BlockDisplay {
-	if b := a.blocks[blockID]; b != nil && blockID != "" {
-		return &b.display().state
-	}
-	return nil
+	d := b.display()
+	d.state = st
+	d.ver++
 }

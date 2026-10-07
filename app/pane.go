@@ -38,7 +38,7 @@ func (a *App) paneSync() {
 	if !a.pane.on {
 		return
 	}
-	id, name := a.sess.ID, markerSafe(a.sessName)
+	id, name := a.threadID, markerSafe(a.sessName)
 	if id != a.pane.sess || name != a.pane.nam {
 		a.pane.sess, a.pane.nam = id, name
 		a.ui.Emit(daemon.MarkerSeq("session", id, name))
@@ -57,7 +57,7 @@ func (a *App) paneState() string {
 	switch {
 	case a.busy:
 		return "working"
-	case (a.modal != nil && !center) || (a.goal.Held() && a.goal.Active()):
+	case (a.modal != nil && !center) || (a.goalHeld() && a.goalActive()):
 		return "waiting"
 	}
 	return "idle"

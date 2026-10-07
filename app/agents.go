@@ -258,7 +258,7 @@ func (c *agentCenter) apply(snapshot centerSnapshot) {
 	for i := range panes {
 		p := panes[i]
 		it := centerItem{id: p.Session, title: p.Name, cwd: p.Cwd, pane: &p, updated: p.Active,
-			current: c.a != nil && (p.ID == self || (p.Session != "" && p.Session == c.a.sess.ID))}
+			current: c.a != nil && (p.ID == self || (p.Session != "" && p.Session == c.a.threadID))}
 		switch p.State {
 		case "working":
 			it.tab = tabWorking
@@ -282,16 +282,16 @@ func (c *agentCenter) apply(snapshot centerSnapshot) {
 		items = append(items, it)
 		seen[it.id] = true
 	}
-	if a := c.a; a != nil && !seen[a.sess.ID] {
-		it := centerItem{id: a.sess.ID, title: a.sessName, cwd: a.cwd, current: true, updated: time.Now(), tab: tabReady}
+	if a := c.a; a != nil && !seen[a.threadID] {
+		it := centerItem{id: a.threadID, title: a.sessName, cwd: a.cwd, current: true, updated: time.Now(), tab: tabReady}
 		switch {
 		case a.busy:
 			it.tab = tabWorking
-		case a.goal.Held() && a.goal.Active():
+		case a.goalHeld() && a.goalActive():
 			it.tab = tabNeedsYou
 		}
 		items = append(items, it)
-		seen[a.sess.ID] = true
+		seen[a.threadID] = true
 	}
 	c.msgs = make(map[string]string)
 	for _, s := range snapshot.saved {
@@ -336,7 +336,7 @@ func (c *agentCenter) apply(snapshot centerSnapshot) {
 			it.branch = st.Branch
 		}
 		// A live pane's waiting/working state is more precise than turn state.
-		viewer := it.current && c.a != nil && c.a.sess.ReadOnly() != ""
+		viewer := it.current && c.a != nil && c.a.readOnly != ""
 		if it.pane != nil && it.pane.State != "waiting" && turn.Status.Active() {
 			// A pane may be a read-only viewer of the headless turn. Its idle
 			// frontend does not make the actual agent idle.
