@@ -83,7 +83,7 @@ func (a *App) submitWithImages(text string, att []tui.Attachment) {
 		a.restoreToEditor([]string{text}, att...)
 		return
 	}
-	if a.busy {
+	if a.turns.Busy {
 		a.enqueue(text, att)
 		return
 	}

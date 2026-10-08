@@ -111,10 +111,10 @@ func TestDoubleEscOpensTree(t *testing.T) {
 
 	// While a turn runs, Esc interrupts, and never arms the double Esc.
 	cancels := 0
-	a.busy, a.cancel = true, func() { cancels++ }
+	a.turns.Busy, a.turns.Cancel = true, func(error) { cancels++ }
 	a.onInput("\x1b")
 	a.onInput("\x1b")
-	a.busy = false
+	a.turns.Busy = false
 	a.onInput("\x1b")
 	if a.modal != nil || cancels != 2 {
 		t.Fatalf("modal %T, cancels %d", a.modal, cancels)
@@ -141,7 +141,7 @@ func TestNavigateAndResume(t *testing.T) {
 	a.record("user", "u2")
 	a.record("assistant", "a2")
 	a.goal.Goal = &goal.Goal{Objective: "x", Status: goal.Active}
-	a.queued = []queuedInput{{text: "queued follow-up"}}
+	a.turns.Queued = []queuedInput{{text: "queued follow-up"}}
 
 	a.navigateTree(entryID(t, a, "u2"))
 	if got := a.editor.Text(); !strings.Contains(got, "queued follow-up") {
@@ -201,14 +201,14 @@ func TestNavigateWhileBusyWaitsForTurn(t *testing.T) {
 	a.record("user", "u1")
 	a.record("assistant", "a1")
 	canceled := false
-	a.busy, a.cancel, a.runKind = true, func() { canceled = true }, "turn"
-	a.pendingSteers = []string{"steer"}
+	a.turns.Busy, a.turns.Cancel, a.runKind = true, func(error) { canceled = true }, "turn"
+	a.turns.Steers = []string{"steer"}
 	a.agent.Steer("steer")
 	a.navigateTree(entryID(t, a, "u1"))
 	if !canceled || a.pendingTree == "" {
 		t.Fatal("should interrupt and wait")
 	}
-	a.busy, a.cancel = false, nil
+	a.turns.Busy, a.turns.Cancel = false, nil
 	a.afterRun(nil)
 	if a.pendingTree != "" || len(userBlocks(a)) != 0 {
 		t.Fatalf("navigation not applied: %v", userBlocks(a))

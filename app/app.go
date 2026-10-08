@@ -86,17 +86,15 @@ type App struct {
 	toast   toast
 
 	memory  core.IdleMemory
-	busy    bool
+	turns   core.TurnRunner[queuedInput]
 	runKind string // "turn", "compact" or "branchSummary" while busy
 	// typed is the message the user typed that started the running turn (nil
 	// for any other run); replied is set once the model has answered it.
-	typed           *queuedInput
-	replied         bool
-	cancel          context.CancelFunc
-	interruptCancel context.CancelCauseFunc
-	runDone         <-chan struct{}
-	runStart        time.Time
-	activity        string
+	typed    *queuedInput
+	replied  bool
+	runDone  <-chan struct{}
+	runStart time.Time
+	activity string
 	// Activity line state (activity.go): the turn's verb, the setting it
 	// comes from, when the run last sent an event and how many commands
 	// run; now and verbRand are replaced by tests.
@@ -121,14 +119,6 @@ type App struct {
 	// rendering never reads agent state while a turn runs.
 	ctxTokens int
 	usage     usageStats
-
-	// Codex-style pending input: Enter during a turn steers it (delivered
-	// after the next tool call); Tab queues a follow-up turn.
-	pendingSteers            []string
-	queued                   []queuedInput
-	sendSteersAfterInterrupt bool
-	sendNow                  *queuedInput // Ctrl+Enter's message, sent once the turn it interrupted ends
-	queuePaused              bool
 
 	// items makes the transcript's items from agent events and session
 	// entries (see items.go); these are the blocks of the items being
@@ -180,7 +170,6 @@ type App struct {
 	escAction string
 
 	// Inbox: events waiting for delivery, and counts for the status line.
-	pendingEvents        []events.Event
 	jobCount, timerCount int
 
 	goal core.GoalDriver
@@ -337,8 +326,8 @@ func Run(opts Options) error {
 	<-a.quit
 	var done <-chan struct{}
 	a.ui.Do(func() {
-		if a.cancel != nil {
-			a.cancel()
+		if a.turns.Cancel != nil {
+			a.turns.Cancel(nil)
 		}
 		done = a.runDone
 		a.memory.Close()
@@ -402,7 +391,7 @@ func (a *App) leaveSession(reason string) {
 	if n := a.leaveCore(); n > 0 {
 		a.notice("Stopped %d background job(s) of the previous conversation.", n)
 	}
-	a.jobCount, a.timerCount, a.pendingEvents = 0, 0, nil
+	a.jobCount, a.timerCount, a.turns.PendingEvents = 0, 0, nil
 	a.dropShell()
 }
 
@@ -591,7 +580,7 @@ func (a *App) onInput(data string) bool {
 	case "ctrl+c":
 		switch {
 		case a.cancelShell():
-		case a.busy:
+		case a.turns.Busy:
 			a.interruptTurn()
 		case a.editor.Text() != "":
 			a.editor.SetText("")
@@ -600,14 +589,14 @@ func (a *App) onInput(data string) bool {
 		}
 		return true
 	case "ctrl+d":
-		if a.editor.Text() == "" && (!a.busy || a.exitMenuAvailable()) {
+		if a.editor.Text() == "" && (!a.turns.Busy || a.exitMenuAvailable()) {
 			a.requestQuit()
 			return true
 		}
 	case "ctrl+b":
 		// As in Claude Code: the running command moves to the background
 		// and the turn goes on. Otherwise it is the editor's cursor-left.
-		if a.backgroundShell() || a.busy && a.agent.Background() {
+		if a.backgroundShell() || a.turns.Busy && a.agent.Background() {
 			return true
 		}
 	case "ctrl+l":
@@ -625,7 +614,7 @@ func (a *App) onInput(data string) bool {
 		if a.editLastSteer() {
 			return true
 		}
-		if len(a.queued) > 0 {
+		if len(a.turns.Queued) > 0 {
 			a.editLastQueued()
 			return true
 		}
@@ -643,11 +632,11 @@ func (a *App) interrupt() bool {
 	if a.cancelShell() {
 		return true
 	}
-	if !a.busy {
+	if !a.turns.Busy {
 		return a.interruptGoalRetry()
 	}
-	if len(a.pendingSteers) > 0 {
-		a.sendSteersAfterInterrupt = true
+	if len(a.turns.Steers) > 0 {
+		a.turns.SendSteersAfterInterrupt = true
 	}
 	a.interruptTurn()
 	return true
@@ -655,11 +644,7 @@ func (a *App) interrupt() bool {
 
 // interruptTurn distinguishes a user interrupt from shutdown or navigation.
 func (a *App) interruptTurn() {
-	if a.interruptCancel != nil && a.runKind == "turn" {
-		a.interruptCancel(agent.ErrUserInterrupt)
-	} else if a.cancel != nil {
-		a.cancel()
-	}
+	a.turns.Interrupt(a.runKind == "turn")
 }
 
 func (a *App) submit(text string, att []tui.Attachment) {
@@ -684,9 +669,9 @@ func (a *App) submit(text string, att []tui.Attachment) {
 		// Enter on an empty prompt resumes a paused queue, or else a goal
 		// waiting for the user.
 		switch {
-		case a.busy:
-		case len(a.queued) > 0:
-			a.queuePaused = false
+		case a.turns.Busy:
+		case len(a.turns.Queued) > 0:
+			a.turns.QueuePaused = false
 			a.maybeSendNextQueued()
 		case a.goal.Held():
 			a.goal.Release()
@@ -697,9 +682,9 @@ func (a *App) submit(text string, att []tui.Attachment) {
 		a.runCommand(text)
 	case a.noModel():
 		a.restoreToEditor([]string{text})
-	case a.busy && a.runKind == "turn":
+	case a.turns.Busy && a.runKind == "turn":
 		a.steer(text)
-	case a.busy:
+	case a.turns.Busy:
 		a.enqueue(text, nil)
 	default:
 		a.startTurn(text, nil)
@@ -749,7 +734,7 @@ func (a *App) runTurn(text string, att []tui.Attachment, typed bool) {
 	a.runKind = "turn"
 	a.recordSettings()
 	a.start("Thinking", func(ctx context.Context, emit func(any)) error {
-		return a.agent.RunWithImages(ctx, text, imgs, emit)
+		return a.turns.Run(ctx, a.agent, core.TurnRequest{Text: text, Images: imgs}, emit)
 	})
 	if typed && !a.fromRemote { // after start, which forgets the last one
 		a.typed = &queuedInput{text, att, false}
@@ -762,9 +747,14 @@ func (a *App) start(activity string, fn func(context.Context, func(any)) error) 
 		a.memory.Begin()
 	}
 	a.typed, a.replied = nil, false
-	ctx, cancel := context.WithCancelCause(context.Background())
-	a.busy, a.cancel = true, func() { cancel(nil) }
-	a.interruptCancel = cancel
+	ctx, err := a.turns.Begin(context.Background())
+	if err != nil {
+		if a.memory != nil {
+			a.memory.End()
+		}
+		a.errorNotice(err)
+		return
+	}
 	done := make(chan struct{})
 	a.runDone = done
 	a.runStart, a.activity = a.clock(), activity
@@ -807,12 +797,10 @@ func (a *App) start(activity string, fn func(context.Context, func(any)) error) 
 			if a.memory != nil {
 				defer a.memory.End()
 			}
-			a.pendingEvents = append(a.pendingEvents, reported...)
+			a.turns.PendingEvents = append(a.turns.PendingEvents, reported...)
 			a.tr().End() // a compaction that did not finish disappears
-			a.busy = false
+			a.turns.End()
 			a.ctxTokens = ctxTokens
-			cancel(nil)
-			a.cancel, a.interruptCancel = nil, nil
 			select {
 			case <-a.quit:
 				return // quitting cannot start queued or goal work

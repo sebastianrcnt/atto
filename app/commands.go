@@ -192,9 +192,9 @@ func (a *App) cmdSkill(text string) {
 		a.notice("Unknown skill: %s", strings.Fields(text)[0])
 	case a.noModel():
 		a.restoreToEditor([]string{text})
-	case a.busy && a.runKind == "turn":
+	case a.turns.Busy && a.runKind == "turn":
 		a.steer(msg)
-	case a.busy:
+	case a.turns.Busy:
 		a.enqueue(msg, nil)
 	default:
 		a.runTurn(msg, nil, false)
@@ -351,7 +351,7 @@ func (a *App) cmdEffort(arg string) {
 }
 
 func (a *App) cmdCompact(string) {
-	if a.busy {
+	if a.turns.Busy {
 		a.enqueue("/compact", nil)
 		return
 	}
@@ -364,7 +364,7 @@ func (a *App) cmdCompact(string) {
 func (a *App) reset() {
 	a.agent.Reset()
 	a.agent.SetLongContext(false)
-	a.queued, a.pendingSteers, a.queuePaused = nil, nil, false
+	a.turns.Queued, a.turns.Steers, a.turns.QueuePaused = nil, nil, false
 	a.remoteSteers = nil
 	a.ctxTokens = 0
 	a.usage = usageStats{}
@@ -376,7 +376,7 @@ func (a *App) reset() {
 }
 
 func (a *App) cmdClear(string) {
-	if a.busy {
+	if a.turns.Busy {
 		a.enqueue("/clear", nil)
 		return
 	}
@@ -412,7 +412,7 @@ func (a *App) cmdName(arg string) {
 }
 
 func (a *App) cmdArchive(string) {
-	if a.busy {
+	if a.turns.Busy {
 		a.notice("Still working — press esc to interrupt first.")
 		return
 	}

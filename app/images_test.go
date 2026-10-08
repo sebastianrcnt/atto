@@ -92,8 +92,8 @@ func TestClipboardKeyAttachesImage(t *testing.T) {
 	// Switching to a text-only model: submitting keeps the draft and warns.
 	a.agent.SetModel(config.ModelRef{ProviderName: "t", Model: config.Model{ID: "text-only"}})
 	a.editor.HandleInput("\r")
-	if len(a.editor.Attachments()) != 2 || a.busy {
-		t.Fatalf("draft not kept: %q busy %v", a.editor.Text(), a.busy)
+	if len(a.editor.Attachments()) != 2 || a.turns.Busy {
+		t.Fatalf("draft not kept: %q busy %v", a.editor.Text(), a.turns.Busy)
 	}
 	// And Ctrl+V does not read the clipboard.
 	before := calls.Load()

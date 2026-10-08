@@ -136,7 +136,7 @@ func (a *App) stallLevel(now time.Time) float64 {
 // renderActivity draws the activity line. It runs every animation frame,
 // so it stays cheap: the glyph and the shimmer come from the elapsed time.
 func (a *App) renderActivity(width int) []string {
-	if !a.busy {
+	if !a.turns.Busy {
 		return nil
 	}
 	now := a.clock()

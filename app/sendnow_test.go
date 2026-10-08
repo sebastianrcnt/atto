@@ -24,7 +24,7 @@ func TestCtrlEnterSendsNow(t *testing.T) {
 	model := newRemoteModel(t)
 	a := remoteApp(t, model)
 	a.ui.Do(func() {
-		a.queuePaused = true // no goal turn starts by itself
+		a.turns.QueuePaused = true // no goal turn starts by itself
 		a.cmdGoal("ship it")
 		a.startTurn("block", nil)
 	})
@@ -34,12 +34,12 @@ func TestCtrlEnterSendsNow(t *testing.T) {
 		press(a, "\r")
 		a.editor.SetText("now")
 		press(a, ctrlEnterKey)
-		if a.editor.Text() != "" || a.sendNow == nil {
-			t.Errorf("editor %q, sendNow %v", a.editor.Text(), a.sendNow)
+		if a.editor.Text() != "" || a.turns.SendNow == nil {
+			t.Errorf("editor %q, sendNow %v", a.editor.Text(), a.turns.SendNow)
 		}
 	})
 	within(t, a, "the new turn's answer", func() bool {
-		return !a.busy && strings.Contains(bodyText(a), "answer to steer me")
+		return !a.turns.Busy && strings.Contains(bodyText(a), "answer to steer me")
 	})
 	a.ui.Do(func() {
 		if got := userBlocks(a); !slices.Equal(got, []string{"block", "steer me\n\nnow"}) {
@@ -48,7 +48,7 @@ func TestCtrlEnterSendsNow(t *testing.T) {
 		if g := a.goal.Goal; g.Status != goal.Active || g.Note != "" || !a.goal.Held() {
 			t.Errorf("goal %+v, held %v", g, a.goal.Held())
 		}
-		if a.sendNow != nil || len(a.pendingSteers) != 0 || a.sendSteersAfterInterrupt {
+		if a.turns.SendNow != nil || len(a.turns.Steers) != 0 || a.turns.SendSteersAfterInterrupt {
 			t.Error("send-now state left over")
 		}
 	})
@@ -59,9 +59,9 @@ func TestCtrlEnterSendsNow(t *testing.T) {
 // not sent over the turn.
 func TestCtrlEnterWhileBusy(t *testing.T) {
 	a := treeApp(t)
-	a.busy, a.runKind = true, "turn"
+	a.turns.Busy, a.runKind = true, "turn"
 	canceled := 0
-	a.cancel = func() { canceled++ }
+	a.turns.Cancel = func(error) { canceled++ }
 
 	press(a, ctrlEnterKey)
 	if canceled != 0 {
@@ -69,25 +69,25 @@ func TestCtrlEnterWhileBusy(t *testing.T) {
 	}
 	a.editor.SetText("/nope")
 	press(a, ctrlEnterKey)
-	if canceled != 0 || a.sendNow != nil {
+	if canceled != 0 || a.turns.SendNow != nil {
 		t.Fatal("a command interrupted the turn")
 	}
 	a.steer("first")
 	press(a, "\x07") // the fallback key
-	if canceled != 1 || !a.sendSteersAfterInterrupt || a.sendNow != nil {
-		t.Fatalf("canceled %d, send steers %v, sendNow %v", canceled, a.sendSteersAfterInterrupt, a.sendNow)
+	if canceled != 1 || !a.turns.SendSteersAfterInterrupt || a.turns.SendNow != nil {
+		t.Fatalf("canceled %d, send steers %v, sendNow %v", canceled, a.turns.SendSteersAfterInterrupt, a.turns.SendNow)
 	}
-	a.sendSteersAfterInterrupt = false
+	a.turns.SendSteersAfterInterrupt = false
 	a.editor.SetText("draft")
 	press(a, "\x1b[13;5u")
-	if canceled != 2 || a.sendNow == nil || a.sendNow.text != "draft" {
-		t.Fatalf("canceled %d, sendNow %+v", canceled, a.sendNow)
+	if canceled != 2 || a.turns.SendNow == nil || a.turns.SendNow.text != "draft" {
+		t.Fatalf("canceled %d, sendNow %+v", canceled, a.turns.SendNow)
 	}
 	// A second one while the first is on its way is a steer, as Enter.
 	a.editor.SetText("again")
 	press(a, ctrlEnterKey)
-	if canceled != 2 || a.sendNow.text != "draft" || a.pendingSteers[len(a.pendingSteers)-1] != "again" {
-		t.Fatalf("canceled %d, sendNow %+v, steers %q", canceled, a.sendNow, a.pendingSteers)
+	if canceled != 2 || a.turns.SendNow.text != "draft" || a.turns.Steers[len(a.turns.Steers)-1] != "again" {
+		t.Fatalf("canceled %d, sendNow %+v, steers %q", canceled, a.turns.SendNow, a.turns.Steers)
 	}
 }
 
@@ -98,11 +98,11 @@ func TestCtrlEnterIdleIsEnter(t *testing.T) {
 	a.ui.Do(func() {
 		a.editor.SetText("hello")
 		press(a, ctrlEnterKey)
-		if a.editor.Text() != "" || !a.busy || a.sendNow != nil {
-			t.Errorf("editor %q, busy %v", a.editor.Text(), a.busy)
+		if a.editor.Text() != "" || !a.turns.Busy || a.turns.SendNow != nil {
+			t.Errorf("editor %q, busy %v", a.editor.Text(), a.turns.Busy)
 		}
 	})
-	within(t, a, "the answer", func() bool { return !a.busy && strings.Contains(bodyText(a), "answer to hello") })
+	within(t, a, "the answer", func() bool { return !a.turns.Busy && strings.Contains(bodyText(a), "answer to hello") })
 	a.ui.Do(func() {
 		if got := userBlocks(a); !slices.Equal(got, []string{"hello"}) {
 			t.Errorf("user messages %q", got)
@@ -113,7 +113,7 @@ func TestCtrlEnterIdleIsEnter(t *testing.T) {
 // The hint shows while a turn runs.
 func TestSendNowHint(t *testing.T) {
 	a := treeApp(t)
-	a.busy, a.runKind, a.activity = true, "turn", "Thinking"
+	a.turns.Busy, a.runKind, a.activity = true, "turn", "Thinking"
 	a.runStart = a.clock()
 	got := strings.Join(a.renderActivity(120), "\n")
 	if !strings.Contains(got, "esc to interrupt") || !strings.Contains(got, "ctrl+enter to send now") {

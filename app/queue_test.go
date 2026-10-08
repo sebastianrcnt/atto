@@ -10,8 +10,8 @@ func TestEditLastSteer(t *testing.T) {
 	a.steer("why so slow?")
 	a.editor.SetText("draft")
 	a.onInput("\x1b[1;2D") // shift+left
-	if a.editor.Text() != "why so slow?\ndraft" || len(a.pendingSteers) != 1 || a.pendingSteers[0] != "first" {
-		t.Fatalf("editor %q, pending %q", a.editor.Text(), a.pendingSteers)
+	if a.editor.Text() != "why so slow?\ndraft" || len(a.turns.Steers) != 1 || a.turns.Steers[0] != "first" {
+		t.Fatalf("editor %q, pending %q", a.editor.Text(), a.turns.Steers)
 	}
 	if got := a.agent.DrainSteers(); len(got) != 1 || got[0] != "first" {
 		t.Fatalf("agent steers %q", got)
@@ -30,10 +30,10 @@ func TestFailedTurnRestoresTypedText(t *testing.T) {
 	model := newRemoteModel(t)
 	a := remoteApp(t, model)
 	a.ui.Do(func() {
-		a.queuePaused = true
+		a.turns.QueuePaused = true
 		a.startTurn("fail", nil)
 	})
-	within(t, a, "the failed turn", func() bool { return !a.busy })
+	within(t, a, "the failed turn", func() bool { return !a.turns.Busy })
 	a.ui.Do(func() {
 		if a.editor.Text() != "fail" {
 			t.Errorf("editor %q, want the failed message back", a.editor.Text())
@@ -42,7 +42,7 @@ func TestFailedTurnRestoresTypedText(t *testing.T) {
 		a.startTurn("fail", nil)
 		a.editor.SetText("typed meanwhile")
 	})
-	within(t, a, "the second failed turn", func() bool { return !a.busy })
+	within(t, a, "the second failed turn", func() bool { return !a.turns.Busy })
 	a.ui.Do(func() {
 		if a.editor.Text() != "typed meanwhile" {
 			t.Errorf("editor %q, the draft was overwritten", a.editor.Text())
@@ -50,14 +50,14 @@ func TestFailedTurnRestoresTypedText(t *testing.T) {
 		a.editor.SetText("")
 		a.runTurn("fail", nil, false)
 	})
-	within(t, a, "the untyped failed turn", func() bool { return !a.busy })
+	within(t, a, "the untyped failed turn", func() bool { return !a.turns.Busy })
 	a.ui.Do(func() {
 		if a.editor.Text() != "" {
 			t.Errorf("editor %q, only typed messages come back", a.editor.Text())
 		}
 		a.startTurn("hello", nil)
 	})
-	within(t, a, "the answer", func() bool { return !a.busy })
+	within(t, a, "the answer", func() bool { return !a.turns.Busy })
 	a.ui.Do(func() {
 		if a.editor.Text() != "" {
 			t.Errorf("editor %q after a good turn", a.editor.Text())

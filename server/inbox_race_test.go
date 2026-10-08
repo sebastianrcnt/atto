@@ -12,7 +12,8 @@ func TestInboxEventsRequeuedWhenBeginRefuses(t *testing.T) {
 	t.Setenv("ATTO_DIR", t.TempDir())
 	s := &Server{Notify: func(string, map[string]any) {}}
 	for _, closing := range []bool{false, true} {
-		th := &thread{id: "s", busy: !closing, closing: closing}
+		th := &thread{id: "s", closing: closing}
+		th.turns.Busy = !closing
 		evs := []events.Event{
 			{Time: time.Now().Add(-time.Second), Source: "job", Text: "finished", Title: "first"},
 			{Time: time.Now(), Source: "timer", Text: "check", Title: "second"},

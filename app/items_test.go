@@ -59,7 +59,7 @@ func TestLiveBlocksMatchResume(t *testing.T) {
 	deadline := time.Now().Add(10 * time.Second)
 	for {
 		var busy bool
-		a.ui.Do(func() { busy = a.busy })
+		a.ui.Do(func() { busy = a.turns.Busy })
 		if !busy {
 			break
 		}

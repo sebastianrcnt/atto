@@ -49,7 +49,7 @@ func (a *App) snapshotGoal(g *goal.Goal) {
 // an empty prompt, or /goal resume).
 // As in codex, a continuation shows nothing of its own: the turn just starts.
 func (a *App) continueGoal() {
-	if a.busy || a.modal != nil || a.queuePaused || len(a.queued) > 0 || len(a.pendingEvents) > 0 || a.goal.Held() {
+	if a.turns.Busy || a.modal != nil || a.turns.QueuePaused || len(a.turns.Queued) > 0 || len(a.turns.PendingEvents) > 0 || a.goal.Held() {
 		return
 	}
 	if r := a.goal.Pending(); r != nil {
@@ -68,7 +68,7 @@ func (a *App) continueGoal() {
 	a.recordSettings()
 	a.tr().Event(transcript.Input{Text: text}) // recorded as a goal message
 	a.start("Working on goal", func(ctx context.Context, emit func(any)) error {
-		return a.agent.Run(ctx, text, emit)
+		return a.turns.Run(ctx, a.agent, core.TurnRequest{Text: text}, emit)
 	})
 }
 
@@ -384,7 +384,7 @@ func (a *App) setObjective(text string) {
 	if g.Status != goal.Active {
 		return
 	}
-	if a.busy && a.runKind == "turn" {
+	if a.turns.Busy && a.runKind == "turn" {
 		a.agent.Steer(g.ObjectiveUpdatedMessage()) // the running turn follows the new objective
 	} else {
 		a.continueGoal()
@@ -414,7 +414,7 @@ func (a *App) goalIndicator() string {
 	if g == nil {
 		return ""
 	}
-	if s := g.Indicator(a.goal.Elapsed(), a.goal.Held() && !a.busy); s != "" {
+	if s := g.Indicator(a.goal.Elapsed(), a.goal.Held() && !a.turns.Busy); s != "" {
 		return tui.FG(5, s)
 	}
 	return ""

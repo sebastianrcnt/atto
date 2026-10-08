@@ -82,7 +82,7 @@ func TestShutdownStopsLateInterruptDetach(t *testing.T) {
 		t.Fatal(err)
 	}
 	th.mu.Lock()
-	th.cancel(agent.ErrUserInterrupt)
+	th.turns.Cancel(agent.ErrUserInterrupt)
 	th.mu.Unlock()
 	closed := make(chan struct{})
 	go func() { s.Close(); close(closed) }()

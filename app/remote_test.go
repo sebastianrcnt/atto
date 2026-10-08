@@ -97,8 +97,8 @@ func remoteApp(t *testing.T, model *remoteModel) *App {
 	a.newSession("")
 	t.Cleanup(func() {
 		a.ui.Do(func() {
-			if a.cancel != nil {
-				a.cancel()
+			if a.turns.Cancel != nil {
+				a.turns.Cancel(nil)
 			}
 			a.stopRemote()
 		})

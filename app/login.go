@@ -45,7 +45,7 @@ func (a *App) loginHooks() loginHooks {
 }
 
 func (a *App) cmdLogin(arg string) {
-	if a.busy {
+	if a.turns.Busy {
 		a.notice("Still working — press esc to interrupt first.")
 		return
 	}

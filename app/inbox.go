@@ -63,13 +63,8 @@ func (a *App) pollInbox(s string) {
 		}
 		a.jobCount, a.timerCount = nJobs, nTimers
 		a.goal.Poll()
-		a.pendingEvents = append(a.pendingEvents, evs...)
-		if !a.busy && !events.Wakes(a.pendingEvents) {
-			// Quiet messages wait in the inbox for the next turn, which
-			// takes them after its first step.
-			events.Requeue(s, a.pendingEvents)
-			a.pendingEvents = nil
-		}
+		a.turns.PendingEvents = append(a.turns.PendingEvents, evs...)
+		a.turns.RequeueQuiet(s)
 		if reload { // atto reload, run by the agent
 			a.requestReload(true)
 		}
@@ -83,19 +78,11 @@ func (a *App) pollInbox(s string) {
 // a steer (after the next tool call) during a turn. While compacting, a
 // picker is open or the queue is paused, they wait.
 func (a *App) deliverEvents() {
-	if len(a.pendingEvents) == 0 || a.modal != nil || a.queuePaused {
+	delivery := a.turns.DeliverEvents(a.sess.ID, a.modal != nil || a.turns.QueuePaused, a.runKind == "turn")
+	evs := delivery.Events
+	if len(evs) == 0 {
 		return
 	}
-	if a.busy && a.runKind != "turn" {
-		return
-	}
-	if !a.busy && !events.Wakes(a.pendingEvents) {
-		events.Requeue(a.sess.ID, a.pendingEvents)
-		a.pendingEvents = nil
-		return
-	}
-	evs := a.pendingEvents
-	a.pendingEvents = nil
 	for _, e := range evs {
 		title := e.Title
 		if title == "" {
@@ -103,19 +90,19 @@ func (a *App) deliverEvents() {
 		}
 		a.add(&eventBlock{title: title})
 	}
-	text := events.Format(evs)
-	if !a.busy { // a steer reaches a running turn; idle, the user may be away
+	text := delivery.Text
+	if !a.turns.Busy { // a steer reaches a running turn; idle, the user may be away
 		a.notify("background_event", firstTitle(evs))
 	}
-	if a.busy {
-		a.agent.Steer(text) // shown above; not a user steer
+	if !delivery.Start {
+		a.turns.SteerEvents(a.agent, delivery)
 		return
 	}
 	a.runKind = "turn"
 	a.recordSettings()
 	a.tr().Event(transcript.Input{Text: text}) // shown above
 	a.start("Thinking", func(ctx context.Context, emit func(any)) error {
-		return a.agent.Run(ctx, text, emit)
+		return a.turns.Run(ctx, a.agent, core.TurnRequest{Text: text}, emit)
 	})
 }
 

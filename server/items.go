@@ -1,8 +1,6 @@
 package server
 
 import (
-	"slices"
-
 	"github.com/sebastianrcnt/atto/agent"
 	"github.com/sebastianrcnt/atto/core/transcript"
 	"github.com/sebastianrcnt/atto/extensions"
@@ -78,13 +76,11 @@ func (m *itemMapper) event(ev any) {
 		// The user's steers it took are no longer pending (inbox events
 		// and extensions' messages are steers too, never listed).
 		m.t.mu.Lock()
-		n := len(m.t.steers)
+		n := len(m.t.turns.Steers)
 		for _, text := range e.Texts {
-			if i := slices.Index(m.t.steers, text); i >= 0 {
-				m.t.steers = slices.Delete(m.t.steers, i, i+1)
-			}
+			m.t.turns.Committed(text)
 		}
-		changed := len(m.t.steers) != n
+		changed := len(m.t.turns.Steers) != n
 		m.t.mu.Unlock()
 		if changed {
 			m.s.pendingChanged(m.t)

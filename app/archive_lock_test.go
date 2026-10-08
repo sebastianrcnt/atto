@@ -16,7 +16,7 @@ func TestCurrentSessionArchivePreservesWriterLease(t *testing.T) {
 			t.Cleanup(a.closeSession)
 			a.record("user", "kept")
 			path := a.sess.Path
-			a.busy = busy
+			a.turns.Busy = busy
 			if !busy {
 				rel, err := filepath.Rel(config.SessionsDir(), path)
 				if err != nil {

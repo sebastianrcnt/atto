@@ -105,7 +105,7 @@ func TestShellCommandJoinsContext(t *testing.T) {
 	if bs := bashEntries(a); len(bs) != 1 || bs[0].Command != "echo hello" || bs[0].Exclude || bs[0].Output != "hello" {
 		t.Fatalf("entries: %+v", bs)
 	}
-	if a.busy || len(userBlocks(a)) != 0 {
+	if a.turns.Busy || len(userBlocks(a)) != 0 {
 		t.Fatal("a shell command is not a turn")
 	}
 }
@@ -128,13 +128,13 @@ func TestShellExcludedStaysOutOfContext(t *testing.T) {
 func TestShellEmptyCommandIsAMessage(t *testing.T) {
 	// During a turn a message steers it; a command would run.
 	a := treeApp(t)
-	a.busy, a.runKind = true, "turn"
-	a.cancel = func() {}
+	a.turns.Busy, a.runKind = true, "turn"
+	a.turns.Cancel = func(error) {}
 	for _, text := range []string{"!", "!!"} {
 		a.submit(text, nil)
 	}
-	if len(a.pendingSteers) != 2 || a.shell != nil || len(shellBlocks(a)) != 0 {
-		t.Fatalf("steers %q", a.pendingSteers)
+	if len(a.turns.Steers) != 2 || a.shell != nil || len(shellBlocks(a)) != 0 {
+		t.Fatalf("steers %q", a.turns.Steers)
 	}
 }
 
@@ -152,7 +152,7 @@ func TestShellExitCodeInContext(t *testing.T) {
 
 func TestShellDuringTurnWaitsForTheEnd(t *testing.T) {
 	a := treeApp(t)
-	a.busy, a.runKind = true, "turn"
+	a.turns.Busy, a.runKind = true, "turn"
 	a.submit("!echo hello", nil)
 	waitShell(t, a)
 	a.ui.Do(func() {
@@ -162,7 +162,7 @@ func TestShellDuringTurnWaitsForTheEnd(t *testing.T) {
 		if !strings.Contains(shellText(a), "after this turn") {
 			t.Errorf("block:\n%s", shellText(a))
 		}
-		a.busy = false
+		a.turns.Busy = false
 		a.afterRun(nil)
 	})
 	if got := contextText(a); !strings.Contains(got, "Ran `echo hello`") {
@@ -242,11 +242,11 @@ func TestShellBashModeInput(t *testing.T) {
 
 func TestShellQueueKeyRunsAtOnce(t *testing.T) {
 	a := treeApp(t)
-	a.busy, a.runKind = true, "turn"
+	a.turns.Busy, a.runKind = true, "turn"
 	a.editor.SetText("!echo hi")
 	a.queueFromEditor()
-	if len(a.queued) != 0 || len(shellBlocks(a)) == 0 {
-		t.Fatalf("queued %d", len(a.queued))
+	if len(a.turns.Queued) != 0 || len(shellBlocks(a)) == 0 {
+		t.Fatalf("queued %d", len(a.turns.Queued))
 	}
 	waitShell(t, a)
 }

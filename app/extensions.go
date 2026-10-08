@@ -184,9 +184,9 @@ func (a *App) sendExtensionMessage(text string) {
 	switch {
 	case strings.TrimSpace(text) == "":
 	case a.noModel():
-	case a.busy && a.runKind == "turn":
+	case a.turns.Busy && a.runKind == "turn":
 		a.steer(text)
-	case a.busy:
+	case a.turns.Busy:
 		a.enqueue(text, nil)
 	default:
 		a.runTurn(text, nil, false)

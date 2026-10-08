@@ -67,7 +67,7 @@ func transcriptAppOn(tb testing.TB, term tui.Terminal, mode tui.Mode, fullRepain
 		a.add(txt)
 		a.add(&noticeBlock{text: "a notice " + para(20), style: tui.Dim})
 	}
-	a.busy, a.runStart, a.activity = true, time.Now(), "Thinking"
+	a.turns.Busy, a.runStart, a.activity = true, time.Now(), "Thinking"
 	a.lastEvent = a.runStart
 	return a
 }

@@ -105,7 +105,7 @@ func TestNotificationAfterLongTurn(t *testing.T) {
 
 	// Not when the user's queued message starts the next turn right away.
 	a.runKind, a.runStart = "turn", time.Now().Add(-time.Minute)
-	a.queued = append(a.queued, queuedInput{text: "next"})
+	a.turns.Queued = append(a.turns.Queued, queuedInput{text: "next"})
 	a.notifyIdle()
 	time.Sleep(200 * time.Millisecond)
 	if got = hookLog(t, log); len(got) != 1 {
@@ -121,16 +121,16 @@ func TestNotificationForBackgroundEventWhenIdle(t *testing.T) {
 	a, log := hookedApp(t, srv.URL, "Notification")
 
 	// During a turn the event is a steer: the user is already looking.
-	a.busy, a.runKind = true, "turn"
-	a.pendingEvents = []events.Event{{Source: "job", Title: "job 1 exited"}}
+	a.turns.Busy, a.runKind = true, "turn"
+	a.turns.PendingEvents = []events.Event{{Source: "job", Title: "job 1 exited"}}
 	a.deliverEvents()
 	time.Sleep(200 * time.Millisecond)
 	if got := hookLog(t, log); len(got) != 0 {
 		t.Fatalf("busy: %v", got)
 	}
 
-	a.busy, a.runKind = false, ""
-	a.pendingEvents = []events.Event{{Source: "job", Title: "job 2 exited"}, {Source: "timer", Title: "timer fired"}}
+	a.turns.Busy, a.runKind = false, ""
+	a.turns.PendingEvents = []events.Event{{Source: "job", Title: "job 2 exited"}, {Source: "timer", Title: "timer fired"}}
 	a.deliverEvents()
 	got := waitLog(t, log, 1)
 	if got[0]["notification_type"] != "background_event" || got[0]["message"] != "job 2 exited (+1 more)" {
@@ -138,7 +138,7 @@ func TestNotificationForBackgroundEventWhenIdle(t *testing.T) {
 	}
 	for busy := true; busy; { // let the started turn finish before the test's cleanup
 		time.Sleep(10 * time.Millisecond)
-		a.ui.Do(func() { busy = a.busy })
+		a.ui.Do(func() { busy = a.turns.Busy })
 	}
 }
 

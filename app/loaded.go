@@ -121,7 +121,7 @@ func (a *App) cmdReload(string) { a.requestReload(false) }
 // (a request in flight keeps the prompt it was sent with). forModel: the
 // agent asked (atto reload) and is told the result.
 func (a *App) requestReload(forModel bool) {
-	if !a.busy {
+	if !a.turns.Busy {
 		a.reloadNow(forModel)
 		return
 	}
@@ -152,7 +152,7 @@ func (a *App) reloadNow(forModel bool) {
 	r, err := core.Reload(a.agent, a.sess.ID, a.sess.Path, a.loaded)
 	a.applyReload(r, err)
 	if forModel {
-		a.pendingEvents = append(a.pendingEvents, events.Event{Source: sourceReloaded, Title: "Reload result sent to the agent", Text: reloadReport(r, err)})
+		a.turns.PendingEvents = append(a.turns.PendingEvents, events.Event{Source: sourceReloaded, Title: "Reload result sent to the agent", Text: reloadReport(r, err)})
 	}
 }
 

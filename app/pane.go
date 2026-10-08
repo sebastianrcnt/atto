@@ -55,7 +55,7 @@ func (a *App) paneSync() {
 func (a *App) paneState() string {
 	_, center := a.modal.(*agentCenter)
 	switch {
-	case a.busy:
+	case a.turns.Busy:
 		return "working"
 	case (a.modal != nil && !center) || (a.goal.Held() && a.goal.Active()):
 		return "waiting"

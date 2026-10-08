@@ -127,7 +127,7 @@ func (a *App) cmdContext(arg string) {
 		lines = append(lines, tui.Dim("No tier cap: "+reason+"."))
 	}
 
-	if a.busy {
+	if a.turns.Busy {
 		lines = append(lines, tui.Dim("Breakdown is available when the turn finishes."))
 	} else {
 		b := a.agent.Breakdown()

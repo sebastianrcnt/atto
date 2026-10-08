@@ -25,7 +25,7 @@ import (
 // transcript.
 func goalApp(t *testing.T) *App {
 	a := treeApp(t)
-	a.queuePaused = true
+	a.turns.QueuePaused = true
 	return a
 }
 
@@ -247,7 +247,7 @@ func TestGoalEditPrompt(t *testing.T) {
 func TestGoalEditSteersRunningTurn(t *testing.T) {
 	a := goalApp(t)
 	a.cmdGoal("old")
-	a.busy, a.runKind = true, "turn"
+	a.turns.Busy, a.runKind = true, "turn"
 	a.setObjective("new")
 	if a.goal.Goal.Objective != "new" || a.goal.Goal.Status != goal.Active {
 		t.Fatalf("%+v", a.goal.Goal)
@@ -327,9 +327,9 @@ func TestGoalIndicatorPlacement(t *testing.T) {
 func TestGoalInterruptPauses(t *testing.T) {
 	a := goalApp(t)
 	a.cmdGoal("ship it")
-	a.busy, a.runKind = true, "turn"
+	a.turns.Busy, a.runKind = true, "turn"
 	a.goal.BeginTurn()
-	a.busy = false
+	a.turns.Busy = false
 	a.afterRun(context.Canceled)
 	g := a.goal.Goal
 	if g.Status != goal.Paused || g.Note != "interrupted" {
@@ -445,9 +445,9 @@ func TestOldGoalSnapshotsStillLoad(t *testing.T) {
 func TestUsageLimitedTurnStopsTheGoal(t *testing.T) {
 	a := goalApp(t)
 	a.cmdGoal("ship it")
-	a.busy, a.runKind = true, "turn"
+	a.turns.Busy, a.runKind = true, "turn"
 	a.goal.BeginTurn()
-	a.busy = false
+	a.turns.Busy = false
 	a.afterRun(errors.New("429: You have hit your ChatGPT usage limit (plus plan). Try again in ~30 min."))
 	g := a.goal.Goal
 	if g.Status != goal.UsageLimited {
@@ -465,7 +465,7 @@ func TestUsageLimitedTurnStopsTheGoal(t *testing.T) {
 // endTurn simulates a goal turn that ends: steers are the texts committed
 // during it, userStart that the user's message started it.
 func endTurn(a *App, userStart bool, steers ...string) {
-	a.busy, a.runKind = true, "turn"
+	a.turns.Busy, a.runKind = true, "turn"
 	a.goal.BeginTurn()
 	if userStart {
 		a.goal.UserInput()
@@ -473,13 +473,13 @@ func endTurn(a *App, userStart bool, steers ...string) {
 	if len(steers) > 0 {
 		for _, text := range steers {
 			if !events.IsEvent(text) && !goal.IsMessage(text) {
-				a.pendingSteers = append(a.pendingSteers, text)
+				a.turns.Steers = append(a.turns.Steers, text)
 			}
 		}
 		a.onEvent(agent.SteerCommitted{Texts: steers})
 	}
 	a.goal.Event(agent.ToolStart{})
-	a.busy = false
+	a.turns.Busy = false
 	a.afterRun(nil)
 }
 
@@ -530,7 +530,7 @@ func TestGoalIndicatorWhileHeld(t *testing.T) {
 	if !a.goal.Held() || !strings.Contains(a.goalIndicator(), "Goal waiting (enter to continue)") {
 		t.Fatalf("idle: held %v, %q", a.goal.Held(), a.goalIndicator())
 	}
-	a.busy, a.runKind = true, "turn"
+	a.turns.Busy, a.runKind = true, "turn"
 	a.goal.BeginTurn()
 	if !a.goal.Held() {
 		t.Fatal("the hold stays while the user's turn runs")
@@ -539,7 +539,7 @@ func TestGoalIndicatorWhileHeld(t *testing.T) {
 		t.Fatalf("running: %q", got)
 	}
 	a.goal.UserInput()
-	a.busy = false
+	a.turns.Busy = false
 	a.afterRun(nil)
 	if !a.goal.Held() || !strings.Contains(a.goalIndicator(), "Goal waiting (enter to continue)") {
 		t.Fatalf("idle again: held %v, %q", a.goal.Held(), a.goalIndicator())
@@ -610,7 +610,7 @@ func TestGoalHoldEndToEnd(t *testing.T) {
 		deadline := time.Now().Add(10 * time.Second)
 		for {
 			var busy bool
-			a.ui.Do(func() { busy = a.busy })
+			a.ui.Do(func() { busy = a.turns.Busy })
 			if !busy {
 				return
 			}
@@ -715,7 +715,7 @@ func TestGoalChangesMidTurnSteerTheModel(t *testing.T) {
 			}
 			stops := 0
 			a.goal.Stop = func() { stops++ }
-			a.busy, a.runKind = true, "turn"
+			a.turns.Busy, a.runKind = true, "turn"
 			a.goal.BeginTurn()
 			a.cmdGoal(c.cmd)
 			steers := a.agent.DrainSteers()
@@ -742,7 +742,7 @@ func TestGoalChangesMidTurnSteerTheModel(t *testing.T) {
 		t.Fatalf("idle: %q, %d stops", s, stops)
 	}
 	a.cmdGoal("ship it")
-	a.busy, a.runKind = true, "compact"
+	a.turns.Busy, a.runKind = true, "compact"
 	a.cmdGoal("clear")
 	if s := a.agent.DrainSteers(); len(s) != 0 || stops != 0 || strings.Contains(goalText(a), stoppingNotice) {
 		t.Fatalf("compaction: %q, %d stops", s, stops)
@@ -756,12 +756,12 @@ func TestGoalNoteLeftAtTurnEndStartsNoTurn(t *testing.T) {
 	a.cmdGoal("ship it")
 	a.cmdGoal("clear")
 	a.agent.Steer(goal.ClearedMessage())
-	a.busy, a.runKind = true, "turn"
+	a.turns.Busy, a.runKind = true, "turn"
 	a.goal.BeginTurn()
-	a.busy = false
-	a.queuePaused = false
+	a.turns.Busy = false
+	a.turns.QueuePaused = false
 	a.afterRun(nil)
-	if a.busy || len(a.agent.DrainSteers()) != 0 {
+	if a.turns.Busy || len(a.agent.DrainSteers()) != 0 {
 		t.Fatal("the note started a turn")
 	}
 }
@@ -797,7 +797,7 @@ func TestGoalStateNoteAttachesToUserTurns(t *testing.T) {
 		deadline := time.Now().Add(10 * time.Second)
 		for {
 			var busy bool
-			a.ui.Do(func() { busy = a.busy })
+			a.ui.Do(func() { busy = a.turns.Busy })
 			if !busy {
 				return
 			}
@@ -874,14 +874,14 @@ func TestGoalStateNoteAttachesToUserTurns(t *testing.T) {
 // ended by /goal pause, /goal clear and Esc.
 func TestGoalTransientErrorRetriesLater(t *testing.T) {
 	fail := func(a *App) {
-		a.busy, a.runKind = true, "turn"
+		a.turns.Busy, a.runKind = true, "turn"
 		a.goal.BeginTurn()
-		a.busy = false
+		a.turns.Busy = false
 		a.afterRun(errors.New("400: Upstream request failed: Model is unavailable"))
 	}
 	a := goalApp(t)
 	a.cmdGoal("ship it")
-	a.queuePaused = false
+	a.turns.QueuePaused = false
 	t.Cleanup(func() { a.cancelGoalRetry() })
 	fail(a)
 	g := a.goal.Goal
@@ -950,9 +950,9 @@ func TestGoalPrefixedUserSteerHoldsGoal(t *testing.T) {
 	a := goalApp(t)
 	a.cmdGoal("ship it")
 	text := goal.OpenTag + "\nuser typed this\n" + goal.CloseTag
-	a.pendingSteers = []string{text}
+	a.turns.Steers = []string{text}
 	endTurn(a, false, text)
-	if !a.goal.Held() || len(a.pendingSteers) != 0 {
+	if !a.goal.Held() || len(a.turns.Steers) != 0 {
 		t.Fatal("user steer was treated as internal")
 	}
 	found := false

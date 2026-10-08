@@ -235,12 +235,12 @@ func (a *App) remoteInfo(r *remote) server.ThreadInfo {
 	m, effort := a.agent.Current()
 	info := server.ThreadInfo{
 		ID: a.sess.ID, Cwd: a.cwd, Name: a.sessName, Effort: effort,
-		ContextTokens: a.ctxTokens, Busy: a.busy, TurnID: r.turnID, Live: true,
+		ContextTokens: a.ctxTokens, Busy: a.turns.Busy, TurnID: r.turnID, Live: true,
 	}
 	server.SetModel(&info, m, a.models)
 	u := a.remoteUsage()
 	info.Usage = &u
-	if a.busy {
+	if a.turns.Busy {
 		info.Turn = &server.TurnInfo{StartedAt: a.runStart.UnixMilli(), Verb: a.turnVerb, InputTokens: a.turnIn, OutputTokens: a.turnOut}
 	}
 	if p := a.pendingInput(); len(p.Steers)+len(p.Queued) > 0 {
@@ -270,8 +270,8 @@ func (a *App) remoteStep(step provider.Usage) {
 // pendingInput is what renderPending shows: steers not taken yet and
 // queued follow-ups.
 func (a *App) pendingInput() server.PendingInput {
-	p := server.PendingInput{Steers: append([]string{}, a.pendingSteers...)}
-	for _, q := range a.queued {
+	p := server.PendingInput{Steers: append([]string{}, a.turns.Steers...)}
+	for _, q := range a.turns.Queued {
 		p.Queued = append(p.Queued, q.text)
 	}
 	return p
@@ -408,7 +408,7 @@ func (a *App) remoteGoalInfo() *server.GoalInfo {
 	secs := a.goal.Elapsed()
 	return &server.GoalInfo{
 		Objective: g.Objective, Status: string(g.Status), Label: g.Status.Label(),
-		Indicator: g.Indicator(secs, a.goal.Held() && !a.busy), Summary: g.Summary(), Note: g.Note,
+		Indicator: g.Indicator(secs, a.goal.Held() && !a.turns.Busy), Summary: g.Summary(), Note: g.Note,
 		Tokens: goal.Tokens(g.TokensUsed), TokensUsed: g.TokensUsed,
 		Elapsed: goal.FormatElapsed(secs), Seconds: secs, Held: a.goal.Held(),
 	}
@@ -534,20 +534,20 @@ func (l remoteSession) Send(input string, imgs []provider.Image) (status, turnID
 		for _, im := range imgs {
 			att = append(att, tui.Attachment{Label: images.Label(im), Value: im})
 		}
-		wasBusy, kind, queued, steers := a.busy, a.runKind, len(a.queued), len(a.pendingSteers)
+		wasBusy, kind, queued, steers := a.turns.Busy, a.runKind, len(a.turns.Queued), len(a.turns.Steers)
 		a.fromRemote = true
 		a.submit(input, att)
 		a.fromRemote = false
 		switch {
-		case !wasBusy && a.busy:
+		case !wasBusy && a.turns.Busy:
 			status, turnID = "started", l.r.turnID
-		case wasBusy && kind == "turn" && len(a.pendingSteers) > steers:
+		case wasBusy && kind == "turn" && len(a.turns.Steers) > steers:
 			status = "steered"
 			if a.remoteSteers == nil {
 				a.remoteSteers = map[string]int{}
 			}
 			a.remoteSteers[input]++
-		case len(a.queued) > queued:
+		case len(a.turns.Queued) > queued:
 			status = "queued"
 		default:
 			status = "done" // a command that ran at once
@@ -570,7 +570,7 @@ func (l remoteSession) Interrupt() bool {
 func (l remoteSession) Background() bool {
 	ok := false
 	_ = l.input(func() error {
-		ok = l.a.busy && l.a.agent.Background()
+		ok = l.a.turns.Busy && l.a.agent.Background()
 		return nil
 	})
 	return ok
@@ -612,20 +612,18 @@ func (l remoteSession) Unsteer(input string, queued bool) error {
 	return l.input(func() error {
 		a := l.a
 		if queued {
-			for i, v := range slices.Backward(a.queued) {
+			for i, v := range slices.Backward(a.turns.Queued) {
 				if v.text == input {
-					a.queued = slices.Delete(a.queued, i, i+1)
+					a.turns.Queued = slices.Delete(a.turns.Queued, i, i+1)
 					a.remotePending()
 					return nil
 				}
 			}
 			return errors.New("that message is no longer queued: it has started")
 		}
-		i := slices.Index(a.pendingSteers, input)
-		if i < 0 || !a.agent.Unsteer(input) {
+		if !a.turns.Unsteer(a.agent, input) {
 			return errors.New("that message is no longer pending: the turn has taken it")
 		}
-		a.pendingSteers = slices.Delete(a.pendingSteers, i, i+1)
 		a.takeRemoteSteer(input)
 		a.remotePending()
 		return nil
@@ -639,7 +637,7 @@ func (l remoteSession) Rollback(n int) (string, error) {
 	var text string
 	err := l.input(func() error {
 		a := l.a
-		if a.busy {
+		if a.turns.Busy {
 			return errors.New("a turn is running; turn/interrupt first")
 		}
 		if why := a.sess.ReadOnly(); why != "" {

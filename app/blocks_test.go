@@ -78,7 +78,7 @@ func runTurn(t *testing.T, a *App, text string) {
 	a.ui.Do(func() { a.startTurn(text, nil) })
 	for deadline := time.Now().Add(10 * time.Second); ; time.Sleep(10 * time.Millisecond) {
 		busy := true
-		a.ui.Do(func() { busy = a.busy })
+		a.ui.Do(func() { busy = a.turns.Busy })
 		if !busy {
 			return
 		}

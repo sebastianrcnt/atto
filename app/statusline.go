@@ -80,7 +80,7 @@ func (a *App) statusInput() statusInput {
 	in.ContextWindow.Long = a.agent.LongContext()
 	in.Effort = effort
 	in.GitBranch = a.gitBranch
-	in.Busy = a.busy
+	in.Busy = a.turns.Busy
 	in.Memory.RSSBytes = rssBytes.Load()
 	in.Cache.LastInputTokens = a.usage.last.PromptTokens
 	in.Cache.LastCachedTokens = a.usage.last.CachedTokens

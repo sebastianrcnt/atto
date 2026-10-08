@@ -72,12 +72,12 @@ func TestPaneReportsSessionOnce(t *testing.T) {
 	}
 
 	// A running turn, then a question, change the state it reports.
-	a.busy = true
+	a.turns.Busy = true
 	a.paneSync()
 	if got := rec.take(); got != daemon.MarkerSeq("state", "working") {
 		t.Fatalf("busy report %q", got)
 	}
-	a.busy = false
+	a.turns.Busy = false
 	a.cmdSessions("")
 	a.paneSync()
 	if got := rec.take(); got != daemon.MarkerSeq("state", "waiting") {
@@ -120,15 +120,15 @@ func TestExitMenuDetachesInPane(t *testing.T) {
 	a, rec := paneApp(t, true)
 	canceled := 0
 	a.record("user", "do the thing")
-	a.busy, a.runKind = true, "turn"
-	a.cancel = func() { canceled++ }
+	a.turns.Busy, a.runKind = true, "turn"
+	a.turns.Cancel = func(error) { canceled++ }
 	a.requestQuit()
 	if !strings.Contains(menuText(a), "2. Detach") || strings.Contains(menuText(a), "Run in background") {
 		t.Fatalf("menu:\n%s", menuText(a))
 	}
 	rec.take()
 	a.modal.HandleInput("2")
-	if quitting(a) || canceled != 0 || a.modal != nil || !a.busy {
+	if quitting(a) || canceled != 0 || a.modal != nil || !a.turns.Busy {
 		t.Fatalf("detach must leave the task running: quit=%v canceled=%d", quitting(a), canceled)
 	}
 	if got := rec.take(); got != daemon.MarkerSeq("detach") {

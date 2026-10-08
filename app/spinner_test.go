@@ -18,7 +18,7 @@ func busyApp(t *testing.T, activity string, el time.Duration) (*App, *time.Time)
 	start := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
 	now := start.Add(el)
 	a.now = func() time.Time { return now }
-	a.busy, a.activity, a.runStart, a.lastEvent = true, activity, start, start
+	a.turns.Busy, a.activity, a.runStart, a.lastEvent = true, activity, start, start
 	a.ui.FullRepaint = false    // tests select the repaint mode explicitly
 	a.ui.Colors = tui.Colors256 // whatever the environment says
 	a.spinnerScan = true        // the scanner is what most tests here look at
@@ -229,7 +229,8 @@ func TestActivityShimmerFrames(t *testing.T) {
 
 // BenchmarkRenderActivity draws the activity line, as every frame does.
 func BenchmarkRenderActivity(b *testing.B) {
-	a := &App{ui: tui.New(nullTerm{}), busy: true, activity: "Working", turnVerb: "Blorvenating"}
+	a := &App{ui: tui.New(nullTerm{}), activity: "Working", turnVerb: "Blorvenating"}
+	a.turns.Busy = true
 	a.ui.Colors = tui.TrueColor
 	now := time.Now()
 	a.runStart, a.lastEvent = now, now

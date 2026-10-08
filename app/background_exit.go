@@ -56,7 +56,7 @@ type bgExit struct {
 // exitRunning reports whether leaving now would stop work: a turn is
 // running, or a goal is active and will start the next one.
 func (a *App) exitRunning() bool {
-	return (a.busy && a.runKind == "turn") || (a.goal.Active() && !a.goal.Held())
+	return (a.turns.Busy && a.runKind == "turn") || (a.goal.Active() && !a.goal.Held())
 }
 
 // requestQuit is every way of exiting (ctrl+c, ctrl+d, /quit, /exit): the
@@ -146,7 +146,7 @@ func (a *App) dismissModal() {
 
 // cancelTask stops the running turn; an idle goal is paused.
 func (a *App) cancelTask() {
-	if a.busy {
+	if a.turns.Busy {
 		a.interruptTurn() // afterRun pauses the goal, as for esc
 		return
 	}
@@ -161,7 +161,7 @@ func (a *App) cancelTask() {
 // it has stopped (backgroundAfterRun), hands the session over.
 func (a *App) runInBackground() {
 	a.bgx.pending = true
-	if !a.busy { // only a goal that would go on
+	if !a.turns.Busy { // only a goal that would go on
 		a.bgx.pending = false
 		a.goalSnapshot()
 		a.startBackgroundRun()
@@ -178,8 +178,8 @@ func (a *App) runInBackground() {
 }
 
 func (a *App) bgCancel() {
-	if a.bgx.pending && a.cancel != nil {
-		a.cancel()
+	if a.bgx.pending && a.turns.Cancel != nil {
+		a.turns.Cancel(nil)
 	}
 }
 

@@ -21,7 +21,7 @@ func (t *thread) restore(entries []session.Entry) {
 	t.ctxTokens = t.agent.ContextTokens()
 	t.items, t.blocks = items, bl
 	t.total = UsageOf(branch)
-	t.steers = nil // Restore drops them
+	t.turns.Steers = nil // Restore drops them
 	t.mu.Unlock()
 }
 
@@ -42,16 +42,16 @@ func (s *Server) rollback(p threadParams) (any, error) {
 		return nil, invalid("numTurns must be positive")
 	}
 	t.mu.Lock()
-	if t.busy {
+	if t.turns.Busy {
 		t.mu.Unlock()
 		return nil, &rpcError{codeServer, "a turn is running; turn/interrupt first"}
 	}
-	t.busy = true // no turn may start while the branch moves
+	t.turns.Busy = true // no turn may start while the branch moves
 	t.mu.Unlock()
 	text, err := t.rollback(n)
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	t.busy = false
+	t.turns.Busy = false
 	if err != nil {
 		return nil, err
 	}

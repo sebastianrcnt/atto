@@ -156,8 +156,8 @@ func TestCenterDefersResumeWhileBusy(t *testing.T) {
 	fakeCenter(t, nil, []session.Summary{{ID: other.ID, Cwd: a.cwd, Name: "other work", Updated: time.Now()}})
 
 	canceled := false
-	a.busy = true
-	a.cancel = func() { canceled = true }
+	a.turns.Busy = true
+	a.turns.Cancel = func(error) { canceled = true }
 	a.cmdResume("")
 	waitCenter(t, a)
 	c := a.modal.(*agentCenter)
@@ -172,7 +172,7 @@ func TestCenterDefersResumeWhileBusy(t *testing.T) {
 	if a.sess.ID != original {
 		t.Fatalf("session changed while busy: got %s, want %s", a.sess.ID, original)
 	}
-	a.busy = false
+	a.turns.Busy = false
 }
 
 func TestStandaloneCenterPicks(t *testing.T) {

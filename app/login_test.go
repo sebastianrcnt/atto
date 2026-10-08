@@ -72,7 +72,7 @@ func TestFirstRunWithoutModels(t *testing.T) {
 		t.Fatalf("header: %s", screen(a))
 	}
 	a.submit("hello there", nil)
-	if out := screen(a); !strings.Contains(out, "No models available. Use /login") || a.busy {
+	if out := screen(a); !strings.Contains(out, "No models available. Use /login") || a.turns.Busy {
 		t.Fatalf("hint not shown or turn started: %s", out)
 	}
 	if a.editor.Text() != "hello there" {

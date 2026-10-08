@@ -355,8 +355,8 @@ func TestCenterCtrlCClosesWithoutInterruptingSession(t *testing.T) {
 			a, _ := paneApp(t, false)
 			fakeCenter(t, nil, nil)
 			turnCanceled, shellCanceled := false, false
-			a.busy = true
-			a.cancel = func() { turnCanceled = true }
+			a.turns.Busy = true
+			a.turns.Cancel = func(error) { turnCanceled = true }
 			runningShell := &shellRun{cancel: func() { shellCanceled = true }}
 			a.shell = runningShell
 			a.editor.SetText("keep my draft")
@@ -372,13 +372,13 @@ func TestCenterCtrlCClosesWithoutInterruptingSession(t *testing.T) {
 			if a.modal != nil || a.ui.Screen != nil {
 				t.Fatal("Ctrl+C did not return to the transcript")
 			}
-			if turnCanceled || shellCanceled || !a.busy || a.shell != runningShell {
+			if turnCanceled || shellCanceled || !a.turns.Busy || a.shell != runningShell {
 				t.Fatal("center interrupted underlying work")
 			}
 			if a.sess.ID != before || a.editor.Text() != "keep my draft" || quitting(a) {
 				t.Fatal("center changed or quit the session")
 			}
-			a.busy = false
+			a.turns.Busy = false
 			a.shell = nil
 		})
 	}

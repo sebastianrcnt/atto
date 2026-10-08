@@ -336,29 +336,26 @@ func RunPrint(o PrintOptions) error {
 	// taken at each step boundary. Quiet messages don't keep a finished
 	// turn going, and a plain run's finished turn takes nothing: what is
 	// left waits in the inbox for the session's next turn.
-	var poll func() string
-	poll = func() string {
-		ag.AtBoundary(poll)
-		_, evs := events.SplitReload(core.Poll(sess.ID))
-		if ag.AtStop() && (o.Worker == nil || !events.Wakes(evs)) {
-			events.Requeue(sess.ID, evs)
-			return ""
-		}
-		return events.Format(evs)
-	}
-	ag.AtBoundary(poll)
+	var turns core.TurnRunner[string]
+	turns.BoundaryInbox(ag, sess.ID, o.Worker != nil)
 
 	resume := o.Background && mode == bgResumeTurn // the first turn has its message already
-	turn := func(ctx context.Context, input string, emit func(any)) error {
-		if resume {
-			resume = false
-			err := ag.Continue(ctx, emit)
-			p.tr.End()
+	turn := func(parent context.Context, input string, emit func(any)) error {
+		ctx, err := turns.Begin(parent)
+		if err != nil {
 			return err
 		}
-		emit(transcript.Input{Text: input, Images: imgs})
-		err := ag.RunWithImages(ctx, input, imgs, emit)
-		imgs = nil
+		defer turns.End()
+		request := core.TurnRequest{Text: input, Images: imgs, Continue: resume}
+		if resume {
+			resume = false
+		} else {
+			emit(transcript.Input{Text: input, Images: imgs})
+		}
+		err = turns.Run(ctx, ag, request, emit)
+		if !request.Continue {
+			imgs = nil
+		}
 		p.tr.End()
 		return err
 	}
@@ -371,13 +368,13 @@ func RunPrint(o PrintOptions) error {
 	// What arrived as the turn ended gets a turn of its own.
 	for o.Worker != nil && runErr == nil && ctx.Err() == nil {
 		_, evs := events.SplitReload(core.Poll(sess.ID))
-		if !events.Wakes(evs) {
-			events.Requeue(sess.ID, evs) // quiet messages wait for its next turn
+		turns.PendingEvents = append(turns.PendingEvents, evs...)
+		delivery := turns.DeliverEvents(sess.ID, false, true)
+		if !delivery.Start {
 			break
 		}
-		text := events.Format(evs)
 		p.flushStep()
-		runErr = turn(ctx, text, p.event)
+		runErr = turn(ctx, delivery.Text, p.event)
 	}
 	if g := d.Goal; g != nil {
 		res.GoalStatus, res.GoalNote = string(g.Status), g.Note

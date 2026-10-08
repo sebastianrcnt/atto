@@ -285,7 +285,7 @@ func (c *agentCenter) apply(snapshot centerSnapshot) {
 	if a := c.a; a != nil && !seen[a.sess.ID] {
 		it := centerItem{id: a.sess.ID, title: a.sessName, cwd: a.cwd, current: true, updated: time.Now(), tab: tabReady}
 		switch {
-		case a.busy:
+		case a.turns.Busy:
 			it.tab = tabWorking
 		case a.goal.Held() && a.goal.Active():
 			it.tab = tabNeedsYou

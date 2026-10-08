@@ -476,7 +476,7 @@ func (a *App) cmdSessions(string) {
 	p.onCancel = a.closeModal
 	p.onArchive = func(s session.Summary) {
 		current := s.Path == a.sess.Path
-		if current && a.busy {
+		if current && a.turns.Busy {
 			a.errorNotice(fmt.Errorf("cannot archive the current session while a turn is running"))
 			return
 		}
@@ -547,9 +547,9 @@ func (a *App) requestResume(path string) {
 // for the turn to stop first, whoever asks: the running turn keeps its
 // session until then, so its late events and reply can't land in the new one.
 func (a *App) resume(path string) {
-	if a.busy {
+	if a.turns.Busy {
 		a.pendingResume = path
-		a.cancel()
+		a.turns.Cancel(nil)
 		return
 	}
 	l, locked := session.LockedBy(path)

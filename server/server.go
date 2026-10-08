@@ -77,21 +77,17 @@ func (s *Server) watchInbox() {
 				continue
 			}
 			t.mu.Lock()
-			busy := t.busy
+			t.turns.PendingEvents = append(t.turns.PendingEvents, evs...)
+			delivery := t.turns.DeliverEvents(t.id, false, true)
 			t.mu.Unlock()
-			if !busy && !events.Wakes(evs) {
-				events.Requeue(t.id, evs) // quiet: for the next turn
-				continue
-			}
-			for _, e := range evs {
+			for _, e := range delivery.Events {
 				s.notify(t, "event", map[string]any{"title": e.Title, "source": e.Source})
 			}
-			text := events.Format(evs)
-			if busy {
-				t.agent.Steer(text)
+			if !delivery.Start {
+				t.turns.SteerEvents(t.agent, delivery)
 				continue
 			}
-			s.beginInboxTurn(t, evs)
+			s.beginInboxTurn(t, delivery.Events)
 		}
 	}
 }
@@ -101,7 +97,7 @@ func (s *Server) beginInboxTurn(t *thread, evs []events.Event) {
 	text := events.Format(evs)
 	if _, err := s.begin(t, func(ctx context.Context, emit func(any)) error {
 		emit(transcript.Input{Text: text})
-		return t.agent.Run(ctx, text, emit)
+		return t.turns.Run(ctx, t.agent, core.TurnRequest{Text: text}, emit)
 	}); err != nil {
 		events.Requeue(t.id, evs)
 	}
@@ -130,15 +126,13 @@ type thread struct {
 	loaded    core.Loaded        // what it loaded, as of the last reload
 	tr        transcript.Builder // used by the running turn, or by restore while idle
 	items     []Item             // completed items
-	busy      bool
+	turns     core.TurnRunner[string]
 	turnID    string
-	cancel    context.CancelCauseFunc
 	turnSeq   int
 	ctxTokens int
 	usage     provider.Usage // totals for the running turn
 	total     Usage          // the session's totals
 	turn      TurnInfo       // the running turn, for the activity line
-	steers    []string       // the user's steers the turn has not taken
 	// What the extensions show (see extui.go): on the blocks of the
 	// items, around the input, and how many text blocks they added.
 	blocks   blocks
@@ -165,8 +159,8 @@ func (s *Server) Close() {
 		t.mu.Lock()
 		t.closing = true
 		done := t.done
-		if t.cancel != nil {
-			t.cancel(nil)
+		if t.turns.Cancel != nil {
+			t.turns.Cancel(nil)
 		}
 		t.mu.Unlock()
 		if done != nil {
@@ -202,12 +196,12 @@ func (s *Server) Close() {
 
 func (t *thread) info() ThreadInfo {
 	m, effort := t.agent.Current()
-	info := ThreadInfo{ID: t.id, Cwd: t.cwd, Name: t.name, Effort: effort, ContextTokens: t.ctxTokens, Busy: t.busy, TurnID: t.turnID}
+	info := ThreadInfo{ID: t.id, Cwd: t.cwd, Name: t.name, Effort: effort, ContextTokens: t.ctxTokens, Busy: t.turns.Busy, TurnID: t.turnID}
 	SetModel(&info, m, t.models)
 	info.AutoCompactLimit, _ = t.agent.CompactionLimit()
 	total := t.total
 	info.Usage = &total
-	if t.busy {
+	if t.turns.Busy {
 		turn := t.turn
 		info.Turn = &turn
 	}
@@ -218,10 +212,10 @@ func (t *thread) info() ThreadInfo {
 // pending is the input the turn has not taken (nil when none). Call with
 // t.mu held.
 func (t *thread) pending() *PendingInput {
-	if len(t.steers) == 0 {
+	if len(t.turns.Steers) == 0 {
 		return nil
 	}
-	return &PendingInput{Steers: slices.Clone(t.steers)}
+	return &PendingInput{Steers: slices.Clone(t.turns.Steers)}
 }
 
 // pendingChanged tells clients what input is pending now.
@@ -363,7 +357,7 @@ func (s *Server) call(ctx context.Context, method string, raw json.RawMessage) (
 			return nil, err
 		}
 		t.mu.Lock()
-		busy := t.busy
+		busy := t.turns.Busy
 		t.mu.Unlock()
 		if !busy {
 			return nil, &rpcError{codeServer, "no turn is running; use turn/start"}
@@ -371,9 +365,8 @@ func (s *Server) call(ctx context.Context, method string, raw json.RawMessage) (
 		if strings.TrimSpace(p.Input) == "" {
 			return nil, invalid("input is required")
 		}
-		t.agent.Steer(p.Input)
 		t.mu.Lock()
-		t.steers = append(t.steers, p.Input)
+		t.turns.Steer(t.agent, t.id, p.Input, false)
 		t.mu.Unlock()
 		s.pendingChanged(t)
 		return nil, nil
@@ -386,16 +379,11 @@ func (s *Server) call(ctx context.Context, method string, raw json.RawMessage) (
 			return nil, invalid("only a live session queues follow-ups")
 		}
 		t.mu.Lock()
-		i := slices.Index(t.steers, p.Input)
+		ok := t.turns.Unsteer(t.agent, p.Input)
 		t.mu.Unlock()
-		if i < 0 || !t.agent.Unsteer(p.Input) {
+		if !ok {
 			return nil, &rpcError{codeServer, "that message is no longer pending: the turn has taken it"}
 		}
-		t.mu.Lock()
-		if i = slices.Index(t.steers, p.Input); i >= 0 {
-			t.steers = slices.Delete(t.steers, i, i+1)
-		}
-		t.mu.Unlock()
 		s.pendingChanged(t)
 		return nil, nil
 	// Keep subagent/* dispatch for the frozen web client.
@@ -421,9 +409,7 @@ func (s *Server) call(ctx context.Context, method string, raw json.RawMessage) (
 			return nil, err
 		}
 		t.mu.Lock()
-		if t.cancel != nil {
-			t.cancel(agent.ErrUserInterrupt)
-		}
+		t.turns.Interrupt(true)
 		t.mu.Unlock()
 		return nil, nil
 	}
@@ -602,7 +588,7 @@ func (s *Server) snapshot(t *thread) ThreadInfo {
 	for _, it := range t.items {
 		info.Items = append(info.Items, t.withDisplay(it))
 	}
-	if t.busy {
+	if t.turns.Busy {
 		for _, it := range t.tr.Open() {
 			info.Items = append(info.Items, t.withDisplay(wireItem(t.id, &it)))
 		}
@@ -679,7 +665,7 @@ func (s *Server) notify(t *thread, method string, params map[string]any) {
 // begin marks the thread busy and starts fn in the background.
 func (s *Server) begin(t *thread, fn func(ctx context.Context, emit func(any)) error) (string, error) {
 	t.mu.Lock()
-	if t.busy || t.closing {
+	if t.turns.Busy || t.closing {
 		t.mu.Unlock()
 		return "", &rpcError{codeServer, "a turn is already running; use turn/steer or turn/interrupt"}
 	}
@@ -690,8 +676,8 @@ func (s *Server) begin(t *thread, fn func(ctx context.Context, emit func(any)) e
 	done := t.done
 	t.turnSeq++
 	turnID := fmt.Sprintf("%s-t%d", t.id, t.turnSeq)
-	ctx, cancel := context.WithCancelCause(context.Background())
-	t.busy, t.turnID, t.cancel, t.usage = true, turnID, cancel, provider.Usage{}
+	ctx, _ := t.turns.Begin(context.Background()) // claimed under t.mu above
+	t.turnID, t.usage = turnID, provider.Usage{}
 	t.turn = TurnInfo{StartedAt: time.Now().UnixMilli()}
 	started := t.turn.StartedAt
 	t.mu.Unlock()
@@ -716,11 +702,11 @@ func (s *Server) begin(t *thread, fn func(ctx context.Context, emit func(any)) e
 			}
 		}
 		t.mu.Lock()
-		t.busy, t.cancel, t.turnID = false, nil, ""
+		t.turns.End()
+		t.turnID = ""
 		t.ctxTokens = t.agent.ContextTokens()
 		usage, ctxTokens := t.usage, t.ctxTokens
 		t.mu.Unlock()
-		cancel(nil)
 		status, msg := "completed", ""
 		switch {
 		case errors.Is(err, context.Canceled):
@@ -755,7 +741,7 @@ func (s *Server) startTurn(p threadParams) (any, error) {
 	var turnID string
 	turnID, err = s.begin(t, func(ctx context.Context, emit func(any)) error {
 		emit(transcript.Input{Text: input, Images: imgs})
-		return t.agent.RunWithImages(ctx, input, imgs, emit)
+		return t.turns.Run(ctx, t.agent, core.TurnRequest{Text: input, Images: imgs}, emit)
 	})
 	if err != nil {
 		return nil, err
@@ -801,7 +787,7 @@ func (s *Server) reload(t *thread) {
 	_, err := s.begin(t, func(ctx context.Context, emit func(any)) error {
 		text := apply()
 		emit(transcript.Input{Text: text})
-		return t.agent.Run(ctx, text, emit)
+		return t.turns.Run(ctx, t.agent, core.TurnRequest{Text: text}, emit)
 	})
 	if err != nil { // a turn is running: apply it at its next step boundary
 		t.agent.AtBoundary(apply)

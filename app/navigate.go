@@ -122,12 +122,12 @@ func (a *App) navigateTree(id string) { a.moveTo(id, nil) }
 // moveTo is navigateTree, first summarizing the branch being left when
 // sum is set (see branchsummary.go).
 func (a *App) moveTo(id string, sum *summaryRequest) {
-	if a.busy {
+	if a.turns.Busy {
 		// Queued and pending input belonged to the old branch: back to the
 		// editor, as pi does before aborting.
 		a.pendingTree, a.pendingSummary, a.pendingResume = id, sum, ""
 		a.stashPending()
-		a.cancel()
+		a.turns.Cancel(nil)
 		return
 	}
 	entries := a.loadSession()
@@ -180,13 +180,13 @@ func (a *App) stashPending() {
 			texts = append(texts, s)
 		}
 	}
-	for _, q := range a.queued {
+	for _, q := range a.turns.Queued {
 		texts, att = append(texts, q.text), append(att, q.att...)
 	}
-	if n := a.sendNow; n != nil {
+	if n := a.turns.SendNow; n != nil {
 		texts, att = append(texts, n.text), append(att, n.att...)
 	}
-	a.queued, a.pendingSteers, a.queuePaused, a.sendSteersAfterInterrupt, a.sendNow = nil, nil, false, false, nil
+	a.turns.Queued, a.turns.Steers, a.turns.QueuePaused, a.turns.SendSteersAfterInterrupt, a.turns.SendNow = nil, nil, false, false, nil
 	if len(texts) > 0 {
 		a.restoreToEditor(texts, att...)
 	}
@@ -262,7 +262,7 @@ func (a *App) cmdFork(string) {
 	sel.OnCancel = a.closeModal
 	sel.OnSelect = func(it tui.SelectItem) {
 		a.closeModal()
-		if a.busy {
+		if a.turns.Busy {
 			a.notice("Still working — press esc to interrupt first.")
 			return
 		}

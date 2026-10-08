@@ -111,7 +111,7 @@ func (a *App) submitShell(text, cmd string, exclude bool) {
 // finishShell adds a finished command to the conversation, or holds it
 // until the run in progress ends.
 func (a *App) finishShell(x session.BashExec) {
-	if a.busy {
+	if a.turns.Busy {
 		if !x.Exclude && a.shellBlk != nil {
 			a.shellBlk.queued = true
 		}

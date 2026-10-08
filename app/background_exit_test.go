@@ -27,8 +27,8 @@ func bgApp(t *testing.T) (a *App, canceled *int, spawned *[]spawnCall) {
 	a = treeApp(t)
 	canceled, spawned = new(int), new([]spawnCall)
 	a.record("user", "do the thing")
-	a.busy, a.runKind = true, "turn"
-	a.cancel = func() { *canceled++ }
+	a.turns.Busy, a.runKind = true, "turn"
+	a.turns.Cancel = func(error) { *canceled++ }
 	a.bgx.spawn = func(id, path, cwd string) (int, string, error) {
 		*spawned = append(*spawned, spawnCall{id, path, cwd})
 		return 4321, filepath.Join(filepath.Dir(path), "x.bg.log"), nil
@@ -91,7 +91,7 @@ func TestExitMenuKeys(t *testing.T) {
 	a, canceled, spawned := bgApp(t)
 	a.requestQuit()
 	a.modal.HandleInput("\x1b")
-	if a.modal != nil || quitting(a) || *canceled != 0 || len(*spawned) != 0 || !a.busy {
+	if a.modal != nil || quitting(a) || *canceled != 0 || len(*spawned) != 0 || !a.turns.Busy {
 		t.Fatal("esc leaves everything as it was")
 	}
 
@@ -181,7 +181,7 @@ func TestRunInBackground(t *testing.T) {
 		t.Fatal("nothing is handed over before the turn has stopped")
 	}
 	// The turn ends, interrupted.
-	a.busy, a.cancel = false, nil
+	a.turns.Busy, a.turns.Cancel = false, nil
 	a.afterRun(context.Canceled)
 	if len(*spawned) != 1 || (*spawned)[0].id != a.sess.ID || (*spawned)[0].path != a.sess.Path || (*spawned)[0].cwd != a.cwd {
 		t.Fatalf("spawned %+v", *spawned)
@@ -212,7 +212,7 @@ func TestRunInBackgroundWhenTurnFinishedFirst(t *testing.T) {
 	a, _, spawned := bgApp(t)
 	a.requestQuit()
 	a.modal.HandleInput("2")
-	a.busy, a.cancel = false, nil
+	a.turns.Busy, a.turns.Cancel = false, nil
 	a.afterRun(nil) // it finished before the cancel landed
 	if len(*spawned) != 0 || !quitting(a) || a.bgx.line != "" {
 		t.Fatal("nothing left to run: plain exit")
@@ -226,7 +226,7 @@ func TestRunInBackgroundKeepsGoal(t *testing.T) {
 	a.goal.Snapshot = a.snapshotGoal
 	a.requestQuit()
 	a.modal.HandleInput("2")
-	a.busy, a.cancel = false, nil
+	a.turns.Busy, a.turns.Cancel = false, nil
 	a.afterRun(context.Canceled)
 	if len(*spawned) != 1 || a.goal.Goal.Status != goal.Active {
 		t.Fatalf("an interrupted goal turn stays active: %+v", a.goal.Goal)
@@ -269,7 +269,7 @@ func TestRunInBackgroundSpawnFails(t *testing.T) {
 	a.bgx.spawn = func(id, path, cwd string) (int, string, error) { return 0, "", errors.New("no exe") }
 	a.requestQuit()
 	a.modal.HandleInput("2")
-	a.busy, a.cancel = false, nil
+	a.turns.Busy, a.turns.Cancel = false, nil
 	a.afterRun(context.Canceled)
 	if quitting(a) || a.bgx.line != "" {
 		t.Fatal("a failed hand-over stays in atto")
@@ -311,8 +311,8 @@ func TestReadOnlyLockedSession(t *testing.T) {
 
 	a.submit("hello", nil)
 	a.onInput("\t")
-	if a.busy || a.editor.Text() != "hello" {
-		t.Fatalf("input is refused and kept: busy=%v text=%q", a.busy, a.editor.Text())
+	if a.turns.Busy || a.editor.Text() != "hello" {
+		t.Fatalf("input is refused and kept: busy=%v text=%q", a.turns.Busy, a.editor.Text())
 	}
 	a.sess.Append(session.Entry{Type: session.TypeName, Name: "x"})
 	if after, _ := os.ReadFile(path); string(after) != string(before) {

@@ -450,7 +450,7 @@ func TestToolGroupResume(t *testing.T) {
 // the running call's description, which its block shows.
 func TestActivityWhileCallRuns(t *testing.T) {
 	a := testApp(t)
-	a.busy, a.runStart, a.activity = true, time.Now(), "Thinking"
+	a.turns.Busy, a.runStart, a.activity = true, time.Now(), "Thinking"
 	a.onEvent(agent.ToolDraft{Index: 0, Args: agent.BashArgs{Description: "Wait for the full regression"}})
 	a.onEvent(agent.ToolStart{ID: "x", Args: agent.BashArgs{Description: "Wait for the full regression", Command: "sleep 1"}, Timeout: time.Minute})
 	got := plainLines(a.renderActivity(100))

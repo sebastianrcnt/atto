@@ -2,7 +2,6 @@ package app
 
 import (
 	"errors"
-	"slices"
 	"strings"
 	"time"
 
@@ -267,9 +266,8 @@ func (a *App) onEvent(ev any) {
 		n := 0 // the user's own steers, shown as pending until now
 		e.User = make([]bool, len(e.Texts))
 		for j, text := range e.Texts {
-			if i := slices.Index(a.pendingSteers, text); i >= 0 {
+			if a.turns.Committed(text) {
 				e.User[j] = true
-				a.pendingSteers = slices.Delete(a.pendingSteers, i, i+1)
 				n++
 			}
 		}
