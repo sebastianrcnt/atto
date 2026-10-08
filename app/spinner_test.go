@@ -19,6 +19,7 @@ func busyApp(t *testing.T, activity string, el time.Duration) (*App, *time.Time)
 	now := start.Add(el)
 	a.now = func() time.Time { return now }
 	a.busy, a.activity, a.runStart, a.lastEvent = true, activity, start, start
+	a.ui.FullRepaint = false    // tests select the repaint mode explicitly
 	a.ui.Colors = tui.Colors256 // whatever the environment says
 	a.spinnerScan = true        // the scanner is what most tests here look at
 	return a, &now
