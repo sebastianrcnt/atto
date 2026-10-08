@@ -83,7 +83,26 @@ func VisibleWidth(s string) int {
 			w += 3
 		}
 	}
-	return w + uniseg.StringWidth(strings.ReplaceAll(s, "\t", ""))
+	return w + uniseg.StringWidth(strings.ReplaceAll(s, "\t", "")) + keycapExtraWidth(s)
+}
+
+// keycapExtraWidth corrects uniseg's one-column width for emoji keycaps:
+// an ASCII digit, # or * followed by VS16 and COMBINING ENCLOSING KEYCAP.
+// Other variation-selector sequences keep uniseg's width.
+func keycapExtraWidth(s string) (width int) {
+	const suffix = "\ufe0f\u20e3"
+	for {
+		i := strings.Index(s, suffix)
+		if i < 0 {
+			return width
+		}
+		if i > 0 {
+			if c := s[i-1]; c >= '0' && c <= '9' || c == '#' || c == '*' {
+				width++
+			}
+		}
+		s = s[i+len(suffix):]
+	}
 }
 
 // asciiWidth is the fast path for printable ASCII mixed with escape sequences,
@@ -181,7 +200,7 @@ func (sc *cellScanner) next() (cell, bool) {
 	} else {
 		var b int
 		c.text, _, b, sc.state = uniseg.StepString(sc.s[sc.i:sc.end], sc.state)
-		c.width = b >> uniseg.ShiftWidth
+		c.width = b>>uniseg.ShiftWidth + keycapExtraWidth(c.text)
 		sc.i += len(c.text)
 	}
 	if c.text == "\t" {
