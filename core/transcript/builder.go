@@ -253,7 +253,7 @@ func (b *Builder) apply(ev any, at time.Time) {
 		b.closeText(at)
 		b.compact = b.start(Item{Kind: Compaction, Status: InProgress, Auto: e.Auto, Reason: e.Reason, Cap: e.Cap})
 	case agent.CompactTrimmed:
-		b.add(Item{Kind: Notice, Status: Completed, Text: fmt.Sprintf("Compaction left out the %d oldest messages: the conversation no longer fit the context window with room for the notes.", e.Messages)})
+		b.add(Item{Kind: Notice, Status: Completed, Text: fmt.Sprintf("Compaction left out the %d oldest messages to fit the request limits.", e.Messages)})
 	case agent.CompactDelta:
 		if c := b.compact; c != nil {
 			c.Text += e.Text

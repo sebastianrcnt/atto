@@ -370,3 +370,158 @@ func TestFitCompactionDoesNotRetainToolsWhenPrefixCannotFit(t *testing.T) {
 		t.Fatal("retained tools even though the turn prefix cannot fit")
 	}
 }
+
+func TestCompactionTrimsRequestsPastInputCaps(t *testing.T) {
+	for _, tc := range []struct {
+		name             string
+		tier, long, auto bool
+		limits           map[string]int
+		trimmed          int
+	}{
+		{"price tier", true, false, true, nil, 4},
+		{"setting", false, false, true, map[string]int{"t/m": 8000}, 4},
+		{"manual", true, false, false, nil, 4},
+		{"plain window", false, false, true, nil, 0},
+		{"long context", true, true, true, nil, 0},
+		{"setting disabled", true, false, true, map[string]int{"t/m": 0}, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv, seen := fakeServer(t, text("notes"))
+			a := newTestAgent(srv.URL)
+			a.model.Model.ContextWindow, a.model.Model.MaxTokens = 60000, 16000
+			if tc.tier {
+				a.model.Model.Cost = &ai.ModelCost{Tiers: []ai.ModelCostTier{{InputTokensAbove: 8000}}}
+			}
+			a.SetCompaction(&config.Compaction{Limits: tc.limits})
+			a.SetLongContext(tc.long)
+			a.system = "system"
+			for i := range 3 {
+				id := fmt.Sprint(i)
+				a.messages = append(a.messages,
+					provider.Message{Role: "user", Content: "turn " + id},
+					provider.Message{Role: "assistant", ToolCalls: []provider.ToolCall{{ID: id, Type: "function",
+						Function: provider.FunctionCall{Name: "bash", Arguments: `{"command":"cat log"}`}}}},
+					provider.Message{Role: "tool", ToolCallID: id, Content: strings.Repeat("output text ", 1000)},
+					provider.Message{Role: "assistant", Content: "answer " + id})
+			}
+			a.LastUsage.PromptTokens = 10000
+			before := append([]provider.Message(nil), a.messages...)
+			trimmed := 0
+			err := a.compact(context.Background(), func(ev any) {
+				if e, ok := ev.(CompactTrimmed); ok {
+					trimmed += e.Messages
+					if !reflect.DeepEqual(a.messages, before) {
+						t.Error("trimming changed the conversation before notes succeeded")
+					}
+				}
+			}, tc.auto)
+			if err != nil || trimmed != tc.trimmed || len(seen()) != 1 {
+				t.Fatalf("err %v, trimmed %d, requests %d", err, trimmed, len(seen()))
+			}
+			req := seen()[0]
+			wantTurn := "turn 0"
+			if tc.trimmed > 0 {
+				wantTurn = "turn 1"
+			}
+			if len(req) != len(before)+2-tc.trimmed || req[0]["content"] != "system" || req[1]["content"] != wantTurn {
+				t.Fatalf("unexpected retained prefix: %v", req)
+			}
+			var body struct {
+				MaxTokens int `json:"max_tokens"`
+			}
+			if err := json.Unmarshal(a.LastRequest(), &body); err != nil {
+				t.Fatal(err)
+			}
+			if body.MaxTokens != 16000 {
+				t.Fatalf("input cap restricted output tokens to %d", body.MaxTokens)
+			}
+			if tc.trimmed > 0 {
+				est := 10000 + messageChars(provider.Message{Content: req[len(req)-1]["content"].(string)})/4
+				for _, msg := range before[:tc.trimmed] {
+					est -= messageChars(msg) / 4
+				}
+				if est+256 > 8000 {
+					t.Fatalf("summary request estimate %d exceeds cap", est)
+				}
+			}
+		})
+	}
+}
+
+func TestCapFittingDropsOldTurnsBeforeRetainingTools(t *testing.T) {
+	history := oversizedToolHistory(2)
+	all := append([]provider.Message{{Role: "system", Content: "system"}}, history...)
+	all = append(all, provider.Message{Role: "user", Content: "write notes"})
+	req := provider.Request{Messages: all, MaxTokens: 10000}
+	est := 0
+	for _, msg := range all {
+		est += messageChars(msg) / 4
+	}
+	dropped, kept := fitCompactionUnderCap(&req, config.Model{ContextWindow: 60000}, est, compactRoom, 5000)
+	if dropped != 2 || !reflect.DeepEqual(kept, history[5:]) || len(req.Messages) != 5 || req.Messages[1].Content != history[2].Content {
+		t.Fatalf("dropped %d, kept %v, request %v", dropped, kept, req.Messages)
+	}
+	if !reflect.DeepEqual(all[1:len(all)-1], history) {
+		t.Fatal("cap fitting mutated the original history")
+	}
+}
+
+func TestCapFittingKeepsAnIndivisibleNewestTurn(t *testing.T) {
+	all := msgs("system", "user", "assistant", "user", "assistant", "user")
+	req := provider.Request{Messages: all}
+	dropped, kept := fitCompactionUnderCap(&req, config.Model{ContextWindow: 60000}, 30000, compactRoom, 10000)
+	if dropped != 2 || len(kept) != 0 || !reflect.DeepEqual(req.Messages[1:len(req.Messages)-1], all[3:5]) {
+		t.Fatal("cap fitting discarded the newest indivisible turn")
+	}
+}
+
+func TestCompactionCapsInputWhenOutputRoomLowersTheTrigger(t *testing.T) {
+	srv, seen := fakeServer(t, text("notes"))
+	a := newTestAgent(srv.URL)
+	a.model.Model.ContextWindow, a.model.Model.MaxTokens = 60000, 20000
+	a.model.Model.Cost = &ai.ModelCost{Tiers: []ai.ModelCostTier{{InputTokensAbove: 45000}}}
+	a.system = "system"
+	for range 3 {
+		a.messages = append(a.messages,
+			provider.Message{Role: "user", Content: strings.Repeat("user text ", 2000)},
+			provider.Message{Role: "assistant", Content: strings.Repeat("answer text ", 2000)})
+	}
+	a.LastUsage.PromptTokens = 50000
+	if _, cap := a.CompactionLimit(); cap != 0 {
+		t.Fatal("output room should already lower the trigger")
+	}
+	trimmed := 0
+	if err := a.compact(context.Background(), func(ev any) {
+		if e, ok := ev.(CompactTrimmed); ok {
+			trimmed += e.Messages
+		}
+	}, true); err != nil {
+		t.Fatal(err)
+	}
+	if trimmed != 2 || len(seen()) != 1 || len(seen()[0]) != 6 {
+		t.Fatalf("trimmed %d, requests %v", trimmed, seen())
+	}
+}
+
+func TestFailedCapCompactionLeavesTheConversationUnchanged(t *testing.T) {
+	srv, count := scriptedServer(t, status(401, "invalid api key"))
+	a := newTestAgent(srv.URL)
+	a.model.Model.ContextWindow = 60000
+	a.SetCompaction(&config.Compaction{Limits: map[string]int{"t/m": 5000}})
+	a.system = "system"
+	a.messages = msgs("user", "assistant", "user", "assistant", "user", "assistant")
+	a.LastUsage.PromptTokens = 8000
+	before := append([]provider.Message(nil), a.messages...)
+	var recorded []session.Entry
+	a.Record = func(e session.Entry) { recorded = append(recorded, e) }
+	trimmed := 0
+	err := a.compact(context.Background(), func(ev any) {
+		if e, ok := ev.(CompactTrimmed); ok {
+			trimmed += e.Messages
+		}
+	}, true)
+	if err == nil || count() != 1 || trimmed != 4 || !reflect.DeepEqual(a.messages, before) ||
+		a.ContextTokens() != 8000 || len(recorded) != 0 {
+		t.Fatalf("err %v, requests %d, trimmed %d, context %d, recorded %d", err, count(), trimmed, a.ContextTokens(), len(recorded))
+	}
+}

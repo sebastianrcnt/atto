@@ -206,7 +206,7 @@ type (
 	}
 	CompactDelta struct{ Text string }
 	// CompactTrimmed: the compaction request left out the oldest Messages
-	// to fit the context window (the conversation keeps them until the
+	// to fit the request limits (the conversation keeps them until the
 	// compaction replaces it).
 	CompactTrimmed struct{ Messages int }
 	CompactEnd     struct {
@@ -735,9 +735,20 @@ func (a *Agent) CompactionLimit() (limit, cap int) {
 // that does not lower the trigger below the window's own (the room for the
 // answer already does) is none.
 func (a *Agent) compactionPlan() (limit, cap int, reason string) {
+	m, cap, reason := a.compactionCap()
+	limit = compactLimit(m.Model, cap)
+	if cap <= 0 || limit >= compactLimit(m.Model, 0) {
+		cap, reason = 0, ""
+	}
+	return limit, cap, reason
+}
+
+// compactionCap keeps the selected input cap even when output room already
+// lowers the trigger: a resumed conversation may still exceed that cap.
+func (a *Agent) compactionCap() (m config.ModelRef, cap int, reason string) {
 	a.cfgMu.Lock()
 	defer a.cfgMu.Unlock()
-	m := a.model
+	m = a.model
 	cap, reason = m.Model.Cost.ContextPriceBoundary(), ReasonPriceTier
 	if n, ok := a.compactLimits[m.ProviderName+"/"+m.Model.ID]; ok && n >= 0 {
 		cap, reason = n, ReasonSetting
@@ -745,11 +756,7 @@ func (a *Agent) compactionPlan() (limit, cap int, reason string) {
 	if a.longContext || cap >= m.Model.ContextWindow {
 		cap = 0
 	}
-	limit = compactLimit(m.Model, cap)
-	if cap <= 0 || limit >= compactLimit(m.Model, 0) {
-		cap, reason = 0, ""
-	}
-	return limit, cap, reason
+	return m, cap, reason
 }
 
 // Reset clears the conversation.
@@ -1478,6 +1485,7 @@ func (a *Agent) compact(ctx context.Context, emit func(any), auto bool) error {
 	}
 	start := time.Now()
 	before := a.ContextTokens()
+	_, fitCap, _ := a.compactionCap()
 	var reason string
 	var cap int
 	if auto {
@@ -1506,7 +1514,7 @@ func (a *Agent) compact(ctx context.Context, emit func(any), auto bool) error {
 			// The conversation itself is untouched until the notes succeed.
 			need := compactRoom << try
 			old := req.Messages
-			dropped, kept := fitCompaction(&req, model.Model, est, need)
+			dropped, kept := fitCompactionUnderCap(&req, model.Model, est, need, fitCap)
 			for _, m := range old[1 : 1+dropped] {
 				est -= messageChars(m) / 4
 			}
@@ -1616,6 +1624,14 @@ func cutNotes(res provider.Result) string {
 // to keep after the notes instead of summarizing it. The other return value
 // counts messages dropped from the oldest turns.
 func fitCompaction(req *provider.Request, m config.Model, est, need int) (int, []provider.Message) {
+	return fitCompactionUnderCap(req, m, est, need, 0)
+}
+
+// fitCompactionUnderCap also keeps the input below cap, independently of
+// output room. Drop oldest whole turns first for a price or settings cap;
+// only then consider retaining an oversized latest tool group. Like window
+// fitting, it leaves the newest indivisible turn even if it cannot fit.
+func fitCompactionUnderCap(req *provider.Request, m config.Model, est, need, cap int) (int, []provider.Message) {
 	window := m.ContextWindow
 	if window <= 0 {
 		return 0, nil
@@ -1624,7 +1640,30 @@ func fitCompaction(req *provider.Request, m config.Model, est, need int) (int, [
 	dropped := 0
 	msgs := req.Messages // [system, conversation..., compaction prompt]
 	var kept []provider.Message
-	if window-est-margin < need {
+	dropOldest := func() bool {
+		end := 2
+		for end < len(msgs)-1 && msgs[end].Role != "user" {
+			end++
+		}
+		if end >= len(msgs)-1 { // one turn left: keep it
+			return false
+		}
+		for _, d := range msgs[1:end] {
+			est -= messageChars(d) / 4
+		}
+		dropped += end - 1
+		msgs = append(msgs[:1:1], msgs[end:]...)
+		return true
+	}
+	for cap > 0 && est+margin > cap && len(msgs) > 3 {
+		if !dropOldest() {
+			break
+		}
+	}
+	fits := func(tokens, output int) bool {
+		return window-tokens-margin >= output && (cap <= 0 || tokens+margin <= cap)
+	}
+	if !fits(est, need) {
 		last := 1
 		for i := 2; i < len(msgs)-1; i++ {
 			if msgs[i].Role == "user" {
@@ -1635,7 +1674,7 @@ func fitCompaction(req *provider.Request, m config.Model, est, need int) (int, [
 		for _, m := range msgs[1:last] {
 			lastEst -= messageChars(m) / 4
 		}
-		if window-lastEst-margin < need {
+		if !fits(lastEst, need) {
 			// Dropping older turns cannot help. Summarize their history and
 			// the current turn's prefix, keeping the latest call with all its
 			// results. Never cut at a tool result itself.
@@ -1648,7 +1687,7 @@ func fitCompaction(req *provider.Request, m config.Model, est, need int) (int, [
 					}
 					// The cut must leave room for at least the minimum answer,
 					// not just retain tools when the prefix itself cannot fit.
-					if window-(lastEst-tokens)-margin < 1024 {
+					if !fits(lastEst-tokens, 1024) {
 						continue
 					}
 					kept = tail
@@ -1659,20 +1698,10 @@ func fitCompaction(req *provider.Request, m config.Model, est, need int) (int, [
 			}
 		}
 	}
-	for window-est-margin < need && len(msgs) > 3 {
-		// Drop up to (not including) the next user message after the first.
-		end := 2
-		for end < len(msgs)-1 && msgs[end].Role != "user" {
-			end++
-		}
-		if end >= len(msgs)-1 { // one turn left: keep it
+	for !fits(est, need) && len(msgs) > 3 {
+		if !dropOldest() {
 			break
 		}
-		for _, d := range msgs[1:end] {
-			est -= messageChars(d) / 4
-		}
-		dropped += end - 1
-		msgs = append(msgs[:1:1], msgs[end:]...)
 	}
 	req.Messages = msgs
 	if room := window - est - margin; req.MaxTokens <= 0 || req.MaxTokens > room {

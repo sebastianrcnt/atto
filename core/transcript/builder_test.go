@@ -356,3 +356,13 @@ func TestToolImages(t *testing.T) {
 		}
 	}
 }
+
+func TestCompactionTrimmedNotice(t *testing.T) {
+	var b Builder
+	b.Event(agent.CompactTrimmed{Messages: 4})
+	items := b.Items()
+	if len(items) != 1 || items[0].Kind != Notice || items[0].Status != Completed ||
+		items[0].Text != "Compaction left out the 4 oldest messages to fit the request limits." {
+		t.Fatalf("trim notice %v", items)
+	}
+}
