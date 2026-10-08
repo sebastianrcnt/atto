@@ -197,7 +197,7 @@ func (a *App) cmdRequest(string) {
 	}
 	_ = json.Unmarshal(body, &req)
 	a.notice("Saved the last request (%d messages, %d tools, %s) to %s",
-		len(req.Messages), len(req.Tools), fmtBytes(int64(len(body))), shortPath(path))
+		len(req.Messages), len(req.Tools), fmtBytes(int64(len(body))), core.ShortPath(path))
 }
 
 // priceTierNotice is shown on model selection, not on every turn or status update.

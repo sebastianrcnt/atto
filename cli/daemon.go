@@ -6,12 +6,12 @@ import (
 	"io"
 	"os"
 	"strconv"
-	"strings"
 	"syscall"
 	"text/tabwriter"
 	"time"
 
 	"github.com/sebastianrcnt/atto/app"
+	"github.com/sebastianrcnt/atto/core"
 	"github.com/sebastianrcnt/atto/daemon"
 )
 
@@ -37,7 +37,7 @@ settings.json (or ATTO_NO_DAEMON=1) runs atto directly in the terminal.`
 func RunAttach(args []string, out io.Writer) error {
 	fs := newFlags("attach")
 	list := fs.Bool("l", false, "list the running attos")
-	words, err := parseWords(fs, args)
+	words, err := parseInterleaved(fs, args)
 	if err != nil || len(words) > 1 {
 		return fmt.Errorf("%s", attachUsage)
 	}
@@ -68,7 +68,7 @@ func RunAttach(args []string, out io.Writer) error {
 func RunDaemon(args []string, out io.Writer) error {
 	fs := newFlags("daemon")
 	force := fs.Bool("force", false, "stop: end running panes too")
-	words, err := parseWords(fs, args)
+	words, err := parseInterleaved(fs, args)
 	if err != nil {
 		return fmt.Errorf("%s", daemonUsage)
 	}
@@ -113,12 +113,8 @@ func listPanes(out io.Writer) error {
 	}
 	tw := tabwriter.NewWriter(out, 0, 0, 2, ' ', 0)
 	fmt.Fprintln(tw, "ID\tSESSION\tNAME\tDIRECTORY\tSHOWN\tSTARTED")
-	home, _ := os.UserHomeDir()
 	for _, p := range panes {
-		dir := p.Cwd
-		if home != "" && strings.HasPrefix(dir, home) {
-			dir = "~" + dir[len(home):]
-		}
+		dir := core.ShortPath(p.Cwd)
 		shown := "detached"
 		if p.Clients > 0 {
 			shown = strconv.Itoa(p.Clients) + " terminal"

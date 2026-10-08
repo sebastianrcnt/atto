@@ -116,7 +116,7 @@ func RunAgent(args []string, out io.Writer) error {
 		fs.BoolVar(&jsonOut, "json", false, "JSON report")
 	}
 	done := fs.Bool("done", false, "close: every agent that is not running or queued")
-	words, err := parseWords(fs, rest)
+	words, err := parseInterleaved(fs, rest)
 	if err != nil {
 		return fmt.Errorf("%v\n%s", err, agentUsage)
 	}
@@ -457,23 +457,6 @@ func checkWorktree(s agentstate.State, force bool) error {
 	return nil
 }
 
-// parseWords parses flags anywhere among the words (atto agent wait a
-// -timeout 5m) and returns the words.
-func parseWords(fs *flag.FlagSet, args []string) ([]string, error) {
-	var words []string
-	for {
-		if err := fs.Parse(args); err != nil {
-			return nil, err
-		}
-		args = fs.Args()
-		if len(args) == 0 {
-			return words, nil
-		}
-		words = append(words, args[0])
-		args = args[1:]
-	}
-}
-
 func contains(list []string, s string) bool {
 	return slices.Contains(list, s)
 }
@@ -606,18 +589,11 @@ func sessionModel(id string) (model, effort string) {
 	if err != nil {
 		return "", ""
 	}
-	_, entries, err := session.Load(path)
+	saved, err := core.Read(path)
 	if err != nil {
 		return "", ""
 	}
-	for _, e := range entries {
-		switch e.Type {
-		case session.TypeModel:
-			model = e.Provider + "/" + e.Model
-		case session.TypeEffort:
-			effort = e.Effort
-		}
-	}
+	model, effort = saved.Model, saved.Effort
 	return model, effort
 }
 
@@ -804,7 +780,7 @@ func agentList(out io.Writer, parent string) error {
 		if t.Duration() > 0 {
 			d = tui.FormatDuration(t.Duration())
 		}
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n", agentstate.PathOf(s.Session), s.Preset, s.Model, t.Status, d, tui.Truncate(tui.FirstLine(s.Task), 60, "…"))
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n", agentstate.PathOf(s.Session), s.Preset, s.Model, t.Status, d, tui.Truncate(tui.FirstLineWithEllipsis(s.Task), 60, "…"))
 	}
 	if err := tw.Flush(); err != nil {
 		return err

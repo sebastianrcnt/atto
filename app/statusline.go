@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/sebastianrcnt/atto/core"
 	"os"
 	"path/filepath"
 	"slices"
@@ -431,9 +432,9 @@ func (a *App) buildStatus(m config.ModelRef, effort string, first, width int) []
 		if a.agent.LongContext() {
 			label += " long"
 		}
-		size := fmt.Sprintf("%s/%s", tui.FormatTokens(a.ctxTokens), tui.FormatTokens(cw))
+		size := fmt.Sprintf("%s/%s", compactTokens(a.ctxTokens), compactTokens(cw))
 		if cap > 0 { // a price tier or a setting compacts before the window fills
-			size += " ⇥" + tui.FormatTokens(limit)
+			size += " ⇥" + compactTokens(limit)
 		}
 		items = append(items,
 			statusItem{text: style(contextBar(pct, 10) + label), pre: "  "},
@@ -480,7 +481,7 @@ func (a *App) buildStatus(m config.ModelRef, effort string, first, width int) []
 	if a.gitBranch != "" {
 		branch = " (" + a.gitBranch + ")"
 	}
-	where := shortPath(a.cwd)
+	where := core.ShortPath(a.cwd)
 	whereW, branchW, sepW := tui.VisibleWidth(where+branch), tui.VisibleWidth(branch), tui.VisibleWidth(sep)
 
 	// row lays out one row w wide: l at the left, the directory (when

@@ -21,3 +21,11 @@ func TestFormatDuration(t *testing.T) {
 		}
 	}
 }
+
+func TestFirstLineWithEllipsis(t *testing.T) {
+	for text, want := range map[string]string{"one": "one", "one\ntwo": "one …", "\ntwo": " …"} {
+		if got := FirstLineWithEllipsis(text); got != want {
+			t.Errorf("%q: %q, want %q", text, got, want)
+		}
+	}
+}

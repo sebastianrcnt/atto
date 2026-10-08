@@ -7,7 +7,6 @@ import (
 	"os"
 	"strings"
 
-	"github.com/sebastianrcnt/atto/config"
 	"github.com/sebastianrcnt/atto/trust"
 )
 
@@ -25,8 +24,8 @@ content need approval again. A running session picks decisions up with /reload.`
 // RunTrust implements "atto trust". Approval decisions belong to the user, so
 // even listing through this command is refused inside an agent's shell.
 func RunTrust(args []string, out io.Writer) error {
-	if config.InAgent() || os.Getenv("ATTO_SESSION_ID") != "" {
-		return fmt.Errorf("atto: project trust is managed by the user, not from an agent's shell (ATTO_AGENT or ATTO_SESSION_ID is set). Ask the user to run atto trust in their terminal")
+	if err := requireUserApproval("project trust is managed", "atto trust in their terminal"); err != nil {
+		return err
 	}
 	cmd := "list"
 	if len(args) > 0 {

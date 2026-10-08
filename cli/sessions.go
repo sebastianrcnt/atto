@@ -107,23 +107,6 @@ func RunSessions(args []string, out io.Writer) error {
 	return fmt.Errorf("unknown subcommand %q\n%s", sub, sessionsUsage)
 }
 
-// parseInterleaved parses flags that may come before, between or after
-// positional words, so "delete <id> -y" works as well as "delete -y <id>".
-func parseInterleaved(fs *flag.FlagSet, args []string) ([]string, error) {
-	var pos []string
-	for {
-		if err := fs.Parse(args); err != nil {
-			return nil, err
-		}
-		args = fs.Args()
-		if len(args) == 0 {
-			return pos, nil
-		}
-		pos = append(pos, args[0])
-		args = args[1:]
-	}
-}
-
 // oneLine collapses whitespace and cuts s to n runes.
 func oneLine(s string, n int) string {
 	s = strings.Join(strings.Fields(s), " ")

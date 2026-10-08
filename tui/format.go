@@ -36,8 +36,8 @@ func FormatTokens(n int) string {
 	return fmt.Sprint(n)
 }
 
-// FirstLine is s up to its first newline, with " …" if it went on.
-func FirstLine(s string) string {
+// FirstLineWithEllipsis is s up to its first newline, with " …" if it went on.
+func FirstLineWithEllipsis(s string) string {
 	if before, _, ok := strings.Cut(s, "\n"); ok {
 		return before + " …"
 	}

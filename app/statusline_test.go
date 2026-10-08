@@ -39,7 +39,7 @@ func TestBuiltinStatusWidths(t *testing.T) {
 		}
 		return out
 	}
-	all := []string{"Orca", "11%", "31.0k/262.0k", "cache 85%", "↑12k", "↓3.4k", "W2k", "$0.123", "/work/proj (main)"}
+	all := []string{"Orca", "11%", "31k/262k", "cache 85%", "↑12k", "↓3.4k", "W2k", "$0.123", "/work/proj (main)"}
 	hasAll := func(width int) {
 		t.Helper()
 		s := strings.Join(rows(width), "\n")

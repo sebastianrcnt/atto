@@ -242,7 +242,7 @@ func goalMessageTitle(text string) string {
 	if strings.Contains(text, "<objective>") {
 		return "◎ Continuing goal"
 	}
-	return "◎ " + tui.FirstLine(goal.Body(text))
+	return "◎ " + tui.FirstLineWithEllipsis(goal.Body(text))
 }
 
 // goalStatusBlock announces a goal status change, as codex words it: "Goal

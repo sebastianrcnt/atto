@@ -70,9 +70,8 @@ func RunExtensions(args []string, out io.Writer) error {
 		if len(args) != 1 {
 			return fmt.Errorf("%s", extensionsUsage)
 		}
-		if config.InAgent() {
-			// Approval is the user's check on code a repository brings.
-			return fmt.Errorf("atto: project extensions are approved by the user, not from an agent's shell (%s is set). Ask the user to run: atto extensions approve %s (or /extensions approve %s)", config.EnvAgent, args[0], args[0])
+		if err := requireUserApproval("project extensions are approved", "atto extensions approve "+args[0]); err != nil {
+			return err
 		}
 		s, err := extensions.Approve(cwd, args[0])
 		if err != nil {

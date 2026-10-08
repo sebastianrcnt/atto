@@ -645,7 +645,7 @@ func (l Loaded) Details() []Section {
 		if h.Type == "http" {
 			cmd = "POST " + cmd
 		}
-		text := clip(oneLine(cmd), 80) + " · " + ShortPath(h.File)
+		text := clipWithEllipsis(oneLine(cmd), 80) + " · " + ShortPath(h.File)
 		if h.Status != "" {
 			text += " · " + h.Status
 			if h.Status != config.HookApproved {
@@ -698,7 +698,7 @@ func (l Loaded) Details() []Section {
 			text += " · effort " + p.Effort
 		}
 		if p.Description != "" {
-			text += " · " + clip(oneLine(p.Description), 80)
+			text += " · " + clipWithEllipsis(oneLine(p.Description), 80)
 		}
 		s.Rows = append(s.Rows, Row{p.Name, text})
 	}
@@ -763,7 +763,7 @@ func withFrom(s, from string) string {
 
 func oneLine(s string) string { return strings.Join(strings.Fields(s), " ") }
 
-func clip(s string, n int) string {
+func clipWithEllipsis(s string, n int) string {
 	r := []rune(s)
 	if len(r) <= n {
 		return s
@@ -877,7 +877,7 @@ func Diff(prev, cur Loaded) []Change {
 			if h.Matcher != "" {
 				name += " [" + h.Matcher + "]"
 			}
-			m[name+": "+clip(oneLine(h.Command), 60)] = h.File + " " + h.Type + " " + h.Status
+			m[name+": "+clipWithEllipsis(oneLine(h.Command), 60)] = h.File + " " + h.Type + " " + h.Status
 		}
 		return m
 	}

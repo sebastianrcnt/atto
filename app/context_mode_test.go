@@ -124,7 +124,7 @@ func TestStatusShowsTierTrigger(t *testing.T) {
 	a.agent.SetModel(m)
 	a.ctxTokens = 100000
 	row := func() string { return tui.StripEscapes(strings.Join(a.builtinStatus(240, 240), "\n")) }
-	if !strings.Contains(row(), "100.0k/1.1M ⇥244.8k") {
+	if !strings.Contains(row(), "100k/1.1M ⇥245k") {
 		t.Fatal(row())
 	}
 	a.agent.SetLongContext(true)

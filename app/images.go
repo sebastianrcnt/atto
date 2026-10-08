@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"fmt"
+	"github.com/sebastianrcnt/atto/core"
 
 	"github.com/sebastianrcnt/atto/config"
 	"github.com/sebastianrcnt/atto/images"
@@ -19,7 +20,7 @@ import (
 func (a *App) imagesUnsupported() {
 	m := a.model()
 	a.add(&noticeBlock{
-		text:  images.Unsupported(m.Model.DisplayName(), "/model", shortPath(config.ModelsPath())),
+		text:  images.Unsupported(m.Model.DisplayName(), "/model", core.ShortPath(config.ModelsPath())),
 		style: func(s string) string { return tui.FG(3, s) },
 	})
 }

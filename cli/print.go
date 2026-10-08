@@ -518,7 +518,7 @@ func (p *printer) toolUse(it *transcript.Item) {
 	p.flushStep()
 	p.emit(map[string]any{"type": "tool_use", "id": it.CallID, "description": it.Description, "command": it.Command})
 	if p.verbose && p.textMode() {
-		fmt.Fprintf(p.errOut, "\n● %s  $ %s\n", it.Description, tui.FirstLine(it.Command))
+		fmt.Fprintf(p.errOut, "\n● %s  $ %s\n", it.Description, tui.FirstLineWithEllipsis(it.Command))
 	}
 }
 

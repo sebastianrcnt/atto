@@ -3,6 +3,7 @@ package app
 import (
 	"errors"
 	"fmt"
+	"github.com/sebastianrcnt/atto/core"
 	"strings"
 
 	"github.com/sebastianrcnt/atto/server"
@@ -164,7 +165,7 @@ func (a *App) resumePrompt(r *resumePicker) *openPrompt {
 	if r.all {
 		p.wire.Subtitle = "All projects"
 	} else {
-		p.wire.Subtitle = "Sessions in " + shortPath(r.cwd)
+		p.wire.Subtitle = "Sessions in " + core.ShortPath(r.cwd)
 	}
 	items := r.list.Items
 	if len(items) > maxPromptOptions {

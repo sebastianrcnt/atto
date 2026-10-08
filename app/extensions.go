@@ -265,7 +265,7 @@ func (a *App) cmdExtensions(arg string) {
 			a.errorNotice(err)
 			return
 		}
-		a.notice("Approved %s (%s); reloading.", s.Name, shortPath(s.Path))
+		a.notice("Approved %s (%s); reloading.", s.Name, core.ShortPath(s.Path))
 		a.requestReload(false)
 	default:
 		a.notice("Usage: /extensions [approve <name>]")

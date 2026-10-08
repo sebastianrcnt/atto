@@ -2,6 +2,7 @@ package app
 
 import (
 	"fmt"
+	"github.com/sebastianrcnt/atto/core"
 	"os"
 	"path/filepath"
 	"slices"
@@ -10,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/sebastianrcnt/atto/agent"
 	"github.com/sebastianrcnt/atto/agentstate"
 	"github.com/sebastianrcnt/atto/daemon"
 	"github.com/sebastianrcnt/atto/session"
@@ -466,7 +468,7 @@ func centerTree(items []centerItem) []centerItem {
 			if name == "" {
 				name = it.id
 			}
-			it.agentPath = path + "/" + firstLine(name)
+			it.agentPath = path + "/" + agent.FirstLine(name)
 		}
 		out = append(out, it)
 		childPath := path
@@ -709,9 +711,9 @@ func (c *agentCenter) renderList(sh []centerItem, width, bodyH int) []string {
 			if len(lines) > 0 {
 				lines = append(lines, "")
 			}
-			lines = append(lines, tui.Truncate(tui.Dim(fmt.Sprintf(" %s  %d", shortPath(group), n)), width, "…"))
+			lines = append(lines, tui.Truncate(tui.Dim(fmt.Sprintf(" %s  %d", core.ShortPath(group), n)), width, "…"))
 		}
-		title := firstLine(it.title)
+		title := agent.FirstLine(it.title)
 		if title == "" {
 			title = "(new session)"
 		}
@@ -751,7 +753,11 @@ func (c *agentCenter) renderList(sh []centerItem, width, bodyH int) []string {
 		row := "  " + mark + " " + name
 		if wide {
 			row += strings.Repeat(" ", max(1, titleW-tui.VisibleWidth(name)+2))
-			row += fmt.Sprintf("%-*s %*s", statusW, it.status(), ageW, ago(it.updated))
+			age := ""
+			if !it.updated.IsZero() {
+				age = session.RelTime(it.updated)
+			}
+			row += fmt.Sprintf("%-*s %*s", statusW, it.status(), ageW, age)
 		}
 		if i == c.sel {
 			selLine = len(lines)
@@ -791,13 +797,13 @@ func (c *agentCenter) renderList(sh []centerItem, width, bodyH int) []string {
 // and where.
 func (c *agentCenter) renderDetail(it centerItem, width int) []string {
 	wrap := func(s string) []string { return tui.Wrap(s, max(width, 10)) }
-	title := firstLine(it.title)
+	title := agent.FirstLine(it.title)
 	if title == "" {
 		title = "(new session)"
 	}
 	out := []string{tui.Bold("Task details"), ""}
 	if it.agentPath != "" {
-		title = firstLine(it.prompt)
+		title = agent.FirstLine(it.prompt)
 	}
 	out = append(out, wrap(title)...)
 	if it.agentPath != "" {
@@ -828,7 +834,7 @@ func (c *agentCenter) renderDetail(it centerItem, width int) []string {
 		out = append(out, "")
 	}
 	out = append(out, tui.Dim("Project"))
-	out = append(out, wrap(shortPath(it.cwd))...)
+	out = append(out, wrap(core.ShortPath(it.cwd))...)
 	if it.branch != "" {
 		out = append(out, "", tui.Dim("Branch"))
 		out = append(out, wrap(it.branch)...)
@@ -843,7 +849,7 @@ func (c *agentCenter) renderDetail(it centerItem, width int) []string {
 	}
 	if it.prompt != "" {
 		out = append(out, "", tui.Dim("Prompt"))
-		lines := wrap(firstLine(it.prompt))
+		lines := wrap(agent.FirstLine(it.prompt))
 		if len(lines) > 3 {
 			lines = append(lines[:3], "…")
 		}
@@ -854,28 +860,6 @@ func (c *agentCenter) renderDetail(it centerItem, width int) []string {
 
 // lastMessage is loaded with the summary snapshot, never during rendering.
 func (c *agentCenter) lastMessage(id string) string { return c.msgs[id] }
-
-func firstLine(s string) string {
-	s, _, _ = strings.Cut(strings.TrimSpace(s), "\n")
-	return s
-}
-
-// ago is a short age: 5m ago, 3h ago, 2d ago.
-func ago(t time.Time) string {
-	if t.IsZero() {
-		return ""
-	}
-	d := time.Since(t)
-	switch {
-	case d < time.Minute:
-		return "now"
-	case d < time.Hour:
-		return fmt.Sprintf("%dm ago", int(d.Minutes()))
-	case d < 24*time.Hour:
-		return fmt.Sprintf("%dh ago", int(d.Hours()))
-	}
-	return fmt.Sprintf("%dd ago", int(d.Hours()/24))
-}
 
 // AgentsPick is what the center by itself was left with.
 type AgentsPick struct {

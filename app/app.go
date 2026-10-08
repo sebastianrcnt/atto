@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"math/rand/v2"
 	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -886,7 +885,7 @@ func (a *App) renderEditor(width int) []string {
 		return a.editor.Render(width)
 	}
 	a.editor.Rule = func(s string) string { return tui.FG(2, s) }
-	hint := "bash mode · runs in " + shortPath(a.cwd) + " · output goes to the model"
+	hint := "bash mode · runs in " + core.ShortPath(a.cwd) + " · output goes to the model"
 	if mode == "!!" {
 		hint = "bash mode · not sent to the model"
 	}
@@ -917,16 +916,6 @@ func (p jumpPill) Render(width int) []string {
 func (p jumpPill) Click(int) bool {
 	p.a.ui.ScrollToBottom()
 	return true
-}
-
-func shortPath(p string) string {
-	// Only whole path elements: /Users/bob2 is not under /Users/bob.
-	if home, err := os.UserHomeDir(); err == nil && home != "" {
-		if rest, ok := strings.CutPrefix(p, home); ok && (rest == "" || rest[0] == '/' || rest[0] == filepath.Separator) {
-			return "~" + rest
-		}
-	}
-	return p
 }
 
 func effortStyle(level string) string {

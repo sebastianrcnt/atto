@@ -97,7 +97,7 @@ func mcpSummary(infos []mcp.Info) string {
 
 // mcpRow describes one MCP server for the expanded Loaded block.
 func mcpRow(in mcp.Info) Row {
-	text := fmt.Sprintf("%s · %s · %s", in.Scope, in.Transport, clip(oneLine(in.Target), 70))
+	text := fmt.Sprintf("%s · %s · %s", in.Scope, in.Transport, clipWithEllipsis(oneLine(in.Target), 70))
 	switch in.Status {
 	case mcp.Running:
 		text += " · " + plural(in.Tools, "tool") + ", running"

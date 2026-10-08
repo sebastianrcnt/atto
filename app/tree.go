@@ -522,7 +522,7 @@ func (p *treePicker) HandleInput(data string) {
 
 func oneLine(s string) string { return strings.Join(strings.Fields(s), " ") }
 
-func clip(s string, n int) string {
+func clipRunes(s string, n int) string {
 	if r := []rune(s); len(r) > n {
 		return string(r[:n])
 	}
@@ -602,17 +602,17 @@ func (p *treePicker) entryText(n *session.Node) string {
 		switch m.Role {
 		case "user":
 			if after, ok := strings.CutPrefix(m.Content, events.Prefix); ok {
-				return tui.FG(5, "[event]: ") + clip(oneLine(after), 200)
+				return tui.FG(5, "[event]: ") + clipRunes(oneLine(after), 200)
 			}
-			return tui.FG(6, "user: ") + clip(oneLine(m.Content), 200)
+			return tui.FG(6, "user: ") + clipRunes(oneLine(m.Content), 200)
 		case "assistant":
-			if t := clip(oneLine(m.Content), 200); t != "" {
+			if t := clipRunes(oneLine(m.Content), 200); t != "" {
 				return tui.FG(2, "assistant: ") + t
 			}
 			return tui.FG(2, "assistant: ") + tui.Dim("(no content)")
 		case "tool":
 			cmd := oneLine(p.calls[m.ToolCallID])
-			short := clip(cmd, 50)
+			short := clipRunes(cmd, 50)
 			if short != cmd {
 				short += "..."
 			}
@@ -626,13 +626,13 @@ func (p *treePicker) entryText(n *session.Node) string {
 	case session.TypeCompaction:
 		return tui.FG(6, fmt.Sprintf("[compaction: %dk tokens]", (e.TokensBefore+500)/1000))
 	case session.TypeBranchSummary:
-		return tui.FG(5, "[branch summary]: ") + clip(oneLine(e.Summary), 200)
+		return tui.FG(5, "[branch summary]: ") + clipRunes(oneLine(e.Summary), 200)
 	case session.TypeBashExecution:
 		x := e.Bash
 		if x == nil {
 			return ""
 		}
-		s := tui.FG(5, "[bash: "+clip(oneLine(x.Command), 50)+"]")
+		s := tui.FG(5, "[bash: "+clipRunes(oneLine(x.Command), 50)+"]")
 		if x.Exclude {
 			s += tui.Dim(" (not sent to the model)")
 		}
@@ -650,7 +650,7 @@ func (p *treePicker) entryText(n *session.Node) string {
 	case session.TypeBlockDisplay:
 		return tui.Dim("[display: " + e.Ext + "]")
 	case session.TypeExtText:
-		return tui.Dim("[" + e.Ext + ": " + clip(oneLine(e.Title), 80) + "]")
+		return tui.Dim("[" + e.Ext + ": " + clipRunes(oneLine(e.Title), 80) + "]")
 	case session.TypeLabel:
 		if e.Label == "" {
 			return tui.Dim("[label: (cleared)]")

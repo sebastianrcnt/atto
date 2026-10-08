@@ -168,8 +168,8 @@ func encodeJSON(out io.Writer, v any) error {
 	return enc.Encode(v)
 }
 
-// firstLine is the first non-empty line of a description.
-func firstLine(s string) string {
+// firstNonEmptyLine is the first non-empty line of a description.
+func firstNonEmptyLine(s string) string {
 	for l := range strings.SplitSeq(s, "\n") {
 		if l = strings.TrimSpace(l); l != "" {
 			return l
@@ -241,7 +241,7 @@ func mcpTools(args []string, out io.Writer) error {
 		sw, tw = max(sw, len(t.Server)), max(tw, len(t.Name))
 	}
 	for _, t := range tools {
-		line := fmt.Sprintf("%-*s  %-*s  %s", sw, t.Server, tw, t.Name, oneLine(firstLine(t.Description), 100))
+		line := fmt.Sprintf("%-*s  %-*s  %s", sw, t.Server, tw, t.Name, oneLine(firstNonEmptyLine(t.Description), 100))
 		fmt.Fprintln(out, strings.TrimRight(line, " "))
 	}
 	return nil
@@ -330,17 +330,9 @@ func mcpAdd(args []string, out io.Writer) error {
 	var env, headers repeated
 	fs.Var(&env, "e", "")
 	fs.Var(&headers, "H", "")
-	var positional []string
-	for { // flags may come before or after the name
-		if err := fs.Parse(args); err != nil {
-			return fmt.Errorf("%s", usage)
-		}
-		args = fs.Args()
-		if len(args) == 0 {
-			break
-		}
-		positional = append(positional, args[0])
-		args = args[1:]
+	positional, parseErr := parseInterleaved(fs, args)
+	if parseErr != nil {
+		return fmt.Errorf("%s", usage)
 	}
 	if len(positional) != 1 {
 		return fmt.Errorf("%s", usage)
@@ -418,17 +410,9 @@ func mcpRemove(args []string, out io.Writer) error {
 	const usage = "usage: atto mcp remove <name> [-scope user|project|local]"
 	fs := newFlags("mcp remove")
 	scope := scopeFlag(fs, "")
-	var positional []string
-	for {
-		if err := fs.Parse(args); err != nil {
-			return fmt.Errorf("%s", usage)
-		}
-		args = fs.Args()
-		if len(args) == 0 {
-			break
-		}
-		positional = append(positional, args[0])
-		args = args[1:]
+	positional, parseErr := parseInterleaved(fs, args)
+	if parseErr != nil {
+		return fmt.Errorf("%s", usage)
 	}
 	if len(positional) != 1 {
 		return fmt.Errorf("%s", usage)
@@ -489,9 +473,8 @@ func mcpApprove(args []string, out io.Writer) error {
 		return fmt.Errorf("usage: atto mcp approve <name>")
 	}
 	name := args[0]
-	if config.InAgent() {
-		// Approval is the user's check on commands a repository brings.
-		return fmt.Errorf("atto: project MCP servers are approved by the user, not from an agent's shell (%s is set). Ask the user to run: atto mcp approve %s", config.EnvAgent, name)
+	if err := requireUserApproval("project MCP servers are approved", "atto mcp approve "+name); err != nil {
+		return err
 	}
 	o, err := mcpEnv()
 	if err != nil {

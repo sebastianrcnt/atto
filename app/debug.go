@@ -3,6 +3,7 @@ package app
 import (
 	"encoding/json"
 	"fmt"
+	"github.com/sebastianrcnt/atto/core"
 	"maps"
 	"os"
 	"path/filepath"
@@ -29,7 +30,7 @@ func (a *App) cmdDebug(string) {
 	}
 	var m runtime.MemStats
 	runtime.ReadMemStats(&m)
-	a.notice("Saved a heap profile to %s\n%s", shortPath(dir), memSummary(&m))
+	a.notice("Saved a heap profile to %s\n%s", core.ShortPath(dir), memSummary(&m))
 }
 
 // writeDebug writes profiles, memory figures and metadata probe failures to dir.

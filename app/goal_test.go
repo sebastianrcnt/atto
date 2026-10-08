@@ -313,7 +313,7 @@ func TestGoalIndicatorPlacement(t *testing.T) {
 
 	// Jobs and timers keep their own row.
 	a.jobCount = 2
-	if r := row(120); len(r) != 3 || !strings.Contains(r[2], "2 jobs running") || !strings.HasSuffix(r[0], "Goal paused (/goal resume)") {
+	if r := row(110); len(r) != 3 || !strings.Contains(r[2], "2 jobs running") || !strings.HasSuffix(r[0], "Goal paused (/goal resume)") {
 		t.Fatalf("jobs: %q", r)
 	}
 

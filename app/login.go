@@ -100,7 +100,7 @@ func (a *App) startLogin(p config.LoginProvider) {
 
 func (a *App) apiKeyLogin(p config.LoginProvider) {
 	d := &loginDialog{title: "Log in to " + p.Name, label: "API key: ", masked: true,
-		lines: []string{"Paste the API key and press enter. It is saved to " + shortPath(config.AuthPath()) + "."}}
+		lines: []string{"Paste the API key and press enter. It is saved to " + core.ShortPath(config.AuthPath()) + "."}}
 	d.onCancel = a.closeModal
 	d.onSubmit = func(key string) {
 		key = strings.TrimSpace(key)

@@ -435,7 +435,7 @@ func (p *resumePicker) rowMeta(s session.Summary) string {
 		parts = append(parts, "current")
 	}
 	if p.all {
-		parts = append(parts, "⌁ "+shortPath(s.Cwd))
+		parts = append(parts, "⌁ "+core.ShortPath(s.Cwd))
 	}
 	return strings.Join(parts, " · ")
 }
@@ -612,7 +612,7 @@ func (a *App) resume(path string) {
 	a.replay(saved.Entries)
 	a.restoreGoal(saved.Snapshots())
 	if h.Cwd != a.cwd {
-		a.notice("Resumed a session from %s; commands run in %s.", shortPath(h.Cwd), shortPath(a.cwd))
+		a.notice("Resumed a session from %s; commands run in %s.", core.ShortPath(h.Cwd), core.ShortPath(a.cwd))
 	}
 	label := h.Time.Local().Format("2006-01-02 15:04")
 	if a.sessName != "" {
