@@ -109,6 +109,9 @@ func TestNestedAllowsAgent(t *testing.T) {
 // is not mentioned there is invisible: every command a user can run must
 // appear in the usage text (hidden ones, "_foo", are deliberately not).
 func TestUsageListsEverySubcommand(t *testing.T) {
+	if !strings.Contains(usage, `atto -p [flags] "prompt"          standalone session, not an agent in a tree`) {
+		t.Error("usage does not distinguish print mode from an agent in a tree")
+	}
 	listed := map[string]bool{}
 	for f := range strings.FieldsSeq(strings.ReplaceAll(usage, "|", " ")) {
 		f = strings.Trim(f, "[]<>(),.:;?!/…")

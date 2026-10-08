@@ -195,8 +195,18 @@ func TestAgentWorktreeNeedsGit(t *testing.T) {
 	}
 }
 
-func TestWorktreeMentioned(t *testing.T) {
-	if !strings.Contains(agentUsage, "-worktree") {
+func TestAgentHelpAndWorktreePrompts(t *testing.T) {
+	out, err := runAgent(t, "-h")
+	if err != nil {
+		t.Fatal(err)
+	}
+	top, _, _ := strings.Cut(out, "usage:")
+	for _, text := range []string{`"agents": {"enabled": true}`, `"subagents"`, "plain shell", "no running atto session or atto -p root"} {
+		if !strings.Contains(top, text) {
+			t.Errorf("help introduction does not mention %q: %s", text, top)
+		}
+	}
+	if !strings.Contains(out, "-worktree") {
 		t.Error("usage does not mention -worktree")
 	}
 	if got := prompts.Render("subagent_parent", map[string]any{"Presets": ""}); !strings.Contains(got, "add -worktree to give it its own git worktree and branch") {

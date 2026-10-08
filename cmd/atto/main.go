@@ -29,7 +29,8 @@ const usage = `atto — a terminal coding harness
 usage:
   atto [flags]                      interactive session
   atto [flags] "prompt"             interactive session, starting with this message
-  atto -p [flags] "prompt"          run one prompt and print the result
+  atto -p [flags] "prompt"          standalone session, not an agent in a tree;
+                                    run one prompt and print the result
   cat file | atto -p "explain"      stdin is appended to the prompt
   atto -p -image shot.png "why?"    attach an image (repeatable); an image on
                                     stdin is attached too
@@ -281,7 +282,7 @@ func main() {
 		fs.PrintDefaults()
 	}
 	showVersion := fs.Bool("version", false, "print version and exit")
-	print := fs.Bool("p", false, "print mode: run the prompt non-interactively and exit")
+	print := fs.Bool("p", false, "standalone session, not an agent in a tree: run the prompt non-interactively and exit")
 	model := fs.String("m", "", "model to use, as provider/id (see: atto models)")
 	effort := fs.String("effort", "", "reasoning effort for this run")
 	cont := fs.Bool("c", false, "continue the most recent session in this directory")

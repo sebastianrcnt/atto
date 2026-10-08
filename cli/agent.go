@@ -25,7 +25,12 @@ import (
 	"github.com/sebastianrcnt/atto/tui"
 )
 
-const agentUsage = `usage:
+const agentUsage = `Agents are off unless settings.json has "agents": {"enabled": true}
+(the older "subagents" key works too); spawn/task/send fail with "agents are off".
+Works from a plain shell: no running atto session or atto -p root is needed.
+A model-run root is only needed when a model should orchestrate the agents.
+
+usage:
   atto agent spawn NAME "<task>" [-role R] [-worktree]
                                        start an agent in the background; returns at once
   atto agent task AGENT "<text>"       give an agent a new task: a turn now if it is
@@ -62,16 +67,17 @@ HEAD, and commits its work there: use it when agents edit files in
 parallel. close removes the worktree, refusing while it has uncommitted
 changes unless -force, and keeps the branch for you to merge.
 
-Agents are off unless settings.json has "agents": {"enabled": true} (or
-the older "subagents"); "maxDepth" (default 1) is how deep agents may start
+In the agents setting, "maxDepth" (default 1) is how deep agents may start
 agents of their own, "maxConcurrent" (default 3) caps the turns each
 session's agents run at once (more wait in a queue), "model" and "effort"
 apply to agents whose role names none (else they use their parent's).
 
 Every command accepts -session ID (default: $ATTO_SESSION_ID). Outside
-atto, without -session, a parent is created without a model call and reused
-for this project (git root, else cwd); the last close archives it.
-spawn accepts -m provider/model and -effort LEVEL (external callers only).
+atto, without -session or ATTO_SESSION_ID, a lightweight parent is created
+without a model call and reused for this project (git root, else cwd);
+the last close archives it.
+spawn accepts -m provider/model and -effort LEVEL for external callers only;
+in atto's model shell (ATTO_SESSION_ID / ATTO_AGENT set), use -role instead.
 wait and report accept -json: one object; duration is in seconds.
 Old names still work: start (spawn), next (task, idle), steer (task,
 running), wait-any (wait), stop (interrupt), rm (close), presets (roles).`

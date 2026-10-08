@@ -325,6 +325,26 @@ echo '{"query": "atto"}' | atto mcp call docs search -    # arguments from stdin
 
 **Agents** (off by default) are atto sessions other agents start, as in codex's multi-agent mode: equally capable, with the same tools, each working in the background on what it is sent. The model starts and talks to them through its shell like everything else. Turn them on with `"agents": {"enabled": true}` in `settings.json` (the older `"subagents"` key works too); the system prompt then tells the model about them and to start them only when you ask.
 
+**Standalone or agent?** These are different kinds of session:
+
+| Command | Session |
+| --- | --- |
+| `atto -p "..."` | Standalone, headless: no parent, no path, not in any agent tree. Saved unless `-no-save`. |
+| `atto agent spawn NAME "<task>"` | Under a parent, with a path such as `/root/NAME`, `wait` / `report` / `list`, and an optional git worktree (`-worktree`). |
+
+`agent` works directly from a plain shell: no running atto session or `atto -p` root is needed. A model-run root is only needed when a model should orchestrate the agents. With agents off, `agent spawn`, `task` and `send` fail with "agents are off".
+
+From a plain shell, a typical worktree run is:
+
+```sh
+atto agent spawn NAME "task" -worktree -m openai/gpt-6.1-sol
+atto agent wait -json
+# Review the branch shown in the report.
+atto agent close NAME
+```
+
+`close` removes the worktree and keeps the branch for you to merge.
+
 ```
 atto agent spawn NAME "<task>" [-role R] [-worktree]
                                     start one in the background; returns at once
@@ -345,7 +365,7 @@ atto agent roles                    what -role picks from
 - **Messages.** What one agent sends another arrives wrapped in `<atto_internal_context source="agent">` with a `Message Type` (`NEW_TASK`, `MESSAGE` or `FINAL_ANSWER`), `From` and `To`. When an agent's turn ends, its final answer reaches the session that started it by itself (`FINAL_ANSWER`, cut at 8000 characters; `report` has all of it), and wakes it as a job's exit does. `task` starts a turn; `send` doesn't: a message to an idle session waits in its inbox for its next turn (a running one takes it after its current step, but a turn that has finished is not kept going for it). `wait` returns early when you send a message, so you are never stuck behind it.
 - **Nesting.** `agents.maxDepth` (default 1, as codex) is how deep trees may grow: at 1 only your session starts agents; at 2 they may start their own, and so on. An agent that may start agents is told how; one that may not is told to do the work itself. `agents.maxConcurrent` (default 3) caps the turns each session's agents run at once; the rest wait in a queue (`list` shows them `queued`). Closing an agent closes the agents below it.
 - **From a normal shell**, every command accepts `-session ID`. Without it (and without `ATTO_SESSION_ID`), atto creates a lightweight parent without calling a model, prints its ID, and reuses it for the project (git root, else cwd). It is named `atto agent (external)` in session lists, is not picked by continue, and is archived and forgotten when `close` removes its last agent.
-- External callers can set the model and effort on `spawn` with `-m provider/model -effort LEVEL`; in atto's model shell these flags are refused and models pick roles. `wait` and `report` accept `-json` for one object with `name`, `status`, `turn`, `duration` (seconds), `tokens` (`in`, `cached`, `out`), optional `cost` (estimated USD), `session`, `model`, `message` and optional `error`, `worktree` and `branch`.
+- External callers can set the model and effort on `spawn` with `-m provider/model -effort LEVEL`; in atto's model shell (`ATTO_SESSION_ID` / `ATTO_AGENT` set) these flags are refused and models pick roles. `wait` and `report` accept `-json` for one object with `name`, `status`, `turn`, `duration` (seconds), `tokens` (`in`, `cached`, `out`), optional `cost` (estimated USD), `session`, `model`, `message` and optional `error`, `worktree` and `branch`.
 - An agent is its own session (in the parent's directory, or its own worktree with `-worktree`) that sees only what it is sent. Each turn runs headless as a job of the session that started it (`atto job list` shows `agent NAME`); an agent's own agents keep running when its turn ends. Agents' sessions are kept out of the default `atto resume` and `atto sessions` listings, but appear in the agent command center under their parent, recursively. Working includes running/queued agent turns; idle or completed agents are Ready, failed/stopped or closed agents Inactive. Closed agents keep their archived transcripts in the center. The center opens a locked agent transcript read-only (banner and `Ctrl+R` refresh); once unlocked, refresh opens it normally.
 - **Worktrees.** `spawn -worktree` gives the agent a git worktree of its own, so agents editing files in parallel don't clobber each other or your checkout. It is made from the parent's `HEAD` (committed work only) on a new branch `atto/<parent session>/<name>` (spawn refuses if that branch exists), at `~/.atto/worktrees/<parent session>/<name>`: outside the project, so nothing shows up in its `git status` or searches, and short enough for Windows paths. The agent works at the same place in it as the parent and is told to commit there. It needs a git repository with a commit. `report`, `list` and `-json` show the worktree and branch. `close` runs `git worktree remove` and keeps the branch, printing it and its new commits for you to merge; while the worktree has uncommitted changes `close` refuses and lists them, unless `-force`.
 - **Roles** set an agent's model, effort and instructions (`-role`, default `general`, which uses the parent's model and effort, or `agents.model` / `agents.effort` from `settings.json`). Add roles as Markdown files in `~/.atto/agents/` or the project's `.atto/agents/` (the project wins on the same name, and either replaces the built-in `general`):
