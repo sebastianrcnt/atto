@@ -63,6 +63,9 @@ type Extensions interface {
 	// id is its stable block ID, text its text and model the "provider/id"
 	// that wrote it. It only observes and must not wait for extensions.
 	BlockEnd(kind, id, text, model string)
+	// StepEnd reports a completed model response: its usage and timing,
+	// and the "provider/id" that wrote it. It only observes.
+	StepEnd(e StepEnd, model string)
 }
 
 // MCPServers names the MCP servers configured for a session, sorted. They
@@ -159,10 +162,14 @@ type (
 	// response are the blocks session.BlockID(sessionID, EntryID, ...) names.
 	MessageSaved struct{ EntryID string }
 	// StepEnd fires after each model response. Context is the estimated
-	// context size afterwards.
+	// context size afterwards. TTFT is the time from sending the request
+	// to its first streamed output, Generation from there to the end of
+	// the stream (both zero when nothing streamed).
 	StepEnd struct {
-		Usage   provider.Usage
-		Context int
+		Usage      provider.Usage
+		Context    int
+		TTFT       time.Duration
+		Generation time.Duration
 	}
 	// SteerCommitted fires when steering messages are added to the
 	// conversation of the running turn.
@@ -808,6 +815,20 @@ func (a *Agent) messageSaved(m provider.Message, emit func(any)) {
 	if strings.TrimSpace(m.Content) != "" {
 		a.Extensions.BlockEnd(session.BlockText, session.BlockID(sid, id, session.BlockText), m.Content, model)
 	}
+}
+
+// stepEnd tells extensions about a completed model response.
+func (a *Agent) stepEnd(m provider.Message, e StepEnd) {
+	if a.Extensions == nil {
+		return
+	}
+	a.cfgMu.Lock()
+	model := a.model.ProviderName + "/" + a.model.Model.ID
+	a.cfgMu.Unlock()
+	if m.Model != "" {
+		model = m.Provider + "/" + m.Model
+	}
+	a.Extensions.StepEnd(e, model)
 }
 
 // ImagesUnsupported replaces images in requests to a model without image

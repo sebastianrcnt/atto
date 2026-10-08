@@ -25,7 +25,7 @@ An extension is a TypeScript file atto loads into every session. Do not guess it
 
 - Display APIs (`ctx.ui.setBlockDisplay`, `setBlockStatus`, `showText`, `setStatus`, `setWidget`) change what the user sees, never what the model receives or what is saved as the conversation. To change what the model sees, use the blocking events.
 - Blocking events (`tool_call`, `tool_result`, `user_prompt`) are waited for and have a timeout (5 s by default). Keep their handlers fast and do slow work elsewhere (`message_end`, `turn_end`, a command). A handler that throws is skipped, not fatal.
-- `message_end` and `reasoning_end` never delay anything, so they are the place for model calls.
+- `message_end` and `reasoning_end` never delay anything, so they are the place for model calls. `step_end` gives each response's usage and timing (`outputTokens / genMs` is the generation speed).
 - `atto.complete({model, prompt, ...})` makes a side model call: for helpers such as translation or summaries. The model is `provider/id` from models.json. Keep the default concurrency of 1 (local servers slow down or hang when asked in parallel), pass `reasoningEffort: "none"` when thinking is not needed, and set `timeoutMs` if the task is long. Handle rejection (server down, timeout) by showing a status such as "failed".
 - No Node.js: no `require`, `process` or npm packages that need them. Use `atto.exec`, `atto.fs`, `fetch`, `atto.mcp`.
 - Never put secrets (API keys, tokens) in extension files. Read them from the environment through `atto.exec`, or from a file the user keeps outside the repository.

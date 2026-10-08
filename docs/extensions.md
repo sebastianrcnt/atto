@@ -107,9 +107,10 @@ extensions in load order (user before project, then by name).
 | `tool_result` | `{toolName, command, description, output, exitCode, timedOut, canceled, durationMs, job}` | a string (or `{output}`) to replace what the model receives |
 | `message_end` | `{blockId, text, model}`: an assistant text block finished | ignored |
 | `reasoning_end` | `{blockId, text, model}`: a reasoning block finished | ignored |
+| `step_end` | `{model, promptTokens, cachedTokens, outputTokens, cost, contextTokens, ttftMs, genMs}`: a model response finished (one per request in a turn); `ttftMs` runs from sending the request to the first streamed output, `genMs` from there to the end | ignored |
 
 `tool_call`, `tool_result` and `user_prompt` are waited for; the others are
-not. `message_end` and `reasoning_end` never delay anything, not even a
+not. `message_end`, `reasoning_end` and `step_end` never delay anything, not even a
 handler that takes minutes (a model call, say): they have no timeout, and
 a handler that throws or rejects is reported like any other. A later handler sees what an earlier one changed (a rewritten command,
 a redacted output).

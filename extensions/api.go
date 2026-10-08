@@ -87,7 +87,7 @@ func (e *ext) install() *goja.Object {
 }
 
 // eventNames are the events atto.on accepts.
-var eventNames = []string{"session_start", "session_end", "turn_start", "turn_end", "tool_call", "tool_result", "user_prompt", "message_end", "reasoning_end"}
+var eventNames = []string{"session_start", "session_end", "turn_start", "turn_end", "tool_call", "tool_result", "user_prompt", "message_end", "reasoning_end", "step_end"}
 
 func (e *ext) jsOn(event string, v goja.Value) {
 	if !slices.Contains(eventNames, event) {

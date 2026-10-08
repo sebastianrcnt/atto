@@ -129,6 +129,16 @@ func (m *Manager) BlockEnd(kind, id, text, model string) {
 	m.fire(event, map[string]any{"blockId": id, "text": text, "model": model})
 }
 
+// StepEnd fires step_end after each model response, without waiting:
+// usage and timing for a tokens-per-second display.
+func (m *Manager) StepEnd(e agent.StepEnd, model string) {
+	m.fire("step_end", map[string]any{
+		"model": model, "promptTokens": e.Usage.PromptTokens, "cachedTokens": e.Usage.CachedTokens,
+		"outputTokens": e.Usage.CompletionTokens, "cost": e.Usage.Cost, "contextTokens": e.Context,
+		"ttftMs": e.TTFT.Milliseconds(), "genMs": e.Generation.Milliseconds(),
+	})
+}
+
 func (m *Manager) TurnStart(prompt string) {
 	m.fire("turn_start", map[string]any{"prompt": prompt})
 }

@@ -143,6 +143,24 @@ interface AttoBlockEvent {
   model: string;
 }
 
+interface AttoStepEndEvent {
+  /** provider/id of the model that answered. */
+  model: string;
+  /** Tokens as the provider reported them; 0 when it reported none. */
+  promptTokens: number;
+  cachedTokens: number;
+  /** Output tokens, reasoning included. */
+  outputTokens: number;
+  /** US dollars; 0 for a model without prices. */
+  cost: number;
+  /** Estimated context size after the response. */
+  contextTokens: number;
+  /** Request sent → first streamed output (reasoning, text or tool call). */
+  ttftMs: number;
+  /** First streamed output → end of the stream; 0 when nothing streamed. */
+  genMs: number;
+}
+
 type Awaitable<T> = T | Promise<T>;
 
 interface AttoEvents {
@@ -157,6 +175,11 @@ interface AttoEvents {
   message_end: [AttoBlockEvent, void];
   /** A reasoning block finished. Never waited for, no timeout. */
   reasoning_end: [AttoBlockEvent, void];
+  /**
+   * A model response finished (one per model request in a turn). Never
+   * waited for, no timeout. outputTokens / genMs * 1000 is tokens/s.
+   */
+  step_end: [AttoStepEndEvent, void];
 }
 
 interface AttoCompleteOptions {

@@ -67,24 +67,39 @@ func (a *Agent) request(extra ...provider.Message) (provider.Streamer, provider.
 
 // streamStep receives one response, retrying transient failures and recovering
 // context pressure at most once for the turn.
-func (a *Agent) streamStep(ctx context.Context, emit func(any), compacted *bool) (provider.Result, *draftTracker, int64, error) {
+func (a *Agent) streamStep(ctx context.Context, emit func(any), compacted *bool) (provider.Result, *draftTracker, int64, stepTiming, error) {
 	var thinkStart, thinkEnd time.Time
+	var timing stepTiming
 	var drafts *draftTracker
 	var res provider.Result
 	var err error
 	for attempt := 1; ; {
 		thinkStart, thinkEnd = time.Time{}, time.Time{}
+		var first time.Time // first streamed output of this attempt
+		output := func() {
+			if first.IsZero() {
+				first = time.Now()
+			}
+		}
 		drafts = &draftTracker{emit: emit}
 		h := provider.Handler{
-			OnToolCallStart: drafts.start,
-			OnToolCallDelta: drafts.delta,
+			OnToolCallStart: func(i int) {
+				output()
+				drafts.start(i)
+			},
+			OnToolCallDelta: func(i int, s string) {
+				output()
+				drafts.delta(i, s)
+			},
 			OnReasoning: func(s string) {
+				output()
 				if thinkStart.IsZero() {
 					thinkStart = time.Now()
 				}
 				emit(ReasoningDelta{s})
 			},
 			OnText: func(s string) {
+				output()
 				if !thinkStart.IsZero() && thinkEnd.IsZero() {
 					thinkEnd = time.Now()
 				}
@@ -95,6 +110,10 @@ func (a *Agent) streamStep(ctx context.Context, emit func(any), compacted *bool)
 		sent := time.Now()
 		tctx, trace := ai.WithConnTrace(ctx)
 		res, err = client.Stream(tctx, req, h)
+		timing = stepTiming{}
+		if !first.IsZero() {
+			timing = stepTiming{TTFT: first.Sub(sent), Generation: time.Since(first)}
+		}
 		if ctx.Err() != nil {
 			break
 		}
@@ -172,5 +191,12 @@ func (a *Agent) streamStep(ctx context.Context, emit func(any), compacted *bool)
 		}
 		thinkMs = thinkEnd.Sub(thinkStart).Milliseconds()
 	}
-	return res, drafts, thinkMs, err
+	return res, drafts, thinkMs, timing, err
+}
+
+// stepTiming splits a response's time: TTFT from sending the request to its
+// first streamed output (reasoning, text or a tool call), Generation from
+// there to the end of the stream. Zero when nothing streamed.
+type stepTiming struct {
+	TTFT, Generation time.Duration
 }

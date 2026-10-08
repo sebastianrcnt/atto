@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -14,7 +15,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/sebastianrcnt/atto/agent"
 	"github.com/sebastianrcnt/atto/config"
+	"github.com/sebastianrcnt/atto/provider"
 )
 
 // sideServer is a fake model server for atto.complete. The user message
@@ -297,5 +300,42 @@ export default function (atto: any) {
 	reqs := srv.requests()
 	if len(reqs) != 2 || reqs[0]["reasoning_effort"] != "none" || reqs[1]["reasoning_effort"] != nil {
 		t.Errorf("requests %v", reqs)
+	}
+}
+
+// step_end carries usage and timing; the token-speed example turns them
+// into a status line item.
+func TestStepEndFeedsTokenSpeedExample(t *testing.T) {
+	dir, cwd := env(t)
+	src, err := os.ReadFile(filepath.Join("..", "examples", "extensions", "token-speed.ts"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	write(t, filepath.Join(dir, "token-speed.ts"), string(src))
+	write(t, filepath.Join(dir, "raw.ts"), `
+export default function (atto: any) {
+  atto.on("step_end", (e: any) => atto.log("step", e.model, e.promptTokens, e.cachedTokens, e.outputTokens, e.contextTokens, e.ttftMs, e.genMs));
+}
+`)
+	h := newHost(true)
+	m := load(t, cwd, h)
+	m.StepEnd(agent.StepEnd{Usage: provider.Usage{PromptTokens: 900, CachedTokens: 800, CompletionTokens: 84},
+		Context: 1000, TTFT: 1300 * time.Millisecond, Generation: 2 * time.Second}, "p/m")
+	eventually(t, "the status item", func() bool {
+		h.mu.Lock()
+		defer h.mu.Unlock()
+		return h.status["token-speed/token-speed"] == "42 tok/s · 1.3s to first token"
+	})
+	eventually(t, "the raw payload", func() bool {
+		b, _ := os.ReadFile(config.ExtensionLogPath())
+		return strings.Contains(string(b), "step p/m 900 800 84 1000 1300 2000")
+	})
+	// Nothing streamed or no usage: the example leaves the status alone.
+	m.StepEnd(agent.StepEnd{Usage: provider.Usage{CompletionTokens: 5}}, "p/m")
+	time.Sleep(100 * time.Millisecond)
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if got := h.status["token-speed/token-speed"]; got != "42 tok/s · 1.3s to first token" {
+		t.Fatalf("status %q", got)
 	}
 }

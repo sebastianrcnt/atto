@@ -147,7 +147,7 @@ func (a *Agent) loop(ctx context.Context, emit func(any), checked bool) error {
 				}
 			}
 		}
-		res, drafts, thinkMs, err := a.streamStep(ctx, emit, &compacted)
+		res, drafts, thinkMs, timing, err := a.streamStep(ctx, emit, &compacted)
 
 		if err != nil {
 			// Keep partial text so the transcript matches what the user saw,
@@ -166,7 +166,9 @@ func (a *Agent) loop(ctx context.Context, emit func(any), checked bool) error {
 		if usage.PromptTokens > 0 || usage.CompletionTokens > 0 {
 			a.LastUsage, a.sinceUsage = usage, 0
 		}
-		emit(StepEnd{Usage: usage, Context: a.ContextTokens()})
+		step := StepEnd{Usage: usage, Context: a.ContextTokens(), TTFT: timing.TTFT, Generation: timing.Generation}
+		emit(step)
+		a.stepEnd(res.Message, step)
 
 		if len(res.Message.ToolCalls) == 0 {
 			if a.stopReq.Swap(false) {
