@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"slices"
 	"strings"
 	"time"
@@ -23,6 +24,7 @@ import (
 	"github.com/sebastianrcnt/atto/goal"
 	"github.com/sebastianrcnt/atto/hooks"
 	"github.com/sebastianrcnt/atto/jobs"
+	"github.com/sebastianrcnt/atto/provider"
 	"github.com/sebastianrcnt/atto/session"
 )
 
@@ -201,7 +203,12 @@ func Env(id string) []string {
 // wins whichever branch it was recorded on.
 type Saved struct {
 	Header      session.Entry
-	Entries     []session.Entry
+	Entries     []session.Entry // context; OpenDisplay includes the earlier replay entries
+	State       []session.Entry // latest session-wide choices and goal snapshot
+	Usage       provider.Usage  // session-wide totals
+	LastUsage   provider.Usage
+	LastRole    string // last active message, including before compaction
+	UsageModel  string // model of the last request, for its price tiers
 	Model       string // provider/id
 	Effort      string
 	Name        string
@@ -211,24 +218,41 @@ type Saved struct {
 // Open loads a saved session and reopens its file for appending, on the
 // branch it was left on.
 func Open(path string) (Saved, *session.Writer, error) {
-	s, err := Read(path)
+	return openSaved(path, false)
+}
+
+// OpenDisplay also loads the active branch before its last compaction, for
+// front ends that replay the transcript. No abandoned branch is decoded.
+func OpenDisplay(path string) (Saved, *session.Writer, error) { return openSaved(path, true) }
+
+func openSaved(path string, display bool) (Saved, *session.Writer, error) {
+	s, err := read(path, display)
 	if err != nil {
 		return Saved{}, nil, err
 	}
 	file := session.Resume(path, s.Header)
 	file.SetLeaf(session.Leaf(s.Entries))
+	debug.FreeOSMemory()
 	return s, file, nil
 }
 
-// Read loads a saved session without opening it for writing: its entries
-// and the model, effort and name it uses now.
-func Read(path string) (Saved, error) {
-	h, entries, err := session.Load(path)
+// Read loads the active agent context and lightweight session-wide snapshots
+// without opening the file for writing. Earlier messages are not decoded.
+func Read(path string) (Saved, error) { return read(path, false) }
+
+func read(path string, display bool) (Saved, error) {
+	var loaded session.ActiveFile
+	var err error
+	if display {
+		loaded, err = session.ReadActive(path)
+	} else {
+		loaded, err = session.ReadContext(path)
+	}
 	if err != nil {
 		return Saved{}, err
 	}
-	s := Saved{Header: h, Entries: entries}
-	for _, e := range entries {
+	s := Saved{Header: loaded.Header, Entries: loaded.Entries, State: loaded.State, Usage: loaded.Usage, LastUsage: loaded.LastUsage, UsageModel: loaded.UsageModel, LastRole: loaded.LastRole}
+	for _, e := range loaded.State {
 		switch e.Type {
 		case session.TypeModel:
 			s.Model = e.Provider + "/" + e.Model
@@ -243,8 +267,17 @@ func Read(path string) (Saved, error) {
 	return s, nil
 }
 
-// Branch is the active branch, which is what the agent restores.
-func (s Saved) Branch() []session.Entry { return session.Active(s.Entries) }
+// Snapshots are the latest session-wide choices and goal. In-memory callers
+// that construct Saved directly can use Entries as before.
+func (s Saved) Snapshots() []session.Entry {
+	if s.State != nil {
+		return s.State
+	}
+	return s.Entries
+}
+
+// Branch is the agent context, from the last active compaction onwards.
+func (s Saved) Branch() []session.Entry { return session.Context(s.Entries) }
 
 // Leave cleans up after a session: its background jobs end with it (as in
 // codex) and its goal file goes (the session file keeps the goal's last

@@ -13,7 +13,7 @@ import (
 // items. Call only while no turn runs.
 func (t *thread) restore(entries []session.Entry) {
 	branch := session.Active(entries)
-	t.agent.Restore(branch)
+	t.agent.Restore(session.Context(branch))
 	t.feed.Lock()
 	defer t.feed.Unlock()
 	items, bl := replayItems(&t.tr, t.id, branch)

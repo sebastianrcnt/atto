@@ -52,10 +52,13 @@ const (
 // bgPrepare restores the session's goal as it was left (active again) and
 // decides what the background run starts with.
 func bgPrepare(d *core.GoalDriver, saved core.Saved) bgMode {
-	if d.Restore(saved.Entries) { // an active goal comes back paused: wake it
+	if d.Restore(saved.Snapshots()) { // an active goal comes back paused: wake it
 		g := d.Goal
 		g.Status, g.Note = goal.Active, ""
 		d.Set(g)
+	}
+	if saved.LastRole == "user" || saved.LastRole == "tool" {
+		return bgResumeTurn
 	}
 	branch := saved.Branch()
 	for _, b := range slices.Backward(branch) {

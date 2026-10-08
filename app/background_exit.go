@@ -331,7 +331,7 @@ func (a *App) resumeLocked(saved core.Saved, file *session.Writer, l session.Loc
 	a.resetGoal()
 	a.recModel, a.recEffort, a.sessName = "", "", saved.Name
 	a.editor.Title = a.sessName
-	a.replay(saved.Branch())
+	a.replay(saved.Entries)
 	a.notice("Opened %s read-only. ctrl+r reads it again.", saved.Header.ID)
 	a.statusTrigger()
 }

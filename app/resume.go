@@ -570,7 +570,7 @@ func (a *App) resume(path string) {
 			return
 		}
 	}
-	saved, file, err := core.Open(path)
+	saved, file, err := core.OpenDisplay(path)
 	if err != nil {
 		if release != nil {
 			release()
@@ -595,7 +595,7 @@ func (a *App) resume(path string) {
 	a.agent.Restore(branch)
 	a.agent.SetLongContext(saved.LongContext)
 	a.ctxTokens = a.agent.ContextTokens()
-	a.usage.fromEntries(saved.Entries, a.models)
+	a.usage.fromSaved(saved, a.models)
 	a.recModel, a.recEffort, a.sessName = "", "", saved.Name
 	a.editor.Title = a.sessName
 	if ref, ok := a.models.Find("", saved.Model); ok {
@@ -609,9 +609,8 @@ func (a *App) resume(path string) {
 		a.effortFrom = core.FromSession
 	}
 	a.showLoaded()
-	entries := saved.Entries
-	a.replay(branch)
-	a.restoreGoal(entries)
+	a.replay(saved.Entries)
+	a.restoreGoal(saved.Snapshots())
 	if h.Cwd != a.cwd {
 		a.notice("Resumed a session from %s; commands run in %s.", shortPath(h.Cwd), shortPath(a.cwd))
 	}

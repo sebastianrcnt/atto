@@ -542,7 +542,7 @@ func (s *Server) resumeThread(id string) (any, error) {
 			release()
 		}
 	}()
-	saved, file, err := core.Open(path)
+	saved, file, err := core.OpenDisplay(path)
 	if err != nil {
 		return nil, err
 	}

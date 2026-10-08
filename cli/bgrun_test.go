@@ -247,3 +247,19 @@ func TestOrdinaryPrintHoldsWriterLease(t *testing.T) {
 		t.Fatal("lease not released")
 	}
 }
+
+func TestBgPrepareAfterCompaction(t *testing.T) {
+	t.Setenv(config.EnvDir, t.TempDir())
+	w := session.New(t.TempDir())
+	w.Append(session.Entry{Type: session.TypeMessage, Message: &provider.Message{Role: "user", Content: "unfinished"}})
+	w.Append(session.Entry{Type: session.TypeCompaction, Replacement: []provider.Message{{Role: "user", Content: "notes"}}})
+	w.Close()
+	saved, err := core.Read(w.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := &core.GoalDriver{Session: w.ID}
+	if len(saved.Branch()) != 1 || bgPrepare(d, saved) != bgResumeTurn {
+		t.Fatal("compaction must not hide the unanswered message from background preparation")
+	}
+}

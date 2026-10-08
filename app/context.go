@@ -9,6 +9,7 @@ import (
 
 	"github.com/sebastianrcnt/atto/ai"
 	"github.com/sebastianrcnt/atto/config"
+	"github.com/sebastianrcnt/atto/core"
 	"github.com/sebastianrcnt/atto/provider"
 	"github.com/sebastianrcnt/atto/session"
 	"github.com/sebastianrcnt/atto/tui"
@@ -49,6 +50,15 @@ func (u *usageStats) fromEntries(entries []session.Entry, models config.ModelsFi
 			u.lastCost = model.Model.Cost
 		}
 	}
+}
+
+// fromSaved uses the totals accumulated without decoding old messages.
+func (u *usageStats) fromSaved(saved core.Saved, models config.ModelsFile) {
+	*u = usageStats{}
+	u.add(saved.Usage)
+	u.last = saved.LastUsage
+	model, _ := models.Find("", saved.UsageModel)
+	u.lastCost = model.Model.Cost
 }
 
 func pct(part, whole int) int {
