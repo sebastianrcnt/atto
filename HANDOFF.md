@@ -1,6 +1,6 @@
 # Handoff — 2026-10-09 (night)
 
-State when this was written: `main` = `a59521f` (pushed); the locally installed `atto` was built from it. Nothing is running;
+State when this was written: `main` = `a59521f` + this handoff + a CRLF test fix (pushed; CI run 37855272565 green on all platforms); the locally installed `atto` was built from it. Nothing is running;
 agents `/root/split2`, `/root/split3` and `/root/split4` are closed and their branches deleted. Open issues: none from tonight.
 
 ## Engine / front-end split (done tonight)
@@ -25,7 +25,7 @@ Verified live (isolated `ATTO_DIR`, real model) for every phase: `-p`, `-p` with
 without the daemon (`scratchpad/smoke.sh`), steer, Esc detaching a running command into a job, `!`, `/jobs`, `/context`, `/model`,
 `/clear` + `/resume`, `/remote` RPC+SSE; detach mid-turn then `atto connect`; app-server `thread/resume` of the TUI's session with
 the turn appearing in the TUI; 1-minute retirement; `/close`; `kill -9` of a worker → "Reconnected."; ws turn with and without token;
-unix socket 0600 and removed on exit. CI was green after phase 3; the run after phase 4 was started at the end of the night.
+unix socket 0600 and removed on exit. CI is green after every phase.
 
 ## Things to know
 
