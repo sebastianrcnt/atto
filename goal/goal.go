@@ -43,6 +43,9 @@ const (
 // NoteInterrupted is the note of a goal paused by an interrupt (Esc).
 const NoteInterrupted = "interrupted"
 
+// LongContextNotice warns when a goal runs without the price-tier cap.
+const LongContextNotice = "Long context is on; the price-tier cap is off for this goal (/context normal to restore it)."
+
 // MaxObjective bounds the objective (codex: 4,000 characters).
 const MaxObjective = 4000
 

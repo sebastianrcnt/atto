@@ -307,6 +307,9 @@ func RunPrint(o PrintOptions) error {
 			return nil
 		}
 	}
+	if d.Active() && ag.LongContext() {
+		fmt.Fprintln(os.Stderr, "atto: "+goal.LongContextNotice)
+	}
 	began := time.Now()
 	input := o.Prompt
 	if input == "" && d.Goal != nil {

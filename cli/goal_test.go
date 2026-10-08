@@ -3,6 +3,7 @@ package cli
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -247,5 +248,32 @@ func TestStandaloneGoalCreationRefused(t *testing.T) {
 	}
 	if g, err := goal.Load(w.ID); err != nil || g != nil {
 		t.Fatalf("unsupported goal created: %+v %v", g, err)
+	}
+}
+
+func TestRunPrintGoalLongContextNotice(t *testing.T) {
+	for _, long := range []bool{false, true} {
+		t.Run(fmt.Sprint(long), func(t *testing.T) {
+			goalServer(t, 1, 429, `{"error":{"type":"usage_limit_reached","message":"You have hit your usage limit."}}`)
+			t.Chdir(t.TempDir())
+			cwd, _ := os.Getwd()
+			w := session.New(cwd)
+			w.Append(session.Entry{Type: session.TypeContext, LongContext: long})
+			w.Close()
+			quiet(t)
+			errOut, err := os.CreateTemp(t.TempDir(), "err")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer errOut.Close()
+			os.Stderr = errOut
+			if err := RunPrint(PrintOptions{Goal: "ship it", Resume: w.ID, NoSave: true}); !errors.Is(err, ErrPrintFailed) {
+				t.Fatal(err)
+			}
+			data, _ := os.ReadFile(errOut.Name())
+			if strings.Contains(string(data), goal.LongContextNotice) != long {
+				t.Fatalf("long=%v, stderr %q", long, data)
+			}
+		})
 	}
 }

@@ -27,7 +27,7 @@ func (a *App) resetGoal() {
 		Stop:     func() { a.agent.StopAtBoundary() },
 		Snapshot: a.snapshotGoal,
 		Changed:  a.announceGoal,
-		Adopted:  a.goalInfo,
+		Adopted:  a.goalStarted,
 		Error:    a.errorNotice,
 		Retrying: func(r core.Retry) { a.notice("%s", r.Notice()) },
 	}
@@ -151,6 +151,13 @@ func (a *App) goalInfo(g *goal.Goal) {
 	a.add(&infoBlock{title: "Goal " + g.Status.Label(), hint: g.Summary()})
 }
 
+func (a *App) goalStarted(g *goal.Goal) {
+	a.goalInfo(g)
+	if a.agent.LongContext() {
+		a.notice("%s", goal.LongContextNotice)
+	}
+}
+
 var errNoGoal = errors.New("No goal is currently set.")
 
 // cmdGoal: /goal [<objective>|clear|edit|pause|resume], as in codex. A
@@ -235,7 +242,7 @@ func (a *App) cmdGoal(arg string) {
 func (a *App) startGoal(ng *goal.Goal) {
 	a.goal.Release()
 	a.goal.Set(ng)
-	a.goalInfo(ng)
+	a.goalStarted(ng)
 	a.continueGoal() // starts now if idle, else after the current turn
 }
 
@@ -247,7 +254,7 @@ func (a *App) resumeGoal() {
 	a.goal.Release()
 	g.Status, g.Note, g.FailStreak, g.IdleStreak = goal.Active, "", 0, 0
 	a.goal.Set(g)
-	a.goalInfo(g)
+	a.goalStarted(g)
 	a.continueGoal()
 }
 
@@ -362,13 +369,18 @@ func (a *App) setObjective(text string) {
 		a.errorNotice(err)
 		return
 	}
+	wasComplete := g.Status == goal.Complete
 	g.Objective = text
 	a.goal.Release() // an edit is the user steering the goal: no waiting
 	if g.Status == goal.Complete {
 		g.Status, g.Note, g.FailStreak, g.IdleStreak = goal.Active, "", 0, 0
 	}
 	a.goal.Set(g)
-	a.goalInfo(g)
+	if wasComplete {
+		a.goalStarted(g)
+	} else {
+		a.goalInfo(g)
+	}
 	if g.Status != goal.Active {
 		return
 	}

@@ -965,3 +965,26 @@ func TestGoalPrefixedUserSteerHoldsGoal(t *testing.T) {
 		t.Fatal("user steer did not render as user input")
 	}
 }
+
+func TestGoalLongContextNotice(t *testing.T) {
+	for _, long := range []bool{false, true} {
+		a := goalApp(t)
+		a.agent.SetLongContext(long)
+		a.cmdGoal("ship it")
+		want := 0
+		if long {
+			want = 1
+		}
+		if n := strings.Count(goalText(a), "price-tier cap is off"); n != want {
+			t.Fatalf("long=%v: %s", long, goalText(a))
+		}
+		a.cmdGoal("pause")
+		a.cmdGoal("resume")
+		if n := strings.Count(goalText(a), "price-tier cap is off"); n != 2*want {
+			t.Fatalf("resume long=%v: %s", long, goalText(a))
+		}
+		if a.agent.LongContext() != long {
+			t.Fatal("goal changed the context mode")
+		}
+	}
+}
