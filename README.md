@@ -88,7 +88,26 @@ A provider can also set:
 - `headers`: extra request headers
 - `extraBody`: extra fields for the request body
 - `api`: `"openai-completions"` (the default) or `"openai-responses"`
+- `llamaCppMetadata`: `true` to opt in to llama.cpp runtime metadata discovery (off by default)
 - `subscription`: `true` for a flat-rate plan, so the status line marks its cost as an estimate
+
+For llama.cpp only, set `"llamaCppMetadata": true` on the provider. When
+models.json loads (including `/reload`), atto reads `/models` beside the `/v1`
+API path and uses positive runtime `n_ctx` limits in place of defaults. An
+explicit model `contextWindow` (including `modelOverrides`) always wins; omit
+it to use the runtime limit. Only models reported as `loaded` are inspected via
+`/props?model=<id>&autoload=false` for context and chat templates containing
+`enable_thinking`. Discovered thinking controls use the existing chat-template
+request support (defaulting to `off`/`on` levels); explicit reasoning and
+thinking-format settings take priority.
+Sleeping, unloaded and unknown-status models are never queried for props.
+Resolved metadata stays in the loaded config. Probe results, including failures,
+are also cached in memory for five minutes across config loads (including
+`/reload` and extension side calls), not probed on each request. Requests have a
+two-second timeout; failures silently keep the configured/default metadata and
+appear in `/debug`'s `model-metadata.txt`.
+Leave this setting off for generic OpenAI-compatible servers: atto makes no
+metadata requests unless you opt in.
 
 A model can set:
 

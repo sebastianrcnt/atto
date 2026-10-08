@@ -37,7 +37,7 @@ import (
 //	}
 //
 // atto-only fields: provider "env", "maxTokensField", "extraBody",
-// "subscription"; model
+// "subscription", "llamaCppMetadata"; model
 // "efforts", "extraBody". "effortMap" is read as pi's "thinkingLevelMap".
 // JSON comments are allowed, as in pi.
 type ModelsFile struct {
@@ -46,7 +46,8 @@ type ModelsFile struct {
 	// names caches which display names more than one provider has (see
 	// DisplayName); nil in a ModelsFile not made by LoadModels, which then
 	// works the names out each time.
-	names *sharedNames
+	names               *sharedNames
+	metadataDiagnostics []string
 }
 
 // sharedNames is the set of display names that models of more than one
@@ -79,6 +80,8 @@ type Provider struct {
 	// Subscription marks a flat-rate plan (ChatGPT login, OpenCode Go):
 	// the models' prices then only estimate the usage at API rates.
 	Subscription bool `json:"subscription,omitempty"`
+	// LlamaCppMetadata probes runtime limits and thinking controls on load.
+	LlamaCppMetadata bool `json:"llamaCppMetadata,omitempty"`
 }
 
 type Model struct {
@@ -110,7 +113,8 @@ type Model struct {
 	// exactly these (minus null-mapped ones, plus mapped extras).
 	Efforts []string `json:"efforts,omitempty"`
 	// ExtraBody is merged over the provider's; a null value removes a key.
-	ExtraBody map[string]any `json:"extraBody,omitempty"`
+	ExtraBody       map[string]any `json:"extraBody,omitempty"`
+	runtimeThinking bool
 }
 
 func (m *Model) UnmarshalJSON(b []byte) error {
@@ -169,8 +173,12 @@ var effortOrder = []string{"off", "none", "minimal", "low", "medium", "high", "x
 // Levels returns the available effort levels. With Efforts: those, minus
 // levels mapped to null, plus mapped levels not listed. Otherwise a pi
 // reasoning model gets pi's levels (off..high, plus xhigh/max when
-// mapped); a model with neither has only its mapped levels, if any.
+// mapped); a model with neither has only its mapped levels, if any. A
+// discovered llama.cpp thinking switch defaults to off/on.
 func (m Model) Levels() []string {
+	if m.runtimeThinking && m.Reasoning == nil && len(m.Efforts) == 0 && len(m.EffortMap) == 0 {
+		return []string{"off", "on"}
+	}
 	if len(m.Efforts) == 0 && m.Reasoning != nil {
 		if !*m.Reasoning {
 			return nil
@@ -332,6 +340,15 @@ func (r ModelRef) AIModel() ai.Model {
 			}
 		}
 	}
+	if m.runtimeThinking && am.Reasoning && am.Compat != nil && am.Compat.ThinkingFormat == "" {
+		am.Compat.ThinkingFormat = "chat-template"
+		am.Compat.ChatTemplateKwargs = mergeMap(map[string]any{
+			"enable_thinking": map[string]any{"$var": "thinking.enabled"},
+		}, am.Compat.ChatTemplateKwargs)
+		if am.Compat.SupportsReasoningEffort == nil {
+			am.Compat.SupportsReasoningEffort = new(false)
+		}
+	}
 	return am
 }
 
@@ -441,6 +458,8 @@ func LoadModels() (ModelsFile, error) {
 		}
 	}
 	for name, up := range user.Providers {
+		// Keep the user's explicit limits separate from defaults filled below.
+		up.Models = slices.Clone(up.Models)
 		base, builtin := out.Providers[name]
 		for i, m := range up.Models {
 			// pi's defaults for models it defines from models.json.
@@ -464,6 +483,14 @@ func LoadModels() (ModelsFile, error) {
 		}
 		out.Providers[name] = p
 	}
+	for name, p := range out.Providers {
+		if p.LlamaCppMetadata {
+			p, notes := out.probeLlamaCpp(name, p, user.Providers[name])
+			out.Providers[name] = p
+			out.metadataDiagnostics = append(out.metadataDiagnostics, notes...)
+		}
+	}
+	sort.Strings(out.metadataDiagnostics)
 	return out, nil
 }
 
@@ -500,6 +527,7 @@ func mergeProvider(base, over Provider) Provider {
 	if over.AuthHeader != nil {
 		base.AuthHeader = over.AuthHeader
 	}
+	base.LlamaCppMetadata = over.LlamaCppMetadata
 	if over.Subscription {
 		base.Subscription = true
 	}

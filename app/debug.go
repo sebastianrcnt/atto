@@ -22,7 +22,7 @@ import (
 // to read, and the latest model requests under requests/. Nothing leaves
 // the machine.
 func (a *App) cmdDebug(string) {
-	dir, err := writeDebug(filepath.Join(config.Dir(), "debug", time.Now().Format("20060102-150405")))
+	dir, err := writeDebug(filepath.Join(config.Dir(), "debug", time.Now().Format("20060102-150405")), a.models.MetadataDiagnostics()...)
 	if err != nil {
 		a.notice("debug: %v", err)
 		return
@@ -32,10 +32,15 @@ func (a *App) cmdDebug(string) {
 	a.notice("Saved a heap profile to %s\n%s", shortPath(dir), memSummary(&m))
 }
 
-// writeDebug writes heap.pprof, goroutines.txt and memstats.txt to dir.
-func writeDebug(dir string) (string, error) {
+// writeDebug writes profiles, memory figures and metadata probe failures to dir.
+func writeDebug(dir string, metadata ...string) (string, error) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return "", err
+	}
+	if len(metadata) > 0 {
+		if err := os.WriteFile(filepath.Join(dir, "model-metadata.txt"), []byte(strings.Join(metadata, "\n")+"\n"), 0o600); err != nil {
+			return "", err
+		}
 	}
 	var before runtime.MemStats
 	runtime.ReadMemStats(&before)
