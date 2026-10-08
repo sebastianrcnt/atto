@@ -19,6 +19,7 @@ func clientSettings() map[string]any {
 }
 
 // background serves job/* and agent/* for session sid.
+// The subagent/* aliases retain old fields for the frozen web client.
 func background(method, sid string, p threadParams) (any, error) {
 	switch method {
 	case "job/list":
@@ -52,13 +53,17 @@ func background(method, sid string, p threadParams) (any, error) {
 			return nil, err
 		}
 		return map[string]any{"job": wireJob(j)}, nil
-	case "subagent/list":
+	case "agent/list", "subagent/list":
 		out := []Agent{}
 		for _, st := range agentstate.List(sid) {
 			out = append(out, wireAgent(st))
 		}
-		return map[string]any{"subagents": out}, nil
-	case "subagent/read":
+		result := map[string]any{"agents": out}
+		if method == "subagent/list" { // frozen web client compatibility
+			result["subagents"] = out
+		}
+		return result, nil
+	case "agent/read", "subagent/read":
 		st, err := agentstate.Load(sid, p.Name)
 		if err != nil {
 			return nil, invalid("%v", err)
@@ -76,7 +81,11 @@ func background(method, sid string, p threadParams) (any, error) {
 				msg = items[i].Text
 			}
 		}
-		return map[string]any{"subagent": wireAgent(st), "message": msg, "items": items}, nil
+		result := map[string]any{"agent": wireAgent(st), "message": msg, "items": items}
+		if method == "subagent/read" { // frozen web client compatibility
+			result["subagent"] = result["agent"]
+		}
+		return result, nil
 	}
 	return nil, &rpcError{codeMethodNotFound, "unknown method " + method}
 }

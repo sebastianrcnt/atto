@@ -398,7 +398,8 @@ func (s *Server) call(ctx context.Context, method string, raw json.RawMessage) (
 		t.mu.Unlock()
 		s.pendingChanged(t)
 		return nil, nil
-	case "job/list", "job/output", "job/stop", "subagent/list", "subagent/read":
+	// Keep subagent/* dispatch for the frozen web client.
+	case "job/list", "job/output", "job/stop", "agent/list", "agent/read", "subagent/list", "subagent/read":
 		t, err := s.thread(p.ThreadID)
 		if err != nil {
 			return nil, err

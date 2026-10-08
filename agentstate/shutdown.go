@@ -6,11 +6,17 @@ import (
 	"path/filepath"
 )
 
-func closedPath(root string) string { return filepath.Join(Dir(root), ".closed") }
+func closedPath(root string) string {
+	path := existingPath(root, ".closed")
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		return path
+	}
+	return filepath.Join(coordinationDir(root), ".closed")
+}
 
 // LockTree serializes new agent work with root-session shutdown.
 func LockTree(session string) (func(), error) {
-	return lockFile(filepath.Join(Dir(Root(session)), ".tree.lock"))
+	return lockFile(filepath.Join(coordinationDir(Root(session)), ".tree.lock"))
 }
 
 // StartWork holds the tree until a new agent or turn is durably started.
@@ -55,5 +61,7 @@ func OpenTree(session string) {
 		return
 	}
 	defer release()
-	_ = os.Remove(closedPath(session))
+	for _, root := range stateRoots() {
+		_ = os.Remove(filepath.Join(root, session, ".closed"))
+	}
 }

@@ -187,7 +187,8 @@ func (s *Server) liveCall(method string, p threadParams) (any, error) {
 			return nil, &rpcError{codeServer, err.Error()}
 		}
 		return nil, nil
-	case "job/list", "job/output", "job/stop", "subagent/list", "subagent/read":
+	// Keep subagent/* dispatch for the frozen web client.
+	case "job/list", "job/output", "job/stop", "agent/list", "agent/read", "subagent/list", "subagent/read":
 		info, err := cur()
 		if err != nil {
 			return nil, err

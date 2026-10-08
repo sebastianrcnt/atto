@@ -37,10 +37,12 @@
 //	job/list       {threadId}                      → {jobs: [Job]}  (the session's background jobs)
 //	job/output     {threadId, job, lines?}         → {output}  (the last lines, 200 by default)
 //	job/stop       {threadId, job}                 → {job}
-//	subagent/list  {threadId}                      → {subagents: [Agent]}
-//	subagent/read  {threadId, name}                → {subagent, message, items}
+//	agent/list     {threadId}                      → {agents: [Agent]}
+//	agent/read     {threadId, name}                → {agent, message, items}
 //	               an agent's transcript (its own session), read only,
 //	               and its last message
+//	               subagent/list and subagent/read remain aliases for the
+//	               frozen web client, returning old and new envelope fields
 //
 // Notifications (all carry threadId):
 //

@@ -244,3 +244,21 @@ func TestJobsAndAgents(t *testing.T) {
 		t.Fatalf("agent/read %v", r)
 	}
 }
+
+func TestAgentProtocolNames(t *testing.T) {
+	work := setup(t)
+	s := New("test", work)
+	t.Cleanup(s.Close)
+	id := call(t, s, "thread/start", map[string]any{})["threadId"].(string)
+	if err := agentstate.Create(agentstate.State{Name: "scout", Parent: id, Session: "child", Model: "fake/m"}); err != nil {
+		t.Fatal(err)
+	}
+	list := call(t, s, "agent/list", map[string]any{"threadId": id})
+	if agents := list["agents"].([]any); len(agents) != 1 || agents[0].(map[string]any)["name"] != "scout" {
+		t.Fatalf("agent/list: %v", list)
+	}
+	r := call(t, s, "agent/read", map[string]any{"threadId": id, "name": "scout"})
+	if r["agent"].(map[string]any)["threadId"] != "child" || r["items"] == nil || r["message"] != "" {
+		t.Fatalf("agent/read: %v", r)
+	}
+}

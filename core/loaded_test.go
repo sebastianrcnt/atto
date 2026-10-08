@@ -307,3 +307,20 @@ func TestReload(t *testing.T) {
 		t.Fatalf("a parse error must leave everything: %v", err)
 	}
 }
+
+func TestLoadedAgentJSON(t *testing.T) {
+	atto, _, cwd := project(t)
+	writeFile(t, filepath.Join(atto, "settings.json"), `{"agents":{"enabled":true}}`)
+	_, loaded := open(t, cwd)
+	raw, err := json.Marshal(loaded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &fields); err != nil {
+		t.Fatal(err)
+	}
+	if string(fields["agents"]) != "true" || len(fields["agent_presets"]) == 0 {
+		t.Fatalf("agent context fields: %s", raw)
+	}
+}

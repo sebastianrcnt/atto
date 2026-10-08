@@ -51,12 +51,17 @@ type Loaded struct {
 	Config     []ConfigFile `json:"config"`
 	// Agents says whether atto agent is on, and Presets are the
 	// presets it starts agents from (listed in the prompt when on).
-	Agents         bool                `json:"subagents"`
-	Presets        []agentstate.Preset `json:"subagent_presets,omitempty"`
-	PresetWarnings []string            `json:"subagent_preset_warnings,omitempty"`
-	Model          Choice              `json:"model"`
-	Effort         Choice              `json:"effort"`
-	Prompt         Prompt              `json:"system_prompt"`
+	Agents         bool                `json:"agents"`
+	Presets        []agentstate.Preset `json:"agent_presets,omitempty"`
+	PresetWarnings []string            `json:"agent_preset_warnings,omitempty"`
+	// Legacy fields keep context -json consumers on the older spellings working.
+	LegacyAgents         bool                `json:"subagents"`
+	LegacyPresets        []agentstate.Preset `json:"subagent_presets,omitempty"`
+	LegacyPresetWarnings []string            `json:"subagent_preset_warnings,omitempty"`
+
+	Model  Choice `json:"model"`
+	Effort Choice `json:"effort"`
+	Prompt Prompt `json:"system_prompt"`
 	// Context is what else goes to the model besides the system prompt
 	// and the conversation: the tool schema, how images are sent, hook
 	// output.
@@ -220,6 +225,7 @@ func Collect(ag *agent.Agent, hookSrc []config.HookSource, modelFrom, effortFrom
 		l.Agents = true
 	}
 	l.Presets, l.PresetWarnings = agentstate.LoadPresets(agentstate.Dirs(src.Cwd, agent.ProjectRoot(src.Cwd)))
+	l.LegacyAgents, l.LegacyPresets, l.LegacyPresetWarnings = l.Agents, l.Presets, l.PresetWarnings
 
 	m, effort := ag.Current()
 	l.Model = Choice{Name: "none", Origin: modelFrom}

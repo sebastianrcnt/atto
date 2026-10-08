@@ -8,7 +8,6 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/sebastianrcnt/atto/config"
 	"github.com/sebastianrcnt/atto/fsutil"
 )
 
@@ -23,7 +22,7 @@ const RootPath = "/root"
 // upPath records which agent a session is: its parent and name, so the
 // tree can be walked up from any session.
 func upPath(session string) string {
-	return filepath.Join(config.AgentStateDir(), "_up", session+".json")
+	return existingPath("_up", session+".json")
 }
 
 type up struct {
@@ -51,12 +50,8 @@ func ParentOf(session string) (parent, name string, ok bool) {
 		return u.Parent, u.Name, true
 	}
 	// Older agents have state but no reverse index. Repair it from state.
-	dirs, _ := os.ReadDir(config.AgentStateDir())
-	for _, d := range dirs {
-		if !d.IsDir() || d.Name() == "_up" {
-			continue
-		}
-		for _, s := range List(d.Name()) {
+	for _, parent := range parentIDs() {
+		for _, s := range List(parent) {
 			if s.Session == session {
 				_ = saveUp(s)
 				return s.Parent, s.Name, true

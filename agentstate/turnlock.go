@@ -12,7 +12,7 @@ func LockTurn(parent, name string) (func(), error) {
 	if err := ValidName(name); err != nil {
 		return nil, err
 	}
-	return lockFile(filepath.Join(Dir(parent), name+".lock"))
+	return lockFile(filepath.Join(coordinationDir(parent), name+".lock"))
 }
 
 func lockFile(path string) (func(), error) {

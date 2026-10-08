@@ -40,13 +40,12 @@ const EnvAgent = "ATTO_AGENT"
 // InAgent reports whether this process was started by an atto agent.
 func InAgent() bool { return os.Getenv(EnvAgent) != "" }
 
-// EnvLegacyAgent is set, besides EnvAgent, in the environment of the commands
-// an agent runs (atto agent). Agents can't start agents of their
-// own: atto agent start and next refuse when it is set.
+// EnvLegacyAgent is the ATTO_SUBAGENT compatibility spelling of EnvAgent
+// for commands launched by older installs.
 const EnvLegacyAgent = "ATTO_SUBAGENT"
 
 // InAgentCommand reports whether this process was started by an agent.
-func InAgentCommand() bool { return os.Getenv(EnvLegacyAgent) != "" }
+func InAgentCommand() bool { return InAgent() || os.Getenv(EnvLegacyAgent) != "" }
 
 // EnvView names the directory "atto view" leaves images in for the
 // command that ran it: the agent sets it for each foreground shell call
@@ -80,7 +79,7 @@ func SkillsDir() string     { return filepath.Join(Dir(), "skills") }
 func AgentsDir() string { return filepath.Join(Dir(), "agents") }
 
 // AgentStateDir holds the state of the agents each session started.
-func AgentStateDir() string { return filepath.Join(Dir(), "subagents") }
+func AgentStateDir() string { return filepath.Join(Dir(), "agent-state") }
 
 // SkillsCacheDir is where the built-in skills are written, so the model
 // can read them as files (see package skills).
@@ -407,6 +406,13 @@ func UpdateSettings(kv map[string]any) error {
 			}
 		}
 		maps.Copy(raw, kv)
+		// Migrate the older "subagents" settings key on write; "agents" wins.
+		if old, ok := raw["subagents"]; ok {
+			if _, ok := raw["agents"]; !ok {
+				raw["agents"] = old
+			}
+			delete(raw, "subagents")
+		}
 		out, err := json.MarshalIndent(raw, "", "  ")
 		if err != nil {
 			return err

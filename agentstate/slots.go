@@ -19,7 +19,7 @@ var slotPoll = 500 * time.Millisecond
 // TryAcquire takes a free slot of the limit session parent has, without
 // waiting. ok is false when all are taken.
 func TryAcquire(parent string, limit int) (release func(), ok bool, err error) {
-	dir := filepath.Join(Dir(parent), "slots")
+	dir := filepath.Join(coordinationDir(parent), "slots")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, false, err
 	}
