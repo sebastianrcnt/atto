@@ -61,3 +61,26 @@ func TestReserveReclaimsStaleLock(t *testing.T) {
 		t.Fatalf("lock left: %v", err)
 	}
 }
+
+func TestRemoveReservationLockKeepsReplacement(t *testing.T) {
+	path := filepath.Join(t.TempDir(), ".reserve.lock")
+	if err := os.WriteFile(path, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	checked, err := reservationLockInfo(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(path, path+".old"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("replacement"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := removeReservationLock(path, checked); err != nil {
+		t.Fatal(err)
+	}
+	if b, err := os.ReadFile(path); err != nil || string(b) != "replacement" {
+		t.Fatalf("replacement: %q %v", b, err)
+	}
+}

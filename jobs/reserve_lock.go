@@ -35,7 +35,9 @@ func lockReservations(session string) (func(), error) {
 		if !errors.Is(err, os.ErrExist) {
 			return nil, err
 		}
-		info, err := os.Stat(path)
+		// Stat through a handle: Windows path stats resolve identity lazily,
+		// after reclamation has already renamed the checked lock.
+		info, err := reservationLockInfo(path)
 		if errors.Is(err, os.ErrNotExist) {
 			continue
 		}
@@ -80,4 +82,13 @@ func removeReservationLock(path string, checked os.FileInfo) error {
 		}
 	}
 	return os.Remove(moved)
+}
+
+func reservationLockInfo(path string) (os.FileInfo, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	return f.Stat()
 }
