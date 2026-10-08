@@ -330,25 +330,27 @@ func (a *App) show(info server.ThreadInfo) {
 // runtime goes with this process: its sessions end (SessionEnd, jobs
 // stop), unless one went to a background run.
 func (a *App) shutdown() error {
+	var threadID, bgLine string
 	a.ui.Do(func() {
 		if a.stopTicker != nil {
 			a.stopTicker()
 			a.stopTicker = nil
 		}
+		threadID, bgLine = a.threadID, a.bgLine // notifications still arrive
 	})
-	if a.bgLine != "" {
-		fmt.Println(a.bgLine)
+	if bgLine != "" {
+		fmt.Println(bgLine)
 	}
 	cn := a.conn
 	if cn.own == nil {
 		return cn.c.Close() // a worker's: it goes on
 	}
-	if a.threadID != "" && a.bgLine == "" {
+	if threadID != "" && bgLine == "" {
 		var r struct {
 			StoppedJobs int      `json:"stoppedJobs"`
 			Notices     []string `json:"notices"`
 		}
-		_ = cn.c.Call(context.Background(), "thread/close", map[string]any{"threadId": a.threadID, "reason": "exit"}, &r)
+		_ = cn.c.Call(context.Background(), "thread/close", map[string]any{"threadId": threadID, "reason": "exit"}, &r)
 		if r.StoppedJobs > 0 {
 			fmt.Printf("atto: stopped %d background job(s)\n", r.StoppedJobs)
 		}
