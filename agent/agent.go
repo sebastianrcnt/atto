@@ -1440,7 +1440,9 @@ func (a *Agent) Compact(ctx context.Context, emit func(any)) error {
 // compact asks the model for handoff notes. The request reuses the full
 // existing prefix (system, tools, history) and appends the instruction at the
 // end, so the prefix cache stays warm. The new history is the most recent
-// user messages (up to keepUserTokens) followed by the notes.
+// user messages (up to keepUserTokens) followed by the notes. If the latest
+// turn cannot fit, its trailing tool-call/result group stays after the notes
+// and only the earlier prefix is summarized.
 func (a *Agent) compact(ctx context.Context, emit func(any), auto bool) error {
 	if len(a.messages) == 0 {
 		return fmt.Errorf("nothing to compact")
@@ -1464,6 +1466,7 @@ func (a *Agent) compact(ctx context.Context, emit func(any), auto bool) error {
 	est := before + messageChars(prompt)/4
 	var res provider.Result
 	var err error
+	var retained []provider.Message
 	try, sent := 0, 0
 	cut := ""
 	for again := 0; ; again++ {
@@ -1472,9 +1475,20 @@ func (a *Agent) compact(ctx context.Context, emit func(any), auto bool) error {
 			// can take it past the point where the request plus a full-size
 			// answer fits: give the notes the room that is left, and when that
 			// is too little drop the oldest turns from the request (codex trims
-			// history the same way). The conversation itself is untouched.
+			// history the same way). If even the last turn cannot fit, retain
+			// its latest tool-call/result group outside the summary request.
+			// The conversation itself is untouched until the notes succeed.
 			need := compactRoom << try
-			if dropped := fitCompaction(&req, model.Model, est, need); dropped > 0 {
+			old := req.Messages
+			dropped, kept := fitCompaction(&req, model.Model, est, need)
+			for _, m := range old[1 : 1+dropped] {
+				est -= messageChars(m) / 4
+			}
+			for _, m := range kept {
+				est -= messageChars(m) / 4
+			}
+			retained = append(kept, retained...)
+			if dropped > 0 {
 				emit(CompactTrimmed{Messages: dropped})
 			}
 			sent++
@@ -1529,6 +1543,7 @@ func (a *Agent) compact(ctx context.Context, emit func(any), auto bool) error {
 		kept = append([]provider.Message{m}, kept...)
 	}
 	replacement := append(kept, provider.Message{Role: "user", Content: SummaryPrefix + notes})
+	replacement = append(replacement, retained...)
 
 	a.messages = replacement
 	a.LastUsage = provider.Usage{}
@@ -1570,16 +1585,54 @@ func cutNotes(res provider.Result) string {
 // context window with need tokens left to answer: it lowers MaxTokens to
 // the room left, and drops the oldest turns of the conversation (never
 // the system prompt or the compaction prompt, and whole turns, so a tool
-// call keeps its result) until need fits. It returns how many messages it
-// dropped.
-func fitCompaction(req *provider.Request, m config.Model, est, need int) int {
+// call keeps its result) until need fits. If the last turn alone is too
+// large, it cuts at its latest assistant tool call and returns that suffix
+// to keep after the notes instead of summarizing it. The other return value
+// counts messages dropped from the oldest turns.
+func fitCompaction(req *provider.Request, m config.Model, est, need int) (int, []provider.Message) {
 	window := m.ContextWindow
 	if window <= 0 {
-		return 0
+		return 0, nil
 	}
 	const margin = 256 // token estimates are rough; servers add a few of their own
 	dropped := 0
 	msgs := req.Messages // [system, conversation..., compaction prompt]
+	var kept []provider.Message
+	if window-est-margin < need {
+		last := 1
+		for i := 2; i < len(msgs)-1; i++ {
+			if msgs[i].Role == "user" {
+				last = i
+			}
+		}
+		lastEst := est
+		for _, m := range msgs[1:last] {
+			lastEst -= messageChars(m) / 4
+		}
+		if window-lastEst-margin < need {
+			// Dropping older turns cannot help. Summarize their history and
+			// the current turn's prefix, keeping the latest call with all its
+			// results. Never cut at a tool result itself.
+			for i := len(msgs) - 2; i > last; i-- {
+				if msgs[i].Role == "assistant" && len(msgs[i].ToolCalls) > 0 {
+					tail := msgs[i : len(msgs)-1]
+					tokens := 0
+					for _, m := range tail {
+						tokens += messageChars(m) / 4
+					}
+					// The cut must leave room for at least the minimum answer,
+					// not just retain tools when the prefix itself cannot fit.
+					if window-(lastEst-tokens)-margin < 1024 {
+						continue
+					}
+					kept = tail
+					est -= tokens
+					msgs = append(msgs[:i:i], msgs[len(msgs)-1])
+					break
+				}
+			}
+		}
+	}
 	for window-est-margin < need && len(msgs) > 3 {
 		// Drop up to (not including) the next user message after the first.
 		end := 2
@@ -1599,7 +1652,7 @@ func fitCompaction(req *provider.Request, m config.Model, est, need int) int {
 	if room := window - est - margin; req.MaxTokens <= 0 || req.MaxTokens > room {
 		req.MaxTokens = max(room, 1024)
 	}
-	return dropped
+	return dropped, kept
 }
 
 // contextExceeded reports whether err says the request didn't fit the
