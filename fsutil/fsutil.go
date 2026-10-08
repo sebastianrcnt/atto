@@ -36,5 +36,5 @@ func WriteAtomic(path string, data []byte, perm os.FileMode) (err error) {
 		return err
 	}
 	// Go's rename replaces an existing target on Windows too.
-	return os.Rename(tmp.Name(), path)
+	return renameAtomic(tmp.Name(), path)
 }
