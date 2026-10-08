@@ -225,11 +225,17 @@ func (s *Server) call(ctx context.Context, method string, raw json.RawMessage) (
 	if s.live != nil {
 		return s.liveCall(ctx, method, p)
 	}
+	if sc := scopeOf(ctx); sc != nil {
+		if out, err, ok := s.scopedCall(ctx, sc, method, p); ok {
+			return out, err
+		}
+		p.ThreadID = sc.Thread()
+	}
 	client := clientOf(ctx)
 	switch method {
 	case "initialize":
 		return s.initialize(ctx, p, nil)
-	case "initialized":
+	case "initialized", "ping":
 		return nil, nil
 	case "models/list":
 		return s.listModels()

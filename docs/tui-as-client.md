@@ -873,3 +873,17 @@ late block IDs, input recovery, prompt races, trust gates and shell interruption
 Daemon workers, registry routing, print-on-worker execution, durable accepted-input
 journaling/request dedupe and a full Codex-dialect adapter remain later phases.
 The web client is unchanged.
+
+### Phase 2 gateway foundation
+
+`server.Scope` exposes a scoped HTTP gateway over the session runtime. It keeps
+`/remote`'s frozen-web `live` fields and follow-the-terminal selection policy,
+`thread/switched`, typed-input start/steer behavior, legacy takeback, rollback,
+and local command callbacks. Revoking a link stops the gateway, not execution.
+Scoped RPC calls reject other thread IDs; SSE filters both replayed and live
+notifications so abandoned or unrelated sessions are not exposed. Each handler
+has its own client identity and releases its picker gates on its last SSE
+connection ending, even while another gateway remains connected. `ping` provides
+an ordered connection fence for front-end tests. Protocol tests exercise these
+paths against the scripted provider and verify the persisted session. The old
+Live adapter remains only until the TUI is moved to the runtime in this phase.

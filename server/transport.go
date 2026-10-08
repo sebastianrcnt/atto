@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/sebastianrcnt/atto/config"
@@ -65,6 +66,7 @@ func (s *Server) HTTPHandler(token string) http.Handler {
 	// not echo a new field to keep working. JSON-lines connections have
 	// independent identities.
 	c := &clientConn{id: fmt.Sprintf("h%d", clientSeq.Add(1))}
+	var streams atomic.Int64 // this handler's streams share one client identity
 	clients := func() {
 		if s.OnClients != nil {
 			s.OnClients(b.clients()) // outside the broker's lock: the hook may wait for a UI
@@ -100,7 +102,11 @@ func (s *Server) HTTPHandler(token string) http.Handler {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		resp := s.Handle(context.WithValue(r.Context(), clientKey{}, c), body)
+		ctx := r.Context()
+		if connOf(ctx) == nil {
+			ctx = context.WithValue(ctx, clientKey{}, c)
+		}
+		resp := s.Handle(ctx, body)
 		w.Header().Set("Content-Type", "application/json")
 		if resp == nil {
 			w.WriteHeader(http.StatusNoContent)
@@ -127,9 +133,15 @@ func (s *Server) HTTPHandler(token string) http.Handler {
 		}
 		backlog, ch, kick, gap := b.subscribe(last)
 		s.httpStreams.Add(1)
+		streams.Add(1)
+		client := c
+		if scoped := connOf(r.Context()); scoped != nil {
+			client = scoped
+		}
 		defer func() {
-			if s.httpStreams.Add(-1) == 0 {
-				s.clientGone(c.id)
+			s.httpStreams.Add(-1)
+			if streams.Add(-1) == 0 {
+				s.clientGone(client.id)
 			}
 		}()
 		clients()
@@ -139,6 +151,9 @@ func (s *Server) HTTPHandler(token string) http.Handler {
 		w.Header().Set("Cache-Control", "no-cache")
 		w.Header().Set("X-Accel-Buffering", "no")
 		write := func(ev sseEvent) {
+			if sc := scopeOf(r.Context()); sc != nil && !sc.event(ev.data) {
+				return
+			}
 			fmt.Fprintf(w, "id: %d\ndata: %s\n\n", ev.id, ev.data)
 		}
 		if gap {
