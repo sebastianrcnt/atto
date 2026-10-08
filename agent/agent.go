@@ -1155,9 +1155,25 @@ func (a *Agent) loop(ctx context.Context, emit func(any), checked bool) error {
 				},
 			}
 			client, req := a.request()
-			res, err = client.Stream(ctx, req, h)
+			sent := time.Now()
+			tctx, trace := ai.WithConnTrace(ctx)
+			res, err = client.Stream(tctx, req, h)
 			if ctx.Err() != nil {
 				break
+			}
+			logReq := func(event string, wait time.Duration) {
+				a.cfgMu.Lock()
+				prov := a.model.ProviderName
+				a.cfgMu.Unlock()
+				e := requestLogEntry{Time: time.Now(), Event: event, Session: req.SessionID, Provider: prov, Model: req.Model,
+					Attempt: attempt, WaitMs: wait.Milliseconds(), ElapsedMs: time.Since(sent).Milliseconds()}
+				if err != nil {
+					e.Error = err.Error()
+				}
+				if c, ok := trace.Last(); ok {
+					e.Conn = &c
+				}
+				logRequest(e)
 			}
 			// An early length stop can mean the server ran out of context,
 			// rather than output tokens. Leave 10% slack for provider accounting;
@@ -1182,15 +1198,23 @@ func (a *Agent) loop(ctx context.Context, emit func(any), checked bool) error {
 				continue
 			}
 			if err == nil || ai.IsContextOverflow(err) || ai.IsPermanent(err) || attempt > streamRetries {
+				switch {
+				case err != nil:
+					logReq(requestFailed, 0)
+				case attempt > 1:
+					logReq(requestRecovered, 0)
+				}
 				break
 			}
 			// Anything else may pass: drop what streamed and send it again.
 			drafts.endAll()
 			wait, werr := retryWait(err, attempt, maxRetryWait)
 			if werr != nil {
+				logReq(requestFailed, 0)
 				err = werr
 				break
 			}
+			logReq(requestRetry, wait)
 			emit(StreamRetry{Attempt: attempt, Of: streamRetries, Wait: wait, Err: err.Error()})
 			select {
 			case <-time.After(wait):

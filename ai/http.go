@@ -74,7 +74,7 @@ func FormatProviderError(err error, prefix string) string {
 // headers (later maps win). "Authorization: Bearer <apiKey>" is set when
 // apiKey is non-empty (atto: keyless local servers get no header).
 func postJSON(ctx context.Context, client *http.Client, url string, body []byte, apiKey string, headerSets ...map[string]string) (*http.Response, error) {
-	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(traceConn(ctx), "POST", url, bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}
