@@ -6,6 +6,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 )
 
 // lines is a mutable component for driving the renderer in tests.
@@ -406,5 +407,24 @@ func TestFooterClickAndNewBelow(t *testing.T) {
 	}
 	if got[len(got)-3] != "i" {
 		t.Fatalf("newest line is visible: %q", got)
+	}
+}
+
+func TestDoReleasesLockOnPanic(t *testing.T) {
+	ui := New(newVterm(80, 24))
+	func() {
+		defer func() {
+			if recover() == nil {
+				t.Error("missing panic")
+			}
+		}()
+		ui.Do(func() { panic("picker failed") })
+	}()
+	done := make(chan struct{})
+	go func() { ui.Do(func() {}); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("UI remained locked after panic")
 	}
 }

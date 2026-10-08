@@ -1,9 +1,7 @@
 package app
 
 import (
-	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -12,10 +10,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sebastianrcnt/atto/agent"
-	"github.com/sebastianrcnt/atto/config"
 	"github.com/sebastianrcnt/atto/events"
 	"github.com/sebastianrcnt/atto/goal"
+	"github.com/sebastianrcnt/atto/provider/providertest"
+	"github.com/sebastianrcnt/atto/server"
 	"github.com/sebastianrcnt/atto/session"
 	"github.com/sebastianrcnt/atto/tui"
 )
@@ -25,29 +23,25 @@ import (
 // transcript.
 func goalApp(t *testing.T) *App {
 	a := treeApp(t)
-	a.turns.QueuePaused = true
+	a.ui.Do(func() { a.rpcErr("client/gate", map[string]any{"open": true}) })
+	settle(a)
 	return a
 }
 
 // goalText is everything shown so far, notices included.
-func goalText(a *App) string {
-	var out []string
-	for _, l := range a.ui.Body.Render(80) {
-		out = append(out, strings.TrimRight(tui.StripEscapes(l), " "))
-	}
-	return strings.Join(out, "\n")
-}
+func goalText(a *App) string { return shown(a) }
 
 func keys(a *App, ks ...string) {
 	raw := map[string]string{"escape": "\x1b", "enter": "\r", "down": "\x1b[B", "up": "\x1b[A", "backspace": "\x7f"}
 	for _, k := range ks {
-		a.modal.HandleInput(raw[k])
+		key(a, raw[k])
+		settle(a)
 	}
 }
 
 func TestGoalBareShowsUsage(t *testing.T) {
 	a := goalApp(t)
-	a.cmdGoal("")
+	goalCommand(a, "")
 	got := goalText(a)
 	if !strings.Contains(got, "Usage: /goal [<objective>|clear|edit|pause|resume]") || !strings.Contains(got, "No goal is currently set.") {
 		t.Fatalf("no goal:\n%s", got)
@@ -56,8 +50,8 @@ func TestGoalBareShowsUsage(t *testing.T) {
 
 func TestGoalSetPauseResumeClear(t *testing.T) {
 	a := goalApp(t)
-	a.cmdGoal("ship the thing")
-	g := a.goal.Goal
+	goalCommand(a, "ship the thing")
+	g := a.theGoal()
 	if g == nil || g.Status != goal.Active || g.Objective != "ship the thing" {
 		t.Fatalf("set: %+v", g)
 	}
@@ -65,48 +59,51 @@ func TestGoalSetPauseResumeClear(t *testing.T) {
 		t.Fatalf("set announces the goal:\n%s", got)
 	}
 
-	a.cmdGoal("pause")
+	goalCommand(a, "pause")
 	if g.Status != goal.Paused || !strings.Contains(goalText(a), "• Goal paused") {
 		t.Fatalf("pause: %+v\n%s", g, goalText(a))
 	}
-	a.cmdGoal("resume")
+	goalCommand(a, "resume")
 	if g.Status != goal.Active || strings.Count(goalText(a), "• Goal active") != 2 {
 		t.Fatalf("resume: %+v\n%s", g, goalText(a))
 	}
 
 	// A stalled goal resumes with a fresh stall audit.
 	g.Status, g.Note, g.FailStreak, g.IdleStreak = goal.Blocked, "stuck", 1, 2
-	a.cmdGoal("resume")
+	fixtureGoal(t, a, g)
+	goalCommand(a, "resume")
 	if g.Status != goal.Active || g.Note != "" || g.FailStreak != 0 || g.IdleStreak != 0 {
 		t.Fatalf("resume from stalled: %+v", g)
 	}
 	// So does a usage limited one.
 	g.Status = goal.UsageLimited
-	a.cmdGoal("RESUME")
+	fixtureGoal(t, a, g)
+	goalCommand(a, "RESUME")
 	if g.Status != goal.Active {
 		t.Fatalf("resume from usage limited: %+v", g)
 	}
 
 	// A complete goal does not resume.
 	g.Status = goal.Complete
-	a.cmdGoal("resume")
+	fixtureGoal(t, a, g)
+	goalCommand(a, "resume")
 	if g.Status != goal.Complete {
 		t.Fatalf("complete must stay: %+v", g)
 	}
 
-	a.cmdGoal("clear")
-	if a.goal.Goal != nil || !strings.Contains(goalText(a), "• Goal cleared") {
-		t.Fatalf("clear: %+v", a.goal.Goal)
+	goalCommand(a, "clear")
+	if a.theGoal() != nil || !strings.Contains(goalText(a), "• Goal cleared") {
+		t.Fatalf("clear: %+v", a.theGoal())
 	}
-	if f, _ := goal.Load(a.sess.ID); f != nil {
+	if f, _ := goal.Load(a.threadID); f != nil {
 		t.Fatal("the goal file is removed")
 	}
-	a.cmdGoal("clear")
+	goalCommand(a, "clear")
 	if got := goalText(a); !strings.Contains(got, "No goal to clear") || !strings.Contains(got, "does not currently have a goal") {
 		t.Fatalf("clear without a goal:\n%s", got)
 	}
 	for _, sub := range []string{"pause", "resume", "edit"} {
-		a.cmdGoal(sub)
+		goalCommand(a, sub)
 	}
 	if strings.Count(goalText(a), "No goal is currently set.") != 3 {
 		t.Fatalf("pause, resume and edit need a goal:\n%s", goalText(a))
@@ -115,15 +112,17 @@ func TestGoalSetPauseResumeClear(t *testing.T) {
 
 func TestGoalPauseOnlyWhatCanPause(t *testing.T) {
 	a := goalApp(t)
-	a.cmdGoal("x")
-	g := a.goal.Goal
+	goalCommand(a, "x")
+	g := a.theGoal()
 	g.Status = goal.Complete
-	a.cmdGoal("pause")
+	fixtureGoal(t, a, g)
+	goalCommand(a, "pause")
 	if g.Status != goal.Complete || !strings.Contains(goalText(a), "Goal complete") {
 		t.Fatalf("a complete goal does not pause: %+v", g)
 	}
 	g.Status = goal.Blocked
-	a.cmdGoal("pause")
+	fixtureGoal(t, a, g)
+	goalCommand(a, "pause")
 	if g.Status != goal.Paused {
 		t.Fatalf("%+v", g)
 	}
@@ -131,9 +130,9 @@ func TestGoalPauseOnlyWhatCanPause(t *testing.T) {
 
 func TestGoalReplaceNeedsConfirmation(t *testing.T) {
 	a := goalApp(t)
-	a.cmdGoal("first")
-	a.cmdGoal("second")
-	if a.modal == nil || a.goal.Goal.Objective != "first" {
+	goalCommand(a, "first")
+	goalCommand(a, "second")
+	if a.modal == nil || a.theGoal().Objective != "first" {
 		t.Fatal("an unfinished goal is not replaced without asking")
 	}
 	menu := tui.StripEscapes(strings.Join(a.modal.Render(80), "\n"))
@@ -143,24 +142,26 @@ func TestGoalReplaceNeedsConfirmation(t *testing.T) {
 		}
 	}
 	keys(a, "escape")
-	if a.modal != nil || a.goal.Goal.Objective != "first" {
+	if a.modal != nil || a.theGoal().Objective != "first" {
 		t.Fatal("esc keeps the goal")
 	}
-	a.cmdGoal("second")
+	goalCommand(a, "second")
 	keys(a, "down", "enter") // Cancel
-	if a.modal != nil || a.goal.Goal.Objective != "first" {
+	if a.modal != nil || a.theGoal().Objective != "first" {
 		t.Fatal("cancel keeps the goal")
 	}
-	a.cmdGoal("second")
+	goalCommand(a, "second")
 	keys(a, "enter") // Replace current goal
-	if a.modal != nil || a.goal.Goal.Objective != "second" || a.goal.Goal.Status != goal.Active {
-		t.Fatalf("replace: %+v", a.goal.Goal)
+	if a.modal != nil || a.theGoal().Objective != "second" || a.theGoal().Status != goal.Active {
+		t.Fatalf("replace: %+v", a.theGoal())
 	}
 
 	// A finished goal is replaced without asking.
-	a.goal.Goal.Status = goal.Complete
-	a.cmdGoal("third")
-	if a.modal != nil || a.goal.Goal.Objective != "third" {
+	g := *a.theGoal()
+	g.Status = goal.Complete
+	fixtureGoal(t, a, &g)
+	goalCommand(a, "third")
+	if a.modal != nil || a.theGoal().Objective != "third" {
 		t.Fatal("a complete goal needs no confirmation")
 	}
 }
@@ -187,8 +188,8 @@ func TestGoalSummaryPerStatus(t *testing.T) {
 		}
 	}
 	a := goalApp(t)
-	a.cmdGoal("ship it")
-	a.cmdGoal("")
+	goalCommand(a, "ship it")
+	goalCommand(a, "")
 	if got := goalText(a); !strings.Contains(got, "Status: active") || !strings.Contains(got, "Commands: /goal edit, /goal pause, /goal clear") {
 		t.Fatalf("bare /goal shows the summary:\n%s", got)
 	}
@@ -196,11 +197,12 @@ func TestGoalSummaryPerStatus(t *testing.T) {
 
 func TestGoalEditPrompt(t *testing.T) {
 	a := goalApp(t)
-	a.cmdGoal("old objective")
-	g := a.goal.Goal
+	goalCommand(a, "old objective")
+	g := a.theGoal()
 	g.TokensUsed, g.Status = 1200, goal.Paused
+	fixtureGoal(t, a, g)
 
-	a.cmdGoal("edit")
+	goalCommand(a, "edit")
 	if a.modal == nil {
 		t.Fatal("edit opens a prompt")
 	}
@@ -213,7 +215,7 @@ func TestGoalEditPrompt(t *testing.T) {
 		t.Fatal("esc leaves the goal alone")
 	}
 
-	a.cmdGoal("edit")
+	goalCommand(a, "edit")
 	keys(a, "backspace", "backspace", "backspace", "backspace", "backspace", "backspace", "backspace", "backspace", "backspace")
 	a.modal.HandleInput("new one")
 	keys(a, "enter")
@@ -229,14 +231,16 @@ func TestGoalEditPrompt(t *testing.T) {
 
 	// A finished goal becomes active again.
 	g.Status = goal.Complete
-	a.cmdGoal("edit")
+	fixtureGoal(t, a, g)
+	goalCommand(a, "edit")
 	a.modal.HandleInput("!")
 	keys(a, "enter")
 	if g.Status != goal.Active {
 		t.Fatalf("complete edit -> %s", g.Status)
 	}
 	g.Status = goal.Blocked
-	a.cmdGoal("edit")
+	fixtureGoal(t, a, g)
+	goalCommand(a, "edit")
 	a.modal.HandleInput("!")
 	keys(a, "enter")
 	if g.Status != goal.Blocked {
@@ -245,16 +249,25 @@ func TestGoalEditPrompt(t *testing.T) {
 }
 
 func TestGoalEditSteersRunningTurn(t *testing.T) {
-	a := goalApp(t)
-	a.cmdGoal("old")
-	a.turns.Busy, a.runKind = true, "turn"
-	a.setObjective("new")
-	if a.goal.Goal.Objective != "new" || a.goal.Goal.Status != goal.Active {
-		t.Fatalf("%+v", a.goal.Goal)
+	gate := make(chan struct{})
+	a, m := liveApp(t, providertest.Reply{Text: "first", Gate: gate}, providertest.Reply{Text: "edited"})
+	a.ui.Do(func() { a.rpcErr("client/gate", map[string]any{"open": true}) })
+	settle(a)
+	goalCommand(a, "old")
+	typeLine(a, "work")
+	if m.Started(5*time.Second) == 0 {
+		t.Fatal("model did not start")
 	}
-	steers := a.agent.DrainSteers()
-	if len(steers) != 1 || !strings.Contains(steers[0], "edited by the user") || !strings.Contains(steers[0], "<untrusted_objective>\nnew\n</untrusted_objective>") {
-		t.Fatalf("the running turn is told: %q", steers)
+	a.ui.Do(func() { a.rpcErr("goal/edit", map[string]any{"input": "new"}) })
+	settle(a)
+	close(gate)
+	waitIdle(t, a)
+	if g := a.theGoal(); g.Objective != "new" || g.Status != goal.Active {
+		t.Fatalf("goal: %+v", g)
+	}
+	reqs := m.Requests()
+	if len(reqs) != 2 || !strings.Contains(reqs[1], "edited by the user") || !strings.Contains(reqs[1], `\nnew\n`) {
+		t.Fatalf("requests: %v", reqs)
 	}
 }
 
@@ -284,7 +297,7 @@ func TestGoalIndicatorPlacement(t *testing.T) {
 	for _, c := range cases {
 		g := c.g
 		g.Objective = "x"
-		a.goal.Goal = &g
+		a.info.Goal = &server.GoalInfo{Goal: &g, Seconds: g.Seconds}
 		// The status takes two rows beside the indicator; it ends the first.
 		r := row(110)
 		if len(r) != 2 || !strings.HasSuffix(r[0], c.want) || tui.VisibleWidth(r[0]) != 109 || strings.Contains(r[1], "oal") {
@@ -300,7 +313,7 @@ func TestGoalIndicatorPlacement(t *testing.T) {
 	}
 
 	// A narrow terminal gives the indicator a row of its own.
-	a.goal.Goal = &goal.Goal{Objective: "x", Status: goal.Paused}
+	a.info.Goal = &server.GoalInfo{Goal: &goal.Goal{Objective: "x", Status: goal.Paused}}
 	r := row(40)
 	if len(r) != 3 || !strings.Contains(r[2], "Goal paused (/goal resume)") || strings.Contains(r[0]+r[1], "oal") {
 		t.Fatalf("narrow: %q", r)
@@ -325,34 +338,34 @@ func TestGoalIndicatorPlacement(t *testing.T) {
 }
 
 func TestGoalInterruptPauses(t *testing.T) {
-	a := goalApp(t)
-	a.cmdGoal("ship it")
-	a.turns.Busy, a.runKind = true, "turn"
-	a.goal.BeginTurn()
-	a.turns.Busy = false
-	a.afterRun(context.Canceled)
-	g := a.goal.Goal
-	if g.Status != goal.Paused || g.Note != "interrupted" {
-		t.Fatalf("an interrupted goal turn pauses: %+v", g)
+	gate := make(chan struct{})
+	defer close(gate)
+	a, m := liveApp(t, providertest.Reply{Text: "never", Gate: gate})
+	typeLine(a, "/goal ship it")
+	if m.Started(5*time.Second) == 0 {
+		t.Fatal("goal did not run")
 	}
-	if got := goalText(a); !strings.Contains(got, "• Goal paused") {
-		t.Fatalf("announced:\n%s", got)
+	key(a, "\x1b")
+	within(t, a, "paused goal", func() bool { return !a.busy && a.theGoal() != nil && a.theGoal().Status == goal.Paused })
+	if g := a.theGoal(); g.Note != "interrupted" {
+		t.Fatalf("goal: %+v", g)
 	}
-	if a.goal.Active() {
-		t.Fatal("no new goal turn starts")
+	if !strings.Contains(shown(a), "Goal paused") || a.goalActive() {
+		t.Fatal("interrupted goal was not announced and paused")
 	}
 }
 
 func TestGoalModelReportsAreAnnounced(t *testing.T) {
 	a := goalApp(t)
-	a.cmdGoal("ship it")
-	f, _ := goal.Load(a.sess.ID)
+	goalCommand(a, "ship it")
+	f, _ := goal.Load(a.threadID)
 	f.Status, f.Note = goal.Blocked, "needs a credential"
-	_ = goal.Save(a.sess.ID, f)
-	a.goal.Poll()
+	_ = goal.Save(a.threadID, f)
+	a.ui.Do(func() { a.rpcErr("goal/read", nil) })
+	settle(a)
 	got := goalText(a)
-	if a.goal.Goal.Status != goal.Blocked || !strings.Contains(got, "• Goal stalled") || !strings.Contains(got, "Note: needs a credential") {
-		t.Fatalf("%+v\n%s", a.goal.Goal, got)
+	if a.theGoal().Status != goal.Blocked || !strings.Contains(got, "• Goal stalled") || !strings.Contains(got, "Note: needs a credential") {
+		t.Fatalf("%+v\n%s", a.theGoal(), got)
 	}
 }
 
@@ -363,7 +376,7 @@ func TestResumePausedGoalPrompt(t *testing.T) {
 	}
 	for _, st := range []goal.Status{goal.Paused, goal.Blocked, goal.UsageLimited, goal.Active} {
 		a := goalApp(t)
-		a.restoreGoal(snap(&goal.Goal{Objective: "ship it", Status: st}))
+		restoreGoal(t, a, snap(&goal.Goal{Objective: "ship it", Status: st}))
 		if a.modal == nil {
 			t.Fatalf("%s: a goal that is not running asks to resume", st)
 		}
@@ -373,37 +386,37 @@ func TestResumePausedGoalPrompt(t *testing.T) {
 				t.Fatalf("%s: menu lacks %q:\n%s", st, want, menu)
 			}
 		}
-		if a.goal.Goal.Status == goal.Active {
+		if a.theGoal().Status == goal.Active {
 			t.Fatalf("%s: an active goal comes back paused", st)
 		}
 	}
 
 	a := goalApp(t)
-	a.restoreGoal(snap(&goal.Goal{Objective: "ship it", Status: goal.Paused}))
+	restoreGoal(t, a, snap(&goal.Goal{Objective: "ship it", Status: goal.Paused}))
 	keys(a, "down", "enter") // Leave paused
-	if a.modal != nil || a.goal.Goal.Status != goal.Paused {
-		t.Fatalf("leave paused: %+v", a.goal.Goal)
+	if a.modal != nil || a.theGoal().Status != goal.Paused {
+		t.Fatalf("leave paused: %+v", a.theGoal())
 	}
-	a.restoreGoal(snap(&goal.Goal{Objective: "ship it", Status: goal.Paused}))
+	restoreGoal(t, a, snap(&goal.Goal{Objective: "ship it", Status: goal.Paused}))
 	keys(a, "escape")
-	if a.modal != nil || a.goal.Goal.Status != goal.Paused {
-		t.Fatalf("esc leaves it paused: %+v", a.goal.Goal)
+	if a.modal != nil || a.theGoal().Status != goal.Paused {
+		t.Fatalf("esc leaves it paused: %+v", a.theGoal())
 	}
-	a.restoreGoal(snap(&goal.Goal{Objective: "ship it", Status: goal.Blocked, Note: "stuck"}))
+	restoreGoal(t, a, snap(&goal.Goal{Objective: "ship it", Status: goal.Blocked, Note: "stuck"}))
 	keys(a, "enter") // Resume goal
-	if a.modal != nil || a.goal.Goal.Status != goal.Active || a.goal.Goal.Note != "" {
-		t.Fatalf("resume: %+v", a.goal.Goal)
+	if a.modal != nil || a.theGoal().Status != goal.Active || a.theGoal().Note != "" {
+		t.Fatalf("resume: %+v", a.theGoal())
 	}
 
 	// Finished goals, and sessions without a goal, don't ask.
 	c := goalApp(t)
-	c.restoreGoal(snap(&goal.Goal{Objective: "x", Status: goal.Complete}))
-	if c.modal != nil || c.goal.Goal == nil {
+	restoreGoal(t, c, snap(&goal.Goal{Objective: "x", Status: goal.Complete}))
+	if c.modal != nil || c.theGoal() == nil {
 		t.Fatal("complete: no prompt")
 	}
 	b := goalApp(t)
-	b.restoreGoal(nil)
-	if b.modal != nil || b.goal.Goal != nil {
+	restoreGoal(t, b, nil)
+	if b.modal != nil || b.theGoal() != nil {
 		t.Fatal("no goal, no prompt")
 	}
 }
@@ -412,8 +425,8 @@ func TestOldGoalSnapshotsStillLoad(t *testing.T) {
 	// A snapshot as older atto wrote it: no usage_limited, no pause note.
 	raw := `{"objective":"old goal","status":"blocked","budget":1000,"tokensUsed":500,"seconds":61,"note":"stuck","turns":2,"failStreak":1,"created":"2026-01-01T00:00:00Z","updated":"2026-01-01T00:00:00Z"}`
 	a := goalApp(t)
-	a.restoreGoal([]session.Entry{{Type: session.TypeGoal, Goal: json.RawMessage(raw)}})
-	g := a.goal.Goal
+	restoreGoal(t, a, []session.Entry{{Type: session.TypeGoal, Goal: json.RawMessage(raw)}})
+	g := a.theGoal()
 	if g == nil || g.Status != goal.Blocked || g.Objective != "old goal" || g.TokensUsed != 500 || g.Seconds != 61 || g.Turns != 2 {
 		t.Fatalf("%+v", g)
 	}
@@ -432,55 +445,61 @@ func TestOldGoalSnapshotsStillLoad(t *testing.T) {
 	// back paused and asks to resume.
 	raw = `{"objective":"old goal","status":"budget_limited","budget":1000,"tokensUsed":1200,"seconds":61,"note":"token budget of 1K used","turns":2}`
 	b := goalApp(t)
-	b.restoreGoal([]session.Entry{{Type: session.TypeGoal, Goal: json.RawMessage(raw)}})
-	if g := b.goal.Goal; g == nil || g.Status != goal.Paused || g.TokensUsed != 1200 || b.modal == nil {
+	restoreGoal(t, b, []session.Entry{{Type: session.TypeGoal, Goal: json.RawMessage(raw)}})
+	if g := b.theGoal(); g == nil || g.Status != goal.Paused || g.TokensUsed != 1200 || b.modal == nil {
 		t.Fatalf("budget limited: %+v, prompt %v", g, b.modal != nil)
 	}
 	keys(b, "enter") // Resume goal
-	if g := b.goal.Goal; g.Status != goal.Active {
+	if g := b.theGoal(); g.Status != goal.Active {
 		t.Fatalf("resumed: %+v", g)
 	}
 }
 
 func TestUsageLimitedTurnStopsTheGoal(t *testing.T) {
-	a := goalApp(t)
-	a.cmdGoal("ship it")
-	a.turns.Busy, a.runKind = true, "turn"
-	a.goal.BeginTurn()
-	a.turns.Busy = false
-	a.afterRun(errors.New("429: You have hit your ChatGPT usage limit (plus plan). Try again in ~30 min."))
-	g := a.goal.Goal
-	if g.Status != goal.UsageLimited {
-		t.Fatalf("%+v", g)
+	a, _ := liveApp(t, providertest.Reply{Status: 429, Error: "You have hit your ChatGPT usage limit (plus plan). Try again in ~30 min."})
+	typeLine(a, "/goal ship it")
+	within(t, a, "usage-limited goal", func() bool { return a.theGoal() != nil && a.theGoal().Status == goal.UsageLimited })
+	if !strings.Contains(shown(a), "Goal usage limited") {
+		t.Fatal("usage limit not announced")
 	}
-	if got := goalText(a); !strings.Contains(got, "• Goal usage limited") {
-		t.Fatalf("announced:\n%s", got)
-	}
-	a.cmdGoal("resume")
-	if g.Status != goal.Active {
-		t.Fatalf("resume: %+v", g)
+	a.ui.Do(func() { a.rpcErr("client/gate", map[string]any{"open": true}) })
+	settle(a)
+	goalCommand(a, "resume")
+	if a.theGoal().Status != goal.Active {
+		t.Fatalf("resume: %+v", a.theGoal())
 	}
 }
 
 // endTurn simulates a goal turn that ends: steers are the texts committed
 // during it, userStart that the user's message started it.
-func endTurn(a *App, userStart bool, steers ...string) {
-	a.turns.Busy, a.runKind = true, "turn"
-	a.goal.BeginTurn()
+func endTurn(t *testing.T, a *App, userStart bool, steers ...string) {
+	t.Helper()
+	m := scriptedModel(a)
+	if m == nil {
+		t.Fatal("missing scripted provider")
+	}
+	gate := make(chan struct{})
+	m.SetScript(providertest.Reply{Command: "echo goal-work", Description: "work", Gate: gate}, providertest.Reply{Text: "done"})
 	if userStart {
-		a.goal.UserInput()
+		typeLine(a, "user asks")
+	} else {
+		a.ui.Do(func() { a.rpcErr("client/gate", map[string]any{"open": false}) })
 	}
-	if len(steers) > 0 {
-		for _, text := range steers {
-			if !events.IsEvent(text) && !goal.IsMessage(text) {
-				a.turns.Steers = append(a.turns.Steers, text)
-			}
+	if m.Started(5*time.Second) == 0 {
+		t.Fatal("goal turn did not start")
+	}
+	a.ui.Do(func() { a.rpcErr("client/gate", map[string]any{"open": true}) })
+	settle(a)
+	for _, text := range steers {
+		if events.IsEvent(text) || goal.IsMessage(text) {
+			continue
 		}
-		a.onEvent(agent.SteerCommitted{Texts: steers})
+		typeLine(a, text)
 	}
-	a.goal.Event(agent.ToolStart{})
-	a.turns.Busy = false
-	a.afterRun(nil)
+	settle(a)
+	close(gate)
+	within(t, a, "goal turn ended", func() bool { return !a.busy })
+	settle(a)
 }
 
 func TestGoalHeldAfterUserInput(t *testing.T) {
@@ -499,13 +518,13 @@ func TestGoalHeldAfterUserInput(t *testing.T) {
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			a := goalApp(t)
-			a.cmdGoal("ship it")
-			endTurn(a, c.userStart, c.steers...)
-			if got := a.goal.Held(); got != c.held {
+			goalCommand(a, "ship it")
+			endTurn(t, a, c.userStart, c.steers...)
+			if got := a.goalHeld(); got != c.held {
 				t.Fatalf("held = %v, want %v", got, c.held)
 			}
-			if !a.goal.Active() {
-				t.Fatalf("the goal stays active: %+v", a.goal.Goal)
+			if !a.goalActive() {
+				t.Fatalf("the goal stays active: %+v", a.theGoal())
 			}
 			notice := strings.Contains(strings.Join(strings.Fields(goalText(a)), " "), goalWaitingNotice)
 			if notice != c.held {
@@ -525,68 +544,64 @@ func TestGoalHeldAfterUserInput(t *testing.T) {
 // "Pursuing goal", whatever the turn does about the goal.
 func TestGoalIndicatorWhileHeld(t *testing.T) {
 	a := goalApp(t)
-	a.cmdGoal("ship it")
-	endTurn(a, true)
-	if !a.goal.Held() || !strings.Contains(a.goalIndicator(), "Goal waiting (enter to continue)") {
-		t.Fatalf("idle: held %v, %q", a.goal.Held(), a.goalIndicator())
+	goalCommand(a, "ship it")
+	endTurn(t, a, true)
+	if !a.goalHeld() || !strings.Contains(a.goalIndicator(), "Goal waiting (enter to continue)") {
+		t.Fatal("idle hold indicator missing")
 	}
-	a.turns.Busy, a.runKind = true, "turn"
-	a.goal.BeginTurn()
-	if !a.goal.Held() {
-		t.Fatal("the hold stays while the user's turn runs")
+	a.ui.Do(func() { a.busy = true })
+	if !a.goalHeld() || !strings.Contains(a.goalIndicator(), "Pursuing goal") || strings.Contains(a.goalIndicator(), "waiting") {
+		t.Fatal("running held goal indicator wrong")
 	}
-	if got := a.goalIndicator(); !strings.Contains(got, "Pursuing goal") || strings.Contains(got, "waiting") {
-		t.Fatalf("running: %q", got)
-	}
-	a.goal.UserInput()
-	a.turns.Busy = false
-	a.afterRun(nil)
-	if !a.goal.Held() || !strings.Contains(a.goalIndicator(), "Goal waiting (enter to continue)") {
-		t.Fatalf("idle again: held %v, %q", a.goal.Held(), a.goalIndicator())
+	a.ui.Do(func() { a.busy = false })
+	if !a.goalHeld() || !strings.Contains(a.goalIndicator(), "Goal waiting") {
+		t.Fatal("idle hold lost")
 	}
 }
 
 func TestGoalHoldReleasedByEnterResumeAndNewGoal(t *testing.T) {
 	held := func() *App {
 		a := goalApp(t)
-		a.cmdGoal("ship it")
-		endTurn(a, true)
-		if !a.goal.Held() {
+		goalCommand(a, "ship it")
+		endTurn(t, a, true)
+		if !a.goalHeld() {
 			t.Fatal("not held")
 		}
 		return a
 	}
 
 	a := held()
-	a.submit("", nil) // enter on an empty prompt
-	if a.goal.Held() {
+	typeLine(a, "")
+	settle(a) // enter on an empty prompt
+	if a.goalHeld() {
 		t.Fatal("empty enter releases the hold")
 	}
 
 	a = held()
-	a.cmdGoal("resume")
-	if a.goal.Held() || a.goal.Goal.Status != goal.Active {
+	goalCommand(a, "resume")
+	if a.goalHeld() || a.theGoal().Status != goal.Active {
 		t.Fatal("/goal resume releases the hold")
 	}
 
 	a = held()
-	a.cmdGoal("second") // confirm replacing
+	goalCommand(a, "second") // confirm replacing
 	keys(a, "enter")
-	if a.goal.Held() || a.goal.Goal.Objective != "second" {
-		t.Fatalf("a new goal releases the hold: %+v", a.goal.Goal)
+	if a.goalHeld() || a.theGoal().Objective != "second" {
+		t.Fatalf("a new goal releases the hold: %+v", a.theGoal())
 	}
 
 	a = held()
-	a.setObjective("edited")
-	if a.goal.Held() {
+	a.ui.Do(func() { a.rpcErr("goal/edit", map[string]any{"input": "edited"}) })
+	settle(a)
+	if a.goalHeld() {
 		t.Fatal("editing the objective releases the hold")
 	}
 
 	// Pausing keeps nothing waiting, and resuming later starts clean.
 	a = held()
-	a.cmdGoal("pause")
-	a.cmdGoal("resume")
-	if a.goal.Held() {
+	goalCommand(a, "pause")
+	goalCommand(a, "resume")
+	if a.goalHeld() {
 		t.Fatal("resume after pause releases the hold")
 	}
 }
@@ -594,66 +609,20 @@ func TestGoalHoldReleasedByEnterResumeAndNewGoal(t *testing.T) {
 // A goal held after the user's turn does not start another turn by itself,
 // and enter on an empty prompt continues it, against a scripted model.
 func TestGoalHoldEndToEnd(t *testing.T) {
-	var mu sync.Mutex
-	requests := 0
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		mu.Lock()
-		requests++
-		mu.Unlock()
-		fmt.Fprint(w, `data: {"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}`+"\n\n")
-		fmt.Fprint(w, "data: [DONE]\n\n")
-	}))
-	defer srv.Close()
-	count := func() int { mu.Lock(); defer mu.Unlock(); return requests }
-	idle := func(a *App) {
-		t.Helper()
-		deadline := time.Now().Add(10 * time.Second)
-		for {
-			var busy bool
-			a.ui.Do(func() { busy = a.turns.Busy })
-			if !busy {
-				return
-			}
-			if time.Now().After(deadline) {
-				t.Fatal("turn did not finish")
-			}
-			time.Sleep(10 * time.Millisecond)
-		}
+	a, m := liveApp(t, providertest.Reply{Text: "ok"})
+	a.ui.Do(func() { a.rpcErr("client/gate", map[string]any{"open": true}) })
+	settle(a)
+	goalCommand(a, "ship it")
+	send(t, a, "what is going on?")
+	time.Sleep(100 * time.Millisecond)
+	if len(m.Requests()) != 1 || !a.goalHeld() {
+		t.Fatalf("user turn: %d requests, held=%v", len(m.Requests()), a.goalHeld())
 	}
-
-	a := treeApp(t)
-	a.agent.SetModel(config.ModelRef{ProviderName: "t", Provider: config.Provider{BaseURL: srv.URL}, Model: config.Model{ID: "m", ContextWindow: 100000}})
-	g, _ := goal.New("ship it")
-	a.ui.Do(func() { a.goal.Set(g) })
-
-	a.ui.Do(func() { a.startTurn("what is going on?", nil) })
-	idle(a)
-	time.Sleep(100 * time.Millisecond) // a continuation would have started by now
-	idle(a)
-	var held bool
-	a.ui.Do(func() { held = a.goal.Held() })
-	if n := count(); n != 1 || !held {
-		t.Fatalf("after the user's turn: %d requests, held %v; want 1 and held", n, held)
-	}
-
-	a.ui.Do(func() { a.submit("", nil) })
-	deadline := time.Now().Add(10 * time.Second)
-	for {
-		var st goal.Status
-		a.ui.Do(func() { st = a.goal.Goal.Status })
-		if st != goal.Active {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("the goal did not continue")
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	idle(a)
-	a.ui.Do(func() { held = a.goal.Held() })
-	// The user's turn and two idle continuations stall the goal; the continuations do not hold.
-	if n := count(); n != 3 || held {
-		t.Fatalf("after enter: %d requests, held %v; want 3, not held", n, held)
+	a.ui.Do(func() { a.rpcErr("client/gate", map[string]any{"open": false}); a.submit("", nil) })
+	within(t, a, "goal stalled after continuations", func() bool { return a.theGoal() != nil && a.theGoal().Status == goal.Blocked })
+	waitIdle(t, a)
+	if len(m.Requests()) != 3 || a.goalHeld() {
+		t.Fatalf("continuations: %d requests, held=%v", len(m.Requests()), a.goalHeld())
 	}
 }
 
@@ -674,23 +643,23 @@ func TestGoalMessageTitle(t *testing.T) {
 func TestGoalReservedWordsMakeNoGoal(t *testing.T) {
 	a := goalApp(t)
 	for _, w := range []string{"help", "Help", "status", "show", "--help"} {
-		a.cmdGoal(w)
-		if a.goal.Goal != nil || a.modal != nil {
-			t.Fatalf("/goal %s made a goal or asked: %+v", w, a.goal.Goal)
+		goalCommand(a, w)
+		if a.theGoal() != nil || a.modal != nil {
+			t.Fatalf("/goal %s made a goal or asked: %+v", w, a.theGoal())
 		}
 	}
 	if got := goalText(a); strings.Count(got, "Usage: /goal [<objective>") != 5 {
 		t.Fatalf("each shows the usage (no goal set):\n%s", got)
 	}
 
-	a.cmdGoal("ship it")
-	a.cmdGoal("status")
+	goalCommand(a, "ship it")
+	goalCommand(a, "status")
 	if got := goalText(a); !strings.Contains(got, "Objective: ship it") {
 		t.Fatalf("status shows the goal:\n%s", got)
 	}
-	a.cmdGoal("help")
-	if a.goal.Goal.Objective != "ship it" || a.modal != nil {
-		t.Fatalf("help leaves the goal: %+v", a.goal.Goal)
+	goalCommand(a, "help")
+	if a.theGoal().Objective != "ship it" || a.modal != nil {
+		t.Fatalf("help leaves the goal: %+v", a.theGoal())
 	}
 	if strings.Count(goalText(a), "Usage: /goal [<objective>") != 6 {
 		t.Fatalf("help shows the usage with a goal too:\n%s", goalText(a))
@@ -699,70 +668,60 @@ func TestGoalReservedWordsMakeNoGoal(t *testing.T) {
 
 // A change the user makes to the goal while a turn runs is told to the model.
 func TestGoalChangesMidTurnSteerTheModel(t *testing.T) {
-	for _, c := range []struct {
-		cmd   string
-		setup func(*goal.Goal)
-		want  string
-	}{
-		{"clear", nil, "The user cleared the goal. Stop goal work"},
-		{"pause", nil, "The user paused the goal. Stop goal work"},
-	} {
-		t.Run(c.cmd, func(t *testing.T) {
-			a := goalApp(t)
-			a.cmdGoal("ship it")
-			if c.setup != nil {
-				c.setup(a.goal.Goal)
+	for _, cmd := range []string{"pause", "clear"} {
+		t.Run(cmd, func(t *testing.T) {
+			gate := make(chan struct{})
+			a, m := liveApp(t, providertest.Reply{Text: "current step", Gate: gate})
+			a.ui.Do(func() { a.rpcErr("client/gate", map[string]any{"open": true}) })
+			settle(a)
+			goalCommand(a, "ship it")
+			typeLine(a, "work")
+			if m.Started(5*time.Second) == 0 {
+				t.Fatal("model did not start")
 			}
-			stops := 0
-			a.goal.Stop = func() { stops++ }
-			a.turns.Busy, a.runKind = true, "turn"
-			a.goal.BeginTurn()
-			a.cmdGoal(c.cmd)
-			steers := a.agent.DrainSteers()
-			if len(steers) != 1 || !goal.IsMessage(steers[0]) || !strings.Contains(steers[0], c.want) {
-				t.Fatalf("want a goal note with %q, got %q", c.want, steers)
+			goalCommand(a, cmd)
+			if !strings.Contains(shown(a), stoppingNotice) {
+				t.Fatal("boundary stop not announced")
 			}
-			if stops != 1 {
-				t.Fatalf("the turn is asked to stop %d times, want once", stops)
+			close(gate)
+			waitIdle(t, a)
+			if len(m.Requests()) != 1 {
+				t.Fatal("goal change started another step")
 			}
-			if !strings.Contains(goalText(a), stoppingNotice) {
-				t.Fatalf("no notice:\n%s", goalText(a))
+			if cmd == "clear" && a.theGoal() != nil || cmd == "pause" && a.theGoal().Status != goal.Paused {
+				t.Fatal("goal change lost")
 			}
 		})
 	}
-
-	// Idle, or in a turn that is not a goal turn's (a compaction), nothing is steered.
 	a := goalApp(t)
-	stops := 0
-	a.goal.Stop = func() { stops++ }
-	a.cmdGoal("ship it")
-	a.cmdGoal("pause")
-	a.cmdGoal("clear")
-	if s := a.agent.DrainSteers(); len(s) != 0 || stops != 0 || strings.Contains(goalText(a), stoppingNotice) {
-		t.Fatalf("idle: %q, %d stops", s, stops)
-	}
-	a.cmdGoal("ship it")
-	a.turns.Busy, a.runKind = true, "compact"
-	a.cmdGoal("clear")
-	if s := a.agent.DrainSteers(); len(s) != 0 || stops != 0 || strings.Contains(goalText(a), stoppingNotice) {
-		t.Fatalf("compaction: %q, %d stops", s, stops)
+	goalCommand(a, "ship it")
+	goalCommand(a, "pause")
+	goalCommand(a, "clear")
+	if strings.Contains(shown(a), stoppingNotice) {
+		t.Fatal("idle changes steered a nonexistent run")
 	}
 }
 
 // A goal note that raced with the end of the turn is dropped: it never
 // starts a turn of its own.
 func TestGoalNoteLeftAtTurnEndStartsNoTurn(t *testing.T) {
-	a := goalApp(t)
-	a.cmdGoal("ship it")
-	a.cmdGoal("clear")
-	a.agent.Steer(goal.ClearedMessage())
-	a.turns.Busy, a.runKind = true, "turn"
-	a.goal.BeginTurn()
-	a.turns.Busy = false
-	a.turns.QueuePaused = false
-	a.afterRun(nil)
-	if a.turns.Busy || len(a.agent.DrainSteers()) != 0 {
-		t.Fatal("the note started a turn")
+	gate := make(chan struct{})
+	a, m := liveApp(t, providertest.Reply{Text: "done", Gate: gate})
+	a.ui.Do(func() { a.rpcErr("client/gate", map[string]any{"open": true}) })
+	settle(a)
+	goalCommand(a, "ship it")
+	typeLine(a, "work")
+	if m.Started(5*time.Second) == 0 {
+		t.Fatal("model did not start")
+	}
+	goalCommand(a, "clear")
+	close(gate)
+	waitIdle(t, a)
+	a.ui.Do(func() { a.rpcErr("client/gate", map[string]any{"open": false}) })
+	settle(a)
+	time.Sleep(100 * time.Millisecond)
+	if a.busy || len(m.Requests()) != 1 {
+		t.Fatal("late goal note started a turn")
 	}
 }
 
@@ -789,83 +748,49 @@ func requestLog(t *testing.T) (url string, last func() []string) {
 // A user message that starts a turn while the goal is not running by itself
 // carries a note on the goal's state; nothing else does.
 func TestGoalStateNoteAttachesToUserTurns(t *testing.T) {
-	url, last := requestLog(t)
-	a := treeApp(t)
-	a.agent.SetModel(config.ModelRef{ProviderName: "t", Provider: config.Provider{BaseURL: url}, Model: config.Model{ID: "m", ContextWindow: 100000}})
-	idle := func() {
-		t.Helper()
-		deadline := time.Now().Add(10 * time.Second)
-		for {
-			var busy bool
-			a.ui.Do(func() { busy = a.turns.Busy })
-			if !busy {
-				return
-			}
-			if time.Now().After(deadline) {
-				t.Fatal("turn did not finish")
-			}
-			time.Sleep(10 * time.Millisecond)
-		}
-	}
+	a, m := liveApp(t, providertest.Reply{Text: "ok"})
+	a.ui.Do(func() { a.rpcErr("client/gate", map[string]any{"open": true}) })
+	settle(a)
+	goalCommand(a, "ship it")
 	say := func(text string) string {
-		t.Helper()
-		before := len(last())
-		a.ui.Do(func() { a.startTurn(text, nil) })
-		idle()
-		got := last()
-		if len(got) != before+1 {
-			t.Fatalf("%d requests after %q, want %d", len(got), text, before+1)
+		send(t, a, text)
+		reqs := m.Requests()
+		var body struct {
+			Messages []struct{ Role, Content string }
 		}
-		return got[len(got)-1]
+		if err := json.Unmarshal([]byte(reqs[len(reqs)-1]), &body); err != nil {
+			t.Fatal(err)
+		}
+		return body.Messages[len(body.Messages)-1].Content
 	}
-	set := func(f func(g *goal.Goal)) {
-		a.ui.Do(func() {
-			g := a.goal.Goal
-			f(g)
-			a.goal.Set(g)
-		})
-	}
-
-	g, _ := goal.New("ship it")
-	a.ui.Do(func() { a.goal.Set(g) })
 	if got := say("hi"); got != "hi" {
-		t.Fatalf("a running goal adds no note: %q", got)
+		t.Fatalf("active goal adds no note: %q", got)
 	}
-	// The user's turn held the goal: the next message is told it is waiting.
-	got := say("Thanks, that is fine.")
-	msg, note := goal.SplitNote(got)
-	if msg != "Thanks, that is fine." || !strings.Contains(note, "waiting for the user") || !goal.IsMessage(note) {
-		t.Fatalf("held: %q", got)
+	if msg, note := goal.SplitNote(say("thanks")); msg != "thanks" || !strings.Contains(note, "waiting for the user") {
+		t.Fatalf("held: %q, %q", msg, note)
 	}
-
-	for _, c := range []struct {
-		name string
-		f    func(g *goal.Goal)
-		want string
-	}{
-		{"interrupted", func(g *goal.Goal) { g.Status, g.Note = goal.Paused, goal.NoteInterrupted }, "paused because the user interrupted it"},
-		{"stalled", func(g *goal.Goal) { g.Status, g.Note = goal.Blocked, "stuck" }, "stalled"},
-		{"usage limited", func(g *goal.Goal) { g.Status = goal.UsageLimited }, "usage limited"},
-	} {
-		set(c.f)
-		if _, note := goal.SplitNote(say("what now?")); !strings.Contains(note, c.want) {
-			t.Fatalf("%s: note %q", c.name, note)
+	for _, tc := range []struct {
+		status     goal.Status
+		note, want string
+	}{{goal.Paused, goal.NoteInterrupted, "paused because the user interrupted it"}, {goal.Blocked, "stuck", "stalled"}, {goal.UsageLimited, "", "usage limited"}} {
+		g := a.theGoal()
+		g.Status, g.Note = tc.status, tc.note
+		fixtureGoal(t, a, g)
+		fixtureGoal(t, a, g)
+		a.ui.Do(func() { a.rpcErr("goal/read", nil) })
+		settle(a)
+		if _, note := goal.SplitNote(say("what now?")); !strings.Contains(note, tc.want) {
+			t.Fatalf("%s: %q", tc.status, note)
 		}
 	}
-	set(func(g *goal.Goal) { g.Status = goal.Complete })
+	g := a.theGoal()
+	g.Status = goal.Complete
+	fixtureGoal(t, a, g)
+	fixtureGoal(t, a, g)
+	a.ui.Do(func() { a.rpcErr("goal/read", nil) })
+	settle(a)
 	if got := say("and now?"); got != "and now?" {
-		t.Fatalf("a finished goal adds no note: %q", got)
-	}
-
-	// A goal continuation is not a user turn: no note, even for a held goal.
-	set(func(g *goal.Goal) { g.Status = goal.Active })
-	a.ui.Do(func() {
-		a.goal.Release()
-		a.continueGoal()
-	})
-	idle()
-	if got := last(); !goal.IsMessage(got[len(got)-1]) || strings.Count(got[len(got)-1], goal.OpenTag) != 1 {
-		t.Fatalf("continuation: %q", got[len(got)-1])
+		t.Fatalf("complete goal added note: %q", got)
 	}
 }
 
@@ -873,104 +798,74 @@ func TestGoalStateNoteAttachesToUserTurns(t *testing.T) {
 // retries, no "waiting for you" goes with the error, and the wait can be
 // ended by /goal pause, /goal clear and Esc.
 func TestGoalTransientErrorRetriesLater(t *testing.T) {
-	fail := func(a *App) {
-		a.turns.Busy, a.runKind = true, "turn"
-		a.goal.BeginTurn()
-		a.turns.Busy = false
-		a.afterRun(errors.New("400: Upstream request failed: Model is unavailable"))
+	a, _ := liveApp(t, providertest.Reply{Status: 400, Error: "Model is unavailable", Headers: map[string]string{"retry-after-ms": "1"}})
+	typeLine(a, "/goal ship it")
+	within(t, a, "goal retry", func() bool { return !a.goalRetryAt.IsZero() })
+	if a.theGoal().Status != goal.Active || a.theGoal().FailStreak != 0 || !strings.Contains(shown(a), "retrying the goal in 10s (1/6)") || strings.Contains(shown(a), goalWaitingNotice) {
+		t.Fatalf("retry: %+v, %s", a.theGoal(), shown(a))
 	}
-	a := goalApp(t)
-	a.cmdGoal("ship it")
-	a.turns.QueuePaused = false
-	t.Cleanup(func() { a.cancelGoalRetry() })
-	fail(a)
-	g := a.goal.Goal
-	if g.Status != goal.Active || g.FailStreak != 0 || a.goal.Pending() == nil || a.retryTimer == nil {
-		t.Fatalf("%+v pending=%v timer=%v", g, a.goal.Pending(), a.retryTimer)
+	goalCommand(a, "pause")
+	if a.theGoal().Status != goal.Paused || !a.goalRetryAt.IsZero() {
+		t.Fatal("pause did not cancel retry")
 	}
-	got := strings.Join(strings.Fields(goalText(a)), " ")
-	if !strings.Contains(got, "Model error (400: Upstream request failed: Model is unavailable); retrying the goal in 10s (1/6).") ||
-		strings.Contains(got, goalWaitingNotice) || strings.Contains(got, "stalled") {
-		t.Fatalf("notice:\n%s", got)
+	goalCommand(a, "resume")
+	within(t, a, "second goal retry", func() bool { return !a.goalRetryAt.IsZero() })
+	key(a, "\x1b")
+	within(t, a, "interrupted retry", func() bool { return a.theGoal().Status == goal.Paused && a.goalRetryAt.IsZero() })
+	if a.theGoal().Note != goal.NoteInterrupted {
+		t.Fatal("retry interruption lost cause")
 	}
-	if !strings.Contains(a.goalIndicator(), "Pursuing goal") {
-		t.Fatalf("indicator %q", a.goalIndicator())
-	}
-
-	a.cmdGoal("pause")
-	if a.retryTimer != nil || a.goal.Pending() != nil || g.Status != goal.Paused {
-		t.Fatalf("pause: timer=%v %+v", a.retryTimer, g)
-	}
-
-	// Esc while it waits pauses the goal as interrupting its turn would.
-	g.Status = goal.Active
-	a.goal.Set(g)
-	fail(a)
-	if a.retryTimer == nil {
-		t.Fatal("no timer")
-	}
-	if !a.interrupt() || a.retryTimer != nil || g.Status != goal.Paused || g.Note != goal.NoteInterrupted {
-		t.Fatalf("esc: timer=%v %+v", a.retryTimer, g)
-	}
-	if a.interrupt() {
-		t.Fatal("nothing left to interrupt")
-	}
+	a.ui.Do(func() {
+		if a.interrupt() {
+			t.Error("nothing left to interrupt")
+		}
+	})
 }
 
 // A message the user sends while the goal's turn runs carries the note that
 // the goal is still active, for the model only.
 func TestGoalSteerNoteReachesTheModel(t *testing.T) {
-	url, last := requestLog(t)
-	a := treeApp(t)
-	a.agent.SetModel(config.ModelRef{ProviderName: "t", Provider: config.Provider{BaseURL: url}, Model: config.Model{ID: "m", ContextWindow: 100000}})
-	a.agent.SteerNote = a.goal.SteerNote
-	g, _ := goal.New("ship it")
-	a.goal.Set(g)
-	a.agent.Steer("what is the status?")
-	if err := a.agent.Run(context.Background(), g.Continuation(), func(any) {}); err != nil {
-		t.Fatal(err)
+	gate := make(chan struct{})
+	a, m := liveApp(t, providertest.Reply{Text: "first", Gate: gate}, providertest.Reply{Text: "steered"})
+	typeLine(a, "/goal ship it")
+	if m.Started(5*time.Second) == 0 {
+		t.Fatal("goal did not run")
 	}
-	reqs := last() // the continuation, then the steer
-	if len(reqs) != 2 {
-		t.Fatalf("requests: %q", reqs)
-	}
-	if msg, note := goal.SplitNote(reqs[1]); msg != "what is the status?" || !strings.Contains(note, "not paused") {
-		t.Fatalf("%q", reqs[1])
-	}
-	a.agent.Steer(events.Prefix + "job done")
-	if err := a.agent.Run(context.Background(), "next", func(any) {}); err != nil {
-		t.Fatal(err)
-	}
-	if got := last(); got[len(got)-1] != events.Prefix+"job done" {
-		t.Fatalf("an event takes no note: %q", got[len(got)-1])
+	typeLine(a, "what is the status?")
+	settle(a)
+	close(gate)
+	within(t, a, "held goal", func() bool { return !a.busy && a.goalHeld() })
+	reqs := m.Requests()
+	if len(reqs) != 2 || !strings.Contains(reqs[1], "what is the status?") || !strings.Contains(reqs[1], "not paused") {
+		t.Fatalf("requests: %v", reqs)
 	}
 }
 
 func TestGoalPrefixedUserSteerHoldsGoal(t *testing.T) {
-	a := goalApp(t)
-	a.cmdGoal("ship it")
+	gate := make(chan struct{})
+	a, m := liveApp(t, providertest.Reply{Text: "first", Gate: gate}, providertest.Reply{Text: "done"})
+	typeLine(a, "/goal ship it")
+	if m.Started(5*time.Second) == 0 {
+		t.Fatal("goal did not run")
+	}
 	text := goal.OpenTag + "\nuser typed this\n" + goal.CloseTag
-	a.turns.Steers = []string{text}
-	endTurn(a, false, text)
-	if !a.goal.Held() || len(a.turns.Steers) != 0 {
-		t.Fatal("user steer was treated as internal")
-	}
-	found := false
-	for _, it := range a.items.Items() {
-		if it.Kind == "user" && it.Text == text {
-			found = true
-		}
-	}
-	if !found {
-		t.Fatal("user steer did not render as user input")
+	typeLine(a, text)
+	settle(a)
+	close(gate)
+	within(t, a, "held prefixed steer", func() bool { return !a.busy && a.goalHeld() })
+	if len(a.pending.Steers) != 0 || !strings.Contains(users(a), text) {
+		t.Fatal("prefixed user steer treated as internal")
 	}
 }
 
 func TestGoalLongContextNotice(t *testing.T) {
 	for _, long := range []bool{false, true} {
 		a := goalApp(t)
-		a.agent.SetLongContext(long)
-		a.cmdGoal("ship it")
+		a.ui.Do(func() {
+			a.rpcErr("thread/setContextMode", map[string]any{"contextMode": map[bool]string{true: "long", false: "normal"}[long]})
+		})
+		settle(a)
+		goalCommand(a, "ship it")
 		want := 0
 		if long {
 			want = 1
@@ -978,13 +873,52 @@ func TestGoalLongContextNotice(t *testing.T) {
 		if n := strings.Count(goalText(a), "price-tier cap is off"); n != want {
 			t.Fatalf("long=%v: %s", long, goalText(a))
 		}
-		a.cmdGoal("pause")
-		a.cmdGoal("resume")
+		goalCommand(a, "pause")
+		goalCommand(a, "resume")
 		if n := strings.Count(goalText(a), "price-tier cap is off"); n != 2*want {
 			t.Fatalf("resume long=%v: %s", long, goalText(a))
 		}
-		if a.agent.LongContext() != long {
+		if a.info.LongContext != long {
 			t.Fatal("goal changed the context mode")
 		}
+	}
+}
+
+// goalCommand sends the command and waits off the UI goroutine.
+func goalCommand(a *App, arg string) {
+	a.ui.Do(func() { a.cmdGoal(arg) })
+	settle(a)
+}
+
+const goalWaitingNotice = "Goal waiting for you — press enter on an empty prompt or /goal resume to continue."
+const stoppingNotice = "Stopping the turn after the current step."
+
+func restoreGoal(t *testing.T, a *App, entries []session.Entry) {
+	t.Helper()
+	w := session.New(a.cwd)
+	for _, e := range entries {
+		w.Append(e)
+	}
+	if len(entries) == 0 {
+		w.Append(session.Entry{Type: session.TypeName, Name: "no goal"})
+	}
+	w.Close()
+	a.ui.Do(func() { a.resumeID(w.ID) })
+	settle(a)
+	a.ui.Do(func() { a.rpcErr("client/gate", map[string]any{"open": true}) })
+	settle(a)
+}
+
+// Arbitrary stopped goal states are saved-session fixtures. Opening one is
+// the public way to restore them; goal files intentionally accept only a
+// restricted set of reports from a running model.
+func fixtureGoal(t *testing.T, a *App, g *goal.Goal) {
+	t.Helper()
+	copy := *g
+	raw, _ := json.Marshal(copy)
+	restoreGoal(t, a, []session.Entry{{Type: session.TypeGoal, Goal: raw}})
+	if a.prompt != nil {
+		a.ui.Do(func() { a.rpcErr("prompt/answer", map[string]any{"id": a.prompt.id, "cancel": true}) })
+		settle(a)
 	}
 }

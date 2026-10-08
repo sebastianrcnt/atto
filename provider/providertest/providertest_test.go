@@ -73,3 +73,16 @@ func TestSplit(t *testing.T) {
 		}
 	}
 }
+
+func TestErrorMessage(t *testing.T) {
+	m := New(t, Reply{Status: 429, Error: "usage limit reached"})
+	r, err := http.Post(m.URL, "application/json", strings.NewReader(`{}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Body.Close()
+	b, _ := io.ReadAll(r.Body)
+	if r.StatusCode != 429 || !strings.Contains(string(b), "usage limit reached") {
+		t.Fatalf("response %d %s", r.StatusCode, b)
+	}
+}

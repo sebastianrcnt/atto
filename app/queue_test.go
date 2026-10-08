@@ -1,66 +1,85 @@
 package app
 
-import "testing"
+import (
+	"strings"
+	"testing"
+	"time"
 
-// Shift+Left takes back the last steer the turn has not taken yet; once
-// delivered, it stays.
+	"github.com/sebastianrcnt/atto/provider/providertest"
+)
+
 func TestEditLastSteer(t *testing.T) {
-	a := treeApp(t)
-	a.steer("first")
-	a.steer("why so slow?")
-	a.editor.SetText("draft")
-	a.onInput("\x1b[1;2D") // shift+left
-	if a.editor.Text() != "why so slow?\ndraft" || len(a.turns.Steers) != 1 || a.turns.Steers[0] != "first" {
-		t.Fatalf("editor %q, pending %q", a.editor.Text(), a.turns.Steers)
-	}
-	if got := a.agent.DrainSteers(); len(got) != 1 || got[0] != "first" {
-		t.Fatalf("agent steers %q", got)
-	}
-	// "first" was delivered (drained): it is not taken back.
-	a.editor.SetText("")
-	if a.editLastSteer() || a.editor.Text() != "" {
-		t.Fatalf("a delivered steer came back: %q", a.editor.Text())
+	gate := make(chan struct{})
+	defer func() {
+		select {
+		case <-gate:
+		default:
+			close(gate)
+		}
+	}()
+	a, m := liveApp(t, providertest.Reply{Text: "answer", Gate: gate})
+	typeLine(a, "start")
+	m.Started(5 * time.Second)
+	typeLine(a, "first")
+	typeLine(a, "why so slow?")
+	settle(a)
+	a.ui.Do(func() { a.editor.SetText("draft") })
+	key(a, "\x1b[1;2D")
+	within(t, a, "takeback", func() bool {
+		return a.editor.Text() == "why so slow?\ndraft" && len(a.pending.Steers) == 1 && a.pending.Steers[0] == "first"
+	})
+	// The model consumes the remaining steer when the stream ends. Once
+	// consumed, taking it back cannot recover it.
+	a.ui.Do(func() { a.editor.SetText("") })
+	close(gate)
+	waitIdle(t, a)
+	key(a, "\x1b[1;2D")
+	settle(a)
+	a.ui.Do(func() {
+		if a.editor.Text() != "" {
+			t.Errorf("delivered steer came back: %q", a.editor.Text())
+		}
+	})
+
+	if reqs := m.Requests(); len(reqs) < 2 || !strings.Contains(reqs[1], "first") || strings.Contains(reqs[1], "why so slow?") {
+		t.Fatalf("requests %v", reqs)
 	}
 }
 
-// A turn the model never answered gives the typed text back, so it can be
-// sent again; a draft typed meanwhile is not overwritten, and messages the
-// user did not type (skills, goal turns) do not come back.
 func TestFailedTurnRestoresTypedText(t *testing.T) {
-	model := newRemoteModel(t)
-	a := remoteApp(t, model)
-	a.ui.Do(func() {
-		a.turns.QueuePaused = true
-		a.startTurn("fail", nil)
-	})
-	within(t, a, "the failed turn", func() bool { return !a.turns.Busy })
-	a.ui.Do(func() {
-		if a.editor.Text() != "fail" {
-			t.Errorf("editor %q, want the failed message back", a.editor.Text())
-		}
-		a.editor.SetText("")
-		a.startTurn("fail", nil)
-		a.editor.SetText("typed meanwhile")
-	})
-	within(t, a, "the second failed turn", func() bool { return !a.turns.Busy })
+	a, m := liveApp(t, providertest.Reply{Status: 404})
+	typeLine(a, "fail")
+	within(t, a, "failed message", func() bool { return a.editor.Text() == "fail" })
+	gate := make(chan struct{})
+	m.SetScript(providertest.Reply{Status: 404, Gate: gate})
+	a.ui.Do(func() { a.editor.SetText("") })
+	typeLine(a, "fail")
+	m.Started(5 * time.Second)
+	a.ui.Do(func() { a.editor.SetText("typed meanwhile") })
+	close(gate)
+	waitIdle(t, a)
 	a.ui.Do(func() {
 		if a.editor.Text() != "typed meanwhile" {
-			t.Errorf("editor %q, the draft was overwritten", a.editor.Text())
+			t.Errorf("draft overwritten: %q", a.editor.Text())
 		}
 		a.editor.SetText("")
-		a.runTurn("fail", nil, false)
 	})
-	within(t, a, "the untyped failed turn", func() bool { return !a.turns.Busy })
+	// Skill prompts are runtime-generated, not typed input, and are not recovered.
+	writeTestFile(t, a.cwd+"/.atto/skills/fail/SKILL.md", "---\nname: fail\ndescription: fail\n---\nfail")
+	typeLine(a, "/reload")
+	settle(a)
+	typeLine(a, "/fail")
+	waitIdle(t, a)
 	a.ui.Do(func() {
 		if a.editor.Text() != "" {
-			t.Errorf("editor %q, only typed messages come back", a.editor.Text())
+			t.Errorf("untyped input recovered: %q", a.editor.Text())
 		}
-		a.startTurn("hello", nil)
 	})
-	within(t, a, "the answer", func() bool { return !a.turns.Busy })
+	m.SetScript(providertest.Reply{Text: "ok"})
+	send(t, a, "hello")
 	a.ui.Do(func() {
 		if a.editor.Text() != "" {
-			t.Errorf("editor %q after a good turn", a.editor.Text())
+			t.Errorf("good turn recovered: %q", a.editor.Text())
 		}
 	})
 }

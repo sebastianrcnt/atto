@@ -12,6 +12,9 @@ import (
 // wireItem is the protocol form of a transcript item of session sid.
 func wireItem(sid string, it *transcript.Item) Item {
 	w := Item{ID: it.ID, Text: it.Text, Status: string(it.Status), EntryID: it.EntryID, DurationMs: it.Duration.Milliseconds()}
+	if !it.Started.IsZero() {
+		w.StartedMs = it.Started.UnixMilli()
+	}
 	switch it.Kind {
 	case transcript.User:
 		w.Type = ItemUser
@@ -81,6 +84,9 @@ func TranscriptItem(w Item) transcript.Item {
 		Duration: time.Duration(w.DurationMs) * time.Millisecond}
 	for _, im := range w.Images {
 		it.Images = append(it.Images, provider.Image{Name: im.Name, Width: im.Width, Height: im.Height, File: im.File, MIME: im.MIME})
+	}
+	if w.StartedMs > 0 {
+		it.Started = time.UnixMilli(w.StartedMs)
 	}
 	switch w.Type {
 	case ItemUser:

@@ -34,12 +34,14 @@ func (t *thread) ask(p *openPrompt) {
 		p.cancel()
 		return
 	}
+	if p.wire.ID == "" {
+		t.promptSeq++
+		p.wire.ID = fmt.Sprintf("%s-p%d", t.id, t.promptSeq)
+	}
 	if t.prompt != nil {
 		t.prompts = append(t.prompts, p)
 		return
 	}
-	t.promptSeq++
-	p.wire.ID = fmt.Sprintf("%s-p%d", t.id, t.promptSeq)
 	p.wire.Origin = p.origin
 	t.prompt = p
 	t.publish("prompt/open", map[string]any{"prompt": p.wire})
@@ -66,6 +68,9 @@ func (t *thread) answerPrompt(client, id string, ans PromptAnswer) error {
 	switch {
 	case ans.Cancel:
 		t.closePrompt("cancelled", client)
+		if p.wire.ClientID != "" {
+			t.publish("prompt/clientAnswered", map[string]any{"clientId": p.wire.ClientID, "requestId": p.wire.RequestID, "answer": PromptAnswer{Cancel: true}})
+		}
 		p.cancel()
 	case p.wire.Kind == PromptSelect:
 		if ans.Index == nil {
@@ -235,5 +240,33 @@ func (t *thread) cancelExtensionPrompts() {
 			t.prompts = t.prompts[1:]
 			t.ask(next)
 		}
+	}
+}
+
+// openClientPrompt makes a terminal picker a server object too. The runtime
+// arbitrates answers; its owner applies the chosen UI action asynchronously.
+func (t *thread) openClientPrompt(client string, wire Prompt) (Prompt, error) {
+	if client == "" || wire.RequestID == "" {
+		return Prompt{}, invalid("client and requestId are required")
+	}
+	if wire.Kind != PromptSelect && wire.Kind != PromptInput {
+		return Prompt{}, invalid("kind is select or input")
+	}
+	wire.ID, wire.ClientID, wire.Origin = "", client, "client"
+	respond := func(ans PromptAnswer) {
+		t.publish("prompt/clientAnswered", map[string]any{"clientId": client, "requestId": wire.RequestID, "answer": ans})
+	}
+	p := &openPrompt{wire: wire, origin: "client", choose: func(i int) { respond(PromptAnswer{Index: &i}) }, submit: func(text string) { respond(PromptAnswer{Text: &text}) }, cancel: func() {}}
+	t.ask(p)
+	return p.wire, nil
+}
+
+func (t *thread) withdrawClientPrompt(client, request string) {
+	t.prompts = slices.DeleteFunc(t.prompts, func(p *openPrompt) bool {
+		return p.wire.ClientID == client && (request == "" || p.wire.RequestID == request)
+	})
+	if p := t.prompt; p != nil && p.wire.ClientID == client && (request == "" || p.wire.RequestID == request) {
+		t.closePrompt("closed", client)
+		t.afterPrompt()
 	}
 }

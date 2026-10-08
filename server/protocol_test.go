@@ -32,16 +32,22 @@ func TestInitializeContract(t *testing.T) {
 	for _, live := range []bool{false, true} {
 		t.Run(map[bool]string{false: "standalone", true: "live"}[live], func(t *testing.T) {
 			s := New("test", t.TempDir())
+			ctx := context.Background()
+			id := ""
 			if live {
-				s.Close()
-				s = NewLive("test", &fakeLive{id: "thread"})
+				info, err := s.startThread("", threadParams{})
+				if err != nil {
+					t.Fatal(err)
+				}
+				id = info.(ThreadInfo).ID
+				ctx = context.WithValue(ctx, scopeKey{}, &Scope{Thread: func() string { return id }})
 			}
 			t.Cleanup(s.Close)
 			for _, params := range []string{
 				`null`,
 				`{"protocolVersions":[1,2],"clientInfo":{"name":"test","title":"Test","version":"1"},"capabilities":{"experimentalApi":true,"interactive":true,"images":true}}`,
 			} {
-				r := s.Handle(context.Background(), []byte(`{"id":1,"method":"initialize","params":`+params+`}`))
+				r := s.Handle(ctx, []byte(`{"id":1,"method":"initialize","params":`+params+`}`))
 				if r.Error != nil {
 					t.Fatal(r.Error)
 				}
@@ -49,19 +55,19 @@ func TestInitializeContract(t *testing.T) {
 				if result["name"] != "atto" || result["version"] != "test" || result["protocolVersion"] != 2 || result["serverInstanceId"] != s.instance || len(s.instance) != 16 || result["settings"] == nil {
 					t.Fatalf("initialize: %+v", result)
 				}
-				if live && (result["live"] != true || result["threadId"] != "thread") {
+				if live && (result["live"] != true || result["threadId"] != id) {
 					t.Fatalf("lost live fields: %+v", result)
 				}
 			}
-			r := s.Handle(context.Background(), []byte(`{"id":2,"method":"initialize","params":{"protocolVersions":[1]}}`))
+			r := s.Handle(ctx, []byte(`{"id":2,"method":"initialize","params":{"protocolVersions":[1]}}`))
 			if r.Error != nil || r.Result.(map[string]any)["protocolVersion"] != 1 {
 				t.Fatalf("revision 1: %+v", r)
 			}
-			r = s.Handle(context.Background(), []byte(`{"id":3,"method":"initialize","params":{"protocolVersions":[99]}}`))
+			r = s.Handle(ctx, []byte(`{"id":3,"method":"initialize","params":{"protocolVersions":[99]}}`))
 			if r.Error == nil || r.Error.Data == nil || r.Error.Data.Reason != ReasonUnsupportedProtocol {
 				t.Fatalf("unsupported revision: %+v", r)
 			}
-			if r = s.Handle(context.Background(), []byte(`{"method":"initialized"}`)); r != nil {
+			if r = s.Handle(ctx, []byte(`{"method":"initialized"}`)); r != nil {
 				t.Fatalf("notification returned a response: %+v", r)
 			}
 			if _, err := s.call(context.Background(), "initialized", nil); err != nil {

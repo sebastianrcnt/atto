@@ -4,127 +4,18 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
-	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
-	"github.com/sebastianrcnt/atto/config"
-	"github.com/sebastianrcnt/atto/provider"
+	"github.com/sebastianrcnt/atto/provider/providertest"
 )
 
-// fakeLive is a Live front end that records what it is asked.
-type fakeLive struct {
-	mu     sync.Mutex
-	id     string
-	busy   bool
-	model  string
-	effort string
-	sent   []string
-	images int
-	stops  int
-	items  []Item
-	// answers to the open prompt "p1"
-	answers []PromptAnswer
-	// steers taken back, and turns rolled back
-	unsteered []string
-	rolled    int
-}
-
-func (f *fakeLive) Unsteer(input string, queued bool) error {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	if input != "also" {
-		return errors.New("that message is no longer pending")
-	}
-	f.unsteered = append(f.unsteered, fmt.Sprintf("%s %v", input, queued))
-	return nil
-}
-
-func (f *fakeLive) Rollback(n int) (string, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	if f.busy {
-		return "", errors.New("a turn is running")
-	}
-	f.rolled += n
-	return "go", nil
-}
-
-func (f *fakeLive) Answer(id string, ans PromptAnswer) error {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	if id != "p1" {
-		return errors.New("prompt " + id + " is not open")
-	}
-	f.answers = append(f.answers, ans)
-	return nil
-}
-
-func (f *fakeLive) Thread(items bool, at func()) (ThreadInfo, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	info := ThreadInfo{ID: f.id, Cwd: "/w", Model: f.model, Effort: f.effort, Efforts: []string{"low", "high"}, Busy: f.busy}
-	if items {
-		info.Items = append(info.Items, f.items...)
-	}
-	if at != nil {
-		at()
-	}
-	return info, nil
-}
-
-func (f *fakeLive) Model() config.ModelRef {
-	return config.ModelRef{ProviderName: "t", Model: config.Model{ID: "m", Input: []string{"text", "image"}}}
-}
-
-func (f *fakeLive) Send(input string, imgs []provider.Image) (string, string, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.sent = append(f.sent, input)
-	f.images += len(imgs)
-	if f.busy {
-		return "steered", "", nil
-	}
-	f.busy = true
-	return "started", f.id + "-t1", nil
-}
-
-func (f *fakeLive) Interrupt() bool {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.stops++
-	was := f.busy
-	f.busy = false
-	return was
-}
-
-func (f *fakeLive) Background() bool {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return f.busy // as if a command ran whenever a turn does
-}
-
-func (f *fakeLive) SetModel(id string) (ThreadInfo, error) {
-	f.mu.Lock()
-	f.model = id
-	f.mu.Unlock()
-	return f.Thread(false, nil)
-}
-
-func (f *fakeLive) SetEffort(level string) (ThreadInfo, error) {
-	f.mu.Lock()
-	f.effort = level
-	f.mu.Unlock()
-	return f.Thread(false, nil)
-}
-
-// rpcClient calls a test HTTP server with a token.
 type rpcClient struct {
 	t     *testing.T
 	url   string
@@ -198,147 +89,139 @@ func next(t *testing.T, ch <-chan msg, method string) msg {
 }
 
 func TestLiveSessionProtocol(t *testing.T) {
-	t.Setenv("ATTO_DIR", t.TempDir())
-	f := &fakeLive{id: "sess1", model: "t/m", effort: "low", items: []Item{{ID: "sess1-i1", Type: ItemUser, Text: "hi"}}}
-	s := NewLive("test", f)
-	defer s.Close()
+	gate := make(chan struct{})
+	h := newHarness(t, providertest.Reply{Text: "answer", Gate: gate}, providertest.Reply{Text: "done"})
+	var selected atomic.Value
+	selected.Store(h.id)
 	clients := make(chan int, 10)
-	s.OnClients = func(n int) { clients <- n }
-	h := httptest.NewServer(s.HTTPHandler("live-token-123456"))
-	defer h.Close()
-	c := rpcClient{t, h.URL, "live-token-123456"}
-
-	wrong, _ := http.NewRequest("POST", h.URL+"/rpc", strings.NewReader(`{"method":"initialize"}`))
-	wrong.Header.Set("Authorization", "Bearer live-token-654321")
-	if r, _ := http.DefaultClient.Do(wrong); r.StatusCode != 401 {
-		t.Fatalf("wrong token: %d", r.StatusCode)
-	}
-	if r, _ := http.Post(h.URL+"/rpc", "application/json", strings.NewReader(`{"method":"initialize"}`)); r.StatusCode != 401 {
-		t.Fatalf("no token: %d", r.StatusCode)
+	h.s.OnClients = func(n int) { clients <- n }
+	web := httptest.NewServer(h.s.ScopedHandler("live-token-123456", Scope{Thread: func() string { return selected.Load().(string) }}))
+	defer web.Close()
+	c := rpcClient{t, web.URL, "live-token-123456"}
+	for _, token := range []string{"", "wrong"} {
+		req, _ := http.NewRequest("POST", web.URL+"/rpc", strings.NewReader(`{"method":"initialize"}`))
+		req.Header.Set("Authorization", "Bearer "+token)
+		r, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		r.Body.Close()
+		if r.StatusCode != 401 {
+			t.Fatalf("token %q status %d", token, r.StatusCode)
+		}
 	}
 	init := c.must("initialize", nil)
-	if init["live"] != true || init["threadId"] != "sess1" {
-		t.Fatalf("initialize %v", init)
+	if init["live"] != true || init["threadId"] != h.id {
+		t.Fatalf("init %v", init)
 	}
-	list := c.must("thread/list", nil)["threads"].([]any)
-	if len(list) != 1 || list[0].(map[string]any)["threadId"] != "sess1" {
-		t.Fatalf("thread/list %v", list)
+	if _, ok := init["settings"].(map[string]any)["toolGroups"]; !ok {
+		t.Fatal("settings missing")
 	}
-
-	// Replay: thread/read has the items and where to follow from.
-	s.Publish("item/completed", map[string]any{"threadId": "sess1", "item": Item{ID: "x"}})
-	read := c.must("thread/read", map[string]any{})
-	if items := read["items"].([]any); len(items) != 1 || read["live"] != true || read["eventId"].(float64) != 1 {
-		t.Fatalf("thread/read %v", read)
+	if list := c.must("thread/list", nil)["threads"].([]any); len(list) != 1 {
+		t.Fatalf("list %v", list)
 	}
-
-	events, stop := sse(t, h.URL+"/events?token=live-token-123456&lastEventId=1")
+	read := c.must("thread/read", nil)
+	if read["live"] != true || read["eventId"] == nil {
+		t.Fatalf("snapshot %v", read)
+	}
+	stream, stop := sse(t, web.URL+"/events?token=live-token-123456&lastEventId="+fmt.Sprint(read["eventId"]))
 	defer stop()
 	if n := <-clients; n != 1 {
 		t.Fatalf("clients %d", n)
 	}
-
-	// Sending while idle starts a turn; while busy it is the front end's to
-	// steer or queue; turn/steer goes the same way.
-	if r := c.must("turn/start", map[string]any{"threadId": "sess1", "input": "go"}); r["status"] != "started" || r["turnId"] != "sess1-t1" {
-		t.Fatalf("turn/start %v", r)
+	if r := c.must("turn/start", map[string]any{"input": "go"}); r["status"] != StatusStarted {
+		t.Fatalf("start %v", r)
 	}
-	if r := c.must("turn/steer", map[string]any{"threadId": "sess1", "input": "also"}); r["status"] != "steered" {
-		t.Fatalf("turn/steer %v", r)
+	h.m.Started(5 * time.Second)
+	if r := c.must("turn/steer", map[string]any{"input": "also"}); r["status"] != StatusSteered {
+		t.Fatalf("steer %v", r)
 	}
-	c.must("turn/background", map[string]any{})
+	c.must("turn/unsteer", map[string]any{"input": "also"})
+	if _, err := c.call("turn/unsteer", map[string]any{"input": "taken"}); err == nil {
+		t.Fatal("taken steer accepted")
+	}
+	if _, err := c.call("turn/background", nil); err == nil {
+		t.Fatal("background without command accepted")
+	}
 	png := "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
 	c.must("turn/start", map[string]any{"input": "look", "images": []map[string]any{{"mimeType": "image/png", "data": png}}})
-	f.mu.Lock()
-	sent, imgs := strings.Join(f.sent, "|"), f.images
-	f.mu.Unlock()
-	if !strings.HasPrefix(sent, "go|also|look\n\n[image 1: 1x1 PNG]") || imgs != 1 {
-		t.Fatalf("sent %q, %d images", sent, imgs)
-	}
 	if _, err := c.call("turn/start", map[string]any{"input": " "}); err == nil {
 		t.Fatal("empty input accepted")
 	}
-
-	c.must("turn/interrupt", map[string]any{})
-	if _, err := c.call("turn/background", map[string]any{}); err == nil || !strings.Contains(err.Message, "no command") {
-		t.Fatalf("turn/background: %v", err)
+	close(gate)
+	next(t, stream, "turn/completed")
+	next(t, stream, "turn/completed")
+	reqs := h.m.Requests()
+	if len(reqs) != 2 || !strings.Contains(reqs[0], "go") || !strings.Contains(reqs[1], "image 1: 1x1 PNG") || strings.Contains(reqs[1], `"content":"also"`) {
+		t.Fatalf("requests %v", reqs)
 	}
-	if r := c.must("thread/setModel", map[string]any{"model": "t/other"}); r["model"] != "t/other" {
-		t.Fatalf("setModel %v", r)
-	}
-	if r := c.must("thread/setEffort", map[string]any{"effort": "high"}); r["effort"] != "high" {
-		t.Fatalf("setEffort %v", r)
-	}
-	if _, err := c.call("thread/start", nil); err == nil {
-		t.Fatal("thread/start should be refused")
-	}
-	// Pending input goes back to the front end to take back.
-	c.must("turn/unsteer", map[string]any{"input": "also", "queued": true})
-	if _, err := c.call("turn/unsteer", map[string]any{"input": "taken"}); err == nil || !strings.Contains(err.Message, "no longer") {
-		t.Fatalf("turn/unsteer of a taken steer: %v", err)
-	}
-	// Rollback goes back as /tree does, and gives the message back.
-	if r := c.must("thread/rollback", map[string]any{}); r["input"] != "go" || r["threadId"] != "sess1" {
-		t.Fatalf("thread/rollback %v", r)
-	}
-	f.mu.Lock()
-	if strings.Join(f.unsteered, ",") != "also true" || f.rolled != 1 {
-		t.Fatalf("unsteered %v, rolled back %d", f.unsteered, f.rolled)
-	}
-	f.mu.Unlock()
-	// Jobs and agents are the session's, read from files.
-	if r := c.must("job/list", map[string]any{}); len(r["jobs"].([]any)) != 0 {
-		t.Fatalf("job/list %v", r)
-	}
-	if r := c.must("agent/list", map[string]any{}); len(r["agents"].([]any)) != 0 {
-		t.Fatalf("agent/list %v", r)
-	}
-	// The frozen web client still polls the old method and envelope.
-	if r := c.must("subagent/list", map[string]any{}); len(r["subagents"].([]any)) != 0 || len(r["agents"].([]any)) != 0 {
-		t.Fatalf("legacy agent/list: %v", r)
-	}
-	if _, ok := init["settings"].(map[string]any)["toolGroups"]; !ok {
-		t.Fatalf("initialize without settings: %v", init)
-	}
-
-	// Prompt answers go to the front end; malformed ones do not.
-	c.must("prompt/answer", map[string]any{"id": "p1", "index": 2})
-	c.must("prompt/answer", map[string]any{"id": "p1", "text": "hi"})
-	c.must("prompt/answer", map[string]any{"id": "p1", "cancel": true})
-	for _, bad := range []map[string]any{{"index": 0}, {"id": "p1"}, {"id": "p9", "cancel": true}} {
-		if _, err := c.call("prompt/answer", bad); err == nil || err.Code != codeInvalidParams {
-			t.Fatalf("prompt/answer %v: %v", bad, err)
+	for _, method := range []string{"job/list", "agent/list", "subagent/list"} {
+		r := c.must(method, nil)
+		key := "jobs"
+		if method != "job/list" {
+			key = "agents"
+		}
+		if len(r[key].([]any)) != 0 {
+			t.Fatalf("%s %v", method, r)
+		}
+		if method == "subagent/list" && len(r["subagents"].([]any)) != 0 {
+			t.Fatal("legacy agents missing")
 		}
 	}
-	f.mu.Lock()
-	if a := f.answers; len(a) != 3 || *a[0].Index != 2 || *a[1].Text != "hi" || !a[2].Cancel {
-		t.Fatalf("answers %+v", a)
+	if _, err := c.call("thread/start", nil); err == nil {
+		t.Fatal("scoped thread/start accepted")
 	}
-	f.mu.Unlock()
-
-	// The front end switched sessions: clients hear it, and the old ID is
-	// refused.
-	f.mu.Lock()
-	f.id = "sess2"
-	f.mu.Unlock()
-	s.Publish("thread/switched", map[string]any{"threadId": "sess2", "previousThreadId": "sess1"})
-	if m := next(t, events, "thread/switched"); m.Params["threadId"] != "sess2" {
-		t.Fatalf("switched %v", m.Params)
+	if r := c.must("thread/setEffort", map[string]any{"effort": "none"}); r["effort"] != "none" {
+		t.Fatalf("effort %v", r)
 	}
-	if _, err := c.call("turn/start", map[string]any{"threadId": "sess1", "input": "x"}); err == nil || !strings.Contains(err.Message, "no longer") {
-		t.Fatalf("old thread: %v", err)
+	if r := c.must("thread/setModel", map[string]any{"model": "fake/m"}); r["model"] != "fake/m" {
+		t.Fatalf("model %v", r)
 	}
-	if _, err := c.call("thread/read", map[string]any{"threadId": "sess1"}); err == nil {
-		t.Fatal("thread/read of the old session")
+	if r := c.must("thread/rollback", nil); !strings.HasPrefix(fmt.Sprint(r["input"]), "look\n\n[image 1:") {
+		t.Fatalf("rollback %v", r)
+	}
+	// Prompts use first-answer arbitration and retain malformed-answer errors.
+	th, _ := h.s.thread(h.id)
+	var pid string
+	th.call(func() error {
+		wire, err := th.openClientPrompt("owner", Prompt{RequestID: "picker", Kind: PromptSelect, Options: []PromptOption{{Label: "yes"}}})
+		pid = wire.ID
+		return err
+	})
+	for _, bad := range []map[string]any{{"index": 0}, {"id": pid}, {"id": "missing", "cancel": true}, {"id": pid, "index": 2}} {
+		if _, err := c.call("prompt/answer", bad); err == nil || err.Code != codeInvalidParams {
+			t.Fatalf("answer %v error %v", bad, err)
+		}
+	}
+	c.must("prompt/answer", map[string]any{"id": pid, "index": 0})
+	if _, err := c.call("prompt/answer", map[string]any{"id": pid, "cancel": true}); err == nil {
+		t.Fatal("second answer accepted")
+	}
+	var other ThreadInfo
+	if err := h.c.Call(context.Background(), "thread/start", nil, &other); err != nil {
+		t.Fatal(err)
+	}
+	selected.Store(other.ID)
+	h.s.Switched(other.ID, h.id)
+	for {
+		m := next(t, stream, "thread/switched")
+		if m.Params["threadId"] == other.ID {
+			break
+		}
+	}
+	for _, method := range []string{"thread/read", "turn/start"} {
+		if _, err := c.call(method, map[string]any{"threadId": h.id, "input": "x"}); err == nil {
+			t.Fatalf("old thread accepted by %s", method)
+		}
 	}
 	stop()
 	if n := <-clients; n != 0 {
-		t.Fatalf("clients after leaving %d", n)
+		t.Fatalf("clients %d", n)
 	}
 }
 
 func TestWebClientServedFromEmbed(t *testing.T) {
-	s := NewLive("test", &fakeLive{id: "s"})
+	s := New("test", t.TempDir())
 	defer s.Close()
 	h := httptest.NewServer(s.HTTPHandler("tok-tok-tok-tok-tok"))
 	defer h.Close()

@@ -2,39 +2,36 @@ package app
 
 import (
 	"context"
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
-	"github.com/sebastianrcnt/atto/core"
 	"github.com/sebastianrcnt/atto/mcp"
 	"github.com/sebastianrcnt/atto/tui"
 )
 
-// mcpApp is a TUI whose project has two servers in its .mcp.json waiting
-// for approval.
+const (
+	mcpAllow    = "Allow"
+	mcpDeny     = "Deny"
+	mcpAllowAll = "Allow all for this project"
+)
+
 func mcpApp(t *testing.T) *App {
-	t.Helper()
-	a := testApp(t)
-	proj := t.TempDir()
-	if err := os.Mkdir(filepath.Join(proj, ".git"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(proj, ".mcp.json"), []byte(`{"mcpServers": {
-		"one": {"command": "run-one", "args": ["--flag"]}, "two": {"command": "run-two"}}}`), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	a.agent.Cwd = proj
-	a.mcp = core.LoadMCP(a.agent)
-	t.Cleanup(func() { a.mcp.Close() })
-	return a
+	cwd, _ := testEnv(t)
+	writeTestFile(t, filepath.Join(cwd, ".git", "HEAD"), "x")
+	writeTestFile(t, filepath.Join(cwd, ".mcp.json"), `{"mcpServers":{"one":{"command":"run-one","args":["--flag"]},"two":{"command":"run-two"}}}`)
+	return startApp(t, cwd)
 }
 
 func statusOf(t *testing.T, a *App, name string) string {
 	t.Helper()
-	infos, _ := a.mcp.Servers(context.Background())
-	for _, in := range infos {
+	var out struct {
+		Servers []mcp.Info `json:"servers"`
+	}
+	if err := a.conn.c.Call(context.Background(), "mcp/list", map[string]any{"threadId": a.threadID}, &out); err != nil {
+		t.Fatal(err)
+	}
+	for _, in := range out.Servers {
 		if in.Name == name {
 			return in.Status
 		}
@@ -43,12 +40,11 @@ func statusOf(t *testing.T, a *App, name string) string {
 	return ""
 }
 
-// choose answers the open approval prompt with choice and returns its title.
 func choose(t *testing.T, a *App, choice string) string {
 	t.Helper()
 	sel, ok := a.modal.(*tui.SelectList)
 	if !ok {
-		t.Fatalf("expected the approval prompt, got %T", a.modal)
+		t.Fatalf("approval prompt %T", a.modal)
 	}
 	for i, it := range sel.Items {
 		if it.Value == choice {
@@ -62,71 +58,71 @@ func choose(t *testing.T, a *App, choice string) string {
 
 func TestMCPApprovalPromptAtSessionStart(t *testing.T) {
 	a := mcpApp(t)
+	within(t, a, "first approval", func() bool { return a.modal != nil })
 	a.ui.Do(func() {
-		a.askMCPApprovals()
 		title := choose(t, a, mcpAllow)
-		if want := "This project wants to start MCP server one: run-one --flag. Allow?"; title != want {
-			t.Errorf("title %q, want %q", title, want)
-		}
-		// The next server is asked right after.
-		if title := choose(t, a, mcpDeny); !strings.Contains(title, "server two: run-two") {
-			t.Errorf("second title %q", title)
-		}
-		if a.modal != nil {
-			t.Errorf("a prompt is still open: %T", a.modal)
+		if !strings.Contains(title, "server one: run-one --flag") {
+			t.Errorf("title %q", title)
 		}
 	})
+	within(t, a, "second approval", func() bool { return a.modal != nil && strings.Contains(plainLines(a.renderInput(100)), "server two") })
+	a.ui.Do(func() { choose(t, a, mcpDeny) })
+	within(t, a, "approvals complete", func() bool { return a.modal == nil })
+	settle(a)
 	if got := statusOf(t, a, "one"); got != mcp.NotStarted {
-		t.Errorf("one = %s, want approved (not started)", got)
+		t.Errorf("one=%s", got)
 	}
 	if got := statusOf(t, a, "two"); got != mcp.DeniedStatus {
-		t.Errorf("two = %s", got)
+		t.Errorf("two=%s", got)
 	}
-	// Not asked again this run.
+	typeLine(a, "/reload")
+	settle(a)
 	a.ui.Do(func() {
-		a.askMCPApprovals()
 		if a.modal != nil {
-			t.Errorf("asked again about %T", a.modal)
+			t.Errorf("asked again: %T", a.modal)
 		}
 	})
 }
 
 func TestMCPApprovalPromptAllowAllAndEsc(t *testing.T) {
 	a := mcpApp(t)
-	a.ui.Do(func() {
-		a.askMCPApprovals()
-		choose(t, a, mcpAllowAll)
-		if a.modal != nil {
-			t.Errorf("allow all still asks: %T", a.modal)
-		}
-	})
+	within(t, a, "approval", func() bool { return a.modal != nil })
+	a.ui.Do(func() { choose(t, a, mcpAllowAll) })
+	within(t, a, "all approved", func() bool { return a.modal == nil })
+	settle(a)
 	if statusOf(t, a, "one") != mcp.NotStarted || statusOf(t, a, "two") != mcp.NotStarted {
-		t.Errorf("allow all: %s, %s", statusOf(t, a, "one"), statusOf(t, a, "two"))
+		t.Fatal("allow all failed")
 	}
-
-	// Esc leaves a server unapproved (it is asked about the next session).
 	b := mcpApp(t)
-	b.ui.Do(func() {
-		b.askMCPApprovals()
-		b.modal.HandleInput("\x1b")
-		b.modal.HandleInput("\x1b")
-		if b.modal != nil {
-			t.Errorf("esc did not close the prompts: %T", b.modal)
-		}
-	})
+	within(t, b, "first approval", func() bool { return b.modal != nil })
+	key(b, "\x1b")
+	within(t, b, "second approval", func() bool { return b.modal != nil && strings.Contains(plainLines(b.renderInput(100)), "server two") })
+	key(b, "\x1b")
+	within(t, b, "no approval", func() bool { return b.modal == nil })
+	settle(b)
 	if got := statusOf(t, b, "one"); got != mcp.NeedsApproval {
-		t.Errorf("after esc: %s", got)
+		t.Errorf("after Esc %s", got)
 	}
 }
 
 func TestMCPApprovalPromptWaitsForAFreeScreen(t *testing.T) {
-	a := mcpApp(t)
+	cwd, _ := testEnv(t)
+	a := startApp(t, cwd)
+	writeTestFile(t, filepath.Join(cwd, ".git", "HEAD"), "x")
+	writeTestFile(t, filepath.Join(cwd, ".mcp.json"), `{"mcpServers":{"one":{"command":"run-one"}}}`)
+	var other *tui.SelectList
 	a.ui.Do(func() {
-		other := &tui.SelectList{Title: "something else"}
+		other = &tui.SelectList{Title: "something else", OnCancel: a.closeModal}
 		a.openModal(other)
-		a.askMCPApprovals()
-		if a.modal != tui.Component(other) {
-			t.Errorf("the approval prompt replaced another dialog: %T", a.modal)
-		}
+		a.rpcErr("thread/reload", nil)
 	})
+	settle(a)
+	a.ui.Do(func() {
+		if a.modal != tui.Component(other) {
+			t.Fatalf("approval replaced another dialog: %T", a.modal)
+		}
+		a.closeModal()
+	})
+	within(t, a, "deferred approval", func() bool { return a.modal != nil })
+	key(a, "\x1b")
 }

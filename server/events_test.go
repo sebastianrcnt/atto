@@ -79,7 +79,8 @@ func publishN(s *Server, n int) {
 // Last-Event-ID set to the last event it got: that one wins, or every
 // delta since the query's ID would be applied twice.
 func TestEventsHeaderWinsOverQuery(t *testing.T) {
-	s := NewLive("test", &fakeLive{id: "s1"})
+	s := New("test", t.TempDir())
+	t.Cleanup(s.Close)
 	h := httptest.NewServer(s.HTTPHandler("tok-1234567890123456"))
 	defer h.Close()
 	publishN(s, 10)
@@ -99,7 +100,8 @@ func TestEventsHeaderWinsOverQuery(t *testing.T) {
 // A client resuming from events the server no longer knows (it restarted,
 // or the client was away too long) is told to read its thread again.
 func TestEventsReset(t *testing.T) {
-	s := NewLive("test", &fakeLive{id: "s1"})
+	s := New("test", t.TempDir())
+	t.Cleanup(s.Close)
 	h := httptest.NewServer(s.HTTPHandler("tok-1234567890123456"))
 	defer h.Close()
 	s.events.keep = 5

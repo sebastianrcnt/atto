@@ -223,6 +223,7 @@ func (t *thread) onEvent(ev any) {
 		t.usage.CachedTokens += e.Usage.CachedTokens
 		t.usage.CompletionTokens += e.Usage.CompletionTokens
 		t.total.Add(e.Usage)
+		t.total.LastCost = t.model().Model.Cost
 		t.turn.InputTokens += max(0, e.Usage.PromptTokens-e.Usage.CachedTokens-e.Usage.CacheWriteTokens)
 		t.turn.OutputTokens += e.Usage.CompletionTokens
 		t.ctx = e.Context

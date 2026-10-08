@@ -3,8 +3,6 @@ package app
 import (
 	"encoding/json"
 	"fmt"
-	"github.com/sebastianrcnt/atto/core"
-	"maps"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -16,6 +14,7 @@ import (
 
 	"github.com/sebastianrcnt/atto/ai"
 	"github.com/sebastianrcnt/atto/config"
+	"github.com/sebastianrcnt/atto/core"
 )
 
 // cmdDebug saves a heap profile, the goroutines and the memory statistics
@@ -23,14 +22,30 @@ import (
 // to read, and the latest model requests under requests/. Nothing leaves
 // the machine.
 func (a *App) cmdDebug(string) {
-	dir, err := writeDebug(filepath.Join(config.Dir(), "debug", time.Now().Format("20060102-150405")), a.models.MetadataDiagnostics()...)
-	if err != nil {
-		a.notice("debug: %v", err)
-		return
-	}
-	var m runtime.MemStats
-	runtime.ReadMemStats(&m)
-	a.notice("Saved a heap profile to %s\n%s", core.ShortPath(dir), memSummary(&m))
+	a.rpc("thread/debugRequests", nil, func(raw json.RawMessage, err error) {
+		if err != nil {
+			a.errorNotice(err)
+			return
+		}
+		var history struct {
+			Sets map[string][]ai.SentRequest `json:"sets"`
+		}
+		if err := json.Unmarshal(raw, &history); err != nil {
+			a.errorNotice(err)
+			return
+		}
+		dir, err := writeDebug(filepath.Join(config.Dir(), "debug", time.Now().Format("20060102-150405")), a.models.MetadataDiagnostics()...)
+		if err == nil {
+			err = writeRequestSets(filepath.Join(dir, "requests"), history.Sets)
+		}
+		if err != nil {
+			a.notice("debug: %v", err)
+			return
+		}
+		var m runtime.MemStats
+		runtime.ReadMemStats(&m)
+		a.notice("Saved a heap profile to %s\n%s", core.ShortPath(dir), memSummary(&m))
+	})
 }
 
 // writeDebug writes profiles, memory figures and metadata probe failures to dir.
@@ -57,9 +72,6 @@ func writeDebug(dir string, metadata ...string) (string, error) {
 	if err := write("heap.pprof", func(f *os.File) error { return pprof.Lookup("heap").WriteTo(f, 0) }); err != nil {
 		return "", err
 	}
-	if err := writeRequests(filepath.Join(dir, "requests")); err != nil {
-		return "", err
-	}
 	if err := write("goroutines.txt", func(f *os.File) error { return pprof.Lookup("goroutine").WriteTo(f, 1) }); err != nil {
 		return "", err
 	}
@@ -81,14 +93,9 @@ func memSummary(m *runtime.MemStats) string {
 		mb(m.HeapInuse), mb(m.HeapSys), mb(m.Sys), runtime.NumGoroutine(), m.NumGC)
 }
 
-// writeRequests saves the latest model requests (recent-N.json) and the
-// pinned ones (compaction-N.json: the requests around the last
-// compaction), and index.txt, which says for each request whether its
-// messages continue the previous request's: where they first differ is
-// where a server's prefix cache stops helping.
-func writeRequests(dir string) error {
-	sets := map[string][]ai.SentRequest{"recent": ai.RecentRequests()}
-	maps.Copy(sets, ai.PinnedRequests())
+// writeRequestSets saves recent and pinned model requests fetched from the
+// runtime, with index.txt describing where consecutive prefixes diverge.
+func writeRequestSets(dir string, sets map[string][]ai.SentRequest) error {
 	names := make([]string, 0, len(sets))
 	for k := range sets {
 		names = append(names, k)

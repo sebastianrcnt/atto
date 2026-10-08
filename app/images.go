@@ -75,18 +75,3 @@ func attachedImages(att []tui.Attachment) []provider.Image {
 	}
 	return out
 }
-
-// submitWithImages sends a prompt with images. A running turn only takes
-// text steers, so while busy it is queued as the next turn instead.
-func (a *App) submitWithImages(text string, att []tui.Attachment) {
-	if !a.model().Model.Images() {
-		a.imagesUnsupported()
-		a.restoreToEditor([]string{text}, att...)
-		return
-	}
-	if a.turns.Busy {
-		a.enqueue(text, att)
-		return
-	}
-	a.startTurn(text, att)
-}

@@ -1,8 +1,6 @@
 package app
 
 import (
-	"context"
-	"errors"
 	"strings"
 	"time"
 
@@ -14,23 +12,15 @@ import (
 
 // Branch summaries, after pi: picking an entry in /tree that leaves part
 // of the conversation behind asks "Summarize branch?" first. With a
-// summary, the current model writes one (agent.SummarizeBranch; Esc
-// cancels it and the tree opens again) and it is recorded where the leaf
-// moves to, as a "branch_summary" entry the model sees on the new branch.
+// summary, the runtime has the current model write one (Esc cancels it and
+// the tree opens again) and records it where the leaf moves to, as a
+// "branch_summary" entry the model sees on the new branch.
 // settings.json "branchSummary": {"skipPrompt": true} never asks and goes
 // back without one.
 
 // summaryRequest asks for a summary of the branch being left;
 // instructions are the user's own focus for it ("" for none).
 type summaryRequest struct{ instructions string }
-
-// summaryRun is a branch summary being written: where the move goes once
-// it is done, and the summary when it is.
-type summaryRun struct {
-	id, leaf, text string // as for finishMove
-	start          time.Time
-	summary        string
-}
 
 // Summary choices, in pi's order and wording.
 const (
@@ -101,43 +91,6 @@ type labelModal struct{ *labelInput }
 func (m labelModal) Render(width int) []string {
 	rule := tui.Dim(strings.Repeat("─", width))
 	return append(append([]string{rule}, m.labelInput.Render(width)...), rule)
-}
-
-// summarizeBranch has the model summarize left, the entries a move to
-// leaf leaves behind, then moves (afterBranchSummary). The agent holds
-// the conversation on the branch being left, as the summary needs.
-func (a *App) summarizeBranch(id, leaf, text string, left []session.Entry, instructions string) {
-	run := &summaryRun{id: id, leaf: leaf, text: text, start: time.Now()}
-	a.summary = run
-	a.runKind = "branchSummary"
-	a.start("Summarizing branch", func(ctx context.Context, emit func(any)) error {
-		s, err := a.agent.SummarizeBranch(ctx, left, instructions, emit)
-		run.summary = s // read on the UI goroutine once the run is over
-		return err
-	})
-}
-
-// afterBranchSummary finishes the move once the summary is written, and
-// reports whether it did. Canceled, the tree opens again (as in pi) unless
-// another move or a resume is waiting; failed, the leaf stays.
-func (a *App) afterBranchSummary(err error) bool {
-	run := a.summary
-	a.summary = nil
-	if run == nil {
-		return false
-	}
-	if err != nil {
-		if a.pendingTree == "" && a.pendingResume == "" && errors.Is(err, context.Canceled) {
-			a.cmdTree("")
-		}
-		return false
-	}
-	entries := a.loadSession()
-	a.finishMove(entries, run.id, run.leaf, run.text, &session.Entry{
-		Summary:   run.summary,
-		ElapsedMs: time.Since(run.start).Milliseconds(),
-	})
-	return true
 }
 
 // summaryBlock shows a branch summary: streaming while the model writes

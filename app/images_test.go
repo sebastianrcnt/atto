@@ -12,27 +12,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sebastianrcnt/atto/agent"
 	"github.com/sebastianrcnt/atto/config"
 	"github.com/sebastianrcnt/atto/images"
 	"github.com/sebastianrcnt/atto/provider"
 	"github.com/sebastianrcnt/atto/tui"
 )
-
-type nullTerm struct{}
-
-func (nullTerm) Start(func(string), func()) error { return nil }
-func (nullTerm) Stop()                            {}
-func (nullTerm) Write(string)                     {}
-func (nullTerm) Size() (int, int)                 { return 80, 24 }
-
-func testApp(t *testing.T, input ...string) *App {
-	t.Setenv("ATTO_DIR", t.TempDir())
-	model := config.ModelRef{ProviderName: "t", Model: config.Model{ID: "m", Input: input}}
-	a := &App{ui: tui.New(nullTerm{}), agent: agent.New(model, "", t.TempDir()), tools: map[string]*toolBlock{}, quit: make(chan struct{})}
-	a.build()
-	return a
-}
 
 func writePNG(t *testing.T, w, h int) string {
 	var b bytes.Buffer
@@ -89,13 +73,8 @@ func TestClipboardKeyAttachesImage(t *testing.T) {
 		t.Fatalf("editor %q", got)
 	}
 
-	// Switching to a text-only model: submitting keeps the draft and warns.
-	a.agent.SetModel(config.ModelRef{ProviderName: "t", Model: config.Model{ID: "text-only"}})
-	a.editor.HandleInput("\r")
-	if len(a.editor.Attachments()) != 2 || a.turns.Busy {
-		t.Fatalf("draft not kept: %q busy %v", a.editor.Text(), a.turns.Busy)
-	}
-	// And Ctrl+V does not read the clipboard.
+	// A text-only model: Ctrl+V does not read the clipboard.
+	a.models = config.ModelsFile{Providers: map[string]config.Provider{"t": {Models: []config.Model{{ID: "m"}}}}}
 	before := calls.Load()
 	a.onInput("\x16")
 	time.Sleep(20 * time.Millisecond)

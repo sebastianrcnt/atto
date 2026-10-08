@@ -409,9 +409,11 @@ func TestToolGroupCache(t *testing.T) {
 // TestToolGroupResume: a session saved with a run of calls looks the same
 // resumed as it did live.
 func TestToolGroupResume(t *testing.T) {
-	a := treeApp(t)
+	a := testApp(t)
+	w := session.New(a.cwd)
+	t.Cleanup(w.Close)
 	a.tr().Event(transcript.Input{Text: "look around"})
-	a.sess.Append(session.Entry{Type: session.TypeMessage, Message: &provider.Message{Role: "user", Content: "look around"}})
+	w.Append(session.Entry{Type: session.TypeMessage, Message: &provider.Message{Role: "user", Content: "look around"}})
 	for i, c := range exploreCalls {
 		id := fmt.Sprintf("call%d", i)
 		// Reasoning between the calls, hidden in the group.
@@ -421,14 +423,14 @@ func TestToolGroupResume(t *testing.T) {
 			a.tr().Event(agent.ReasoningDelta{Text: thought})
 		}
 		args, _ := json.Marshal(agent.BashArgs{Description: c.desc, Command: c.cmd})
-		a.sess.Append(session.Entry{Type: session.TypeMessage, Message: &provider.Message{Role: "assistant", ReasoningContent: thought,
+		w.Append(session.Entry{Type: session.TypeMessage, Message: &provider.Message{Role: "assistant", ReasoningContent: thought,
 			ToolCalls: []provider.ToolCall{{ID: id, Type: "function", Function: provider.FunctionCall{Name: "bash", Arguments: string(args)}}}}})
 		runCalls(a, id, []call{c})
 		content := c.out
 		if c.exit != 0 {
 			content = fmt.Sprintf("[exit code %d]", c.exit) // the failing call has no output
 		}
-		a.sess.Append(session.Entry{Type: session.TypeMessage, Message: &provider.Message{Role: "tool", ToolCallID: id, Content: content},
+		w.Append(session.Entry{Type: session.TypeMessage, Message: &provider.Message{Role: "tool", ToolCallID: id, Content: content},
 			Tool: &session.ToolMeta{Description: c.desc, ExitCode: c.exit, DurationMs: c.dur.Milliseconds()}})
 	}
 	// From the prompt on: the header and the loaded block are not part of
@@ -438,8 +440,11 @@ func TestToolGroupResume(t *testing.T) {
 		return out[strings.Index(out, "› look around"):]
 	}
 	live := transcriptText()
-	a.ui.Body.Clear()
-	a.replay(session.Active(a.loadSession()))
+	_, entries, err := session.Load(w.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.replay(session.Active(entries))
 	if got := transcriptText(); got != live {
 		t.Fatalf("resumed differs\nlive:\n%s\nresumed:\n%s", live, got)
 	}
@@ -450,7 +455,7 @@ func TestToolGroupResume(t *testing.T) {
 // the running call's description, which its block shows.
 func TestActivityWhileCallRuns(t *testing.T) {
 	a := testApp(t)
-	a.turns.Busy, a.runStart, a.activity = true, time.Now(), "Thinking"
+	a.busy, a.runStart, a.activity = true, time.Now(), "Thinking"
 	a.onEvent(agent.ToolDraft{Index: 0, Args: agent.BashArgs{Description: "Wait for the full regression"}})
 	a.onEvent(agent.ToolStart{ID: "x", Args: agent.BashArgs{Description: "Wait for the full regression", Command: "sleep 1"}, Timeout: time.Minute})
 	got := plainLines(a.renderActivity(100))

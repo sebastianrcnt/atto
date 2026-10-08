@@ -5,33 +5,21 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/sebastianrcnt/atto/config"
-	"github.com/sebastianrcnt/atto/core"
 	"github.com/sebastianrcnt/atto/events"
 	"github.com/sebastianrcnt/atto/tui"
 )
 
-func writeTestFile(t *testing.T, path, text string) {
-	t.Helper()
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(path, []byte(text), 0o644); err != nil {
-		t.Fatal(err)
-	}
-}
-
-// loadedApp is a treeApp whose ATTO_DIR and project have AGENTS files,
-// skills and hooks.
-// The home directory is <tmp>, ATTO_DIR <tmp>/.atto and the project
-// <tmp>/proj; its model t/m is in models.json.
-func loadedApp(t *testing.T) *App {
+// loadedEnv is a home whose ATTO_DIR and project have AGENTS files,
+// skills and hooks: the home directory is <tmp>, ATTO_DIR <tmp>/.atto and
+// the project <tmp>/proj; its model t/m (the default) is served at url.
+func loadedEnv(t *testing.T, url string) (cwd string) {
 	t.Helper()
 	home, _ := filepath.EvalSymlinks(t.TempDir())
 	t.Setenv("HOME", home)
@@ -43,43 +31,23 @@ func loadedApp(t *testing.T) *App {
 	writeTestFile(t, filepath.Join(dir, "AGENTS.md"), "Global rules.")
 	writeTestFile(t, filepath.Join(dir, "skills", "pdf", "SKILL.md"), "---\nname: pdf\ndescription: Work with PDFs\n---\nx")
 	writeTestFile(t, filepath.Join(dir, "skills", "broken", "SKILL.md"), "---\nname: broken\n---\nx")
-	writeTestFile(t, filepath.Join(dir, "settings.json"), `{"skills":{"disabled":["atto-extensions"]},"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"./check.sh"}]}]}}`)
+	writeTestFile(t, filepath.Join(dir, "settings.json"), `{"defaultProvider":"t","defaultModel":"m","skills":{"disabled":["atto-extensions"]},"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"./check.sh"}]}]}}`)
 	writeTestFile(t, filepath.Join(cwd, ".git", "HEAD"), "x")
 	writeTestFile(t, filepath.Join(cwd, "AGENTS.md"), "Project rules.")
 	writeTestFile(t, filepath.Join(cwd, "CLAUDE.md"), "Claude rules.")
-	setModels(t, "http://127.0.0.1:9/v1")
-	models, err := config.LoadModels()
-	if err != nil {
-		t.Fatal(err)
-	}
-	ref, _ := models.Find("t", "m")
-	ag, hk, src, err := core.NewAgentSources(cwd, ref, "medium")
-	if err != nil {
-		t.Fatal(err)
-	}
-	a := &App{ui: tui.New(nullTerm{}), models: models, agent: ag, hooks: hk, hookSrc: src,
-		modelFrom: core.FromSettings, effortFrom: core.FromDefault,
-		tools: map[string]*toolBlock{}, cwd: cwd, quit: make(chan struct{})}
-	a.build()
-	a.ui.Do(func() { a.newSession("") })
-	t.Cleanup(a.closeSession)
-	return a
+	setModels(t, url)
+	return cwd
+}
+
+// loadedApp is a terminal on a session of loadedEnv, its model down.
+func loadedApp(t *testing.T) *App {
+	t.Helper()
+	return startApp(t, loadedEnv(t, "http://127.0.0.1:9/v1"))
 }
 
 // setModels configures the test model t/m at url.
 func setModels(t *testing.T, url string) {
 	writeTestFile(t, config.ModelsPath(), `{"providers":{"t":{"baseUrl":"`+url+`","models":[{"id":"m","contextWindow":100000}]}}}`)
-}
-
-// useServer points the app's model at url, through models.json so a
-// reload keeps it.
-func useServer(t *testing.T, a *App, url string) {
-	setModels(t, url)
-	models, _ := config.LoadModels()
-	ref, _ := models.Find("t", "m")
-	a.models = models
-	a.agent.SetModel(ref)
-	a.ui.Do(func() { a.loaded = a.collect() })
 }
 
 // loadedBlocks returns the transcript's loaded blocks.
@@ -97,14 +65,6 @@ func loadedBlocks(a *App) []*loadedBlock {
 	return out
 }
 
-func plainLines(lines []string) string {
-	var out []string
-	for _, l := range lines {
-		out = append(out, strings.TrimRight(tui.StripEscapes(l), " "))
-	}
-	return strings.Join(out, "\n")
-}
-
 func TestLoadedBlockAtSessionStart(t *testing.T) {
 	a := loadedApp(t)
 	bs := loadedBlocks(a)
@@ -116,12 +76,13 @@ func TestLoadedBlockAtSessionStart(t *testing.T) {
 	t.Logf("collapsed at 80:\n%s", short)
 	for _, s := range []string{
 		"◇ Loaded · click or ctrl+t for details",
-		"AGENTS.md  ~/.atto/AGENTS.md (13 B), ~/proj/AGENTS.md (14 B); 1 skipped",
-		"Skills     1: pdf; 1 skipped",
-		"Hooks      1: PreToolUse(Bash) · from ~/.atto/settings.json",
-		"Model      m · medium (model from ~/.atto/settings.json, effort default)",
-		"Config     ~/.atto/settings.json, ~/.atto/models.json",
-		"Prompt     ", "system prompt: base, environment, 2 AGENTS files, 1 skill",
+		"AGENTS.md   ~/.atto/AGENTS.md (13 B), ~/proj/AGENTS.md (14 B); 1 skipped",
+		"Skills      1: pdf; 1 skipped",
+		"Hooks       1: PreToolUse(Bash) · from ~/.atto/settings.json",
+		"Extensions  2: autorename, diff",
+		"Model       m · medium (model from ~/.atto/settings.json, effort default)",
+		"Config      ~/.atto/settings.json, ~/.atto/models.json",
+		"Prompt      ", "system prompt: base, environment, 2 AGENTS files, 1 skill",
 	} {
 		if !strings.Contains(filepath.ToSlash(short), s) {
 			t.Errorf("collapsed block lacks %q", s)
@@ -132,7 +93,7 @@ func TestLoadedBlockAtSessionStart(t *testing.T) {
 			t.Errorf("line wider than 80: %q", l)
 		}
 	}
-	if n := len(b.Render(80)); n != 7 {
+	if n := len(b.Render(80)); n != 8 {
 		t.Errorf("collapsed: a header and one line per kind, got %d lines", n)
 	}
 
@@ -166,20 +127,18 @@ func TestLoadedBlockAtSessionStart(t *testing.T) {
 
 func TestReloadCommand(t *testing.T) {
 	a := loadedApp(t)
-	before := a.agent.SystemPrompt()
-	a.ui.Do(func() { a.runCommand("/reload") })
+	typeLine(a, "/reload")
+	within(t, a, "the reload block", func() bool { return len(loadedBlocksLocked(a)) == 2 })
 	bs := loadedBlocks(a)
-	if len(bs) != 2 {
-		t.Fatalf("/reload shows the block again: %d", len(bs))
-	}
 	got := plainLines(bs[1].Render(80))
-	if !strings.Contains(got, "◇ Reloaded · nothing changed") || !strings.Contains(got, "system prompt unchanged") || a.agent.SystemPrompt() != before {
+	if !strings.Contains(got, "◇ Reloaded · nothing changed") || !strings.Contains(got, "system prompt unchanged") {
 		t.Fatalf("unchanged reload:\n%s", got)
 	}
 
 	writeTestFile(t, filepath.Join(a.cwd, "AGENTS.md"), "Project rules, revised.")
-	writeTestFile(t, filepath.Join(config.Dir(), "settings.json"), `{"skills":{"disabled":["atto-extensions"]},"doubleEscapeAction":"none"}`)
-	a.ui.Do(func() { a.runCommand("/reload") })
+	writeTestFile(t, filepath.Join(config.Dir(), "settings.json"), `{"defaultProvider":"t","defaultModel":"m","skills":{"disabled":["atto-extensions"]},"doubleEscapeAction":"none"}`)
+	typeLine(a, "/reload")
+	within(t, a, "the second reload block", func() bool { return len(loadedBlocksLocked(a)) == 3 })
 	bs = loadedBlocks(a)
 	got = plainLines(bs[len(bs)-1].Render(80))
 	t.Logf("after a change, at 80:\n%s", got)
@@ -189,18 +148,25 @@ func TestReloadCommand(t *testing.T) {
 		"removed  hook PreToolUse [Bash]: ./check.sh",
 		"changed  config ~/.atto/settings.json",
 		"system prompt changed; the next request re-reads the prompt",
-		"Hooks      none",
+		"Hooks       none",
 	} {
 		if !strings.Contains(filepath.ToSlash(got), s) {
 			t.Errorf("reload block lacks %q", s)
 		}
 	}
-	if p := a.agent.SystemPrompt(); p == before || !strings.Contains(p, "Project rules, revised.") {
-		t.Fatal("the system prompt was not rebuilt")
+	within(t, a, "the terminal's settings", func() bool { return a.escAction == "none" })
+}
+
+func loadedBlocksLocked(a *App) []*loadedBlock {
+	var out []*loadedBlock
+	for _, c := range a.ui.Body.Children {
+		if g, ok := c.(gap); ok {
+			if b, ok := g.Component.(*loadedBlock); ok {
+				out = append(out, b)
+			}
+		}
 	}
-	if a.hooks != nil || a.agent.Hooks != nil || a.escAction != "none" {
-		t.Fatalf("hooks and settings not taken over: %v %q", a.hooks, a.escAction)
-	}
+	return out
 }
 
 // reloadServer is a chat completions server: the first request is
@@ -244,21 +210,17 @@ func reloadServer(t *testing.T, release chan struct{}) (url string, got func() (
 // boundary: the following request has the new system prompt and the
 // reload's report.
 func TestAttoReloadBetweenSteps(t *testing.T) {
-	a := loadedApp(t)
 	release := make(chan struct{})
 	url, got, first := reloadServer(t, release)
-	useServer(t, a, url)
-	a.ui.Do(func() { a.startTurn("edit AGENTS.md and reload", nil) })
+	a := startApp(t, loadedEnv(t, url))
+	typeLine(a, "edit AGENTS.md and reload")
 	<-first // the request is in flight: its prompt must not change under it
 
 	writeTestFile(t, filepath.Join(a.cwd, "AGENTS.md"), "Rules the agent just wrote.")
-	if err := events.RequestReload(a.sess.ID); err != nil { // what atto reload does
+	if err := events.RequestReload(a.threadID); err != nil { // what atto reload does
 		t.Fatal(err)
 	}
-	a.pollInbox(a.sess.ID)
-	if a.agent.SystemPrompt() == "" || strings.Contains(a.agent.SystemPrompt(), "Rules the agent just wrote.") {
-		t.Fatal("the reload must wait for the step boundary")
-	}
+	time.Sleep(700 * time.Millisecond) // the runtime's inbox tick
 	close(release)
 	waitIdle(t, a)
 
@@ -280,13 +242,12 @@ func TestAttoReloadBetweenSteps(t *testing.T) {
 // With no turn running, `atto reload` applies at once and its report starts
 // a turn, like any event.
 func TestAttoReloadWhenIdle(t *testing.T) {
-	a := loadedApp(t)
 	url, got, _ := reloadServer(t, nil)
-	useServer(t, a, url)
-	if err := events.RequestReload(a.sess.ID); err != nil {
+	a := startApp(t, loadedEnv(t, url))
+	if err := events.RequestReload(a.threadID); err != nil {
 		t.Fatal(err)
 	}
-	a.pollInbox(a.sess.ID)
+	within(t, a, "the reload's turn", func() bool { _, lasts := got(); return len(lasts) == 1 })
 	waitIdle(t, a)
 	_, lasts := got()
 	if len(lasts) != 1 || lasts[0] != events.Prefix+"Reload applied: nothing changed. The system prompt is unchanged." {

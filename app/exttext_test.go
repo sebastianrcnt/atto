@@ -8,9 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/sebastianrcnt/atto/agent"
-	"github.com/sebastianrcnt/atto/config"
-	"github.com/sebastianrcnt/atto/core"
+	"github.com/sebastianrcnt/atto/provider/providertest"
 	"github.com/sebastianrcnt/atto/session"
 	"github.com/sebastianrcnt/atto/tui"
 )
@@ -24,39 +22,31 @@ func gitIn(t *testing.T, dir string, args ...string) {
 	}
 }
 
-// diffApp is an app whose project is a git repository with a modified, a
-// staged and an untracked file, running only the built-in extensions.
-func diffApp(t *testing.T) *App {
+// diffApp is a terminal whose project is a git repository with a
+// modified, a staged and an untracked file, running only the built-in
+// extensions; the model is scripted.
+func diffApp(t *testing.T, script ...providertest.Reply) (*App, *providertest.Model) {
 	t.Helper()
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git is not installed")
 	}
-	t.Setenv("GIT_CONFIG_GLOBAL", filepath.Join(t.TempDir(), "gitconfig"))
+	t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
 	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
-	a := loadedApp(t)
-	if err := os.RemoveAll(filepath.Join(a.cwd, ".git")); err != nil { // loadedApp's stand-in
+	m := providertest.New(t, script...)
+	cwd := loadedEnv(t, m.URL)
+	if err := os.RemoveAll(filepath.Join(cwd, ".git")); err != nil { // loadedEnv's stand-in
 		t.Fatal(err)
 	}
-	writeTestFile(t, filepath.Join(a.cwd, "main.go"), "package main\n\nfunc main() {\n\tprintln(\"hi\")\n}\n")
-	writeTestFile(t, filepath.Join(a.cwd, "util.go"), "package main\n")
-	gitIn(t, a.cwd, "init", "-q")
-	gitIn(t, a.cwd, "add", ".")
-	gitIn(t, a.cwd, "commit", "-q", "-m", "init")
-	writeTestFile(t, filepath.Join(a.cwd, "main.go"), "package main\n\nfunc main() {\n\tprintln(\"hello\")\n\tprintln(\"bye\")\n}\n")
-	writeTestFile(t, filepath.Join(a.cwd, "util.go"), "package main\n\nfunc util() {}\n")
-	gitIn(t, a.cwd, "add", "util.go")
-	writeTestFile(t, filepath.Join(a.cwd, "notes.txt"), "todo\n")
-
-	a.ext = core.LoadExtensions(a.agent, newTUIHost(a))
-	t.Cleanup(func() {
-		a.ext.Close()
-		a.doQuit()
-	})
-	a.ui.Do(func() {
-		a.newSession("")
-		a.sessionStartHook("startup")
-	})
-	return a
+	writeTestFile(t, filepath.Join(cwd, "main.go"), "package main\n\nfunc main() {\n\tprintln(\"hi\")\n}\n")
+	writeTestFile(t, filepath.Join(cwd, "util.go"), "package main\n")
+	gitIn(t, cwd, "init", "-q")
+	gitIn(t, cwd, "add", ".")
+	gitIn(t, cwd, "commit", "-q", "-m", "init")
+	writeTestFile(t, filepath.Join(cwd, "main.go"), "package main\n\nfunc main() {\n\tprintln(\"hello\")\n\tprintln(\"bye\")\n}\n")
+	writeTestFile(t, filepath.Join(cwd, "util.go"), "package main\n\nfunc util() {}\n")
+	gitIn(t, cwd, "add", "util.go")
+	writeTestFile(t, filepath.Join(cwd, "notes.txt"), "todo\n")
+	return startApp(t, cwd), m
 }
 
 // textBlocks are the transcript's blocks of extension text.
@@ -86,8 +76,8 @@ func lastText(t *testing.T, a *App, n int) *extTextBlock {
 }
 
 func TestDiffCommandShowsABlock(t *testing.T) {
-	a := diffApp(t)
-	a.ui.Do(func() { a.runCommand("/diff") })
+	a, _ := diffApp(t)
+	typeLine(a, "/diff")
 	b := lastText(t, a, 1)
 
 	var collapsed, expanded, raw string
@@ -137,48 +127,30 @@ func TestDiffCommandShowsABlock(t *testing.T) {
 }
 
 func TestDiffArgumentsInTUI(t *testing.T) {
-	a := diffApp(t)
-	a.ui.Do(func() { a.runCommand("/diff --staged") })
+	a, _ := diffApp(t)
+	typeLine(a, "/diff --staged")
 	b := lastText(t, a, 1)
 	if !strings.HasPrefix(b.text, "1 file changed, +2 -0\n") || strings.Contains(b.text, "main.go") {
 		t.Errorf("--staged:\n%s", b.text)
 	}
-	a.ui.Do(func() { a.runCommand("/diff main.go") })
+	typeLine(a, "/diff main.go")
 	b = lastText(t, a, 2)
 	if b.title != "git diff main.go" || !strings.HasPrefix(b.text, "1 file changed, +2 -1") || strings.Contains(b.text, "util.go") {
 		t.Errorf("path:\n%s", b.text)
 	}
-	// Not a repository: a notice, no block.
-	plain := t.TempDir()
-	a.ui.Do(func() { a.cwd = plain })
-	a.ext.Close()
-	a.agent.Cwd = plain
-	a.ext = core.LoadExtensions(a.agent, newTUIHost(a))
-	a.ui.Do(func() { a.runCommand("/diff") })
-	within(t, a, "the notice", func() bool { return strings.Contains(bodyText(a), "[diff] Not a git repository:") })
-	if n := len(textBlocks(a)); n != 2 {
-		t.Errorf("%d blocks", n)
-	}
 }
 
 func TestDiffBlockIsDisplayOnlyAndSurvivesResume(t *testing.T) {
-	a := diffApp(t)
-	srv := newMainServer(t, reply{"", "first"}, reply{"", "second"})
-	useMain(t, a, srv, "")
-	runTurn(t, a, "q1")
-	a.ui.Do(func() { a.runCommand("/diff") })
+	a, m := diffApp(t, providertest.Reply{Text: "first"}, providertest.Reply{Text: "second"})
+	send(t, a, "q1")
+	typeLine(a, "/diff")
 	b := lastText(t, a, 1)
 	var shown string
 	a.ui.Do(func() { shown = plainLines(b.Render(80)) })
-	runTurn(t, a, "q2")
+	send(t, a, "q2")
 
 	// The model's context has none of it.
-	for _, m := range a.agent.Messages() {
-		if strings.Contains(m.Content, "diff --git") || strings.Contains(m.Content, "files changed") {
-			t.Errorf("message %q reached the model", m.Content)
-		}
-	}
-	reqs := srv.requests()
+	reqs := m.Requests()
 	if len(reqs) != 2 {
 		t.Fatalf("%d requests", len(reqs))
 	}
@@ -193,7 +165,7 @@ func TestDiffBlockIsDisplayOnlyAndSurvivesResume(t *testing.T) {
 	}
 
 	// Saved as one ext_text entry.
-	_, entries, err := session.Load(a.sess.Path)
+	_, entries, err := session.Load(a.sessPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -209,12 +181,7 @@ func TestDiffBlockIsDisplayOnlyAndSurvivesResume(t *testing.T) {
 
 	// A resumed session shows the same block, in the same place, and the
 	// model's context is still without it.
-	r := &App{ui: tui.New(nullTerm{}), agent: agent.New(config.ModelRef{ProviderName: "t", Model: config.Model{ID: "m"}}, "", a.cwd),
-		cwd: a.cwd, quit: make(chan struct{})}
-	r.build()
-	r.newSession("")
-	r.resume(a.sess.Path)
-	t.Cleanup(r.closeSession)
+	r := reopen(t, a)
 	bs := textBlocks(r)
 	if len(bs) != 1 {
 		t.Fatalf("%d blocks after resume", len(bs))
@@ -235,11 +202,6 @@ func TestDiffBlockIsDisplayOnlyAndSurvivesResume(t *testing.T) {
 	}
 	if fmt.Sprint(order) != "[user diff user]" {
 		t.Errorf("order %v", order)
-	}
-	for _, m := range r.agent.Messages() {
-		if strings.Contains(m.Content, "diff --git") {
-			t.Errorf("resumed context has %q", m.Content)
-		}
 	}
 }
 

@@ -1,6 +1,7 @@
 package app
 
 import (
+	"encoding/json"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -20,8 +21,9 @@ func TestContextModeResume(t *testing.T) {
 	m := a.model()
 	m.Model.ContextWindow, m.Model.MaxTokens = 1050000, 128000
 	m.Model.Cost = &ai.ModelCost{Input: 0.1, Tiers: []ai.ModelCostTier{{InputTokensAbove: 272000, Input: 0.2}}}
-	a.agent.SetModel(m)
-	a.cmdContext("")
+	setRuntimeModel(t, a, m)
+	a.ui.Do(func() { a.cmdContext("") })
+	settle(a)
 	block := a.ui.Body.Children[len(a.ui.Body.Children)-1]
 	text := tui.StripEscapes(strings.Join(block.Render(250), "\n"))
 	for _, want := range []string{"244.8k", "costs more above 272.0k", "/context long"} {
@@ -30,12 +32,13 @@ func TestContextModeResume(t *testing.T) {
 		}
 	}
 	for _, mode := range []string{"long", "normal"} {
-		a.cmdContext(mode)
+		a.ui.Do(func() { a.cmdContext(mode) })
+		settle(a)
 		want := mode == "long"
-		if a.agent.LongContext() != want {
+		if a.info.LongContext != want {
 			t.Fatal(mode)
 		}
-		saved, file, err := core.Open(a.sess.Path)
+		saved, file, err := core.Open(a.sessPath)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -44,16 +47,17 @@ func TestContextModeResume(t *testing.T) {
 			t.Fatal("persisted", mode)
 		}
 	}
-	a.cmdContext("long")
-	path := a.sess.Path
-	a.closeSession()
-	b := treeApp(t)
-	b.resume(path)
-	if !b.agent.LongContext() {
+	a.ui.Do(func() { a.cmdContext("long") })
+	settle(a)
+	a.shutdown()
+	b := startApp(t, a.cwd, Options{Session: a.threadID})
+	settle(b)
+	if !b.info.LongContext {
 		t.Fatal("resume lost long context")
 	}
-	b.cmdClear("")
-	if b.agent.LongContext() {
+	b.ui.Do(func() { b.cmdClear("") })
+	settle(b)
+	if b.info.LongContext {
 		t.Fatal("new session kept long context")
 	}
 }
@@ -67,7 +71,7 @@ func TestTierStatus(t *testing.T) {
 	a := statusApp(t, cost)
 	m := a.model()
 	m.Model.ContextWindow = 1050000
-	a.agent.SetModel(m)
+	setTestModel(a, m)
 	a.ctxTokens = 300000
 	for _, tc := range []struct {
 		tokens int
@@ -79,18 +83,18 @@ func TestTierStatus(t *testing.T) {
 			t.Fatal(tc, text)
 		}
 	}
-	a.agent.SetLongContext(true)
+	setTestLongContext(a, true)
 	text := tui.StripEscapes(strings.Join(a.builtinStatus(240, 240), "\n"))
 	if !strings.Contains(text, "28% long") {
 		t.Fatal(text)
 	}
 	a.usage.last.PromptTokens = 300000
 	a.usage.lastCost = cost
-	a.agent.SetModel(config.ModelRef{Model: config.Model{ID: "free"}})
+	setTestModel(a, config.ModelRef{Model: config.Model{ID: "free"}})
 	if got := a.surcharge(a.model()); got != " ×2" {
 		t.Fatal("model switch lost last price", got)
 	}
-	a.agent.SetLongContext(false)
+	setTestLongContext(a, false)
 	if strings.Contains(tui.StripEscapes(strings.Join(a.builtinStatus(240, 240), "\n")), " long") {
 		t.Fatal("stale context mode")
 	}
@@ -121,13 +125,13 @@ func TestStatusShowsTierTrigger(t *testing.T) {
 	a := statusApp(t, &ai.ModelCost{Input: 0.1, Tiers: []ai.ModelCostTier{{InputTokensAbove: 272000, Input: 0.2}}})
 	m := a.model()
 	m.Model.ContextWindow, m.Model.MaxTokens = 1050000, 128000
-	a.agent.SetModel(m)
+	setTestModel(a, m)
 	a.ctxTokens = 100000
 	row := func() string { return tui.StripEscapes(strings.Join(a.builtinStatus(240, 240), "\n")) }
 	if !strings.Contains(row(), "100k/1.1M ⇥245k") {
 		t.Fatal(row())
 	}
-	a.agent.SetLongContext(true)
+	setTestLongContext(a, true)
 	if strings.Contains(row(), "⇥") {
 		t.Fatal("long context has no tier trigger", row())
 	}
@@ -139,8 +143,9 @@ func TestContextWithoutTierData(t *testing.T) {
 		m := a.model()
 		m.Model.Cost = cost
 		m.Model.ContextWindow = 100000
-		a.agent.SetModel(m)
-		a.cmdContext("")
+		setRuntimeModel(t, a, m)
+		a.ui.Do(func() { a.cmdContext("") })
+		settle(a)
 		got := tui.StripEscapes(strings.Join(a.ui.Body.Render(200), "\n"))
 		if !strings.Contains(got, "No tier cap: no tier data known for this model.") || !strings.Contains(got, "Auto-compacts at") {
 			t.Fatal(got)
@@ -155,12 +160,13 @@ func TestPriceTierSelectionNotices(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ref, _ := models.Find("t", "m")
-	a.agent.SetModel(ref)
+	a.ui.Do(func() { a.rpcErr("models/reload", nil) })
 	a.models = models
-	a.showLoaded() // startup/resume
+	typeLine(a, "/reload")
+	settle(a) // startup/resume-equivalent loaded notice
 	a.cmdModel("t/m")
-	a.reloadNow(false)
+	typeLine(a, "/reload")
+	settle(a)
 	got := tui.StripEscapes(strings.Join(a.ui.Body.Render(300), "\n"))
 	if n := strings.Count(got, "No price-tier cap for t/m:"); n != 3 {
 		t.Fatalf("%d notices: %s", n, got)
@@ -168,9 +174,53 @@ func TestPriceTierSelectionNotices(t *testing.T) {
 	// Finding the selected model, even without tiers, silences notices.
 	writeTestFile(t, filepath.Join(config.Dir(), "cache", "catalog.json"), `{"t":{"models":{"m":{}}}}`)
 	a.cmdModel("t/m")
-	a.reloadNow(false)
+	typeLine(a, "/reload")
+	settle(a)
 	got = tui.StripEscapes(strings.Join(a.ui.Body.Render(300), "\n"))
 	if n := strings.Count(got, "No price-tier cap for t/m:"); n != 3 {
 		t.Fatalf("flat catalog model got a warning: %s", got)
+	}
+}
+
+// setRuntimeModel changes the runtime's model catalog, not an app-owned agent.
+func setRuntimeModel(t *testing.T, a *App, ref config.ModelRef) {
+	t.Helper()
+	if a.conn == nil {
+		setTestModel(a, ref)
+		return
+	}
+	if ref.ProviderName == "" {
+		ref.ProviderName = "t"
+	}
+	models := a.models
+	if models.Providers == nil {
+		models.Providers = map[string]config.Provider{}
+	}
+	p := models.Providers[ref.ProviderName]
+	p.Models = []config.Model{ref.Model}
+	models.Providers[ref.ProviderName] = p
+	raw, err := json.Marshal(models)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeTestFile(t, config.ModelsPath(), string(raw))
+	a.ui.Do(func() {
+		a.models = models
+		a.rpcErr("models/reload", nil)
+		a.rpcErr("thread/setModel", map[string]any{"model": ref.ProviderName + "/" + ref.Model.ID})
+	})
+	settle(a)
+}
+
+func setTestLongContext(a *App, long bool) {
+	a.info.LongContext = long
+	ref := a.model()
+	if long {
+		ref.Model.Cost = nil
+	}
+	a.info.AutoCompactLimit = agent.AutoCompactLimit(ref.Model)
+	a.info.AutoCompactCap = 0
+	if !long {
+		a.info.AutoCompactCap = ref.Model.Cost.ContextPriceBoundary()
 	}
 }

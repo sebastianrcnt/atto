@@ -6,37 +6,33 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/sebastianrcnt/atto/agent"
 	"github.com/sebastianrcnt/atto/config"
 	"github.com/sebastianrcnt/atto/tui"
 )
 
 func TestSkillCommands(t *testing.T) {
-	tmp := t.TempDir()
-	t.Setenv("ATTO_DIR", filepath.Join(tmp, "atto"))
-	t.Setenv("HOME", tmp)
-	t.Setenv("USERPROFILE", tmp)
-	skill := filepath.Join(tmp, "atto", "skills", "pdf", "SKILL.md")
+	cwd, _ := testEnv(t)
+	skill := filepath.Join(config.Dir(), "skills", "pdf", "SKILL.md")
 	if err := os.MkdirAll(filepath.Dir(skill), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(skill, []byte("---\nname: pdf\ndescription: Work with PDFs\n---\nUse pdftotext."), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	a := &App{editor: tui.NewEditor("› "), agent: agent.New(config.ModelRef{}, "", tmp)}
-	a.editor.SetText("/skill:p")
-	lines := a.renderSuggestions(80)
-	if len(lines) == 0 || !strings.Contains(tui.StripEscapes(lines[0]), "/skill:pdf") {
-		t.Fatalf("the skill is in the command list: %q", lines)
-	}
-	a.suggestionKey("tab")
+	a := startApp(t, cwd)
+	a.ui.Do(func() { a.editor.SetText("/skill:p") })
+	within(t, a, "the skill in the command list", func() bool {
+		lines := a.renderSuggestions(80)
+		return len(lines) > 0 && strings.Contains(tui.StripEscapes(lines[0]), "/skill:pdf")
+	})
+	a.ui.Do(func() { a.suggestionKey("tab") })
 	if got := a.editor.Text(); got != "/skill:pdf " {
 		t.Fatalf("tab completes the skill: %q", got)
 	}
 }
 
 func TestSuggestionList(t *testing.T) {
-	a := &App{editor: tui.NewEditor("› ")}
+	a := testApp(t)
 	a.editor.SetText("/")
 	lines := a.renderSuggestions(80)
 	if len(lines) != maxSuggestions+1 || !strings.Contains(tui.StripEscapes(lines[maxSuggestions]), "(1/") {
@@ -105,8 +101,7 @@ func TestTuiCommand(t *testing.T) {
 }
 
 func TestSuggestionsAboveInput(t *testing.T) {
-	a := &App{ui: tui.New(nil), agent: agent.New(config.ModelRef{}, "", t.TempDir())}
-	a.build()
+	a := testApp(t)
 	a.editor.SetText("/co")
 	var rows []string
 	for _, l := range a.ui.Footer.Render(80) {

@@ -57,7 +57,7 @@ func (a *App) askProjectApprovals() {
 		return
 	}
 	a.trustWaiting = false
-	items, err := trust.Discover(a.agent.Cwd)
+	items, err := trust.Discover(a.cwd)
 	if err != nil {
 		a.errorNotice(err)
 	}
@@ -145,12 +145,12 @@ func (a *App) finishProjectTrust(changed bool) {
 	// turn /reload applies them at a safe boundary rather than replacing hooks
 	// that the turn's goroutine is using.
 	if changed {
-		a.cmdReload("")
+		a.rpcErr("thread/reload", nil)
 	}
 	a.trustActive = false
 	if done := a.trustDone; done != nil {
 		a.trustDone = nil
 		done()
 	}
-	a.maybeSendNextQueued()
+	a.rpcErr("queue/resume", nil)
 }

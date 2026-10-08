@@ -19,8 +19,8 @@
 //	               settings: what of settings.json clients follow
 //	               ({toolGroups}: false shows every command on its own)
 //	models/list                                    → {models: [{id, name, contextWindow, efforts, hasKey, images}]}
-//	thread/start   {cwd?, model?, effort?}         → thread + context
-//	thread/resume  {threadId}                      → thread + items + context
+//	thread/start   {cwd?, model?, effort?, deferStart?}         → thread + context
+//	thread/resume  {threadId, deferStart?}                      → thread + items + context
 //	               context: what the thread loaded (AGENTS files, skills,
 //	               hooks, configuration, model and effort and where they
 //	               came from), as stream-json's init event has it
@@ -82,6 +82,9 @@
 //	thread/fork    {threadId, entryId}  → {path, input, images}
 //	thread/context {threadId, view?: system}  → ContextInfo
 //	thread/reload  {threadId}; thread/debugRequest {threadId} → {request}
+//	thread/sessionStart {threadId} (releases deferStart after the TUI trust picker)
+//	models/reload {threadId}; mcp/list {threadId} → {servers}
+//	thread/debugRequests {threadId} → {sets} (recent and pinned request bodies)
 //	thread/handoff {threadId}  ("Run in background" without a daemon)
 //	goal/read, goal/set {input}, goal/edit {input}, goal/pause, goal/resume, goal/clear
 //	commands/list  {threadId}  → {commands: [CommandInfo]}; commands/run {threadId, name, args?}
@@ -180,7 +183,13 @@
 //	               that is no longer open is refused (reason stalePrompt).
 //
 // thread/read's result carries the open prompt and the goal as well. The
-// terminal's own pickers (/model, /resume, /tree) are not prompts.
+// terminal's own pickers (/model, /resume, /tree) stay local without /remote.
+// With a link active their owner registers them with prompt/clientOpen
+// {threadId, prompt: {requestId, kind, title, options?, ...}} → Prompt,
+// and withdraws with prompt/clientClose {threadId, id: requestId}.
+// Answers are arbitrated exactly like execution prompts; the owner gets
+// prompt/clientAnswered {clientId, requestId, answer}. Owner detach removes
+// its pickers without answering; execution prompts still wait for a client.
 // ping is an ordering fence: its reply follows preceding requests on the
 // same JSON-lines connection (the UI need not wait for runtime requests).
 package server
@@ -190,6 +199,7 @@ import (
 	"fmt"
 
 	"github.com/sebastianrcnt/atto/agent"
+	"github.com/sebastianrcnt/atto/ai"
 	"github.com/sebastianrcnt/atto/config"
 	"github.com/sebastianrcnt/atto/core"
 	"github.com/sebastianrcnt/atto/goal"
@@ -320,7 +330,8 @@ type Item struct {
 	Background string `json:"background,omitempty"`
 	// Pending: the model is still writing the command (description and
 	// command are what has arrived).
-	Pending bool `json:"pending,omitempty"`
+	Pending   bool  `json:"pending,omitempty"`
+	StartedMs int64 `json:"startedMs,omitempty"` // running command start, Unix milliseconds
 	// Images are what atto view attached to the command's result.
 	Images []ItemImage `json:"images,omitempty"`
 
@@ -450,6 +461,7 @@ type ThreadInfo struct {
 	// prices (a cost) and is on a subscription (the cost only estimates).
 	ModelName        string `json:"modelName,omitempty"`
 	AutoCompactLimit int    `json:"autoCompactLimit,omitempty"`
+	AutoCompactCap   int    `json:"autoCompactCap,omitempty"`
 	Priced           bool   `json:"priced,omitempty"`
 	Subscription     bool   `json:"subscription,omitempty"`
 	// Usage is the session's token totals; Turn the running turn, and
@@ -523,11 +535,13 @@ func SetModel(info *ThreadInfo, m config.ModelRef, models config.ModelsFile) {
 // Usage is token usage: a session's totals, or one model response's
 // (thread/usage's step). Input includes the cached and written tokens.
 type Usage struct {
-	InputTokens       int     `json:"inputTokens"`
-	CachedInputTokens int     `json:"cachedInputTokens"`
-	CacheWriteTokens  int     `json:"cacheWriteTokens,omitempty"`
-	OutputTokens      int     `json:"outputTokens"`
-	Cost              float64 `json:"cost,omitempty"` // US dollars; 0 without prices
+	Last              *provider.Usage `json:"last,omitempty"`
+	LastCost          *ai.ModelCost   `json:"lastCost,omitempty"`
+	InputTokens       int             `json:"inputTokens"`
+	CachedInputTokens int             `json:"cachedInputTokens"`
+	CacheWriteTokens  int             `json:"cacheWriteTokens,omitempty"`
+	OutputTokens      int             `json:"outputTokens"`
+	Cost              float64         `json:"cost,omitempty"` // US dollars; 0 without prices
 	// The latest response's input and how much of it was cached, for the
 	// cache hit rate (totals only).
 	LastInputTokens       int `json:"lastInputTokens,omitempty"`
@@ -536,6 +550,8 @@ type Usage struct {
 
 // Add counts one response's usage in the totals.
 func (u *Usage) Add(x provider.Usage) {
+	last := x
+	u.Last = &last
 	u.InputTokens += x.PromptTokens
 	u.CachedInputTokens += x.CachedTokens
 	u.CacheWriteTokens += x.CacheWriteTokens
@@ -639,14 +655,16 @@ const (
 	PromptInput  = "input"
 )
 
-// Prompt is a choice or a line of input the live session's terminal asks
-// for (a picker, a confirmation, an extension's dialog), mirrored to the
-// clients so they can answer it.
+// Prompt is a runtime-owned question (a confirmation, an extension dialog
+// or a client picker registered with /remote). Every attached client can
+// answer it; the first valid answer wins.
 type Prompt struct {
-	ID       string `json:"id"`
-	Kind     string `json:"kind"` // select or input
-	Title    string `json:"title"`
-	Subtitle string `json:"subtitle,omitempty"`
+	ClientID  string `json:"clientId,omitempty"`  // owner of a front-end picker
+	RequestID string `json:"requestId,omitempty"` // owner correlation token
+	ID        string `json:"id"`
+	Kind      string `json:"kind"` // select or input
+	Title     string `json:"title"`
+	Subtitle  string `json:"subtitle,omitempty"`
 
 	// select: the options, and the one selected at first. Filterable
 	// pickers (/model, /resume) can be searched; the client filters.
@@ -675,9 +693,9 @@ type PromptOption struct {
 // PromptAnswer is a client's answer to a prompt: Index for a select,
 // Text for an input, or Cancel.
 type PromptAnswer struct {
-	Index  *int
-	Text   *string
-	Cancel bool
+	Index  *int    `json:"index,omitempty"`
+	Text   *string `json:"text,omitempty"`
+	Cancel bool    `json:"cancel,omitempty"`
 }
 
 // GoalInfo is the live session's goal as the terminal shows it.

@@ -2,7 +2,6 @@ package app
 
 import (
 	"bufio"
-	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -10,282 +9,288 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
-	"github.com/sebastianrcnt/atto/agent"
 	"github.com/sebastianrcnt/atto/config"
 	"github.com/sebastianrcnt/atto/goal"
+	"github.com/sebastianrcnt/atto/provider/providertest"
+	"github.com/sebastianrcnt/atto/server"
 	"github.com/sebastianrcnt/atto/session"
 	"github.com/sebastianrcnt/atto/tui"
 )
 
 type spawnCall struct{ id, path, cwd string }
 
-// bgApp is a treeApp with a running turn, whose cancel is counted and
-// whose background spawner is a stub.
-func bgApp(t *testing.T) (a *App, canceled *int, spawned *[]spawnCall) {
+// bgApp has a real blocked provider turn and a stub of the process handoff.
+func bgApp(t *testing.T) (*App, <-chan spawnCall) {
 	t.Helper()
-	a = treeApp(t)
-	canceled, spawned = new(int), new([]spawnCall)
-	a.record("user", "do the thing")
-	a.turns.Busy, a.runKind = true, "turn"
-	a.turns.Cancel = func(error) { *canceled++ }
-	a.bgx.spawn = func(id, path, cwd string) (int, string, error) {
-		*spawned = append(*spawned, spawnCall{id, path, cwd})
-		return 4321, filepath.Join(filepath.Dir(path), "x.bg.log"), nil
+	gate := make(chan struct{})
+	a, m := liveApp(t, providertest.Reply{Text: "partial must not be saved", Gate: gate})
+	t.Cleanup(func() { close(gate) })
+	spawned := make(chan spawnCall, 2)
+	old := server.Spawn
+	server.Spawn = func(id, path, cwd string) (string, error) {
+		spawned <- spawnCall{id, path, cwd}
+		return filepath.Join(filepath.Dir(path), "x.bg.log"), nil
 	}
-	return a, canceled, spawned
-}
-
-func quitting(a *App) bool {
-	select {
-	case <-a.quit:
-		return true
-	default:
-		return false
+	t.Cleanup(func() { server.Spawn = old })
+	typeLine(a, "do the thing")
+	if m.Started(5*time.Second) == 0 {
+		t.Fatal("request did not start")
 	}
-}
-
-func menuText(a *App) string {
-	return tui.StripEscapes(strings.Join(a.modal.Render(80), "\n"))
+	within(t, a, "running turn", func() bool { return a.busy })
+	return a, spawned
 }
 
 func TestExitMenuOnlyWithRunningTurn(t *testing.T) {
 	a := treeApp(t)
-	a.requestQuit()
+	a.ui.Do(a.requestQuit)
 	if !quitting(a) || a.modal != nil {
-		t.Fatal("an idle atto exits straight away")
+		t.Fatal("idle terminal did not exit")
 	}
-
-	a, _, _ = bgApp(t)
-	a.requestQuit()
+	a, _ = bgApp(t)
+	a.ui.Do(a.requestQuit)
 	if quitting(a) || a.modal == nil {
-		t.Fatal("a running turn asks first")
+		t.Fatal("running turn did not ask")
 	}
-	got := menuText(a)
-	for _, want := range []string{"› 1. Cancel task", "Stop the current task and stay in atto", "2. Run in background", "Exit atto and leave the task running", "3. Exit", "Stop the current task and exit atto", "enter select · esc back"} {
-		if !strings.Contains(got, want) {
-			t.Fatalf("menu lacks %q:\n%s", want, got)
+	for _, want := range []string{"1. Cancel task", "Stop the current task and stay in atto", "2. Run in background", "Exit atto and leave the task running", "3. Exit", "Stop the current task and exit atto", "enter select · esc back"} {
+		if !strings.Contains(screen(a), want) {
+			t.Fatalf("missing %q: %s", want, screen(a))
 		}
 	}
-
-	// A compaction or summary is not a turn.
-	a, _, _ = bgApp(t)
-	a.runKind = "compact"
-	a.requestQuit()
+	a.ui.Do(func() { a.closeModal(); a.runKind = "compact"; a.requestQuit() })
 	if !quitting(a) {
-		t.Fatal("only turns ask")
+		t.Fatal("compaction should not show a turn exit menu")
 	}
-
-	// An active goal that will go on asks too.
-	a = treeApp(t)
+	b := testApp(t)
 	g, _ := goal.New("ship it")
-	a.goal.Goal = g
-	a.requestQuit()
-	if quitting(a) || a.modal == nil {
-		t.Fatal("an active goal asks first")
+	b.info.Goal = &server.GoalInfo{Goal: g}
+	b.conn = &conn{own: &server.Server{}}
+	b.requestQuit()
+	if quitting(b) || b.modal == nil {
+		t.Fatal("active goal did not ask")
 	}
 }
 
 func TestExitMenuKeys(t *testing.T) {
-	// Esc goes back to the session untouched.
-	a, canceled, spawned := bgApp(t)
-	a.requestQuit()
-	a.modal.HandleInput("\x1b")
-	if a.modal != nil || quitting(a) || *canceled != 0 || len(*spawned) != 0 || !a.turns.Busy {
-		t.Fatal("esc leaves everything as it was")
+	a, spawned := bgApp(t)
+	a.ui.Do(a.requestQuit)
+	key(a, "\x1b")
+	if a.modal != nil || quitting(a) || !a.busy {
+		t.Fatal("escape changed execution")
 	}
-
-	// Enter on the first row cancels the task and stays.
-	a.requestQuit()
-	a.modal.HandleInput("\r")
-	if a.modal != nil || quitting(a) || *canceled != 1 || len(*spawned) != 0 {
-		t.Fatalf("cancel: canceled=%d quit=%v", *canceled, quitting(a))
+	select {
+	case <-spawned:
+		t.Fatal("escape spawned background work")
+	default:
 	}
-
-	// Down, down, enter (and "3") exit; the turn is stopped by Run's exit.
-	a, canceled, spawned = bgApp(t)
-	a.requestQuit()
-	a.modal.HandleInput("\x1b[B")
-	a.modal.HandleInput("\x1b[B")
-	a.modal.HandleInput("\r")
-	if !quitting(a) || len(*spawned) != 0 {
-		t.Fatal("exit quits without a background run")
+	a.ui.Do(a.requestQuit)
+	key(a, "\r")
+	within(t, a, "canceled turn", func() bool { return !a.busy })
+	if quitting(a) || a.modal != nil {
+		t.Fatal("cancel did not stay in terminal")
 	}
-	a, _, _ = bgApp(t)
-	a.requestQuit()
-	a.modal.HandleInput("3")
-	if !quitting(a) {
-		t.Fatal("3 exits")
+	for _, keys := range [][]string{{"\x1b[B", "\x1b[B", "\r"}, {"3"}} {
+		b, ch := bgApp(t)
+		b.ui.Do(b.requestQuit)
+		for _, k := range keys {
+			key(b, k)
+		}
+		if !quitting(b) {
+			t.Fatal("exit did not quit")
+		}
+		select {
+		case <-ch:
+			t.Fatal("exit handed off")
+		default:
+		}
 	}
 }
 
 func TestExitMenuCtrlKeys(t *testing.T) {
-	// ctrl+c while the turn runs interrupts it, as before.
-	a, canceled, _ := bgApp(t)
-	a.onInput("\x03")
-	if *canceled != 1 || a.modal != nil || quitting(a) {
-		t.Fatal("ctrl+c still interrupts")
+	a, _ := bgApp(t)
+	key(a, "\x03")
+	within(t, a, "interrupted turn", func() bool { return !a.busy })
+	if a.modal != nil || quitting(a) {
+		t.Fatal("Ctrl+C did not interrupt and stay")
 	}
-	// ctrl+d (empty prompt) is a way to exit: menu.
-	a.onInput("\x04")
+	a, _ = bgApp(t)
+	key(a, "\x04")
 	if a.modal == nil || quitting(a) {
-		t.Fatal("ctrl+d asks")
+		t.Fatal("Ctrl+D did not ask")
 	}
-	// /quit asks as well.
-	a, _, _ = bgApp(t)
-	a.runCommand("/quit")
+	a, _ = bgApp(t)
+	typeLine(a, "/quit")
 	if a.modal == nil || quitting(a) {
-		t.Fatal("/quit asks")
+		t.Fatal("/quit did not ask")
 	}
-	// Idle: ctrl+c exits as always.
-	a = treeApp(t)
-	a.onInput("\x03")
-	if !quitting(a) {
-		t.Fatal("idle ctrl+c exits")
+	b := treeApp(t)
+	key(b, "\x03")
+	if !quitting(b) {
+		t.Fatal("idle Ctrl+C did not exit")
 	}
 }
 
 func TestExitMenuDisabledBySetting(t *testing.T) {
-	a, _, _ := bgApp(t)
-	dir := os.Getenv("ATTO_DIR")
-	if err := os.WriteFile(filepath.Join(dir, "settings.json"), []byte(`{"backgroundExit": false}`), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	a, _ := bgApp(t)
+	writeTestFile(t, config.SettingsPath(), `{"backgroundExit":false}`)
 	st, err := config.LoadSettings()
 	if err != nil || st.BackgroundExit == nil || *st.BackgroundExit {
-		t.Fatalf("setting not read: %v %+v", err, st.BackgroundExit)
+		t.Fatalf("setting: %+v, %v", st, err)
 	}
-	a.bgx.off = true
-	a.requestQuit()
+	a.ui.Do(func() { a.applySettings(st); a.requestQuit() })
 	if !quitting(a) || a.modal != nil {
-		t.Fatal("with the menu off, quitting is as it was")
+		t.Fatal("disabled menu still asks")
 	}
-	// ctrl+d while busy is the editor's, as before.
-	b, _, _ := bgApp(t)
-	b.bgx.off = true
-	b.onInput("\x04")
+	b, _ := bgApp(t)
+	b.ui.Do(func() { b.bgx.off = true })
+	key(b, "\x04")
 	if quitting(b) || b.modal != nil {
-		t.Fatal("ctrl+d while busy does nothing special")
+		t.Fatal("disabled Ctrl+D opened menu")
 	}
 }
 
 func TestRunInBackground(t *testing.T) {
-	a, canceled, spawned := bgApp(t)
-	a.sessName = "my task"
-	a.requestQuit()
-	a.modal.HandleInput("2")
-	if *canceled != 1 || !a.agent.DiscardPartial.Load() || a.modal != nil {
-		t.Fatalf("the request in flight is stopped, its partial step dropped: canceled=%d", *canceled)
+	a, spawned := bgApp(t)
+	typeLine(a, "/name my task")
+	settle(a)
+	a.ui.Do(a.requestQuit)
+	key(a, "2")
+	within(t, a, "handoff exit", func() bool { return quitting(a) && a.bgLine != "" })
+	select {
+	case call := <-spawned:
+		if call.id != a.threadID || call.path != a.sessPath || call.cwd != a.cwd {
+			t.Fatalf("spawn: %+v", call)
+		}
+	default:
+		t.Fatal("no handoff")
 	}
-	if quitting(a) || len(*spawned) != 0 {
-		t.Fatal("nothing is handed over before the turn has stopped")
+	if !strings.Contains(a.bgLine, "my task") || !strings.Contains(a.bgLine, "atto resume "+a.threadID) || !strings.HasSuffix(a.bgLine, "x.bg.log") {
+		t.Fatalf("line: %q", a.bgLine)
 	}
-	// The turn ends, interrupted.
-	a.turns.Busy, a.turns.Cancel = false, nil
-	a.afterRun(context.Canceled)
-	if len(*spawned) != 1 || (*spawned)[0].id != a.sess.ID || (*spawned)[0].path != a.sess.Path || (*spawned)[0].cwd != a.cwd {
-		t.Fatalf("spawned %+v", *spawned)
+	_, entries, err := session.Load(a.sessPath)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if !quitting(a) || a.agent.DiscardPartial.Load() {
-		t.Fatal("atto exits")
-	}
-	if want := "Running in background: my task · atto resume " + a.sess.ID + " to check · log: "; !strings.HasPrefix(a.bgx.line, want) || !strings.HasSuffix(a.bgx.line, "x.bg.log") {
-		t.Fatalf("line %q", a.bgx.line)
-	}
-	if !a.printExit() {
-		t.Fatal("printExit")
-	}
-	// The user's message is in the file, and nothing half-written.
-	_, entries, err := session.Load(a.sess.Path)
-	last := ""
+	var last string
 	for _, e := range entries {
-		if e.Type == session.TypeMessage {
+		if e.Message != nil {
 			last = e.Message.Content
 		}
 	}
-	if err != nil || last != "do the thing" {
-		t.Fatalf("%v %+v", err, entries)
+	if last != "do the thing" {
+		t.Fatalf("partial step saved: %q", last)
 	}
 }
 
 func TestRunInBackgroundWhenTurnFinishedFirst(t *testing.T) {
-	a, _, spawned := bgApp(t)
-	a.requestQuit()
-	a.modal.HandleInput("2")
-	a.turns.Busy, a.turns.Cancel = false, nil
-	a.afterRun(nil) // it finished before the cancel landed
-	if len(*spawned) != 0 || !quitting(a) || a.bgx.line != "" {
-		t.Fatal("nothing left to run: plain exit")
+	a, _ := liveApp(t, providertest.Reply{Text: "finished"})
+	send(t, a, "do the thing")
+	a.ui.Do(a.requestQuit)
+	if !quitting(a) || a.bgLine != "" {
+		t.Fatal("finished turn should exit without handoff")
 	}
 }
 
 func TestRunInBackgroundKeepsGoal(t *testing.T) {
-	a, _, spawned := bgApp(t)
-	g, _ := goal.New("ship it")
-	a.goal.Goal = g
-	a.goal.Snapshot = a.snapshotGoal
-	a.requestQuit()
-	a.modal.HandleInput("2")
-	a.turns.Busy, a.turns.Cancel = false, nil
-	a.afterRun(context.Canceled)
-	if len(*spawned) != 1 || a.goal.Goal.Status != goal.Active {
-		t.Fatalf("an interrupted goal turn stays active: %+v", a.goal.Goal)
+	a, ch := bgApp(t)
+	typeLine(a, "/goal ship it")
+	settle(a)
+	a.ui.Do(a.requestQuit)
+	key(a, "2")
+	within(t, a, "goal handoff", func() bool { return quitting(a) })
+	select {
+	case <-ch:
+	default:
+		t.Fatal("goal was not handed off")
 	}
-	var snap bool
-	_, entries, _ := session.Load(a.sess.Path)
+	var id, path string
+	a.ui.Do(func() { id, path = a.threadID, a.sessPath })
+	g, err := goal.Load(id)
+	if err != nil || g == nil || g.Status != goal.Active {
+		t.Fatalf("goal: %+v %v", g, err)
+	}
+	_, entries, _ := session.Load(path)
+	snap := false
 	for _, e := range entries {
 		snap = snap || e.Type == session.TypeGoal
 	}
 	if !snap {
-		t.Fatal("the goal is in the session for the background run")
+		t.Fatal("goal was not persisted for background continuation")
 	}
 }
 
 func TestRunInBackgroundIdleGoal(t *testing.T) {
-	a := treeApp(t)
-	a.bgx.spawn = func(id, path, cwd string) (int, string, error) { return 1, "log", nil }
-	g, _ := goal.New("ship it")
-	a.goal.Goal = g
-	a.requestQuit()
-	a.modal.HandleInput("2")
-	if !quitting(a) || a.bgx.line == "" {
-		t.Fatal("an idle goal is handed over directly")
+	a, ch := bgApp(t)
+	typeLine(a, "/goal ship it")
+	settle(a)
+	// Picker gating keeps automatic goal work idle after this turn stops.
+	a.ui.Do(func() { a.openModal(&tui.SelectList{}); a.rpcErr("turn/interrupt", map[string]any{"mode": "cancel"}) })
+	within(t, a, "idle held goal", func() bool { return !a.busy })
+	a.ui.Do(func() { a.closeModal(); a.runInBackground() })
+	within(t, a, "idle goal handoff", func() bool { return quitting(a) && a.bgLine != "" })
+	select {
+	case <-ch:
+	default:
+		t.Fatal("idle goal not handed off")
 	}
 }
 
 func TestCancelTaskPausesIdleGoal(t *testing.T) {
-	a := treeApp(t)
-	g, _ := goal.New("ship it")
-	a.goal.Goal = g
-	a.requestQuit()
-	a.modal.HandleInput("1")
-	if quitting(a) || a.modal != nil || a.goal.Active() {
-		t.Fatalf("cancel pauses the goal and stays: %+v", a.goal.Goal)
+	a, _ := liveApp(t)
+	a.ui.Do(func() { a.openModal(&tui.SelectList{}) })
+	typeLine(a, "/goal ship it")
+	settle(a)
+	a.ui.Do(a.cancelTask)
+	settle(a)
+	if a.goalActive() || quitting(a) {
+		t.Fatal("cancel did not pause the idle goal")
 	}
 }
 
 func TestRunInBackgroundSpawnFails(t *testing.T) {
-	a, _, _ := bgApp(t)
-	a.bgx.spawn = func(id, path, cwd string) (int, string, error) { return 0, "", errors.New("no exe") }
-	a.requestQuit()
-	a.modal.HandleInput("2")
-	a.turns.Busy, a.turns.Cancel = false, nil
-	a.afterRun(context.Canceled)
-	if quitting(a) || a.bgx.line != "" {
-		t.Fatal("a failed hand-over stays in atto")
+	a, _ := bgApp(t)
+	server.Spawn = func(string, string, string) (string, error) { return "", errors.New("no exe") }
+	a.ui.Do(a.requestQuit)
+	key(a, "2")
+	within(t, a, "handoff failure", func() bool { return !a.bgx.pending && !a.busy })
+	if quitting(a) || a.bgLine != "" || !strings.Contains(shown(a), "no exe") {
+		t.Fatal("failed handoff did not stay with its error")
+	}
+	if _, held := session.LockedBy(a.sessPath); !held {
+		t.Fatal("failed handoff lost writer lease")
 	}
 }
 
 func TestBackgroundWaitsForMovedCommand(t *testing.T) {
-	a, canceled, _ := bgApp(t)
-	a.bgx.pending, a.bgx.awaitTool = true, true
-	a.backgroundEvent(agent.StepEnd{})
-	if *canceled != 0 {
-		t.Fatal("only the end of the command stops the turn")
+	gate := make(chan struct{})
+	a, m := liveApp(t, providertest.Reply{Command: "sleep 30", Description: "long command"}, providertest.Reply{Text: "never", Gate: gate})
+	t.Cleanup(func() { close(gate) })
+	old := server.Spawn
+	spawned := make(chan struct{}, 1)
+	server.Spawn = func(string, string, string) (string, error) { spawned <- struct{}{}; return "log", nil }
+	t.Cleanup(func() { server.Spawn = old })
+	typeLine(a, "work")
+	within(t, a, "running command", func() bool { return a.toolsRunning > 0 })
+	a.ui.Do(a.runInBackground)
+	within(t, a, "command handoff", func() bool { return quitting(a) })
+	select {
+	case <-spawned:
+	default:
+		t.Fatal("command was not handed off")
 	}
-	a.backgroundEvent(agent.ToolEnd{})
-	if *canceled != 1 {
-		t.Fatal("the model request after the command is canceled")
+	if len(m.Requests()) != 1 {
+		t.Fatal("model continued before handoff")
+	}
+	_, entries, _ := session.Load(a.sessPath)
+	found := false
+	for _, e := range entries {
+		if e.Message != nil {
+			found = found || strings.Contains(e.Message.Content, "[canceled by user]")
+		}
+	}
+	if !found {
+		t.Fatal("moved command result not persisted")
 	}
 }
 
@@ -296,48 +301,38 @@ func TestReadOnlyLockedSession(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	a.resume(path)
-	why := a.sess.ReadOnly()
+	defer release()
+	a.ui.Do(func() { a.requestResume(path) })
+	settle(a)
+	why := a.readOnly
 	if !strings.HasPrefix(why, "Running in background (pid ") || !strings.HasSuffix(why, ") — read-only until it finishes") {
-		t.Fatalf("banner %q", why)
+		t.Fatalf("banner: %q", why)
 	}
-	if banner := tui.StripEscapes(strings.Join(a.renderReadOnly(120), "")); !strings.Contains(banner, why) {
-		t.Fatalf("banner line %q", banner)
-	}
-	if !strings.Contains(strings.Join(userBlocks(a), "|"), "earlier") {
-		t.Fatal("the saved transcript is shown")
+	if !strings.Contains(plainLines(a.renderReadOnly(150)), why) || !strings.Contains(users(a), "earlier") {
+		t.Fatal("read-only banner or transcript missing")
 	}
 	before, _ := os.ReadFile(path)
-
-	a.submit("hello", nil)
-	a.onInput("\t")
-	if a.turns.Busy || a.editor.Text() != "hello" {
-		t.Fatalf("input is refused and kept: busy=%v text=%q", a.turns.Busy, a.editor.Text())
+	typeLine(a, "hello")
+	key(a, "\t")
+	settle(a)
+	if a.busy || a.editor.Text() != "hello" {
+		t.Fatal("read-only input was not refused and retained")
 	}
-	a.sess.Append(session.Entry{Type: session.TypeName, Name: "x"})
-	if after, _ := os.ReadFile(path); string(after) != string(before) {
-		t.Fatal("a read-only session is never written")
+	typeLine(a, "/name x")
+	settle(a)
+	after, _ := os.ReadFile(path)
+	if string(before) != string(after) {
+		t.Fatal("read-only view changed the session")
 	}
-	shown := false
-	for _, c := range a.ui.Body.Children {
-		shown = shown || strings.Contains(tui.StripEscapes(strings.Join(c.Render(100), "")), why)
+	a.ui.Do(func() { a.editor.SetText(""); a.requestQuit() })
+	if !quitting(a) {
+		t.Fatal("read-only view could not quit")
 	}
-	if !shown {
-		t.Fatal("the refusal says why")
-	}
-
-	// Commands that don't write still work; quitting leaves the run alone.
-	a.editor.SetText("")
-	a.requestQuit()
-	if !quitting(a) || a.leaveCore() != 0 {
-		t.Fatal("quit")
-	}
-
-	// ctrl+r reads it again; once the run is over it opens for writing.
 	release()
-	a.onInput("\x12")
-	if a.sess.ReadOnly() != "" {
-		t.Fatal("writable after the lock is gone")
+	key(a, "\x12")
+	settle(a)
+	if a.readOnly != "" {
+		t.Fatal("Ctrl+R did not reopen after writer left")
 	}
 }
 
@@ -345,7 +340,7 @@ func TestResumePickerMarksRunning(t *testing.T) {
 	a := treeApp(t)
 	path := saveSession(t, a.cwd, "long job")
 	p := newResumePicker(a.cwd, "")
-	if got := tui.StripEscapes(strings.Join(p.Render(100), "\n")); strings.Contains(got, "running") {
+	if got := p.rowMeta(p.list.Items[0].Data.(session.Summary)); strings.Contains(got, "running") {
 		t.Fatalf("not running:\n%s", got)
 	}
 	release, err := session.LockKind(path, session.KindBackground)
@@ -364,7 +359,7 @@ func TestResumePickerMarksRunning(t *testing.T) {
 // own session, and moves the lock when it opens another.
 func TestSessionOpenInAnotherTerminal(t *testing.T) {
 	a := treeApp(t)
-	if l, ok := session.LockedBy(a.sess.Path); !ok || l.Kind != session.KindTUI || l.PID != os.Getpid() {
+	if l, ok := session.LockedBy(a.sessPath); !ok || l.Kind != session.KindTUI || l.PID != os.Getpid() {
 		t.Fatalf("the new session is not held: %+v %v", l, ok)
 	}
 	path := saveSession(t, a.cwd, "earlier")
@@ -387,12 +382,13 @@ func TestSessionOpenInAnotherTerminal(t *testing.T) {
 	if err != nil || line != "held\n" {
 		t.Fatalf("child: %q %v", line, err)
 	}
-	before := a.sess.Path
-	a.resume(path)
-	if a.sess.Path != before || a.sess.ReadOnly() != "" {
-		t.Fatalf("opened: %s %q", a.sess.Path, a.sess.ReadOnly())
+	before := a.sessPath
+	a.ui.Do(func() { a.requestResume(path) })
+	settle(a)
+	if a.sessPath != before || a.readOnly != "" {
+		t.Fatalf("opened: %s %q", a.sessPath, a.readOnly)
 	}
-	if got := goalText(a); !strings.Contains(got, "session is open in another atto (pid ") {
+	if got := shown(a); !strings.Contains(got, "session is open in another atto (pid ") {
 		t.Fatalf("not said:\n%s", got)
 	}
 
@@ -401,9 +397,10 @@ func TestSessionOpenInAnotherTerminal(t *testing.T) {
 	if err := cmd.Wait(); err != nil {
 		t.Fatal(err)
 	}
-	a.resume(path)
-	if a.sess.Path != path {
-		t.Fatalf("not opened: %s", a.sess.Path)
+	a.ui.Do(func() { a.requestResume(path) })
+	settle(a)
+	if a.sessPath != path {
+		t.Fatalf("not opened: %s", a.sessPath)
 	}
 	if _, ok := session.LockedBy(before); ok {
 		t.Fatal("the previous session is still held")
@@ -411,7 +408,7 @@ func TestSessionOpenInAnotherTerminal(t *testing.T) {
 	if l, ok := session.LockedBy(path); !ok || l.PID != os.Getpid() {
 		t.Fatalf("not held: %+v", l)
 	}
-	a.closeSession()
+	a.shutdown()
 	if _, ok := session.LockedBy(path); ok {
 		t.Fatal("closing releases it")
 	}

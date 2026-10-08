@@ -366,3 +366,36 @@ func TestCompactionTrimmedNotice(t *testing.T) {
 		t.Fatalf("trim notice %v", items)
 	}
 }
+
+// Rebuilding a client's blocks while a command runs preserves its elapsed
+// clock. Completed/replayed items use their duration, not a live start time.
+func TestRunningCommandStartTime(t *testing.T) {
+	for _, shell := range []bool{false, true} {
+		var b Builder
+		if shell {
+			b.Event(ShellStart{Command: "sleep 9"})
+		} else {
+			b.Event(agent.ToolStart{ID: "c", Args: agent.BashArgs{Command: "sleep 9"}})
+		}
+		started := b.Items()[0].Started
+		if started.IsZero() {
+			t.Fatal("running command has no start time")
+		}
+		if shell {
+			b.Event(ShellOutput{Chunk: "progress"})
+		} else {
+			b.Event(agent.ToolOutput{ID: "c", Chunk: "progress"})
+		}
+		if !b.Items()[0].Started.Equal(started) {
+			t.Fatal("output reset command's clock")
+		}
+		if shell {
+			b.Event(ShellEnd{Exec: session.BashExec{Command: "sleep 9"}})
+		} else {
+			b.Event(agent.ToolEnd{ID: "c"})
+		}
+		if !b.Items()[0].Started.IsZero() {
+			t.Fatal("completed command kept live clock")
+		}
+	}
+}

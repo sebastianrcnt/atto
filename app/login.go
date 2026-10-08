@@ -45,7 +45,7 @@ func (a *App) loginHooks() loginHooks {
 }
 
 func (a *App) cmdLogin(arg string) {
-	if a.turns.Busy {
+	if a.busy {
 		a.notice("Still working — press esc to interrupt first.")
 		return
 	}
@@ -211,11 +211,8 @@ func (a *App) afterLogin(p config.LoginProvider, action string) {
 	}
 	a.models = models
 	cur := a.model()
-	if cur.Model.ID != "" {
-		if ref, ok := models.Find(cur.ProviderName, cur.Model.ID); ok {
-			a.agent.SetModel(ref)
-		}
-	}
+	a.rpcErr("models/reload", nil) // the runtime takes the new key
+
 	n := 0
 	for _, r := range models.List() {
 		if r.ProviderName == p.ID {

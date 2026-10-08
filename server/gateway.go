@@ -25,14 +25,19 @@ type Scope struct {
 	Thread func() string
 	// Local runs a command of the terminal typed in the web client
 	// (/clear); false when it is not one. It may be nil.
-	Local func(text string) bool
+	Local     func(text string) bool
+	OnClients func(int) // number of this gateway's event-stream clients
 }
 
 type scopeKey struct{}
 
 // ScopedHandler is HTTPHandler limited to the session sc names.
 func (s *Server) ScopedHandler(token string, sc Scope) http.Handler {
-	h := s.HTTPHandler(token)
+	callback := sc.OnClients
+	if callback == nil {
+		callback = s.OnClients
+	}
+	h := s.httpHandler(token, callback)
 	// A link shares one client identity, distinct from other scoped links.
 	web := &clientConn{id: fmt.Sprintf("r%d", clientSeq.Add(1)), name: "web", interactive: true}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

@@ -1,60 +1,106 @@
 package app
 
 import (
+	"encoding/json"
+	"fmt"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 
 	"github.com/sebastianrcnt/atto/config"
 	"github.com/sebastianrcnt/atto/core"
-	"github.com/sebastianrcnt/atto/extensions"
+	"github.com/sebastianrcnt/atto/server"
 	"github.com/sebastianrcnt/atto/session"
-	"github.com/sebastianrcnt/atto/skills"
 	"github.com/sebastianrcnt/atto/tui"
 )
+
+// Slash commands: the catalog is the runtime's (commands/list: built-in
+// commands, the extensions' and one /skill:<name> per skill). The terminal
+// runs its own (pickers, the renderer, quitting, sessions) and the
+// display of a few others (/goal, /context, /jobs); everything else goes to
+// the runtime as typed, which also queues it behind a running turn.
 
 type command struct {
 	name string
 	args string
 	desc string
-	run  func(a *App, arg string)
 }
 
-var commands []command
+// local are the terminal's commands, and what of the others it shows
+// itself (local returns false: the runtime runs it after all).
+var local map[string]func(a *App, arg string) bool
 
-func init() {
-	commands = []command{
-		{"model", "[id]", "Switch model", (*App).cmdModel},
-		{"effort", "[level]", "Set reasoning effort (also shift+tab)", (*App).cmdEffort},
-		{"compact", "", "Compact the conversation into handoff notes", (*App).cmdCompact},
-		{"copy", "", "Copy the last answer (works over SSH via OSC 52)", (*App).cmdCopy},
-		{"context", "[system|long|normal]", "Show what fills the context and cache use", (*App).cmdContext},
-		{"reload", "", "Re-read AGENTS.md, skills, hooks, extensions, settings and models", (*App).cmdReload},
-		{"extensions", "[approve <name>]", "List extensions, or approve a project extension", (*App).cmdExtensions},
-		{"request", "", "Save the raw last request to a file", (*App).cmdRequest},
-		{"debug", "", "Save a heap profile and memory figures to ~/.atto/debug", (*App).cmdDebug},
-		{"login", "[provider]", "Sign in with an account or save an API key", (*App).cmdLogin},
-		{"logout", "[provider]", "Remove stored credentials", (*App).cmdLogout},
-		{"resume", "", "Resume a saved conversation (the agent center's Inactive tab)", (*App).cmdResume},
-		{"sessions", "", "Pick, archive, rename or preview saved conversations", (*App).cmdSessions},
-		{"tree", "", "Go back to any point of the conversation (also esc esc)", (*App).cmdTree},
-		{"fork", "", "Start a new conversation from an earlier message", (*App).cmdFork},
-		{"name", "<name>", "Name this conversation", (*App).cmdName},
-		{"rename", "<name>", "Rename this conversation", (*App).cmdName},
-		{"archive", "", "Archive this conversation and start a new one", (*App).cmdArchive},
-		{"goal", "[objective|clear|edit|pause|resume]", "Set or view the goal for a long-running task", (*App).cmdGoal},
-		{"jobs", "", "List background jobs and monitors", (*App).cmdJobs},
-		{"stop", "", "Stop all background jobs", (*App).cmdStop},
-		{"timer", "<when> <msg>", "Wake the agent later (10m, 15:30)", (*App).cmdTimer},
-		{"timers", "", "List pending timers", (*App).cmdTimers},
-		{"tui", "[auto|fullscreen|inline]", "Choose the renderer (fullscreen or inline)", (*App).cmdTui},
-		{"remote", "[on [port]|off]", "Control this session from a phone or browser (QR code)", (*App).cmdRemote},
-		{"clear", "", "Start a new conversation", (*App).cmdClear},
-		{"agents", "", "Every atto session, its goal and agents (also ← on an empty prompt)", (*App).cmdAgents},
-		{"detach", "", "Leave atto running in the daemon (atto attach returns)", (*App).cmdDetach},
-		{"quit", "", "Exit atto", (*App).cmdQuit},
-		{"exit", "", "Exit atto", (*App).cmdQuit},
+func init() { local = localCommands() }
+
+func localCommands() map[string]func(a *App, arg string) bool {
+	return map[string]func(a *App, arg string) bool{
+		"model":      func(a *App, arg string) bool { return a.cmdModel(arg) },
+		"effort":     func(a *App, arg string) bool { return a.cmdEffort(arg) },
+		"copy":       func(a *App, arg string) bool { a.cmdCopy(arg); return true },
+		"context":    func(a *App, arg string) bool { return a.cmdContext(arg) },
+		"extensions": func(a *App, arg string) bool { return a.cmdExtensions(arg) },
+		"reload":     func(a *App, arg string) bool { a.cmdReload(arg); return true },
+		"request":    func(a *App, arg string) bool { a.cmdRequest(arg); return true },
+		"debug":      func(a *App, arg string) bool { a.cmdDebug(arg); return true },
+		"login":      func(a *App, arg string) bool { a.cmdLogin(arg); return true },
+		"logout":     func(a *App, arg string) bool { a.cmdLogout(arg); return true },
+		"resume":     func(a *App, arg string) bool { a.cmdResume(arg); return true },
+		"sessions":   func(a *App, arg string) bool { a.cmdSessions(arg); return true },
+		"tree":       func(a *App, arg string) bool { a.cmdTree(arg); return true },
+		"fork":       func(a *App, arg string) bool { a.cmdFork(arg); return true },
+		"name":       func(a *App, arg string) bool { return a.cmdName(arg) },
+		"rename":     func(a *App, arg string) bool { return a.cmdName(arg) },
+		"archive":    func(a *App, arg string) bool { a.cmdArchive(arg); return true },
+		"goal":       func(a *App, arg string) bool { a.cmdGoal(arg); return true },
+		"jobs":       func(a *App, arg string) bool { a.cmdJobs(arg); return true },
+		"timers":     func(a *App, arg string) bool { a.cmdTimers(arg); return true },
+		"tui":        func(a *App, arg string) bool { a.cmdTui(arg); return true },
+		"remote":     func(a *App, arg string) bool { a.cmdRemote(arg); return true },
+		"clear":      func(a *App, arg string) bool { a.cmdClear(arg); return true },
+		"agents":     func(a *App, arg string) bool { a.cmdAgents(arg); return true },
+		"detach":     func(a *App, arg string) bool { a.cmdDetach(arg); return true },
+		"quit":       func(a *App, arg string) bool { a.cmdQuit(arg); return true },
+		"exit":       func(a *App, arg string) bool { a.cmdQuit(arg); return true },
 	}
+}
+
+// runLocal runs text when it is one of the terminal's commands; false
+// sends it to the runtime.
+func (a *App) runLocal(text string) bool {
+	if strings.HasPrefix(text, "/skill:") {
+		return false
+	}
+	c, arg, err := server.ResolveCommand(a.catalogOrBuiltins(), text)
+	if err != nil {
+		a.notice("%s", err.Error())
+		return true
+	}
+	run := local[c.Name]
+	if run == nil || c.Origin != "builtin" {
+		return false
+	}
+	return run(a, arg)
+}
+
+func (a *App) catalogOrBuiltins() []server.CommandInfo {
+	if len(a.catalog) > 0 {
+		return a.catalog
+	}
+	return server.Builtins
+}
+
+// loadCatalog reads the session's commands again.
+func (a *App) loadCatalog() {
+	a.rpc("commands/list", nil, func(raw json.RawMessage, err error) {
+		var r struct {
+			Commands []server.CommandInfo `json:"commands"`
+		}
+		if err == nil && json.Unmarshal(raw, &r) == nil {
+			a.catalog = r.Commands
+			a.cmds.gen++
+		}
+	})
 }
 
 // maxSuggestions is how many commands the list shows at once (pi: 5).
@@ -142,128 +188,69 @@ func (a *App) renderSuggestions(width int) []string {
 	return a.renderMentions(width)
 }
 
-// cmdCache is allCommands' result and what it was built from.
+// cmdCache is allCommands' result: gen counts catalog changes, built is
+// the gen all was made at (-1: never).
 type cmdCache struct {
-	skills []skills.Skill
-	ext    *extensions.Manager
-	extVer uint64
-	all    []command
-	gen    int // counts rebuilds
+	gen, built int
+	all        []command
 }
 
-// allCommands is the built-in commands plus one /skill:<name> per skill of
-// this session, like pi. Skills hidden from the model are listed too: the
-// command is how you run them. It is called every frame, so the list is
-// kept until the skills (a rescan makes a new slice) or the extension
-// commands change.
+// allCommands is the catalog as the list shows it. It is called every
+// frame, so the list is kept until the catalog changes.
 func (a *App) allCommands() []command {
-	if a.agent == nil {
-		return commands
-	}
-	sk, _ := a.agent.Skills()
-	var ver uint64
-	if a.ext != nil {
-		ver = a.ext.CommandsVersion()
-	}
 	c := &a.cmds
-	if c.all != nil && c.ext == a.ext && c.extVer == ver && len(c.skills) == len(sk) && (len(sk) == 0 || &c.skills[0] == &sk[0]) {
+	if c.all != nil && c.built == c.gen {
 		return c.all
 	}
-	all := slices.Clone(commands)
-	all = append(all, a.extensionCommands()...)
-	for _, s := range sk {
-		all = append(all, command{"skill:" + s.Name, "[text]", s.Description, (*App).cmdSkill})
+	var out []command
+	for _, x := range a.catalogOrBuiltins() {
+		out = append(out, command{x.Name, x.Args, x.Desc})
 	}
-	c.skills, c.ext, c.extVer, c.all = sk, a.ext, ver, all
-	c.gen++
-	return all
+	c.all, c.built = out, c.gen
+	return out
 }
 
-// cmdSkill sends "/skill:name text" as a user message made of the skill's
-// instructions and the text, the way pi expands it. It takes the whole
-// command text, not just an argument (see runCommand).
-func (a *App) cmdSkill(text string) {
-	sk, _ := a.agent.Skills()
-	msg, ok, err := skills.Expand(sk, text)
-	switch {
-	case err != nil:
-		a.errorNotice(err)
-	case !ok:
-		a.notice("Unknown skill: %s", strings.Fields(text)[0])
-	case a.noModel():
-		a.restoreToEditor([]string{text})
-	case a.turns.Busy && a.runKind == "turn":
-		a.steer(msg)
-	case a.turns.Busy:
-		a.enqueue(msg, nil)
-	default:
-		a.runTurn(msg, nil, false)
-	}
-}
-
-func (a *App) runCommand(text string) {
-	if strings.HasPrefix(text, "/skill:") {
-		a.cmdSkill(text)
-		return
-	}
-	name, arg, _ := strings.Cut(strings.TrimPrefix(text, "/"), " ")
-	arg = strings.TrimSpace(arg)
-	var match []command
-	// Built-in commands first, then the extensions': an exact name wins,
-	// else a unique prefix.
-	for _, c := range append(slices.Clone(commands), a.extensionCommands()...) {
-		if c.name == name {
-			match = []command{c}
-			break
-		}
-		if strings.HasPrefix(c.name, name) {
-			match = append(match, c)
-		}
-	}
-	switch len(match) {
-	case 0:
-		a.notice("Unknown command /%s.", name)
-	case 1:
-		match[0].run(a, arg)
-	default:
-		a.notice("Ambiguous command /%s.", name)
-	}
-}
-
-// openModal shows m in place of the editor; a prompt (see remoteprompt.go)
-// shows on /remote's clients too.
+// openModal shows m in place of the editor. While a picker of this
+// terminal is open, the runtime holds automatic work (events, queued
+// input, goal turns), as the terminal always did (client/gate).
 func (a *App) openModal(m modal) {
-	a.promptGone() // one open modal replaced by another
+	a.withdrawModal()
+	if a.modal == nil {
+		a.rpc("client/gate", map[string]any{"open": true}, nil)
+	}
 	a.ui.Screen = nil
 	a.modal = m
 	a.ui.SetFocus(m)
-	a.promptOpened(m)
+	a.advertiseModal(m)
 }
 
 func (a *App) closeModal() {
-	a.promptGone()
+	a.withdrawModal()
+	if a.modal == nil {
+		return
+	}
 	a.ui.Screen = nil
 	a.modal = nil
 	a.ui.SetFocus(a.editor)
-	if !a.trustActive && (a.trustWaiting || a.trustDone != nil) {
-		// Another picker may have occupied the screen. Wait until its
-		// callback has finished before opening the project trust question.
-		go a.ui.Do(a.askProjectApprovals)
+	a.rpc("client/gate", map[string]any{"open": false}, nil)
+	if a.trustWaiting {
+		a.askProjectApprovals()
 	}
-	a.maybeSendNextQueued()
+	a.showWaitingPrompt()
 }
 
-func (a *App) cmdModel(arg string) {
+func (a *App) cmdModel(arg string) bool {
 	if arg != "" {
 		ref, ok := a.models.Find("", arg)
 		if !ok {
 			a.notice("Unknown model %q.", arg)
-			return
+			return true
 		}
 		a.setModel(ref)
-		return
+		return true
 	}
 	a.modelPicker("")
+	return true
 }
 
 // modelPicker opens the model list, optionally for one provider.
@@ -302,38 +289,28 @@ func (a *App) modelPicker(provider string) {
 	a.openModal(p)
 }
 
+// setModel makes ref the session's model and the default, as the terminal
+// always did.
 func (a *App) setModel(ref config.ModelRef) {
-	a.agent.SetModel(ref)
-	a.modelFrom = core.FromCommand
-	err := config.UpdateSettings(map[string]any{
-		"defaultProvider": ref.ProviderName,
-		"defaultModel":    ref.Model.ID,
-		"defaultEffort":   a.effort(),
-	})
-	if err != nil {
-		a.errorNotice(err)
-	}
+	a.info.Model = ref.ProviderName + "/" + ref.Model.ID
+	a.rpcErr("thread/setModel", map[string]any{"model": a.info.Model, "saveDefault": true})
 	a.notice("Model set to %s (%s).", ref.Model.DisplayName(), ref.ProviderName)
-	a.priceTierNotice()
 	a.statusTrigger()
-	a.remoteUpdated()
 }
 
-func (a *App) cmdEffort(arg string) {
+func (a *App) cmdEffort(arg string) bool {
 	levels := a.efforts()
 	if len(levels) == 0 {
 		a.notice("%s has no effort levels.", a.model().Model.DisplayName())
-		return
+		return true
 	}
 	if arg != "" {
-		for _, l := range levels {
-			if l == arg {
-				a.setEffort(l, true)
-				return
-			}
+		if slices.Contains(levels, arg) {
+			a.setEffort(arg, true)
+			return true
 		}
 		a.notice("Unknown effort %q. Levels: %s.", arg, strings.Join(levels, ", "))
-		return
+		return true
 	}
 	p := &tui.SelectList{Title: "Reasoning effort (enter to choose, esc to cancel)"}
 	for i, l := range levels {
@@ -348,85 +325,86 @@ func (a *App) cmdEffort(arg string) {
 		a.setEffort(it.Value, true)
 	}
 	a.openModal(p)
+	return true
 }
 
-func (a *App) cmdCompact(string) {
-	if a.turns.Busy {
-		a.enqueue("/compact", nil)
-		return
-	}
-	a.runKind = "compact"
-	a.recordSettings()
-	a.start("Compacting context", a.agent.Compact)
-}
-
-// reset clears the transcript and pending input (for /clear and /resume).
-func (a *App) reset() {
-	a.agent.Reset()
-	a.agent.SetLongContext(false)
-	a.turns.Queued, a.turns.Steers, a.turns.QueuePaused = nil, nil, false
-	a.remoteSteers = nil
-	a.ctxTokens = 0
-	a.usage = usageStats{}
-	a.ui.Body.Clear()
-	a.resetItems()
-	a.ui.Redraw()
-	a.ui.ScrollToBottom()
-	a.addHeader()
-}
-
+// cmdClear starts a new conversation. The one left goes on until it is
+// idle (a turn running finishes), then ends.
 func (a *App) cmdClear(string) {
-	if a.turns.Busy {
-		a.enqueue("/clear", nil)
-		return
-	}
-	a.reset()
-	a.newSession("clear")
-	a.sessionStartHook("clear")
-	a.notice("Started a new conversation.")
+	a.newSession("clear", func() { a.notice("Started a new conversation.") })
 }
 
 func (a *App) cmdQuit(string) { a.requestQuit() }
 
-// nameSession names the conversation (/name, and extensions).
-func (a *App) nameSession(name string) {
-	a.sessName = name
-	a.editor.Title = a.sessName
-	a.sess.Append(session.Entry{Type: session.TypeName, Name: name})
-	a.statusTrigger()
-	a.remoteUpdated()
-}
-
-func (a *App) cmdName(arg string) {
-	if arg == "" {
-		if a.sessName == "" {
-			a.notice("This conversation has no name. Usage: /name <name>")
-		} else {
-			a.notice("This conversation is named %q.", a.sessName)
-		}
-		return
+// cmdName shows the name; with one, the runtime names the conversation.
+func (a *App) cmdName(arg string) bool {
+	if arg != "" {
+		return false
 	}
-	a.nameSession(arg)
-	a.notice("Named this conversation %q.", arg)
-	a.remoteUpdated()
+	if a.sessName == "" {
+		a.notice("This conversation has no name. Usage: /name <name>")
+	} else {
+		a.notice("This conversation is named %q.", a.sessName)
+	}
+	return true
 }
 
+// cmdArchive archives this conversation and starts a new one.
 func (a *App) cmdArchive(string) {
-	if a.turns.Busy {
+	if a.busy {
 		a.notice("Still working — press esc to interrupt first.")
 		return
 	}
-	path := a.sess.Path
-	a.sess.Close()
+	path, id := a.sessPath, a.threadID
 	if _, err := os.Stat(path); err != nil {
 		a.notice("Nothing to archive yet.")
 		return
 	}
-	if _, err := session.Archive(path); err != nil {
+	rel, err := filepath.Rel(config.SessionsDir(), path)
+	if err != nil {
 		a.errorNotice(err)
 		return
 	}
-	a.reset()
-	a.newSession("other")
-	a.notice("Archived the conversation. Find it with /resume (shift+tab shows archived).")
+	dst := filepath.Join(config.ArchivedDir(), rel)
+	if _, err := os.Stat(dst); err == nil {
+		a.errorNotice(fmt.Errorf("session already exists at %s", dst))
+		return
+	} else if !os.IsNotExist(err) {
+		a.errorNotice(err)
+		return
+	}
+	a.newSession("other", func() {
+		// The old session is closed now (it was idle): its file can move.
+		a.rpc("thread/close", map[string]any{"threadId": id, "reason": "other"}, func(json.RawMessage, error) {
+			if _, err := session.Archive(path); err != nil {
+				a.errorNotice(err)
+				return
+			}
+			a.notice("Archived the conversation. Find it with /resume (shift+tab shows archived).")
+		})
+	})
+}
+
+// cmdExtensions lists the extensions; approving one is the runtime's.
+func (a *App) cmdExtensions(arg string) bool {
+	if strings.TrimSpace(arg) != "" {
+		return false
+	}
+	var rows []core.Row
+	for _, s := range a.loaded.Details() {
+		if s.Title == "Extensions" {
+			rows = s.Rows
+		}
+	}
+	lines := []string{"Extensions (guide: atto extensions docs; types: atto extensions types):"}
+	for _, r := range rows {
+		lines = append(lines, "  "+r.Label+"  "+r.Text)
+	}
+	a.notice("%s", strings.Join(lines, "\n"))
+	return true
+}
+
+func (a *App) cmdReload(string) {
+	a.rpcErr("thread/reload", nil)
+	a.askProjectApprovals()
 }

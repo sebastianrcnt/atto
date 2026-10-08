@@ -60,7 +60,9 @@ const webCSP = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-
 //
 // Every request except the web client's files needs the token, as
 // "Authorization: Bearer" or ?token= (EventSource cannot set headers).
-func (s *Server) HTTPHandler(token string) http.Handler {
+func (s *Server) HTTPHandler(token string) http.Handler { return s.httpHandler(token, s.OnClients) }
+
+func (s *Server) httpHandler(token string, onClients func(int)) http.Handler {
 	b := s.events
 	// Legacy HTTP clients share an anonymous transport identity; they need
 	// not echo a new field to keep working. JSON-lines connections have
@@ -68,8 +70,8 @@ func (s *Server) HTTPHandler(token string) http.Handler {
 	c := &clientConn{id: fmt.Sprintf("h%d", clientSeq.Add(1))}
 	var streams atomic.Int64 // this handler's streams share one client identity
 	clients := func() {
-		if s.OnClients != nil {
-			s.OnClients(b.clients()) // outside the broker's lock: the hook may wait for a UI
+		if onClients != nil {
+			onClients(int(streams.Load())) // outside the broker's lock: the hook may wait for a UI
 		}
 	}
 	authed := func(r *http.Request) bool {
@@ -143,9 +145,9 @@ func (s *Server) HTTPHandler(token string) http.Handler {
 			if streams.Add(-1) == 0 {
 				s.clientGone(client.id)
 			}
+			clients()
 		}()
 		clients()
-		defer clients()
 		defer b.unsubscribe(ch)
 		w.Header().Set("Content-Type", "text/event-stream")
 		w.Header().Set("Cache-Control", "no-cache")

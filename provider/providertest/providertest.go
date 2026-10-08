@@ -33,6 +33,10 @@ type Reply struct {
 	Gate chan struct{}
 	// Status, when not 0 or 200, fails the request with that status.
 	Status int
+	// Error replaces the default error message of a failed reply.
+	Error string
+	// Headers are sent before the reply, for retry and transport tests.
+	Headers map[string]string
 	// Usage is the reply's prompt/completion/cached tokens.
 	Prompt, Completion, Cached int
 }
@@ -112,8 +116,16 @@ func (m *Model) serve(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	for name, value := range rep.Headers {
+		w.Header().Set(name, value)
+	}
 	if rep.Status != 0 && rep.Status != http.StatusOK {
-		http.Error(w, `{"error":{"message":"scripted failure"}}`, rep.Status)
+		message := rep.Error
+		if message == "" {
+			message = "scripted failure"
+		}
+		body, _ := json.Marshal(map[string]any{"error": map[string]string{"message": message}})
+		http.Error(w, string(body), rep.Status)
 		return
 	}
 	fl, _ := w.(http.Flusher)

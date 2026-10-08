@@ -13,10 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sebastianrcnt/atto/agent"
 	"github.com/sebastianrcnt/atto/config"
-	"github.com/sebastianrcnt/atto/jobs"
-	"github.com/sebastianrcnt/atto/tui"
 )
 
 // remoteModel answers by the last message: "block" waits until the
@@ -81,31 +78,12 @@ func (m *remoteModel) blocks() int {
 // free port.
 func remoteApp(t *testing.T, model *remoteModel) *App {
 	t.Helper()
-	t.Setenv("ATTO_DIR", t.TempDir())
-	writeTestFile(t, config.ModelsPath(), `{"providers":{"t":{"baseUrl":"`+model.URL+`","models":[`+
-		`{"id":"m","contextWindow":100000},{"id":"m2","contextWindow":100000,"reasoning":true}]}}}`)
-	models, err := config.LoadModels()
-	if err != nil {
-		t.Fatal(err)
-	}
-	ref, _ := models.Find("t", "m")
-	cwd := t.TempDir()
-	a := &App{ui: tui.New(nullTerm{}), models: models, agent: agent.New(ref, "", cwd), tools: map[string]*toolBlock{}, cwd: cwd, quit: make(chan struct{})}
-	a.build()
+	cwd, _ := testEnv(t)
+	writeTestFile(t, config.ModelsPath(), `{"providers":{"t":{"baseUrl":"`+model.URL+`","models":[{"id":"m","contextWindow":100000},{"id":"m2","contextWindow":100000,"reasoning":true}]}}}`)
+	a := startApp(t, cwd)
 	a.remoteHost = "127.0.0.1"
-	a.remotePort = new(int) // any free port
-	a.newSession("")
-	t.Cleanup(func() {
-		a.ui.Do(func() {
-			if a.turns.Cancel != nil {
-				a.turns.Cancel(nil)
-			}
-			a.stopRemote()
-		})
-		waitIdle(t, a)
-		jobs.KillAll(a.sess.ID)
-		a.closeSession()
-	})
+	a.remotePort = new(int)
+	t.Cleanup(func() { a.ui.Do(a.stopRemote) })
 	return a
 }
 
@@ -227,11 +205,11 @@ func remoteUserBlocks(a *App) []*userBlock {
 func TestRemoteLiveSession(t *testing.T) {
 	model := newRemoteModel(t)
 	a := remoteApp(t, model)
-	runTurn(t, a, "first")
+	send(t, a, "first")
 
 	a.ui.Do(func() { a.cmdRemote("on") })
 	c := a.remoteClient(t)
-	text := bodyText(a)
+	text := shown(a)
 	if !strings.Contains(text, c.base+"/#token="+c.token) || !strings.Contains(text, "█") || !strings.Contains(text, "/remote off") {
 		t.Fatalf("the notice should show the link and its QR code:\n%s", text)
 	}
@@ -244,20 +222,28 @@ func TestRemoteLiveSession(t *testing.T) {
 		t.Fatalf("wrong token: %d", r.StatusCode)
 	}
 	var sess string
-	a.ui.Do(func() { sess = a.sess.ID })
+	a.ui.Do(func() { sess = a.threadID })
 	if init := c.must("initialize", nil); init["live"] != true || init["threadId"] != sess {
 		t.Fatalf("initialize %v", init)
 	}
 
-	// Replay: the conversation so far.
+	// Replay: the conversation and runtime notices so far.
 	read := c.must("thread/read", nil)
 	var types []string
+	var notices []string
 	for _, it := range read["items"].([]any) {
 		m := it.(map[string]any)
-		types = append(types, m["type"].(string)+":"+fmt.Sprint(m["text"]))
+		if m["type"] != "notice" {
+			types = append(types, m["type"].(string)+":"+fmt.Sprint(m["text"]))
+		} else {
+			notices = append(notices, fmt.Sprint(m["text"]))
+		}
 	}
 	if got := strings.Join(types, ","); got != "userMessage:first,agentMessage:answer to first" || read["threadId"] != sess || read["model"] != "t/m" {
 		t.Fatalf("thread/read items %s (%v)", got, read)
+	}
+	if len(notices) != 2 || !strings.HasPrefix(notices[0], "Loaded") || !strings.HasPrefix(notices[1], "Worked for") {
+		t.Fatalf("runtime notices %v", notices)
 	}
 	eid, _ := read["eventId"].(float64) // omitted while 0
 	ev := c.events(eid)
@@ -330,12 +316,13 @@ func TestRemoteLiveSession(t *testing.T) {
 	if r := c.must("thread/setModel", map[string]any{"model": "t/m2"}); r["model"] != "t/m2" {
 		t.Fatalf("setModel %v", r)
 	}
-	if m, _ := until(t, ev, "thread/updated", nil); m.Params["thread"].(map[string]any)["model"] != "t/m2" {
+	if m, _ := until(t, ev, "thread/updated", func(m rmsg) bool { return m.Params["thread"].(map[string]any)["model"] == "t/m2" }); m.Params["thread"].(map[string]any)["model"] != "t/m2" {
 		t.Fatalf("thread/updated %v", m.Params)
 	}
 	if r := c.must("thread/setEffort", map[string]any{"effort": "low"}); r["effort"] != "low" {
 		t.Fatalf("setEffort %v", r)
 	}
+	settle(a)
 	var cur config.ModelRef
 	var effort string
 	a.ui.Do(func() { cur, effort = a.model(), a.effort() })
@@ -350,15 +337,16 @@ func TestRemoteLiveSession(t *testing.T) {
 	a.ui.Do(func() { a.cmdClear("") })
 	m, _ := until(t, ev, "thread/switched", nil)
 	var now string
-	a.ui.Do(func() { now = a.sess.ID })
+	a.ui.Do(func() { now = a.threadID })
 	if m.Params["threadId"] != now || m.Params["previousThreadId"] != sess || now == sess {
 		t.Fatalf("switched %v (now %s, was %s)", m.Params, now, sess)
 	}
 	r := c.must("thread/read", map[string]any{"threadId": now})
 	items, _ := r["items"].([]any)
-	if r["threadId"] != now || len(items) != 1 || items[0].(map[string]any)["text"] != "Started a new conversation." {
-		t.Fatalf("after /clear, only the terminal's notice: %v", r)
+	if r["threadId"] != now || len(items) != 1 || items[0].(map[string]any)["level"] != "loaded" {
+		t.Fatalf("after /clear, only the new runtime's Loaded notice: %v", r)
 	}
+	within(t, a, "local clear notice", func() bool { return strings.Contains(bodyText(a), "Started a new conversation.") })
 	if m := c.call("turn/start", map[string]any{"threadId": sess, "input": "x"}); m.Error == nil {
 		t.Fatal("a message for the old session went through")
 	}
@@ -419,7 +407,7 @@ func TestRemoteTokenPerStart(t *testing.T) {
 func TestRemotePendingAndRollback(t *testing.T) {
 	model := newRemoteModel(t)
 	a := remoteApp(t, model)
-	runTurn(t, a, "first")
+	send(t, a, "first")
 	a.ui.Do(func() { a.cmdRemote("on") })
 	c := a.remoteClient(t)
 	read := c.must("thread/read", nil)
@@ -454,7 +442,7 @@ func TestRemotePendingAndRollback(t *testing.T) {
 		t.Fatal("unsteered twice")
 	}
 	var steers []string
-	a.ui.Do(func() { steers = a.agent.DrainSteers() })
+	a.ui.Do(func() { steers = a.pending.Steers })
 	if len(steers) != 0 {
 		t.Fatalf("the agent still has %v", steers)
 	}

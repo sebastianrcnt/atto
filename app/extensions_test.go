@@ -4,52 +4,34 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/sebastianrcnt/atto/config"
-	"github.com/sebastianrcnt/atto/core"
 	"github.com/sebastianrcnt/atto/tui"
 )
 
 // extApp is a loadedApp with the extension demo.ts running, as Run sets
 // it up.
-func extApp(t *testing.T, src string) *App {
-	t.Helper()
-	a := loadedApp(t)
+func extUIApp(t *testing.T, src string) *App {
+	cwd, _ := testEnv(t)
 	writeTestFile(t, filepath.Join(config.ExtensionsDir(), "demo.ts"), src)
-	a.ext = core.LoadExtensions(a.agent, newTUIHost(a))
-	t.Cleanup(func() {
-		a.ext.Close()
-		a.doQuit()
-	})
-	a.ui.Do(func() {
-		a.newSession("")
-		a.sessionStartHook("startup")
-	})
-	return a
+	return startApp(t, cwd)
 }
+
+// extensionCommands is the runtime catalog projected for the suggestions.
+func (a *App) extensionCommands() []command {
+	var out []command
+	for _, c := range a.catalog {
+		if c.Origin == "extension" {
+			out = append(out, command{c.Name, c.Args, c.Desc})
+		}
+	}
+	return out
+}
+
+func (a *App) runCommand(text string) { a.submit(text, nil) }
 
 // within polls cond under the UI lock: extensions reach the UI
 // asynchronously.
-func within(t *testing.T, a *App, what string, cond func() bool) {
-	t.Helper()
-	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(5 * time.Millisecond) {
-		ok := false
-		a.ui.Do(func() { ok = cond() })
-		if ok {
-			return
-		}
-	}
-	t.Fatalf("timed out waiting for %s", what)
-}
-
-func bodyText(a *App) string {
-	var out []string
-	for _, c := range a.ui.Body.Children {
-		out = append(out, c.Render(100)...)
-	}
-	return plainLines(out)
-}
 
 const demoExtension = `
 export default function (atto: any) {
@@ -69,7 +51,7 @@ export default function (atto: any) {
 `
 
 func TestExtensionInTUI(t *testing.T) {
-	a := extApp(t, demoExtension)
+	a := extUIApp(t, demoExtension)
 	within(t, a, "the status item", func() bool {
 		return strings.Contains(plainLines(a.renderStatus(100)), "demo:startup")
 	})
@@ -135,27 +117,39 @@ func TestExtensionInTUI(t *testing.T) {
 	if got := plainLines(bs[len(bs)-1].Render(100)); !strings.Contains(got, "changed  extension demo") {
 		t.Fatalf("reload block:\n%s", got)
 	}
-	if cs := a.extensionCommands(); len(cs) != 3 || cs[0].name != "demo2" || cs[2].name != "diff" {
-		t.Fatalf("%+v", cs)
-	}
+	within(t, a, "the new extension catalog", func() bool {
+		cs := a.extensionCommands()
+		return len(cs) == 3 && cs[0].name == "demo2" && cs[2].name == "diff"
+	})
 }
 
 func TestExtensionDialogWhileModalOpen(t *testing.T) {
-	a := extApp(t, `export default (atto: any) => atto.registerCommand("ask", { handler: async (_a: string, ctx: any) => ctx.ui.notify("got " + await ctx.ui.confirm("x?")) })`)
+	a := extUIApp(t, `export default (atto: any) => atto.registerCommand("ask", { handler: async (_a: string, ctx: any) => ctx.ui.notify("got " + await ctx.ui.confirm("x?")) })`)
 	a.ui.Do(func() {
 		a.openModal(&tui.SelectList{Title: "busy"})
 		a.runCommand("/ask")
 	})
-	within(t, a, "the default answer", func() bool { return strings.Contains(bodyText(a), "[demo] got false") })
+	settle(a)
+	a.ui.Do(func() {
+		if strings.Contains(bodyText(a), "[demo] got false") {
+			t.Fatal("question auto-answered behind a picker")
+		}
+		a.closeModal()
+	})
+	within(t, a, "waiting question", func() bool { return a.modal != nil && strings.Contains(plainLines(a.renderInput(100)), "x?") })
+	key(a, "\x1b")
+	within(t, a, "cancelled answer", func() bool { return strings.Contains(bodyText(a), "[demo] got false") })
 }
 
 func TestExtensionsCommand(t *testing.T) {
-	a := extApp(t, demoExtension)
+	a := extUIApp(t, demoExtension)
 	proj := filepath.Join(a.cwd, ".atto", "extensions", "local.js")
 	writeTestFile(t, proj, `export default (atto) => atto.registerCommand("local", { handler() {} })`)
 	a.ui.Do(func() { a.runCommand("/reload") })
+	settle(a)
 	a.ui.Do(func() { a.runCommand("/extensions") })
-	got := bodyText(a)
+	settle(a)
+	got := shown(a)
 	for _, s := range []string{"demo  loaded · user", "local  needs approval: /extensions approve local"} {
 		if !strings.Contains(got, s) {
 			t.Fatalf("lacks %q:\n%s", s, got)

@@ -1,74 +1,68 @@
 package app
 
 import (
-	"context"
-	"errors"
+	"strings"
 	"testing"
 	"time"
 
-	"github.com/sebastianrcnt/atto/agent"
+	"github.com/sebastianrcnt/atto/provider/providertest"
+	"github.com/sebastianrcnt/atto/session"
 )
 
-func TestTurnCancellationCauses(t *testing.T) {
-	for _, tt := range []struct {
-		name string
-		stop func(*App)
-		user bool
-	}{
-		{"Esc", func(a *App) { press(a, "\x1b") }, true},
-		{"Ctrl+C", func(a *App) { press(a, "\x03") }, true},
-		{"Ctrl+Enter", func(a *App) { a.editor.SetText("now"); press(a, ctrlEnterKey) }, true},
-		{"remote interrupt", func(a *App) { a.interrupt() }, true},
-		{"cancel task", func(a *App) { a.cancelTask() }, true},
-		{"quit", func(a *App) { a.turns.Cancel(nil) }, false},
-		{"navigation", func(a *App) { a.moveTo("old", nil) }, false},
-		{"resume", func(a *App) { a.resume("other") }, false},
-	} {
-		t.Run(tt.name, func(t *testing.T) {
-			a := treeApp(t)
-			ctx, err := a.turns.Begin(context.Background())
+func TestClientInterruptKeys(t *testing.T) {
+	for _, k := range []string{"\x1b", "\x03", ctrlEnterKey, "remote", "cancel"} {
+		t.Run(k, func(t *testing.T) {
+			a, m := liveApp(t, providertest.Reply{Command: "sleep 30", Description: "long command"}, providertest.Reply{Text: "done"})
+			typeLine(a, "run")
+			m.Started(5 * time.Second)
+			within(t, a, "running command", func() bool { return a.toolsRunning > 0 })
+			switch k {
+			case "remote":
+				a.ui.Do(func() { a.interrupt() })
+			case "cancel":
+				a.ui.Do(a.cancelTask)
+			case ctrlEnterKey:
+				a.ui.Do(func() { a.editor.SetText("now") })
+				key(a, k)
+			default:
+				key(a, k)
+			}
+			within(t, a, "interrupted command detached", func() bool {
+				return strings.Contains(bodyText(a), "Interrupted") || strings.Contains(bodyText(a), "background")
+			})
+			waitIdle(t, a)
+			_, es, err := session.Load(a.sessPath)
 			if err != nil {
 				t.Fatal(err)
 			}
-			defer a.turns.End()
-			a.runKind = "turn"
-			tt.stop(a)
-			if ctx.Err() == nil || errors.Is(context.Cause(ctx), agent.ErrUserInterrupt) != tt.user {
-				t.Fatalf("cause %v, want user=%v", context.Cause(ctx), tt.user)
+			text := ""
+			for _, e := range es {
+				if e.Message != nil {
+					text += e.Message.Content
+				}
+			}
+			if !strings.Contains(text, "[canceled by user]") {
+				t.Fatalf("user interrupt did not detach: %s", text)
 			}
 		})
 	}
 }
 
-func TestCtrlBRequestsUserShellBackground(t *testing.T) {
-	a := treeApp(t)
-	a.shell = &shellRun{background: make(chan struct{}, 1)}
-	press(a, "\x02")
-	select {
-	case <-a.shell.background:
-	default:
-		t.Fatal("Ctrl+B did not reach the user-entered command")
-	}
-}
-
 func TestQuitDoesNotStartQueuedTurn(t *testing.T) {
-	model := newRemoteModel(t)
-	a := remoteApp(t, model)
-	a.ui.Do(func() { a.startTurn("block", nil) })
-	within(t, a, "blocking request", func() bool { return model.blocks() == 1 })
-	a.ui.Do(func() {
-		a.turns.Queued = append(a.turns.Queued, queuedInput{text: "next"})
-		a.doQuit()
-		a.turns.Cancel(nil)
-	})
-	select {
-	case <-a.runDone:
-	case <-time.After(5 * time.Second):
-		t.Fatal("quitting turn did not finish")
+	gate := make(chan struct{})
+	defer close(gate)
+	a, m := liveApp(t, providertest.Reply{Gate: gate})
+	typeLine(a, "block")
+	m.Started(5 * time.Second)
+	a.ui.Do(func() { a.editor.SetText("next") })
+	key(a, "\t")
+	settle(a)
+	a.ui.Do(a.doQuit)
+	if err := a.shutdown(); err != nil {
+		t.Fatal(err)
 	}
-	a.ui.Do(func() {
-		if a.turns.Busy || len(a.turns.Queued) != 1 {
-			t.Fatal("quitting started queued work")
-		}
-	})
+	time.Sleep(100 * time.Millisecond)
+	if len(m.Requests()) != 1 {
+		t.Fatalf("queued turn started on quit: %v", m.Requests())
+	}
 }

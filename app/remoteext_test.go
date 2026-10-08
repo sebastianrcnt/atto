@@ -3,8 +3,6 @@ package app
 import (
 	"strings"
 	"testing"
-
-	"github.com/sebastianrcnt/atto/extensions"
 )
 
 // What extensions show in the terminal reaches /remote's clients as data:
@@ -12,8 +10,11 @@ import (
 // in thread/read), a text block (an extText item), status items and
 // widgets (extension/ui, extensionUi) and notices (extension/notify).
 func TestRemoteExtensionUI(t *testing.T) {
-	a := remoteApp(t, newRemoteModel(t))
-	runTurn(t, a, "first")
+	a := extUIApp(t, remoteUIExtension)
+	a.remoteHost = "127.0.0.1"
+	a.remotePort = new(int)
+	t.Cleanup(func() { a.ui.Do(a.stopRemote) })
+	send(t, a, "first")
 	var blockID, itemID string
 	a.ui.Do(func() {
 		for id, b := range a.blocks {
@@ -30,14 +31,8 @@ func TestRemoteExtensionUI(t *testing.T) {
 	ev := c.events(eid)
 	within(t, a, "the client to connect", func() bool { return a.remote.clients == 1 })
 
-	h := newTUIHost(a)
-	h.SetBlockStatus("tr", blockID, "translating…")
-	h.SetBlockDisplay("tr", blockID, "**SHOWN**")
-	h.SetBlockStatus("tr", "elsewhere", "ignored")
-	h.SetStatus("tr", "mode", "on")
-	h.SetWidget("tr", "w", []string{"one", "two"})
-	h.ShowText("tr", "report", "+a\n-b", extensions.TextOptions{Lang: "diff", Preview: 1})
-	h.Notify("tr", "hello", "warning")
+	typeLine(a, "/decorate "+blockID)
+	settle(a)
 
 	var display map[string]any
 	for _, want := range []string{"item/display", "item/display", "extension/ui", "extension/ui", "item/completed", "extension/notify"} {
@@ -49,16 +44,16 @@ func TestRemoteExtensionUI(t *testing.T) {
 			}
 			display, _ = m.Params["display"].(map[string]any)
 		case "item/completed":
-			if it := item(m); it["type"] != "extText" || it["title"] != "report" || it["ext"] != "tr" || it["lang"] != "diff" || it["preview"] != float64(1) || it["text"] != "+a\n-b" {
+			if it := item(m); it["type"] != "extText" || it["title"] != "report" || it["ext"] != "demo" || it["lang"] != "diff" || it["preview"] != float64(1) || it["text"] != "+a\n-b" {
 				t.Fatalf("extText %v", it)
 			}
 		case "extension/notify":
-			if m.Params["extension"] != "tr" || m.Params["message"] != "hello" || m.Params["level"] != "warning" {
+			if m.Params["extension"] != "demo" || m.Params["message"] != "hello" || m.Params["level"] != "warning" {
 				t.Fatalf("notify %v", m.Params)
 			}
 		}
 	}
-	if display["ext"] != "tr" || display["text"] != "**SHOWN**" || len(display["statuses"].([]any)) != 1 {
+	if display["ext"] != "demo" || display["text"] != "**SHOWN**" || len(display["statuses"].([]any)) != 1 {
 		t.Fatalf("display %v", display)
 	}
 
@@ -79,12 +74,13 @@ func TestRemoteExtensionUI(t *testing.T) {
 	status, _ := ui["status"].([]any)
 	widgets, _ := ui["widgets"].([]any)
 	if strings.Join(got, ",") != "display **SHOWN**,extText report" || len(status) != 1 || len(widgets) != 1 ||
-		status[0].(map[string]any)["key"] != "tr/mode" || status[0].(map[string]any)["text"] != "on" {
+		status[0].(map[string]any)["key"] != "demo/mode" || status[0].(map[string]any)["text"] != "on" {
 		t.Fatalf("thread/read: %v, ui %v", got, ui)
 	}
 
 	// Cleared: the clients hear it.
-	h.ClearUI("tr")
+	typeLine(a, "/clean "+blockID)
+	settle(a)
 	m, _ := until(t, ev, "extension/ui", func(m rmsg) bool {
 		u, _ := m.Params["ui"].(map[string]any)
 		s, _ := u["status"].([]any)
@@ -94,9 +90,17 @@ func TestRemoteExtensionUI(t *testing.T) {
 	if m.Params["ui"] == nil {
 		t.Fatal("no ui")
 	}
-	h.SetBlockDisplay("tr", blockID, "")
+
 	m, _ = until(t, ev, "item/display", nil)
 	if d, _ := m.Params["display"].(map[string]any); d["text"] != nil {
 		t.Fatalf("restored: %v", m.Params)
 	}
 }
+
+const remoteUIExtension = `export default (atto: any) => {
+ atto.registerCommand("decorate", {handler(id: string,ctx: any){
+  ctx.ui.setBlockStatus(id,"translating…");ctx.ui.setBlockDisplay(id,"**SHOWN**");ctx.ui.setBlockStatus("elsewhere","ignored");
+  ctx.ui.setStatus("mode","on");ctx.ui.setWidget("w",["one","two"]);ctx.ui.showText("report","+a\n-b",{lang:"diff",preview:1});ctx.ui.notify("hello","warning");
+ }});
+ atto.registerCommand("clean",{handler(id: string,ctx: any){ctx.ui.setStatus("mode",null);ctx.ui.setWidget("w",null);ctx.ui.setBlockDisplay(id,null)}});
+}`

@@ -135,6 +135,7 @@ func (t *thread) startBackgroundRun() {
 	if err != nil {
 		// The failed handoff retained our lease.
 		t.errorNotice(fmt.Errorf("could not run in the background: %w", err))
+		t.publish("thread/handoffFailed", map[string]any{"error": err.Error()})
 		return
 	}
 	name := t.name

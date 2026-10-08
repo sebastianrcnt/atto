@@ -4,8 +4,6 @@ import (
 	"strings"
 
 	"github.com/sebastianrcnt/atto/core/transcript"
-	"github.com/sebastianrcnt/atto/extensions"
-	"github.com/sebastianrcnt/atto/session"
 	"github.com/sebastianrcnt/atto/tui"
 )
 
@@ -109,15 +107,6 @@ func diffLine(l string) string {
 		return tui.FG(1, l)
 	}
 	return l
-}
-
-// showText is ctx.ui.showText: it adds the block and saves it in the
-// session.
-func (a *App) showText(ext, title, text string, o extensions.TextOptions) {
-	a.tr().Add(transcript.Item{Kind: transcript.ExtText, Ext: ext, Title: title, Text: text, Lang: o.Lang, Preview: o.Preview})
-	if a.sess != nil {
-		a.sess.Append(session.Entry{Type: session.TypeExtText, Ext: ext, Title: title, Display: text, Lang: o.Lang, Preview: o.Preview})
-	}
 }
 
 // extTextStarted adds the block of an ext_text item, live and on replay.

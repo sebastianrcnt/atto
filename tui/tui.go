@@ -251,9 +251,9 @@ func (t *TUI) SetMode(m Mode) {
 // Do runs fn under the TUI lock and schedules a render.
 func (t *TUI) Do(fn func()) {
 	t.mu.Lock()
+	defer t.mu.Unlock()
+	defer t.RequestRender()
 	fn()
-	t.mu.Unlock()
-	t.RequestRender()
 }
 
 // RequestRender schedules a render; multiple requests coalesce into one frame.

@@ -13,10 +13,9 @@ func TestCurrentSessionArchivePreservesWriterLease(t *testing.T) {
 	for _, busy := range []bool{true, false} {
 		t.Run(map[bool]string{true: "running", false: "failed"}[busy], func(t *testing.T) {
 			a := treeApp(t)
-			t.Cleanup(a.closeSession)
-			a.record("user", "kept")
-			path := a.sess.Path
-			a.turns.Busy = busy
+			send(t, a, "kept")
+			path := a.sessPath
+			a.ui.Do(func() { a.busy = busy })
 			if !busy {
 				rel, err := filepath.Rel(config.SessionsDir(), path)
 				if err != nil {
@@ -33,13 +32,14 @@ func TestCurrentSessionArchivePreservesWriterLease(t *testing.T) {
 			a.cmdSessions("")
 			p := a.modal.(*resumePicker)
 			p.onArchive(session.Summary{Path: path})
-			if a.sess.Path != path {
+			settle(a)
+			if a.sessPath != path {
 				t.Fatal("refused archive switched session")
 			}
 			if _, err := os.Stat(path); err != nil {
 				t.Fatal(err)
 			}
-			if _, locked := session.LockedBy(path); !locked || a.unlock == nil {
+			if _, locked := session.LockedBy(path); !locked || a.conn == nil {
 				t.Fatal("refused archive lost writer lease")
 			}
 		})

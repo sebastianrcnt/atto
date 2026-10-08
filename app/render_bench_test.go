@@ -29,9 +29,8 @@ func transcriptApp(tb testing.TB, mode tui.Mode, fullRepaint bool) *App {
 // transcriptAppOn is transcriptApp on the terminal term.
 func transcriptAppOn(tb testing.TB, term tui.Terminal, mode tui.Mode, fullRepaint bool) *App {
 	tb.Setenv("ATTO_DIR", tb.TempDir())
-	model := config.ModelRef{ProviderName: "t", Model: config.Model{ID: "m"}}
-	a := &App{ui: tui.New(term), agent: agent.New(model, "", tb.TempDir()), tools: map[string]*toolBlock{}, quit: make(chan struct{})}
-	a.build()
+	a := newApp(term, config.ModelsFile{Providers: map[string]config.Provider{"t": {Models: []config.Model{{ID: "m"}}}}}, tb.TempDir())
+	a.info.Model = "t/m"
 	a.ui.Mode, a.ui.FullRepaint = mode, fullRepaint
 	words := strings.Fields("the quick brown fox jumps over the lazy dog while reading src/main.go and thinking about the next step")
 	para := func(n int) string {
@@ -67,7 +66,7 @@ func transcriptAppOn(tb testing.TB, term tui.Terminal, mode tui.Mode, fullRepain
 		a.add(txt)
 		a.add(&noticeBlock{text: "a notice " + para(20), style: tui.Dim})
 	}
-	a.turns.Busy, a.runStart, a.activity = true, time.Now(), "Thinking"
+	a.busy, a.runStart, a.activity = true, time.Now(), "Thinking"
 	a.lastEvent = a.runStart
 	return a
 }

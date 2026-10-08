@@ -1,12 +1,15 @@
 package app
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/sebastianrcnt/atto/daemon"
+	"github.com/sebastianrcnt/atto/provider/providertest"
+	"github.com/sebastianrcnt/atto/server"
 	"github.com/sebastianrcnt/atto/session"
 	"github.com/sebastianrcnt/atto/tui"
 )
@@ -50,7 +53,7 @@ func TestCenterListsSessionsByProjectAndState(t *testing.T) {
 	now := time.Now()
 	fakeCenter(t,
 		[]daemon.Pane{
-			{ID: 1, Cwd: a.cwd, Session: a.sess.ID, Clients: 1, State: "idle", Active: now},
+			{ID: 1, Cwd: a.cwd, Session: a.threadID, Clients: 1, State: "idle", Active: now},
 			{ID: 2, Cwd: "/w/api", Session: "s2", Name: "fix the api", State: "working", Active: now.Add(-time.Minute)},
 			{ID: 3, Cwd: "/w/api", Session: "s3", Name: "answer me", State: "waiting", Active: now.Add(-2 * time.Minute)},
 		},
@@ -130,7 +133,7 @@ func TestCenterListsSessionsByProjectAndState(t *testing.T) {
 
 func TestCenterDirectResumesInPlace(t *testing.T) {
 	a, _ := paneApp(t, false)
-	a.nameSession("here now")
+	a.sessName = "here now"
 	other := session.New(a.cwd)
 	other.Append(session.Entry{Type: session.TypeName, Name: "earlier work"})
 	other.Close()
@@ -141,38 +144,45 @@ func TestCenterDirectResumesInPlace(t *testing.T) {
 	if c.tab != tabInactive {
 		t.Fatalf("/resume opens on Inactive, tab %d", c.tab)
 	}
-	c.HandleInput("\r")
-	if a.sess.ID != other.ID {
-		t.Fatalf("resumed %s, want %s", a.sess.ID, other.ID)
-	}
+	a.ui.Do(func() { c.HandleInput("\r") })
+	within(t, a, "the resumed session", func() bool { return a.threadID == other.ID })
 }
 
+// Opening another session detaches the busy one rather than canceling it.
+// Its accepted work finishes, then retention zero releases the writer.
 func TestCenterDefersResumeWhileBusy(t *testing.T) {
-	a, _ := paneApp(t, false)
-	original := a.sess.ID
+	gate := make(chan struct{})
+	a, model := liveApp(t, providertest.Reply{Text: "finished old work", Gate: gate})
+	original, path := a.threadID, a.sessPath
 	other := session.New(a.cwd)
 	other.Append(session.Entry{Type: session.TypeName, Name: "other work"})
 	other.Close()
 	fakeCenter(t, nil, []session.Summary{{ID: other.ID, Cwd: a.cwd, Name: "other work", Updated: time.Now()}})
-
-	canceled := false
-	a.turns.Busy = true
-	a.turns.Cancel = func(error) { canceled = true }
-	a.cmdResume("")
+	typeLine(a, "keep working")
+	model.Started(5 * time.Second)
+	a.ui.Do(func() { a.cmdResume("") })
 	waitCenter(t, a)
-	c := a.modal.(*agentCenter)
-	c.HandleInput("\r")
-
-	if !canceled {
-		t.Fatal("opening another session did not cancel the active turn")
+	key(a, "\r")
+	within(t, a, "resume while the old session runs", func() bool { return a.threadID == other.ID })
+	var old server.ThreadInfo
+	if err := a.conn.c.Call(context.Background(), "thread/read", map[string]any{"threadId": original}, &old); err != nil || !old.Busy {
+		t.Fatalf("old runtime %v: %+v", err, old)
 	}
-	if a.pendingResume != other.Path {
-		t.Fatalf("pending resume %q, want %q", a.pendingResume, other.Path)
+	close(gate)
+	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(5 * time.Millisecond) {
+		_, entries, _ := session.Load(path)
+		for _, entry := range entries {
+			if entry.Message != nil && strings.Contains(entry.Message.Content, "finished old work") {
+				for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(5 * time.Millisecond) {
+					if _, locked := session.LockedBy(path); !locked && !a.conn.own.Loaded(original) {
+						return
+					}
+				}
+				t.Fatal("idle detached session retained its lease")
+			}
+		}
 	}
-	if a.sess.ID != original {
-		t.Fatalf("session changed while busy: got %s, want %s", a.sess.ID, original)
-	}
-	a.turns.Busy = false
+	t.Fatal("detached session did not save its answer")
 }
 
 func TestStandaloneCenterPicks(t *testing.T) {
@@ -206,7 +216,7 @@ func TestStandaloneCenterPicks(t *testing.T) {
 // a phone-narrow terminal rows drop the status and age columns.
 func TestCenterScreenLayouts(t *testing.T) {
 	a, _ := paneApp(t, false)
-	now := time.Now().Add(-time.Minute) // saved sessions predate the current one
+	now := time.Now()
 	var saved []session.Summary
 	for i := range 40 {
 		saved = append(saved, session.Summary{ID: fmt.Sprintf("s%d", i), Cwd: fmt.Sprintf("/w/p%d", i%5), Name: fmt.Sprintf("task %d", i), Updated: now.Add(-time.Duration(i) * time.Hour)})

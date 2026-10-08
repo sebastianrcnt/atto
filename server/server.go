@@ -50,7 +50,6 @@ type Server struct {
 	mu          sync.Mutex
 	threads     map[string]*thread
 	stop        chan struct{}
-	live        Live   // set by NewLive: the one conversation served
 	instance    string // see newInstanceID
 	events      *broker
 	clients     map[string]*clientConn
@@ -150,13 +149,14 @@ func decode[T any](raw json.RawMessage) (T, error) {
 }
 
 type threadParams struct {
-	ThreadID string `json:"threadId"`
-	Cwd      string `json:"cwd"`
-	Model    string `json:"model"`
-	Effort   string `json:"effort"`
-	Input    string `json:"input"`
-	Archived bool   `json:"archived"`
-	NumTurns int    `json:"numTurns"`
+	ThreadID   string `json:"threadId"`
+	DeferStart bool   `json:"deferStart"` // TUI waits for its startup project-trust decision
+	Cwd        string `json:"cwd"`
+	Model      string `json:"model"`
+	Effort     string `json:"effort"`
+	Input      string `json:"input"`
+	Archived   bool   `json:"archived"`
+	NumTurns   int    `json:"numTurns"`
 	// Images go with turn/start's and input/submit's input (see images.go).
 	Images []ImageInput `json:"images"`
 	// input/submit: auto, queue, replace or steer.
@@ -166,6 +166,7 @@ type threadParams struct {
 	Mode string `json:"mode"`
 	// prompt/answer
 	ID     string  `json:"id"`
+	Prompt *Prompt `json:"prompt"`
 	Index  *int    `json:"index"`
 	Text   *string `json:"text"`
 	Cancel bool    `json:"cancel"`
@@ -222,9 +223,6 @@ func (s *Server) call(ctx context.Context, method string, raw json.RawMessage) (
 	if err != nil {
 		return nil, err
 	}
-	if s.live != nil {
-		return s.liveCall(ctx, method, p)
-	}
 	if sc := scopeOf(ctx); sc != nil {
 		if out, err, ok := s.scopedCall(ctx, sc, method, p); ok {
 			return out, err
@@ -276,6 +274,15 @@ func (s *Server) call(ctx context.Context, method string, raw json.RawMessage) (
 		var info ThreadInfo
 		err = t.call(func() error { info = t.snapshot(); return nil })
 		return info, err
+	case "thread/tree":
+		if p.Offline {
+			path, err := session.Find(p.ThreadID)
+			if err != nil {
+				return nil, err
+			}
+			_, entries, err := session.Load(path)
+			return map[string]any{"entries": entries, "leaf": session.Leaf(entries)}, err
+		}
 	case "thread/list":
 		return s.listThreads(p)
 	}
@@ -342,6 +349,8 @@ func (s *Server) newThread(o threadOptions) (*thread, error) {
 	t := &thread{s: s, id: o.file.ID, cwd: o.cwd, models: o.models, agent: ag, sess: o.file, release: o.release,
 		hooks: hk, hookSrc: src, blocks: blocks{}, modelFrom: o.modelFrom, effortFrom: o.effortFrom,
 		itemMeta: map[string]userMeta{}, gates: map[string]int{}, attached: map[string]bool{}, lastActive: time.Now()}
+	t.laneWake = make(chan struct{}, 1)
+	t.done = make(chan struct{})
 	t.tr.IDPrefix = itemPrefix(t.id)
 	t.tr.Handler = t.handler()
 	t.resetGoal()
@@ -420,8 +429,12 @@ func (s *Server) startThread(client string, p threadParams) (any, error) {
 			t.notice("", "%s", core.NoModelsHint())
 		}
 		t.showLoaded(false, nil, "")
-		t.sessionStart("startup")
-		t.askMCPApprovals()
+		if p.DeferStart {
+			t.startSource = "startup"
+		} else {
+			t.sessionStart("startup")
+			t.askMCPApprovals()
+		}
 		info = t.snapshot()
 		loaded := t.loaded
 		info.Context = &loaded
@@ -457,6 +470,9 @@ func (t *thread) showLoaded(reloaded bool, changes []core.Change, note string) {
 	l := t.loaded
 	text := strings.Join(append([]string{"Loaded"}, core.FormatRows(l.Summary(), "  ", 12)...), "\n")
 	t.addNotice(Item{Level: "loaded", Text: text, Loaded: &l, Reloaded: reloaded, Changes: changes, Note: note})
+	if notice := config.PriceTierNotice(t.model()); notice != "" {
+		t.notice("", "%s", notice)
+	}
 }
 
 // resumeThread is thread/resume: the thread when loaded (the client
@@ -483,6 +499,15 @@ func (s *Server) resumeThread(client string, p threadParams) (any, error) {
 	}
 	release, err := session.LockKind(path, s.lockKind())
 	if err != nil {
+		if s.lockKind() == session.KindTUI {
+			if lock, ok := session.LockedBy(path); ok && lock.Kind != session.KindTUI {
+				info, readErr := readOffline(p.ThreadID)
+				if readErr == nil {
+					info.ReadOnly = session.ReadOnlyMessage(lock)
+				}
+				return info, readErr
+			}
+		}
 		return nil, &rpcError{Code: codeServer, Message: err.Error(), Data: &ErrorData{Reason: ReasonOwnedElsewhere}}
 	}
 	keep := false
@@ -525,6 +550,11 @@ func (s *Server) resumeThread(client string, p threadParams) (any, error) {
 		t.agent.SetLongContext(saved.LongContext)
 		t.ctx = t.agent.ContextTokens()
 		t.total.Add(saved.Usage)
+		last := saved.LastUsage
+		t.total.Last = &last
+		if ref, ok := models.Find("", saved.UsageModel); ok {
+			t.total.LastCost = ref.Model.Cost
+		}
 		t.total.LastInputTokens, t.total.LastCachedInputTokens = saved.LastUsage.PromptTokens, saved.LastUsage.CachedTokens
 		if m := t.model(); saved.Model != "" && m.ProviderName+"/"+m.Model.ID == saved.Model {
 			t.recModel = saved.Model
@@ -532,7 +562,11 @@ func (s *Server) resumeThread(client string, p threadParams) (any, error) {
 		if saved.Effort != "" {
 			t.recEffort = saved.Effort
 		}
-		t.sessionStart("resume")
+		if p.DeferStart {
+			t.startSource = "resume"
+		} else {
+			t.sessionStart("resume")
+		}
 		t.showLoaded(false, nil, "")
 		t.replayKeepNotices(branch)
 		t.restoreGoal(saved.Snapshots())
@@ -544,7 +578,9 @@ func (s *Server) resumeThread(client string, p threadParams) (any, error) {
 			label = fmt.Sprintf("%q (%s)", t.name, label)
 		}
 		t.notice("", "Resumed session %s.", label)
-		t.askMCPApprovals()
+		if !p.DeferStart {
+			t.askMCPApprovals()
+		}
 		info = t.snapshot()
 		loaded := t.loaded
 		info.Context = &loaded
@@ -575,6 +611,8 @@ func readOffline(id string) (ThreadInfo, error) {
 		switch e.Type {
 		case session.TypeName:
 			saved.Name = e.Name
+		case session.TypeContext:
+			saved.LongContext = e.LongContext
 		case session.TypeModel:
 			saved.Model = e.Provider + "/" + e.Model
 		case session.TypeEffort:
@@ -584,10 +622,23 @@ func readOffline(id string) (ThreadInfo, error) {
 	if err != nil {
 		return ThreadInfo{}, err
 	}
-	info := ThreadInfo{ID: saved.Header.ID, Cwd: saved.Header.Cwd, Name: saved.Name, Model: saved.Model, Effort: saved.Effort, Offline: true, SessionPath: path}
+	info := ThreadInfo{ID: saved.Header.ID, Cwd: saved.Header.Cwd, Name: saved.Name, Model: saved.Model, Effort: saved.Effort, Offline: true, SessionPath: path, LongContext: saved.LongContext}
 	info.Items = ItemsFromEntries(saved.Header.ID, session.Active(saved.Entries))
 	var u Usage
 	u.Add(loaded.Usage)
+	last := loaded.LastUsage
+	u.Last = &last
+	if settings, models, err := core.Load(); err == nil {
+		if model, _, err := core.PickModelFrom(models, settings, "", saved.Model); err == nil {
+			SetModel(&info, model, models)
+		}
+		if model, ok := models.Find("", loaded.UsageModel); ok {
+			u.LastCost = model.Model.Cost
+		}
+		if info.Effort == "" {
+			info.Effort = core.Effort(settings, "")
+		}
+	}
 	u.LastInputTokens, u.LastCachedInputTokens = loaded.LastUsage.PromptTokens, loaded.LastUsage.CachedTokens
 	info.Usage = &u
 	return info, nil
@@ -681,6 +732,7 @@ func (s *Server) clientGone(id string) {
 			}
 			delete(t.attached, id)
 			delete(t.gates, id)
+			t.withdrawClientPrompt(id, "")
 			t.deliverEvents()
 			t.maybeSendNextQueued()
 			t.maybeRetire()

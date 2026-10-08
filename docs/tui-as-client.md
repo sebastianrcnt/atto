@@ -861,29 +861,70 @@ verifies an actual hosted command survives a protocol user interrupt and its qui
 exit does not start another model turn. Existing trust, locking, replay, extension,
 usage, HTTP/SSE and current cancellation regression tests remain in place.
 
-### What phase 2 needs
+### Phase 2 E — the terminal becomes a client
 
-The TUI still executes through App; `server.Live` and `/remote` remain functional.
-Phase 2 must replace App execution with `Client`/`ThreadView`, translate editor
-intents and recovered drafts (including image labels), attach/detach/gate pickers,
-render protocol prompts/activity/notices/items, refresh snapshots on branch/reset,
-and use `thread/tree` rather than reading the runtime's writer. Keep local UI/login
-commands and PTY pane behavior. Test especially reconnect, snapshot/event ordering,
-late block IDs, input recovery, prompt races, trust gates and shell interruption.
-Daemon workers, registry routing, print-on-worker execution, durable accepted-input
-journaling/request dedupe and a full Codex-dialect adapter remain later phases.
-The web client is unchanged.
+App now owns the terminal/editor/rendering and presentation-only commands, not
+an agent, session writer, TurnRunner, hooks, extensions, MCP, goal driver or inbox.
+`server.Connect` connects it to the in-process runtime, including in daemon PTY
+panes in this phase and on Windows. The runtime uses retention zero; `/clear`
+and `/resume` detach the old thread without canceling its turn, and it retires
+once it has no clients or unattended work. Process exit explicitly closes all
+loaded threads with `exit`, running SessionEnd and stopping their jobs.
 
-### Phase 2 gateway foundation
+One ordered request goroutine sends input intents, shell and turn interrupts,
+background commands, picker gates, prompts and session changes. No UI handler
+waits for the runtime. Items pass through `TranscriptItem` into the existing
+blocks; `ThreadView` and snapshots keep branch changes and replay consistent.
+Snapshots buffer concurrent notifications and deduplicate transcript events,
+while addressed one-shot notifications (recovered images/drafts, accepted local
+picker answers and handoff completion) are not discarded by the snapshot cursor.
+Running command start times survive redraws. Status/cost/cache/token/goal figures,
+extension status/widgets/display overrides and notifications come from runtime
+state. `/debug` and `/request` fetch runtime request histories; heap profiles are
+still for the process running the terminal.
 
-`server.Scope` exposes a scoped HTTP gateway over the session runtime. It keeps
-`/remote`'s frozen-web `live` fields and follow-the-terminal selection policy,
-`thread/switched`, typed-input start/steer behavior, legacy takeback, rollback,
-and local command callbacks. Revoking a link stops the gateway, not execution.
-Scoped RPC calls reject other thread IDs; SSE filters both replayed and live
-notifications so abandoned or unrelated sessions are not exposed. Each handler
-has its own client identity and releases its picker gates on its last SSE
-connection ending, even while another gateway remains connected. `ping` provides
-an ordered connection fence for front-end tests. Protocol tests exercise these
-paths against the scripted provider and verify the persisted session. The old
-Live adapter remains only until the TUI is moved to the runtime in this phase.
+`server.Live` and App execution adapters are gone. `/remote` is `server.Scope`
+over the same runtime, with frozen-web `live`, thread switching, rollback,
+agent/subagent aliases and bearer/SSE compatibility. Scope filters both replay
+and live events and counts only its own HTTP clients. Terminal-owned pickers are
+registered runtime prompt objects while a link is active: any client can answer,
+first answer wins, and the owner applies the UI action asynchronously. Without a
+link they remain local. Closing a link never stops execution.
+
+Behavior differences and compatibility choices:
+
+- Switching away from a busy conversation no longer cancels it; accepted work
+  finishes and unattended goals/jobs/timers/prompts continue. This is the adopted
+  detach-not-stop policy, rather than the old pending-resume path.
+- Presentation-only notices (for example `/clear`'s local confirmation) remain
+  local to the terminal. `/remote` snapshots instead include runtime Loaded and
+  Worked notices, as standalone runtime snapshots already do in phase 1.
+- TUI startup uses `deferStart` and `thread/sessionStart` so project trust choices
+  still happen before startup hooks/MCP approval; other protocol clients retain
+  their existing startup behavior. A non-TUI writer remains a read-only display;
+  another TUI writer is still refused. Resume keeps `core.OpenDisplay` and the
+  incremental summary/usage path.
+- Runtime-disconnection reporting is local; socket worker reconnect is not wired
+  in this phase because panes still have in-process runtimes.
+
+Coverage runs App key/command handlers against scripted providers and asserts
+blocks, prompt ownership, queue/gates, recovery, shells, extensions, goals,
+trust, labels/tree/fork, usage, background handoff and saved sessions. Ownership
+unit tests (idle memory, hooks, inbox, shell parsing and interruption) moved next
+to the runtime rather than retaining fake execution fields in App. Race tests
+cover the migrated App and runtime. `TestTerminalCLIEndToEnd` builds the real
+binary and uses a PTY for prompt/answer, steering, hosted-command user-interrupt
+detach and exit with session persistence/lease release. Protocol tests cover
+scoped gateway isolation/replay, owner-detach prompt withdrawal and first-answer
+arbitration. The frozen `server/web` is unchanged.
+
+### What phase 3 needs
+
+Introduce per-session daemon workers and registry/socket routing; make daemon
+panes and `atto connect` clients of workers, with reconnect and detach lifecycle
+rather than shutting their in-process runtimes down. Route print/app-server
+attachment to an existing worker. Keep Windows in-process and legacy background
+handoff for non-daemon runs. Workers need their one-minute unattended idle unload,
+startup socket cleanup and crash/reconnect tests, including retaining running
+command clocks and restoring pending recovery/prompt state. Durable accepted-input
+journaling/request dedupe and the complete Codex-dialect adapter remain later work.

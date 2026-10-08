@@ -250,6 +250,7 @@ func (t *thread) startGoal(ng *goal.Goal) {
 	t.goal.Release()
 	t.goal.Set(ng)
 	t.goalNotice(ng)
+	t.warnGoalContext()
 	t.continueGoal() // starts now if idle, else after the current turn
 }
 
@@ -262,6 +263,7 @@ func (t *thread) resumeGoal() {
 	g.Status, g.Note, g.FailStreak, g.IdleStreak = goal.Active, "", 0, 0
 	t.goal.Set(g)
 	t.goalNotice(g)
+	t.warnGoalContext()
 	t.continueGoal()
 }
 
@@ -340,3 +342,10 @@ func (t *thread) restoreGoal(entries []session.Entry) {
 }
 
 func oneLine(s string) string { return strings.Join(strings.Fields(s), " ") }
+
+// warnGoalContext keeps the price-tier warning with the goal it concerns.
+func (t *thread) warnGoalContext() {
+	if t.agent.LongContext() {
+		t.notice("", "%s", goal.LongContextNotice)
+	}
+}

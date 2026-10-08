@@ -189,7 +189,7 @@ func (b *Builder) apply(ev any, at time.Time) {
 		}
 		b.step = nil
 	case ShellStart:
-		b.shell = b.start(Item{Kind: Shell, Status: InProgress, Command: e.Command, Excluded: e.Exclude})
+		b.shell = b.start(Item{Kind: Shell, Status: InProgress, Command: e.Command, Excluded: e.Exclude, Started: at})
 	case ShellOutput:
 		if it := b.shell; it != nil {
 			it.Output += e.Chunk
@@ -203,6 +203,7 @@ func (b *Builder) apply(ev any, at time.Time) {
 	case ShellEnd:
 		if it := b.shell; it != nil {
 			b.shell = nil
+			it.Started = time.Time{}
 			x := e.Exec
 			// What was saved, as replays have only that.
 			it.Output, it.Dropped = x.Output, 0
@@ -234,7 +235,7 @@ func (b *Builder) apply(ev any, at time.Time) {
 		}
 	case agent.ToolStart:
 		b.closeText(at)
-		b.startTool(e.ID, e.Index, e.Args, e.Timeout)
+		b.startTool(e.ID, e.Index, e.Args, e.Timeout, at)
 	case agent.ToolOutput:
 		b.toolOutput(e.ID, e.Chunk)
 	case agent.ToolEnd:
@@ -393,20 +394,20 @@ func (b *Builder) endDraft(it *Item, err string) {
 }
 
 // startTool starts a call that runs now: the item its draft made, if any.
-func (b *Builder) startTool(id string, index int, args agent.BashArgs, timeout time.Duration) {
+func (b *Builder) startTool(id string, index int, args agent.BashArgs, timeout time.Duration, at time.Time) {
 	if b.tools == nil {
 		b.tools = map[string]*Item{}
 	}
 	if it := b.drafts[index]; it != nil {
 		delete(b.drafts, index)
 		it.Pending, it.CallID = false, id
-		it.Description, it.Command, it.Timeout = args.Description, args.Command, timeout
+		it.Description, it.Command, it.Timeout, it.Started = args.Description, args.Command, timeout, at
 		b.tools[id] = it
 		b.updated(it)
 		return
 	}
 	b.tools[id] = b.start(Item{Kind: Tool, Status: InProgress, CallID: id,
-		Description: args.Description, Command: args.Command, Timeout: timeout})
+		Description: args.Description, Command: args.Command, Timeout: timeout, Started: at})
 }
 
 func (b *Builder) toolOutput(id, chunk string) {
@@ -429,6 +430,7 @@ func (b *Builder) endTool(id string, res ToolResult, d time.Duration, imgs ...pr
 		return
 	}
 	delete(b.tools, id)
+	it.Started = time.Time{}
 	it.Output = tidy(it.Output)
 	for _, im := range imgs {
 		im.Data = nil // the bytes stay in the image store

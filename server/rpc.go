@@ -2,9 +2,12 @@ package server
 
 import (
 	"context"
+	"maps"
 	"strings"
 	"time"
 
+	"github.com/sebastianrcnt/atto/ai"
+	"github.com/sebastianrcnt/atto/config"
 	"github.com/sebastianrcnt/atto/core"
 	"github.com/sebastianrcnt/atto/events"
 	"github.com/sebastianrcnt/atto/images"
@@ -40,6 +43,24 @@ func (s *Server) threadCall(ctx context.Context, client, method string, p thread
 
 // threadMethods are the requests on a thread; they run on its lane.
 var threadMethods = map[string]func(t *thread, client string, p threadParams) (any, error){
+	"mcp/list": func(t *thread, client string, p threadParams) (any, error) {
+		if t.mcp == nil {
+			return map[string]any{"servers": []any{}}, nil
+		}
+		servers, err := t.mcp.Servers(context.Background())
+		return map[string]any{"servers": servers}, err
+	},
+	"thread/sessionStart": func(t *thread, client string, p threadParams) (any, error) {
+		if source := t.startSource; source != "" {
+			t.startSource = ""
+			t.sessionStart(source)
+			t.askMCPApprovals()
+			t.deliverEvents()
+			t.maybeSendNextQueued()
+		}
+		return nil, nil
+	},
+
 	"input/submit": func(t *thread, client string, p threadParams) (any, error) {
 		imgs, err := inputImages(p.Images)
 		if err != nil {
@@ -142,12 +163,30 @@ var threadMethods = map[string]func(t *thread, client string, p threadParams) (a
 			return nil, invalid("unknown model %q", p.Model)
 		}
 		t.setModel(ref, p.SaveDefault)
+		if notice := config.PriceTierNotice(ref); notice != "" {
+			t.notice("", "%s", notice)
+		}
 		if !p.SaveDefault { // the API's: recorded at once, as before
 			t.sess.Append(session.Entry{Type: session.TypeModel, Provider: ref.ProviderName, Model: ref.Model.ID})
 			t.recModel = ref.ProviderName + "/" + ref.Model.ID
 		}
 		return t.info(), nil
 	},
+	"models/reload": func(t *thread, client string, p threadParams) (any, error) {
+		_, models, err := core.Load()
+		if err != nil {
+			return nil, err
+		}
+		t.models = models
+		if m := t.model(); m.Model.ID != "" {
+			if ref, ok := models.Find(m.ProviderName, m.Model.ID); ok {
+				t.agent.SetModel(ref)
+			}
+		}
+		t.updated()
+		return nil, nil
+	},
+
 	"thread/setEffort": func(t *thread, client string, p threadParams) (any, error) {
 		if err := core.CheckEffort(t.model(), p.Effort); err != nil {
 			return nil, invalid("%v", err)
@@ -221,6 +260,11 @@ var threadMethods = map[string]func(t *thread, client string, p threadParams) (a
 		t.requestReload(false)
 		return nil, nil
 	},
+	"thread/debugRequests": func(t *thread, client string, p threadParams) (any, error) {
+		sets := map[string][]ai.SentRequest{"recent": ai.RecentRequests()}
+		maps.Copy(sets, ai.PinnedRequests())
+		return map[string]any{"sets": sets}, nil
+	},
 	"thread/debugRequest": func(t *thread, client string, p threadParams) (any, error) {
 		body := t.agent.LastRequest()
 		if body == nil {
@@ -266,6 +310,16 @@ var threadMethods = map[string]func(t *thread, client string, p threadParams) (a
 			text += " " + p.Args
 		}
 		return t.submit(client, text, nil, "auto")
+	},
+	"prompt/clientOpen": func(t *thread, client string, p threadParams) (any, error) {
+		if p.Prompt == nil {
+			return nil, invalid("prompt is required")
+		}
+		return t.openClientPrompt(client, *p.Prompt)
+	},
+	"prompt/clientClose": func(t *thread, client string, p threadParams) (any, error) {
+		t.withdrawClientPrompt(client, p.ID)
+		return nil, nil
 	},
 	"prompt/answer": func(t *thread, client string, p threadParams) (any, error) {
 		if p.ID == "" {

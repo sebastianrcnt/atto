@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/sebastianrcnt/atto/config"
 	"github.com/sebastianrcnt/atto/core"
-	"github.com/sebastianrcnt/atto/events"
 	"github.com/sebastianrcnt/atto/tui"
 )
 
@@ -97,88 +97,15 @@ func wrapRows(rows []core.Row, indent string, maxLabel, width int) []string {
 	return out
 }
 
-// collect reports what the session loaded.
-func (a *App) collect() core.Loaded {
-	return core.Collect(a.agent, a.hookSrc, a.modelFrom, a.effortFrom)
-}
-
-// showLoaded adds the "Loaded" block for a session that just started or
-// was resumed.
-func (a *App) showLoaded() {
-	a.loaded = a.collect()
-	a.add(&loadedBlock{l: a.loaded, d: &a.details})
-	a.priceTierNotice()
-}
-
-// sourceReloaded is the source of the event that tells the model what an
-// `atto reload` did.
-const sourceReloaded = "reloaded"
-
-func (a *App) cmdReload(string) { a.requestReload(false) }
-
-// requestReload reads AGENTS files, skills, hooks, settings.json and
-// models.json again: now when idle, else between the running turn's steps
-// (a request in flight keeps the prompt it was sent with). forModel: the
-// agent asked (atto reload) and is told the result.
-func (a *App) requestReload(forModel bool) {
-	if !a.turns.Busy {
-		a.reloadNow(forModel)
-		return
+// reloaded follows a reload of the runtime (/reload, atto reload): the
+// terminal reads its own settings again, and the catalog.
+func (a *App) reloaded() {
+	if s, err := config.LoadSettings(); err == nil {
+		a.applySettings(s)
 	}
-	if !forModel {
-		a.notice("Reloading after the current step.")
+	if models, err := config.LoadModels(); err == nil {
+		a.models = models
 	}
-	id, path := a.sess.ID, a.sess.Path
-	a.agent.AtBoundary(func() string { return a.reloadBetweenSteps(id, path, forModel) })
-}
-
-// reloadBetweenSteps runs on the turn's goroutine, at a step boundary (or
-// after the run, if it reached none). Its result goes to the model with
-// the turn's next request.
-func (a *App) reloadBetweenSteps(id, path string, forModel bool) string {
-	var prev core.Loaded
-	a.ui.Do(func() { prev = a.loaded })
-	r, err := core.Reload(a.agent, id, path, prev)
-	a.ui.Do(func() { a.applyReload(r, err) })
-	if !forModel {
-		return ""
-	}
-	return events.Format([]events.Event{{Text: reloadReport(r, err)}})
-}
-
-// reloadNow reloads while no turn runs. The model's report, if it asked,
-// is delivered like any event: it starts a turn.
-func (a *App) reloadNow(forModel bool) {
-	r, err := core.Reload(a.agent, a.sess.ID, a.sess.Path, a.loaded)
-	a.applyReload(r, err)
-	if forModel {
-		a.turns.PendingEvents = append(a.turns.PendingEvents, events.Event{Source: sourceReloaded, Title: "Reload result sent to the agent", Text: reloadReport(r, err)})
-	}
-}
-
-func reloadReport(r core.Reloaded, err error) string {
-	if err != nil {
-		return "Reload failed, nothing changed: " + err.Error()
-	}
-	return r.ForModel()
-}
-
-// applyReload takes over what a reload read and shows what changed.
-func (a *App) applyReload(r core.Reloaded, err error) {
-	if err != nil {
-		a.errorNotice(fmt.Errorf("reload failed, nothing changed: %w", err))
-		return
-	}
-	a.models, a.hooks, a.hookSrc, a.loaded = r.Models, r.Hooks, r.HookSrc, r.Loaded
-	a.escAction = r.Settings.DoubleEscapeAction
-	a.spinnerVerbs, a.spinnerScan = r.Settings.SpinnerVerbs, r.Settings.SpinnerScanner
-	a.skipSummary = r.Settings.BranchSummary != nil && r.Settings.BranchSummary.SkipPrompt
-	a.noToolGroups = r.Settings.ToolGroups != nil && !*r.Settings.ToolGroups
-	if a.sugList != nil { // skills may have changed
-		a.sugList.Items = commandItems(a.allCommands())
-	}
-	a.add(&loadedBlock{l: r.Loaded, reloaded: true, changes: r.Changes, note: r.PromptNote(), d: &a.details})
-	a.priceTierNotice()
+	a.loadCatalog()
 	a.statusTrigger()
-	a.askProjectApprovals()
 }

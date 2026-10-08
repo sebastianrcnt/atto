@@ -1,18 +1,17 @@
 package app
 
 import (
-	"context"
+	"encoding/json"
 	"fmt"
-	"github.com/sebastianrcnt/atto/core"
-	"github.com/sebastianrcnt/atto/core/transcript"
-	"strings"
-	"sync/atomic"
 	"time"
 
-	"github.com/sebastianrcnt/atto/events"
-	"github.com/sebastianrcnt/atto/jobs"
+	"github.com/sebastianrcnt/atto/server"
 	"github.com/sebastianrcnt/atto/tui"
 )
+
+// The inbox (job exits, timers, monitors) is the runtime's: it delivers
+// events to the model and says so (the "event" notification, shown as an
+// eventBlock). /jobs and /timers show what it reports.
 
 // eventBlock shows an [atto event] (job exit, timer, monitor) in the
 // transcript; the model receives the full text.
@@ -27,167 +26,56 @@ func (e *eventBlock) Render(width int) []string {
 	})
 }
 
-// liveSession is the session ID the inbox watcher drains; it changes on
-// /clear and /resume.
-var liveSession atomic.Value
-
-func (a *App) setLiveSession(id string) { liveSession.Store(id) }
-
-// watchInbox polls the session inbox, fires due timers, and refreshes the
-// job and timer counts for the status line.
-func (a *App) watchInbox() {
-	tick := time.NewTicker(500 * time.Millisecond)
-	defer tick.Stop()
-	for {
-		select {
-		case <-a.quit:
+func (a *App) cmdJobs(string) {
+	a.rpc("job/list", nil, func(raw json.RawMessage, err error) {
+		if err != nil {
+			a.errorNotice(err)
 			return
-		case <-tick.C:
 		}
-		if s, _ := liveSession.Load().(string); s != "" {
-			a.pollInbox(s)
+		var r struct {
+			Jobs []server.Job `json:"jobs"`
 		}
-	}
-}
-
-// pollInbox takes session s's events and hands them over (one tick of
-// watchInbox). Call it off the UI goroutine.
-func (a *App) pollInbox(s string) {
-	taken := core.Poll(s)
-	reload, evs := events.SplitReload(taken)
-	nJobs, nTimers := jobs.ActiveCount(s), len(events.Timers(s))
-	a.ui.Do(func() {
-		if s != a.sess.ID {
-			events.Requeue(s, taken)
-			return // session switched; leave events for when it is resumed
+		_ = json.Unmarshal(raw, &r)
+		if len(r.Jobs) == 0 {
+			a.notice("No background jobs. The agent starts them with `atto job start -- <command>`.")
+			return
 		}
-		a.jobCount, a.timerCount = nJobs, nTimers
-		a.goal.Poll()
-		a.turns.PendingEvents = append(a.turns.PendingEvents, evs...)
-		a.turns.RequeueQuiet(s)
-		if reload { // atto reload, run by the agent
-			a.requestReload(true)
+		var lines []string
+		for _, j := range r.Jobs {
+			st := j.Status
+			if j.ExitCode != nil {
+				st += fmt.Sprintf(" (%d)", *j.ExitCode)
+			}
+			runtime := (time.Duration(j.RuntimeMs) * time.Millisecond).Round(time.Second)
+			lines = append(lines, fmt.Sprintf("%-4d %-10s %-12s %-8s %s", j.ID, j.Kind, st, runtime, j.Label))
 		}
-		a.deliverEvents()
-		a.remoteGoal() // the time of a running turn, and reports from atto goal
-		a.remotePending()
+		a.add(&contextBlock{lines: append([]string{tui.Bold("Background jobs") + tui.Dim("  · /stop stops all · output: atto job output <id>")}, lines...)})
 	})
-}
-
-// deliverEvents hands pending events to the agent: a new turn when idle,
-// a steer (after the next tool call) during a turn. While compacting, a
-// picker is open or the queue is paused, they wait.
-func (a *App) deliverEvents() {
-	delivery := a.turns.DeliverEvents(a.sess.ID, a.modal != nil || a.turns.QueuePaused, a.runKind == "turn")
-	evs := delivery.Events
-	if len(evs) == 0 {
-		return
-	}
-	for _, e := range evs {
-		title := e.Title
-		if title == "" {
-			title = e.Text
-		}
-		a.add(&eventBlock{title: title})
-	}
-	text := delivery.Text
-	if !a.turns.Busy { // a steer reaches a running turn; idle, the user may be away
-		a.notify("background_event", firstTitle(evs))
-	}
-	if !delivery.Start {
-		a.turns.SteerEvents(a.agent, delivery)
-		return
-	}
-	a.runKind = "turn"
-	a.recordSettings()
-	a.tr().Event(transcript.Input{Text: text}) // shown above
-	a.start("Thinking", func(ctx context.Context, emit func(any)) error {
-		return a.turns.Run(ctx, a.agent, core.TurnRequest{Text: text}, emit)
-	})
-}
-
-// firstTitle describes the first of evs (and how many more follow).
-func firstTitle(evs []events.Event) string {
-	title := evs[0].Title
-	if title == "" {
-		title = evs[0].Text
-	}
-	if len(evs) > 1 {
-		title += fmt.Sprintf(" (+%d more)", len(evs)-1)
-	}
-	return title
-}
-
-// isEvent reports whether a committed steer came from the inbox.
-func isEvent(s string) bool { return events.IsEvent(s) }
-
-func (a *App) cmdJobs(arg string) {
-	list := jobs.List(a.sess.ID)
-	if len(list) == 0 {
-		a.notice("No background jobs. The agent starts them with `atto job start -- <command>`.")
-		return
-	}
-	var lines []string
-	for _, j := range list {
-		st := string(j.Status)
-		if j.ExitCode != nil {
-			st += fmt.Sprintf(" (%d)", *j.ExitCode)
-		}
-		lines = append(lines, fmt.Sprintf("%-4d %-10s %-12s %-8s %s", j.ID, j.KindLabel(), st, j.Runtime(), j.Label()))
-	}
-	a.add(&contextBlock{lines: append([]string{tui.Bold("Background jobs") + tui.Dim("  · /stop stops all · output: atto job output <id>")}, lines...)})
-}
-
-func (a *App) cmdStop(string) {
-	n := jobs.KillAll(a.sess.ID)
-	a.jobCount = 0
-	a.notice("Stopped %d background jobs.", n)
 }
 
 func (a *App) cmdTimers(string) {
-	ts := events.Timers(a.sess.ID)
-	if len(ts) == 0 {
-		a.notice("No timers. Set one with /timer 10m <message>.")
-		return
-	}
-	var lines []string
-	for _, t := range ts {
-		sched := ""
-		if t.Recurring() {
-			sched = " [" + t.Schedule() + "]"
-		}
-		lines = append(lines, fmt.Sprintf("%s  %s (in %s)%s  %s", t.ID, t.Due.Format("15:04"), time.Until(t.Due).Round(time.Second), sched, t.Message))
-	}
-	a.add(&contextBlock{lines: append([]string{tui.Bold("Timers") + tui.Dim("  · cancel: /timer cancel <id>")}, lines...)})
-}
-
-// cmdTimer: /timer 10m <message>, /timer 15:30 <message>, /timer cancel <id>.
-// Recurring timers are set by the model with `atto timer every`; here they
-// are listed and can be canceled.
-func (a *App) cmdTimer(arg string) {
-	when, msg, _ := strings.Cut(strings.TrimSpace(arg), " ")
-	if when == "cancel" {
-		if err := events.CancelTimer(a.sess.ID, strings.TrimSpace(msg)); err != nil {
+	a.rpc("timer/list", nil, func(raw json.RawMessage, err error) {
+		if err != nil {
 			a.errorNotice(err)
-		} else {
-			a.notice("Timer canceled.")
+			return
 		}
-		return
-	}
-	if when == "" || strings.TrimSpace(msg) == "" {
-		a.notice("Usage: /timer <10m|15:30> <message> — the message is sent to the agent when it fires.")
-		return
-	}
-	due, err := events.ParseWhen(when, time.Now())
-	if err != nil {
-		a.errorNotice(err)
-		return
-	}
-	t, err := events.AddTimer(a.sess.ID, due, strings.TrimSpace(msg))
-	if err != nil {
-		a.errorNotice(err)
-		return
-	}
-	a.timerCount++
-	a.notice("Timer %s set for %s.", t.ID, due.Format("15:04:05"))
+		var r struct {
+			Timers []server.Timer `json:"timers"`
+		}
+		_ = json.Unmarshal(raw, &r)
+		if len(r.Timers) == 0 {
+			a.notice("No timers. Set one with /timer 10m <message>.")
+			return
+		}
+		var lines []string
+		for _, t := range r.Timers {
+			due := time.UnixMilli(t.Due)
+			sched := ""
+			if t.Schedule != "" {
+				sched = " [" + t.Schedule + "]"
+			}
+			lines = append(lines, fmt.Sprintf("%s  %s (in %s)%s  %s", t.ID, due.Format("15:04"), time.Until(due).Round(time.Second), sched, t.Message))
+		}
+		a.add(&contextBlock{lines: append([]string{tui.Bold("Timers") + tui.Dim("  · cancel: /timer cancel <id>")}, lines...)})
+	})
 }

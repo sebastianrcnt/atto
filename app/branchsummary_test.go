@@ -53,30 +53,10 @@ func summaryServer(t *testing.T, reply string, block bool) (*httptest.Server, fu
 // summaryApp is a treeApp talking to url, with a conversation of two
 // exchanges loaded into the agent.
 func summaryApp(t *testing.T, url string) *App {
-	a := treeApp(t)
-	a.agent.SetModel(config.ModelRef{ProviderName: "t", Provider: config.Provider{BaseURL: url}, Model: config.Model{ID: "m", ContextWindow: 100000}})
-	a.record("user", "u1")
-	a.record("assistant", "a1")
-	a.record("user", "u2")
-	a.record("assistant", "a2")
-	a.showBranch(a.loadSession())
-	return a
-}
-
-func waitIdle(t *testing.T, a *App) {
-	t.Helper()
-	deadline := time.Now().Add(10 * time.Second)
-	for {
-		var busy bool
-		a.ui.Do(func() { busy = a.turns.Busy })
-		if !busy {
-			return
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("run did not finish")
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
+	cwd, _ := testEnv(t)
+	writeTestFile(t, config.ModelsPath(), `{"providers":{"t":{"baseUrl":"`+url+`","models":[{"id":"m","contextWindow":100000}]}}}`)
+	w := saved(t, cwd, "user", "u1", "assistant", "a1", "user", "u2", "assistant", "a2")
+	return startApp(t, cwd, Options{Session: w.ID})
 }
 
 // pickSummary answers the "Summarize branch?" question with choice.
@@ -122,7 +102,7 @@ func TestBranchSummaryOnNavigate(t *testing.T) {
 	if a.editor.Text() != "u2" {
 		t.Fatalf("editor %q", a.editor.Text())
 	}
-	if bd := a.agent.Breakdown(); bd.Messages != 3 {
+	if bd := restoredAgent(a).Breakdown(); bd.Messages != 3 {
 		t.Fatalf("agent has %d messages, want u1, a1 and the summary", bd.Messages)
 	}
 	var live string
@@ -132,17 +112,15 @@ func TestBranchSummaryOnNavigate(t *testing.T) {
 	}
 
 	// The next turn carries the summary to the model, and so does a resume.
-	a.ui.Do(func() { a.editor.SetText(""); a.startTurn("u3", nil) })
+	a.ui.Do(func() { a.editor.SetText(""); a.submit("u3", nil) })
 	waitIdle(t, a)
-	b := treeApp(t)
-	b.resume(a.sess.Path)
-	if got := transcriptLines(b); !strings.Contains(got, "⎇ Branch summary") {
-		t.Fatalf("resumed transcript:\n%s", got)
-	}
-	_, saved, _ := session.Load(a.sess.Path)
-	b.agent.Restore(session.Active(saved))
-	if bd := b.agent.Breakdown(); bd.Messages != 5 {
+	_, savedEntries, _ := session.Load(a.sessPath)
+	if bd := restoredAgent(a).Breakdown(); bd.Messages != 5 {
 		t.Fatalf("resumed agent has %d messages", bd.Messages)
+	}
+	a.ui.Do(func() { a.replay(session.Active(savedEntries)) })
+	if got := transcriptLines(a); !strings.Contains(got, "⎇ Branch summary") {
+		t.Fatalf("resumed transcript %s", got)
 	}
 }
 
@@ -150,8 +128,9 @@ func TestBranchSummaryCanceled(t *testing.T) {
 	srv, last := summaryServer(t, "", true)
 	a := summaryApp(t, srv.URL)
 	before := len(a.loadSession())
+	u2 := entryID(t, a, "u2")
 	a.ui.Do(func() {
-		a.selectTreeEntry(entryID(t, a, "u2"))
+		a.selectTreeEntry(u2)
 		pickSummary(t, a, summaryPlain)
 	})
 	for deadline := time.Now().Add(10 * time.Second); len(last()) == 0; time.Sleep(10 * time.Millisecond) {
@@ -174,40 +153,39 @@ func TestBranchSummaryCanceled(t *testing.T) {
 
 func TestBranchSummaryNotAsked(t *testing.T) {
 	a := treeApp(t)
-	a.record("user", "u1")
-	a.record("assistant", "a1")
-	a.record("user", "u2")
-	a.record("assistant", "a2")
-
-	// "No summary" moves as before.
-	a.selectTreeEntry(entryID(t, a, "u2"))
-	pickSummary(t, a, summaryNone)
-	if e := a.loadSession(); e[len(e)-1].Type != session.TypeBranch {
-		t.Fatalf("expected a plain branch entry, got %q", e[len(e)-1].Type)
-	}
-
-	// Nothing to summarize: the branch left holds only the branch marker.
-	a.editor.SetText("")
-	a.selectTreeEntry(entryID(t, a, "a2"))
-	if a.modal != nil {
-		t.Fatalf("asked with nothing to summarize: %T", a.modal)
-	}
-
-	// branchSummary.skipPrompt never asks.
-	a.skipSummary = true
-	a.selectTreeEntry(entryID(t, a, "u1"))
-	if a.modal != nil || a.editor.Text() == "" {
-		t.Fatalf("skipPrompt: modal %T, editor %q", a.modal, a.editor.Text())
-	}
-
-	// Esc on the question goes back to the tree.
-	a.skipSummary = false
-	a.record("user", "u9")
-	a.selectTreeEntry(entryID(t, a, "a1"))
-	a.modal.HandleInput("\x1b")
-	if _, ok := a.modal.(*treePicker); !ok {
-		t.Fatalf("esc should reopen the tree, got %T", a.modal)
-	}
+	u1, u2, a1, a2 := entryID(t, a, "u1"), entryID(t, a, "u2"), entryID(t, a, "a1"), entryID(t, a, "a2")
+	a.ui.Do(func() { a.selectTreeEntry(u2); pickSummary(t, a, summaryNone) })
+	settle(a)
+	a.ui.Do(func() {
+		if e := a.loadSession(); e[len(e)-1].Type != session.TypeBranch {
+			t.Fatalf("expected plain branch, got %s", e[len(e)-1].Type)
+		}
+	})
+	a.ui.Do(func() { a.editor.SetText(""); a.selectTreeEntry(a2) })
+	settle(a)
+	a.ui.Do(func() {
+		if a.modal != nil {
+			t.Fatalf("nothing to summarize: %T", a.modal)
+		}
+		a.skipSummary = true
+		a.selectTreeEntry(u1)
+	})
+	settle(a)
+	a.ui.Do(func() {
+		if a.modal != nil || a.editor.Text() == "" {
+			t.Fatalf("skipPrompt modal %T editor %q", a.modal, a.editor.Text())
+		}
+		a.skipSummary = false
+		a.editor.SetText("")
+	})
+	send(t, a, "u9")
+	a.ui.Do(func() { a.selectTreeEntry(a1); a.modal.HandleInput("\x1b") })
+	settle(a)
+	a.ui.Do(func() {
+		if _, ok := a.modal.(*treePicker); !ok {
+			t.Fatalf("Esc should reopen tree, got %T", a.modal)
+		}
+	})
 }
 
 func TestBranchSummaryInContext(t *testing.T) {

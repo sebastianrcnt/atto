@@ -4,119 +4,99 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/sebastianrcnt/atto/goal"
+	"github.com/sebastianrcnt/atto/provider/providertest"
 )
 
-const ctrlEnterKey = "\x1b[27;5;13~" // modifyOtherKeys; kitty's is \x1b[13;5u
+const ctrlEnterKey = "\x1b[27;5;13~"
 
-// press delivers a key as the TUI does: the app first, then the editor.
-func press(a *App, key string) {
-	if !a.onInput(key) {
-		a.editor.HandleInput(key)
+func press(a *App, k string) {
+	if !a.onInput(k) {
+		a.editor.HandleInput(k)
 	}
 }
 
-// Ctrl+Enter during a turn interrupts it and starts a new one with the
-// steers not yet delivered and the draft, in order. A goal is not paused:
-// it waits for the user after the new turn.
 func TestCtrlEnterSendsNow(t *testing.T) {
-	model := newRemoteModel(t)
-	a := remoteApp(t, model)
+	gate := make(chan struct{})
+	defer close(gate)
+	a, m := liveApp(t, providertest.Reply{Gate: gate}, providertest.Reply{Text: "answered"})
+	// Pause the goal before input; resuming during a user turn holds it until
+	// the user explicitly continues, but send-now must not pause the goal.
+	typeLine(a, "/goal ship it")
+	m.Started(5 * time.Second)
+	typeLine(a, "/goal pause")
+	key(a, "\x03")
+	waitIdle(t, a)
+	m.SetScript(providertest.Reply{Gate: gate}, providertest.Reply{Text: "answer to steer me"})
+	typeLine(a, "block")
+	m.Started(5 * time.Second)
+	typeLine(a, "/goal resume")
+	settle(a)
+	typeLine(a, "steer me")
+	settle(a)
+	a.ui.Do(func() { a.editor.SetText("now") })
+	key(a, ctrlEnterKey)
+	within(t, a, "replacement answer", func() bool { return !a.busy && strings.Contains(bodyText(a), "answer to steer me") })
+	waitIdle(t, a)
 	a.ui.Do(func() {
-		a.turns.QueuePaused = true // no goal turn starts by itself
-		a.cmdGoal("ship it")
-		a.startTurn("block", nil)
-	})
-	within(t, a, "the blocking request", func() bool { return model.blocks() == 1 })
-	a.ui.Do(func() {
-		a.editor.SetText("steer me")
-		press(a, "\r")
-		a.editor.SetText("now")
-		press(a, ctrlEnterKey)
-		if a.editor.Text() != "" || a.turns.SendNow == nil {
-			t.Errorf("editor %q, sendNow %v", a.editor.Text(), a.turns.SendNow)
+		us := userBlocks(a)
+		if len(us) < 2 || !slices.Equal(us[len(us)-2:], []string{"block", "steer me\n\nnow"}) {
+			t.Errorf("users %q", us)
 		}
-	})
-	within(t, a, "the new turn's answer", func() bool {
-		return !a.turns.Busy && strings.Contains(bodyText(a), "answer to steer me")
-	})
-	a.ui.Do(func() {
-		if got := userBlocks(a); !slices.Equal(got, []string{"block", "steer me\n\nnow"}) {
-			t.Errorf("user messages %q", got)
+		if g := a.theGoal(); g == nil || g.Status != goal.Active || g.Note != "" || !a.goalHeld() {
+			t.Errorf("goal %+v held=%v", g, a.goalHeld())
 		}
-		if g := a.goal.Goal; g.Status != goal.Active || g.Note != "" || !a.goal.Held() {
-			t.Errorf("goal %+v, held %v", g, a.goal.Held())
-		}
-		if a.turns.SendNow != nil || len(a.turns.Steers) != 0 || a.turns.SendSteersAfterInterrupt {
-			t.Error("send-now state left over")
+		if len(a.pending.Steers) != 0 {
+			t.Errorf("pending %+v", a.pending)
 		}
 	})
 }
 
-// With nothing to send, Ctrl+Enter during a turn does nothing; with only
-// steers pending it sends those, as Esc does; commands and shell lines are
-// not sent over the turn.
 func TestCtrlEnterWhileBusy(t *testing.T) {
-	a := treeApp(t)
-	a.turns.Busy, a.runKind = true, "turn"
-	canceled := 0
-	a.turns.Cancel = func(error) { canceled++ }
-
-	press(a, ctrlEnterKey)
-	if canceled != 0 {
-		t.Fatal("interrupted with nothing to send")
+	gate := make(chan struct{})
+	defer close(gate)
+	a, m := liveApp(t, providertest.Reply{Gate: gate}, providertest.Reply{Text: "first"})
+	typeLine(a, "block")
+	m.Started(5 * time.Second)
+	key(a, ctrlEnterKey)
+	settle(a)
+	a.ui.Do(func() { a.editor.SetText("/nope") })
+	key(a, ctrlEnterKey)
+	settle(a)
+	if len(m.Requests()) != 1 {
+		t.Fatal("empty input or slash command interrupted")
 	}
-	a.editor.SetText("/nope")
-	press(a, ctrlEnterKey)
-	if canceled != 0 || a.turns.SendNow != nil {
-		t.Fatal("a command interrupted the turn")
-	}
-	a.steer("first")
-	press(a, "\x07") // the fallback key
-	if canceled != 1 || !a.turns.SendSteersAfterInterrupt || a.turns.SendNow != nil {
-		t.Fatalf("canceled %d, send steers %v, sendNow %v", canceled, a.turns.SendSteersAfterInterrupt, a.turns.SendNow)
-	}
-	a.turns.SendSteersAfterInterrupt = false
-	a.editor.SetText("draft")
-	press(a, "\x1b[13;5u")
-	if canceled != 2 || a.turns.SendNow == nil || a.turns.SendNow.text != "draft" {
-		t.Fatalf("canceled %d, sendNow %+v", canceled, a.turns.SendNow)
-	}
-	// A second one while the first is on its way is a steer, as Enter.
-	a.editor.SetText("again")
-	press(a, ctrlEnterKey)
-	if canceled != 2 || a.turns.SendNow.text != "draft" || a.turns.Steers[len(a.turns.Steers)-1] != "again" {
-		t.Fatalf("canceled %d, sendNow %+v, steers %q", canceled, a.turns.SendNow, a.turns.Steers)
-	}
+	typeLine(a, "first")
+	settle(a)
+	key(a, "\x07")
+	within(t, a, "pending steer sent", func() bool { return !a.busy && strings.Contains(bodyText(a), "first") })
+	m.SetScript(providertest.Reply{Gate: gate}, providertest.Reply{Text: "draft"})
+	typeLine(a, "block again")
+	within(t, a, "running second turn", func() bool { return a.busy })
+	m.Started(5 * time.Second)
+	a.ui.Do(func() { a.editor.SetText("draft") })
+	key(a, "\x1b[13;5u")
+	within(t, a, "draft replacement", func() bool { return !a.busy && strings.Contains(strings.Join(userBlocks(a), ","), "draft") })
 }
 
-// When no turn runs, Ctrl+Enter is Enter.
 func TestCtrlEnterIdleIsEnter(t *testing.T) {
-	model := newRemoteModel(t)
-	a := remoteApp(t, model)
-	a.ui.Do(func() {
-		a.editor.SetText("hello")
-		press(a, ctrlEnterKey)
-		if a.editor.Text() != "" || !a.turns.Busy || a.turns.SendNow != nil {
-			t.Errorf("editor %q, busy %v", a.editor.Text(), a.turns.Busy)
-		}
-	})
-	within(t, a, "the answer", func() bool { return !a.turns.Busy && strings.Contains(bodyText(a), "answer to hello") })
-	a.ui.Do(func() {
-		if got := userBlocks(a); !slices.Equal(got, []string{"hello"}) {
-			t.Errorf("user messages %q", got)
-		}
-	})
+	a, _ := liveApp(t, providertest.Reply{Text: "answer to hello"})
+	a.ui.Do(func() { a.editor.SetText("hello") })
+	key(a, ctrlEnterKey)
+	within(t, a, "answer", func() bool { return !a.busy && strings.Contains(bodyText(a), "answer to hello") })
+	if got := users(a); got != "hello" {
+		t.Fatalf("users %q", got)
+	}
 }
 
-// The hint shows while a turn runs.
 func TestSendNowHint(t *testing.T) {
-	a := treeApp(t)
-	a.turns.Busy, a.runKind, a.activity = true, "turn", "Thinking"
+	a := testApp(t)
+	a.busy, a.runKind, a.activity = true, "turn", "Thinking"
 	a.runStart = a.clock()
 	got := strings.Join(a.renderActivity(120), "\n")
 	if !strings.Contains(got, "esc to interrupt") || !strings.Contains(got, "ctrl+enter to send now") {
-		t.Fatalf("activity line %q", got)
+		t.Fatalf("activity %q", got)
 	}
 }

@@ -47,20 +47,21 @@ type thread struct {
 	done     chan struct{}
 
 	// Lane only, from here.
-	name       string
-	agent      *agent.Agent
-	sess       *session.Writer
-	release    func()
-	hooks      *hooks.Runner
-	ext        *extensions.Manager
-	mcp        *mcp.Manager
-	mcpAsked   map[string]bool
-	hookSrc    []config.HookSource
-	models     config.ModelsFile
-	loaded     core.Loaded
-	modelFrom  core.Origin
-	effortFrom core.Origin
-	readOnly   string // why the session cannot be written ("": it can)
+	name        string
+	startSource string
+	agent       *agent.Agent
+	sess        *session.Writer
+	release     func()
+	hooks       *hooks.Runner
+	ext         *extensions.Manager
+	mcp         *mcp.Manager
+	mcpAsked    map[string]bool
+	hookSrc     []config.HookSource
+	models      config.ModelsFile
+	loaded      core.Loaded
+	modelFrom   core.Origin
+	effortFrom  core.Origin
+	readOnly    string // why the session cannot be written ("": it can)
 
 	tr        transcript.Builder
 	items     []Item         // completed items, notices included
@@ -144,8 +145,12 @@ type pendingInput struct {
 // --- the lane ---
 
 func (t *thread) startLane() {
-	t.laneWake = make(chan struct{}, 1)
-	t.done = make(chan struct{})
+	if t.laneWake == nil {
+		t.laneWake = make(chan struct{}, 1)
+	}
+	if t.done == nil {
+		t.done = make(chan struct{})
+	}
 	go func() {
 		for {
 			t.laneMu.Lock()
@@ -227,7 +232,7 @@ func (t *thread) info() ThreadInfo {
 	info := ThreadInfo{ID: t.id, Cwd: t.cwd, Name: t.name, Effort: effort, ContextTokens: t.ctx, Busy: t.turns.Busy, TurnID: t.turnID,
 		RunKind: t.runKind, ReadOnly: t.readOnly, SessionPath: t.sess.Path, LongContext: t.agent.LongContext()}
 	SetModel(&info, m, t.models)
-	info.AutoCompactLimit, _ = t.agent.CompactionLimit()
+	info.AutoCompactLimit, info.AutoCompactCap = t.agent.CompactionLimit()
 	total := t.total
 	info.Usage = &total
 	if t.turns.Busy {
@@ -389,7 +394,7 @@ func (t *thread) pendingChanged() {
 // client has a picker open (the terminal held events, the queue and goal
 // turns while one was).
 func (t *thread) gated() bool {
-	if t.prompt != nil {
+	if t.prompt != nil || t.startSource != "" {
 		return true
 	}
 	for _, n := range t.gates {

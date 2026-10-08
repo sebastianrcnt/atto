@@ -11,7 +11,7 @@ import (
 	"github.com/sebastianrcnt/atto/config"
 	"github.com/sebastianrcnt/atto/core"
 	"github.com/sebastianrcnt/atto/provider"
-	"github.com/sebastianrcnt/atto/session"
+	"github.com/sebastianrcnt/atto/server"
 	"github.com/sebastianrcnt/atto/tui"
 )
 
@@ -36,30 +36,6 @@ func (u *usageStats) add(x provider.Usage) {
 // fresh is the session's input that was neither read from nor written to
 // the cache: pi's "↑".
 func (u *usageStats) fresh() int { return max(0, u.input-u.cached-u.cacheWrite) }
-
-// fromEntries rebuilds totals from a resumed session.
-func (u *usageStats) fromEntries(entries []session.Entry, models config.ModelsFile) {
-	*u = usageStats{}
-	var model config.ModelRef
-	for _, e := range entries {
-		if e.Type == session.TypeModel {
-			model, _ = models.Find(e.Provider, e.Model)
-		}
-		if e.Usage != nil {
-			u.add(*e.Usage)
-			u.lastCost = model.Model.Cost
-		}
-	}
-}
-
-// fromSaved uses the totals accumulated without decoding old messages.
-func (u *usageStats) fromSaved(saved core.Saved, models config.ModelsFile) {
-	*u = usageStats{}
-	u.add(saved.Usage)
-	u.last = saved.LastUsage
-	model, _ := models.Find("", saved.UsageModel)
-	u.lastCost = model.Model.Cost
-}
 
 func pct(part, whole int) int {
 	if whole <= 0 {
@@ -92,43 +68,60 @@ func (c *contextBlock) Render(width int) []string {
 	})
 }
 
-func (a *App) cmdContext(arg string) {
+// cmdContext is /context: the report is the terminal's, its data the
+// runtime's (thread/context). long and normal change the context mode.
+func (a *App) cmdContext(arg string) bool {
+	if arg != "" && arg != "system" && arg != "long" && arg != "normal" {
+		a.notice("Usage: /context [system|long|normal]")
+		return true
+	}
 	if arg == "long" || arg == "normal" {
 		if a.refuseReadOnly("/context " + arg) {
+			return true
+		}
+		a.info.LongContext = arg == "long"
+		a.rpcErr("thread/setContextMode", map[string]any{"contextMode": arg})
+	}
+	a.rpc("thread/context", map[string]any{"view": arg}, func(raw json.RawMessage, err error) {
+		if err != nil {
+			a.errorNotice(err)
 			return
 		}
-		a.agent.SetLongContext(arg == "long")
-		a.sess.Append(session.Entry{Type: session.TypeContext, LongContext: arg == "long"})
-		a.statusTrigger()
-	} else if arg != "" && arg != "system" {
-		a.notice("Usage: /context [system|long|normal]")
-		return
-	}
-	if arg == "system" {
-		a.add(&noticeBlock{text: "System prompt:\n\n" + a.agent.SystemPrompt(), style: tui.Dim})
+		var c server.ContextInfo
+		if json.Unmarshal(raw, &c) == nil {
+			a.showContext(c, arg == "system")
+		}
+	})
+	return true
+}
+
+// showContext adds the /context report.
+func (a *App) showContext(c server.ContextInfo, system bool) {
+	if system {
+		a.add(&noticeBlock{text: "System prompt:\n\n" + c.System, style: tui.Dim})
 		return
 	}
 	m := a.model()
+	ctx := c.ContextTokens
 	var lines []string
-	head := fmt.Sprintf("%s · %s tokens", tui.Bold("Context"), tui.FormatTokens(a.ctxTokens))
-	if cw := m.Model.ContextWindow; cw > 0 {
-		head += fmt.Sprintf(" of %s (%d%%)", tui.FormatTokens(cw), pct(a.ctxTokens, cw))
+	head := fmt.Sprintf("%s · %s tokens", tui.Bold("Context"), tui.FormatTokens(ctx))
+	if cw := c.ContextWindow; cw > 0 {
+		head += fmt.Sprintf(" of %s (%d%%)", tui.FormatTokens(cw), pct(ctx, cw))
 	}
 	lines = append(lines, head)
-	if limit, cap := a.agent.CompactionLimit(); limit > 0 {
+	if limit, cap := c.CompactLimit, c.Cap; limit > 0 {
 		lines = append(lines, tui.Dim("Auto-compacts at "+tui.FormatTokens(limit)))
 		if cap > 0 {
-			if cap == m.Model.Cost.ContextPriceBoundary() {
+			if c.PriceCap {
 				lines = append(lines, tui.Dim(fmt.Sprintf("%s costs more above %s input tokens.", m.Model.DisplayName(), tui.FormatTokens(cap))))
 			} else {
 				lines = append(lines, tui.Dim("Cap set by settings.json compaction.limits."))
 			}
 			lines = append(lines, tui.Dim("/context long to allow more."))
-		} else if a.agent.LongContext() {
+		} else if c.LongContext {
 			lines = append(lines, tui.Dim("Long context; /context normal to restore the tier cap."))
 		}
 	}
-
 	if m.Model.Cost.ContextPriceBoundary() == 0 {
 		reason := "no tier data known for this model"
 		if m.Model.Cost != nil && len(m.Model.Cost.Tiers) > 0 {
@@ -136,11 +129,9 @@ func (a *App) cmdContext(arg string) {
 		}
 		lines = append(lines, tui.Dim("No tier cap: "+reason+"."))
 	}
-
-	if a.turns.Busy {
+	if b := c.Breakdown; c.Busy || b == nil {
 		lines = append(lines, tui.Dim("Breakdown is available when the turn finishes."))
 	} else {
-		b := a.agent.Breakdown()
 		total := max(b.Total(), 1)
 		rows := []struct {
 			name  string
@@ -173,11 +164,24 @@ func (a *App) cmdContext(arg string) {
 
 // cmdRequest saves the last request body sent to the model, pretty-printed.
 func (a *App) cmdRequest(string) {
-	body := a.agent.LastRequest()
-	if body == nil {
-		a.notice("No request has been sent yet.")
-		return
-	}
+	a.rpc("thread/debugRequest", nil, func(raw json.RawMessage, err error) {
+		if err != nil {
+			a.errorNotice(err)
+			return
+		}
+		var r struct {
+			Request string `json:"request"`
+		}
+		_ = json.Unmarshal(raw, &r)
+		if r.Request == "" {
+			a.notice("No request has been sent yet.")
+			return
+		}
+		a.saveRequest([]byte(r.Request))
+	})
+}
+
+func (a *App) saveRequest(body []byte) {
 	var pretty bytes.Buffer
 	if json.Indent(&pretty, body, "", "  ") != nil {
 		pretty.Write(body)
@@ -198,11 +202,4 @@ func (a *App) cmdRequest(string) {
 	_ = json.Unmarshal(body, &req)
 	a.notice("Saved the last request (%d messages, %d tools, %s) to %s",
 		len(req.Messages), len(req.Tools), fmtBytes(int64(len(body))), core.ShortPath(path))
-}
-
-// priceTierNotice is shown on model selection, not on every turn or status update.
-func (a *App) priceTierNotice() {
-	if notice := config.PriceTierNotice(a.model()); notice != "" {
-		a.notice("%s", notice)
-	}
 }

@@ -12,7 +12,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sebastianrcnt/atto/agent"
 	"github.com/sebastianrcnt/atto/auth"
 	"github.com/sebastianrcnt/atto/config"
 	"github.com/sebastianrcnt/atto/tui"
@@ -35,14 +34,14 @@ func noModelApp(t *testing.T) *App {
 	if err != nil || len(models.List()) != 0 {
 		t.Fatalf("expected no models: %v %v", models.List(), err)
 	}
-	a := &App{ui: tui.New(nullTerm{}), models: models, agent: agent.New(config.ModelRef{}, "", t.TempDir()),
-		tools: map[string]*toolBlock{}, quit: make(chan struct{})}
-	a.login = loginHooks{
-		openURL:  func(string) error { return nil },
-		copyText: func(string) error { return nil },
-		deviceID: func() (string, error) { return "00000000-0000-4000-8000-000000000000", nil },
-	}
-	a.build()
+	a := startApp(t, t.TempDir())
+	a.ui.Do(func() {
+		a.login = loginHooks{
+			openURL:  func(string) error { return nil },
+			copyText: func(string) error { return nil },
+			deviceID: func() (string, error) { return "00000000-0000-4000-8000-000000000000", nil },
+		}
+	})
 	return a
 }
 
@@ -64,40 +63,46 @@ func typeText(a *App, s string) {
 	}
 }
 
-func key(a *App, k string) { a.ui.Do(func() { a.modal.HandleInput(k) }) }
+func modalKey(a *App, k string) {
+	a.ui.Do(func() { a.modal.HandleInput(k) })
+	settle(a)
+}
 
 func TestFirstRunWithoutModels(t *testing.T) {
 	a := noModelApp(t)
 	if !strings.Contains(screen(a), "no model (/login)") {
 		t.Fatalf("header: %s", screen(a))
 	}
-	a.submit("hello there", nil)
-	if out := screen(a); !strings.Contains(out, "No models available. Use /login") || a.turns.Busy {
+	typeLine(a, "hello there")
+	settle(a)
+	if out := screen(a); !strings.Contains(out, "No models available. Use /login") || a.busy {
 		t.Fatalf("hint not shown or turn started: %s", out)
 	}
-	if a.editor.Text() != "hello there" {
-		t.Fatalf("prompt lost: %q", a.editor.Text())
+	if text := editorText(a); text != "hello there" {
+		t.Fatalf("prompt lost: %q", text)
 	}
-	a.editor.SetText("")
-	a.submit("/model", nil)
-	if a.modal != nil || !strings.Contains(screen(a), "No models available") {
+	a.ui.Do(func() { a.editor.SetText("") })
+	typeLine(a, "/model")
+	settle(a)
+	if modalOpen(a) || !strings.Contains(screen(a), "No models available") {
 		t.Fatal("/model without models should hint, not open an empty picker")
 	}
 }
 
 func TestLoginWithAPIKey(t *testing.T) {
 	a := noModelApp(t)
-	a.submit("/login", nil)
+	typeLine(a, "/login")
+	settle(a)
 	if out := screen(a); !strings.Contains(out, "Sign in with an account") || !strings.Contains(out, "Sign in with an API key") {
 		t.Fatalf("auth method picker: %s", out)
 	}
-	key(a, "\x1b[B") // down
-	key(a, "\r")
+	modalKey(a, "\x1b[B") // down
+	modalKey(a, "\r")
 	if out := screen(a); !strings.Contains(out, "OpenCode Go API key") || strings.Contains(out, "ChatGPT") {
 		t.Fatalf("api key providers: %s", out)
 	}
 	typeText(a, "go api")
-	key(a, "\r")
+	modalKey(a, "\r")
 	if out := screen(a); !strings.Contains(out, "Log in to OpenCode Go API key") || !strings.Contains(out, "API key:") {
 		t.Fatalf("dialog: %s", out)
 	}
@@ -105,7 +110,7 @@ func TestLoginWithAPIKey(t *testing.T) {
 	if out := screen(a); strings.Contains(out, "sk-secret") || !strings.Contains(out, "•••••") {
 		t.Fatalf("key not masked: %s", out)
 	}
-	key(a, "\r")
+	modalKey(a, "\r")
 	stored, _ := config.LoadAuth()
 	if e := stored["opencode-go"]; e.Type != "api_key" || e.Key != "sk-secret-123" {
 		t.Fatalf("auth.json %+v", stored)
@@ -115,14 +120,17 @@ func TestLoginWithAPIKey(t *testing.T) {
 	if !strings.Contains(out, "Saved API key for OpenCode Go API key. 1 models available") || !strings.Contains(out, "GLM-5") {
 		t.Fatalf("after login: %s", out)
 	}
-	key(a, "\r")
-	if m := a.model(); m.ProviderName != "opencode-go" || m.Model.ID != "glm-5" || m.APIKey != "sk-secret-123" {
+	modalKey(a, "\r")
+	var m config.ModelRef
+	a.ui.Do(func() { m = a.model() })
+	if m.ProviderName != "opencode-go" || m.Model.ID != "glm-5" || m.APIKey != "sk-secret-123" {
 		t.Fatalf("model %+v", m)
 	}
 
 	// /logout removes it again.
-	a.submit("/logout", nil)
-	key(a, "\r")
+	typeLine(a, "/logout")
+	settle(a)
+	modalKey(a, "\r")
 	if stored, _ := config.LoadAuth(); len(stored) != 0 || !strings.Contains(screen(a), "Logged out of opencode-go") {
 		t.Fatalf("logout: %v %s", stored, screen(a))
 	}
@@ -151,7 +159,8 @@ func TestLoginWithChatGPT(t *testing.T) {
 	urls := make(chan string, 1)
 	a.login.openURL = func(u string) error { urls <- u; return nil }
 
-	a.submit("/login openai", nil)
+	typeLine(a, "/login openai")
+	settle(a)
 	var authURL string
 	select {
 	case authURL = <-urls:
@@ -168,7 +177,7 @@ func TestLoginWithChatGPT(t *testing.T) {
 	a.ui.Do(func() {
 		a.modal.HandleInput(tui.PastePrefix + q.Get("redirect_uri") + "?code=the-code&client_id=issued&state=" + q.Get("state"))
 	})
-	key(a, "\r")
+	modalKey(a, "\r")
 	waitFor(t, func() bool { return strings.Contains(screen(a), "Logged in to OpenAI") })
 	stored, _ := config.LoadAuth()
 	if e := stored["openai"]; e.Type != "oauth" || e.Access != "acc" || e.ClientID != "issued" {
@@ -193,10 +202,11 @@ func TestLoginCancel(t *testing.T) {
 		return c
 	}
 	defer func() { auth.NewChatGPTClient = old }()
-	a.submit("/login openai", nil)
+	typeLine(a, "/login openai")
+	settle(a)
 	waitFor(t, func() bool { return strings.Contains(screen(a), "auth.invalid") })
-	key(a, "\x1b")
-	if a.modal != nil || !strings.Contains(screen(a), "Login cancelled.") {
+	modalKey(a, "\x1b")
+	if modalOpen(a) || !strings.Contains(screen(a), "Login cancelled.") {
 		t.Fatalf("esc: %s", screen(a))
 	}
 }
@@ -210,4 +220,16 @@ func waitFor(t *testing.T, cond func() bool) {
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
+}
+
+func editorText(a *App) string {
+	var s string
+	a.ui.Do(func() { s = a.editor.Text() })
+	return s
+}
+
+func modalOpen(a *App) bool {
+	var open bool
+	a.ui.Do(func() { open = a.modal != nil })
+	return open
 }

@@ -1,12 +1,13 @@
 package app
 
 import (
+	"encoding/json"
 	"fmt"
 	"path/filepath"
 	"strings"
 
 	"github.com/sebastianrcnt/atto/core"
-
+	"github.com/sebastianrcnt/atto/server"
 	"github.com/sebastianrcnt/atto/session"
 	"github.com/sebastianrcnt/atto/tui"
 )
@@ -456,168 +457,92 @@ func formatSize(n int64) string {
 
 // cmdResume opens the agent center on its saved sessions (Inactive): the
 // center is where sessions are picked now.
-// A phone or browser (/remote) gets the picker, which it can show.
-func (a *App) cmdResume(arg string) {
-	if a.fromRemote {
-		a.cmdSessions(arg)
-		return
-	}
-	a.openAgents(tabInactive)
-}
+func (a *App) cmdResume(string) { a.openAgents(tabInactive) }
 
 // cmdSessions opens the session picker, which also archives, renames and
-// previews saved sessions. It works mid-turn too: picking a session
-// interrupts the running turn and switches once it has stopped.
+// previews saved sessions.
 func (a *App) cmdSessions(string) {
-	p := newResumePicker(a.cwd, a.sess.Path)
-	if items := p.list.Items; len(items) > 1 && items[0].Data.(session.Summary).Path == a.sess.Path {
+	p := newResumePicker(a.cwd, a.sessPath)
+	if items := p.list.Items; len(items) > 1 && items[0].Data.(session.Summary).Path == a.sessPath {
 		p.list.Selected = 1 // the open session is first; default to the one before it
 	}
 	p.onCancel = a.closeModal
 	p.onArchive = func(s session.Summary) {
-		current := s.Path == a.sess.Path
-		if current && a.turns.Busy {
-			a.errorNotice(fmt.Errorf("cannot archive the current session while a turn is running"))
+		if s.Path == a.sessPath {
+			a.closeModal()
+			a.cmdArchive("")
 			return
 		}
 		var err error
 		if s.Archived {
 			_, err = session.Unarchive(s.Path)
 		} else {
-			if current {
-				a.closeSession() // release the old path before moving it
-			}
 			_, err = session.Archive(s.Path)
-			if err != nil && current {
-				release, lockErr := session.LockTUI(a.sess.Path)
-				if lockErr != nil {
-					a.sess.SetReadOnly(lockErr.Error())
-					a.errorNotice(lockErr)
-				} else {
-					a.unlock = release
-				}
-			}
-			if err == nil && current {
-				a.reset()
-				a.newSession("other")
-				a.notice("Archived the current conversation and started a new one.")
-			}
 		}
 		if err != nil {
 			a.errorNotice(err)
 		}
 	}
 	p.onRename = func(s session.Summary, name string) error {
-		if s.Path != a.sess.Path {
+		if s.Path != a.sessPath {
 			return session.Rename(s.Path, name)
 		}
-		a.sessName = name // the open session: its own writer keeps the file in order
-		a.editor.Title = a.sessName
-		a.sess.Append(session.Entry{Type: session.TypeName, Name: name})
-		a.statusTrigger()
-		return a.sess.Err()
+		// The open session: its runtime's writer keeps the file in order.
+		a.sessName = name
+		a.editor.Title = name
+		a.rpcErr("thread/setName", map[string]any{"name": name})
+		return nil
 	}
 	p.onPick = func(s session.Summary) {
 		a.closeModal()
-		if s.Path == a.sess.Path {
+		if s.Path == a.sessPath {
 			return // already open
 		}
-		path := s.Path
 		if s.Archived {
-			var err error
-			if path, err = session.Unarchive(s.Path); err != nil {
+			if _, err := session.Unarchive(s.Path); err != nil {
 				a.errorNotice(err)
 				return
 			}
 		}
-		a.requestResume(path)
+		a.resumeID(s.ID)
 	}
 	a.openModal(p)
 }
 
-// requestResume switches to another session; the one open stays.
+// requestResume switches to the session at path; the one open goes on
+// until idle.
 func (a *App) requestResume(path string) {
-	if path != a.sess.Path {
-		a.resume(path)
-	}
-}
-
-// resume loads a session file, restores the agent and redraws the
-// transcript, then keeps appending to the same file. During a turn it waits
-// for the turn to stop first, whoever asks: the running turn keeps its
-// session until then, so its late events and reply can't land in the new one.
-func (a *App) resume(path string) {
-	if a.turns.Busy {
-		a.pendingResume = path
-		a.turns.Cancel(nil)
+	if path == a.sessPath {
 		return
 	}
-	l, locked := session.LockedBy(path)
-	background := locked && (l.Kind == "" || l.Kind == session.KindBackground)
-	if locked && !background {
-		// Agent turns hold run leases rather than background leases. Their
-		// transcripts are still safe to view, but never to write concurrently.
-		if saved, err := session.Summarize(path); err == nil && saved.AgentOf != "" {
-			background = true
-		}
+	if s, err := session.Summarize(path); err == nil {
+		a.resumeID(s.ID)
+		return
 	}
-	var release func()
-	var err error
-	if !background {
-		release, err = session.LockTUI(path)
+	a.errorNotice(fmt.Errorf("cannot read %s", path))
+}
+
+// resumeID shows session id: the runtime opens it (or attaches to it, when
+// it runs already), read-only when another process writes it. The
+// session left goes on until it is idle, then ends. Commands keep running
+// in this terminal's directory, as they always did.
+func (a *App) resumeID(id string) {
+	a.rpc("thread/resume", map[string]any{"threadId": id, "cwd": a.cwd}, func(raw json.RawMessage, err error) {
 		if err != nil {
 			a.errorNotice(err)
 			return
 		}
-	}
-	saved, file, err := core.OpenDisplay(path)
-	if err != nil {
-		if release != nil {
-			release()
+		var info server.ThreadInfo
+		if json.Unmarshal(raw, &info) != nil {
+			return
 		}
-		a.errorNotice(err)
-		return
-	}
-	if background {
-		a.resumeLocked(saved, file, l)
-		return
-	}
-	h := saved.Header
-	a.leaveSession("resume")
-	a.reset()
-	a.closeSession()
-	a.sess = file
-	a.unlock = release
-	core.Bind(a.agent, a.hooks, a.sess, h.Time, true) // the session's own date keeps the prefix cache
-	a.setLiveSession(h.ID)
-	a.sessionStartHook("resume")
-	branch := saved.Branch()
-	a.agent.Restore(branch)
-	a.agent.SetLongContext(saved.LongContext)
-	a.ctxTokens = a.agent.ContextTokens()
-	a.usage.fromSaved(saved, a.models)
-	a.recModel, a.recEffort, a.sessName = "", "", saved.Name
-	a.editor.Title = a.sessName
-	if ref, ok := a.models.Find("", saved.Model); ok {
-		a.agent.SetModel(ref)
-		a.recModel = saved.Model
-		a.modelFrom = core.FromSession
-	}
-	if saved.Effort != "" {
-		a.agent.SetEffort(saved.Effort)
-		a.recEffort = saved.Effort
-		a.effortFrom = core.FromSession
-	}
-	a.showLoaded()
-	a.replay(saved.Entries)
-	a.restoreGoal(saved.Snapshots())
-	if h.Cwd != a.cwd {
-		a.notice("Resumed a session from %s; commands run in %s.", core.ShortPath(h.Cwd), core.ShortPath(a.cwd))
-	}
-	label := h.Time.Local().Format("2006-01-02 15:04")
-	if a.sessName != "" {
-		label = fmt.Sprintf("%q (%s)", a.sessName, label)
-	}
-	a.notice("Resumed session %s.", label)
-	a.statusTrigger()
+		if info.ID == a.threadID {
+			a.show(info) // ctrl+r on a read-only session
+		} else {
+			a.switchTo(info, "resume", nil)
+		}
+		if info.ReadOnly != "" {
+			a.notice("Opened %s read-only. ctrl+r reads it again.", info.ID)
+		}
+	})
 }
