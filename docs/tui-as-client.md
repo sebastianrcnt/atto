@@ -771,6 +771,23 @@ have specific reasons; legacy error paths receive a code-derived reason until
 they move into the runtime. `provider/providertest` supplies a scripted streaming
 model with gates, slow replies and saved request bodies for protocol tests.
 
-Connection IDs, the common event hub, the Go client and the session runtime are
-subsequent phase 1 work. The TUI, frozen web client and agent/subagent aliases are
+### Phase 1 B — shared event hub and client
+
+Every transport now observes one server-owned hub. JSON-lines clients use
+`ServeConn`, receive a connection `clientId` from initialize, and detach on EOF
+without cancelling execution. HTTP/SSE no longer replace the server's notification
+sink. Notifications carry `eventId`; snapshots carry the corresponding cursor.
+The Go `Client`/`Connect` speak the same stream protocol, and `ThreadView` combines
+snapshots and events, ignoring duplicate events as well as snapshot-covered ones.
+Connection subscription is established before requests can start emitting events.
+
+Items preserve transcript entry IDs, command timeouts/results/cancellation/errors,
+clipping, full result text, user images, shell fields and compaction reason/cap.
+`TranscriptItem` maps them back for a future TUI client. Late saved entry/block IDs
+are published as `item/updated`, before extension display events reference them.
+Tests compare simultaneous in-process, stdio and mid-stream clients with fresh
+snapshots; they cover lossless rendering, duplicate reduction and unattended work
+surviving transport EOF.
+
+The session runtime remains subsequent phase 1 work. The TUI, frozen web client and agent/subagent aliases are
 unchanged by the contract work.

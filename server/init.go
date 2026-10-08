@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"maps"
@@ -50,10 +51,23 @@ func newInstanceID() string {
 
 // initialize answers initialize: the server, the revision agreed and what
 // the client follows events from; extra adds fields (a live session's).
-func (s *Server) initialize(p threadParams, extra map[string]any) (any, error) {
+func (s *Server) initialize(ctx context.Context, p threadParams, extra map[string]any) (any, error) {
 	v, err := negotiate(p.ProtocolVersions)
 	if err != nil {
 		return nil, err
+	}
+	if c := connOf(ctx); c != nil {
+		s.mu.Lock()
+		if p.Client != nil {
+			c.name = p.Client.Name
+		}
+		c.interactive = p.Capabilities != nil && p.Capabilities.Interactive
+		s.mu.Unlock()
+		extra = maps.Clone(extra)
+		if extra == nil {
+			extra = map[string]any{}
+		}
+		extra["clientId"] = c.id
 	}
 	out := map[string]any{"name": "atto", "version": s.Version, "protocolVersion": v,
 		"serverInstanceId": s.instance, "eventId": s.eventSeq(), "settings": clientSettings()}

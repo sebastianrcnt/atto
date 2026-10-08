@@ -1,8 +1,6 @@
 package server
 
 import (
-	"bufio"
-	"context"
 	"crypto/rand"
 	"crypto/subtle"
 	"encoding/hex"
@@ -15,139 +13,11 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/sebastianrcnt/atto/config"
 	"github.com/sebastianrcnt/atto/server/web"
 )
-
-// ServeStdio speaks JSON-RPC as JSON lines on r/w (codex app-server style):
-// one request per line in, responses and notifications out.
-func (s *Server) ServeStdio(ctx context.Context, r io.Reader, w io.Writer) error {
-	var mu sync.Mutex
-	write := func(v any) {
-		b, _ := json.Marshal(v)
-		mu.Lock()
-		defer mu.Unlock()
-		_, _ = w.Write(append(b, '\n'))
-	}
-	s.Notify = func(method string, params map[string]any) {
-		write(rpcNotification{JSONRPC: "2.0", Method: method, Params: params})
-	}
-	sc := bufio.NewScanner(r)
-	sc.Buffer(make([]byte, 64*1024), 16<<20)
-	for sc.Scan() {
-		line := strings.TrimSpace(sc.Text())
-		if line == "" {
-			continue
-		}
-		if resp := s.Handle(ctx, []byte(line)); resp != nil {
-			write(resp)
-		}
-	}
-	return sc.Err()
-}
-
-// broker fans notifications out to SSE subscribers and keeps a ring of
-// recent events so a client that reconnects (e.g. a phone waking up) can
-// resume with Last-Event-ID. The ring is bounded by count and by bytes; a
-// client further behind gets a reset and reads the thread again.
-type broker struct {
-	mu    sync.Mutex
-	seq   int64
-	ring  []sseEvent
-	bytes int                             // in ring
-	subs  map[chan sseEvent]chan struct{} // each subscriber's kick channel
-	keep  int
-}
-
-// keepBytes bounds the ring's events: completed items carry whole command
-// outputs, and 10,000 of them held megabytes for a resume that a thread
-// read does as well.
-const keepBytes = 2 << 20
-
-type sseEvent struct {
-	id   int64
-	data []byte
-}
-
-func newBroker(keep int) *broker {
-	return &broker{subs: map[chan sseEvent]chan struct{}{}, keep: keep}
-}
-
-func (b *broker) publish(v any) {
-	data, _ := json.Marshal(v)
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	b.seq++
-	ev := sseEvent{b.seq, data}
-	b.ring = append(b.ring, ev)
-	b.bytes += len(data)
-	drop := 0
-	for len(b.ring)-drop > 1 && (len(b.ring)-drop > b.keep || b.bytes > keepBytes) {
-		b.bytes -= len(b.ring[drop].data)
-		drop++
-	}
-	b.ring = b.ring[drop:]
-	for ch, kick := range b.subs {
-		select {
-		case ch <- ev:
-		default:
-			// A slow client: rather than skip events it would never know
-			// it missed, end its stream; it reconnects with Last-Event-ID
-			// and resumes from the ring.
-			delete(b.subs, ch)
-			close(kick)
-		}
-	}
-}
-
-// subscribe returns events after lastID (replayed from the ring), a
-// channel of new ones, and a channel closed when the subscriber fell
-// behind and must reconnect. gap is set when the events after lastID are
-// not known any more: lastID is from before the server started (it
-// restarted) or older than the ring keeps.
-func (b *broker) subscribe(lastID int64) (backlog []sseEvent, ch chan sseEvent, kick chan struct{}, gap bool) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	switch {
-	case lastID > b.seq:
-		gap = true
-	case lastID > 0 && len(b.ring) > 0 && lastID < b.ring[0].id-1:
-		gap = true
-	default:
-		for _, ev := range b.ring {
-			if ev.id > lastID {
-				backlog = append(backlog, ev)
-			}
-		}
-	}
-	ch = make(chan sseEvent, 1024)
-	kick = make(chan struct{})
-	b.subs[ch] = kick
-	return backlog, ch, kick, gap
-}
-
-func (b *broker) unsubscribe(ch chan sseEvent) {
-	b.mu.Lock()
-	delete(b.subs, ch)
-	b.mu.Unlock()
-}
-
-// last is the ID of the latest event.
-func (b *broker) last() int64 {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return b.seq
-}
-
-// clients counts the subscribers.
-func (b *broker) clients() int {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return len(b.subs)
-}
 
 // TokenPath stores the HTTP server's bearer token.
 func TokenPath() string { return filepath.Join(config.Dir(), "server-token") }
@@ -189,11 +59,7 @@ const webCSP = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-
 // Every request except the web client's files needs the token, as
 // "Authorization: Bearer" or ?token= (EventSource cannot set headers).
 func (s *Server) HTTPHandler(token string) http.Handler {
-	b := newBroker(10000)
-	s.events = b
-	s.Notify = func(method string, params map[string]any) {
-		b.publish(rpcNotification{JSONRPC: "2.0", Method: method, Params: params})
-	}
+	b := s.events
 	clients := func() {
 		if s.OnClients != nil {
 			s.OnClients(b.clients()) // outside the broker's lock: the hook may wait for a UI
@@ -268,8 +134,7 @@ func (s *Server) HTTPHandler(token string) http.Handler {
 			// What happened since is not known: the client reads its
 			// thread again (events/reset, see protocol.go). No id, so
 			// it does not move the client's Last-Event-ID.
-			reset, _ := json.Marshal(rpcNotification{JSONRPC: "2.0", Method: "events/reset", Params: map[string]any{"eventId": b.last()}})
-			fmt.Fprintf(w, "data: %s\n\n", reset)
+			fmt.Fprintf(w, "data: %s\n\n", s.resetNotification())
 		}
 		for _, ev := range backlog {
 			write(ev)

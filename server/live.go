@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"strings"
 
 	"github.com/sebastianrcnt/atto/config"
@@ -52,18 +53,18 @@ type Live interface {
 // NewLive makes a server for one live conversation. Its notifications
 // come from the front end through Publish.
 func NewLive(version string, live Live) *Server {
-	return &Server{Version: version, live: live, threads: map[string]*thread{}, Notify: func(string, map[string]any) {}, stop: make(chan struct{}), instance: newInstanceID()}
+	return &Server{Version: version, live: live, threads: map[string]*thread{}, Notify: func(string, map[string]any) {}, stop: make(chan struct{}), instance: newInstanceID(), events: newBroker(10000)}
 }
 
 // Publish sends a notification of the live thread to clients. The front
 // end calls it in the order things happen, from one goroutine at a time.
-func (s *Server) Publish(method string, params map[string]any) { s.Notify(method, params) }
+func (s *Server) Publish(method string, params map[string]any) { s.publish(method, params) }
 
 // WireItem is the protocol form of a transcript item of session sid.
 func WireItem(sid string, it *transcript.Item) Item { return wireItem(sid, it) }
 
 // liveCall serves the protocol for a live conversation.
-func (s *Server) liveCall(method string, p threadParams) (any, error) {
+func (s *Server) liveCall(ctx context.Context, method string, p threadParams) (any, error) {
 	l := s.live
 	cur := func() (ThreadInfo, error) {
 		info, err := l.Thread(false, nil)
@@ -81,7 +82,7 @@ func (s *Server) liveCall(method string, p threadParams) (any, error) {
 		if err != nil {
 			return nil, err
 		}
-		return s.initialize(p, map[string]any{"live": true, "threadId": info.ID})
+		return s.initialize(ctx, p, map[string]any{"live": true, "threadId": info.ID})
 	case "initialized":
 		return nil, nil
 	case "models/list":
