@@ -35,6 +35,7 @@ type Server struct {
 	// as it changes (set before HTTPHandler).
 	OnClients func(n int)
 
+	memory  core.IdleMemory
 	mu      sync.Mutex
 	threads map[string]*thread
 	stop    chan struct{}
@@ -44,6 +45,7 @@ type Server struct {
 
 func New(version, cwd string) *Server {
 	s := &Server{Version: version, Cwd: cwd, threads: map[string]*thread{}, Notify: func(string, map[string]any) {}, stop: make(chan struct{})}
+	s.memory = core.NewIdleMemory()
 	go s.watchInbox()
 	return s
 }
@@ -146,6 +148,9 @@ type thread struct {
 // Close interrupts running turns, stops background jobs and closes session
 // files (Windows cannot delete or move a file that is still open).
 func (s *Server) Close() {
+	if s.memory != nil {
+		s.memory.Close()
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	select {
@@ -307,6 +312,16 @@ type threadParams struct {
 }
 
 func (s *Server) call(ctx context.Context, method string, raw json.RawMessage) (any, error) {
+	// Read-only polling is not input: a browser following an idle thread
+	// must not keep postponing its memory release.
+	switch method {
+	case "thread/start", "thread/resume", "thread/setModel", "thread/setEffort", "thread/compact", "thread/rollback",
+		"turn/start", "turn/steer", "turn/unsteer", "turn/background", "turn/interrupt", "job/stop":
+		if s.memory != nil {
+			s.memory.Begin()
+			defer s.memory.End()
+		}
+	}
 	p, err := decode[threadParams](raw)
 	if err != nil {
 		return nil, err
@@ -665,6 +680,9 @@ func (s *Server) begin(t *thread, fn func(ctx context.Context, emit func(any)) e
 		t.mu.Unlock()
 		return "", &rpcError{codeServer, "a turn is already running; use turn/steer or turn/interrupt"}
 	}
+	if s.memory != nil {
+		s.memory.Begin()
+	}
 	t.done = make(chan struct{})
 	done := t.done
 	t.turnSeq++
@@ -682,6 +700,9 @@ func (s *Server) begin(t *thread, fn func(ctx context.Context, emit func(any)) e
 	t.feed.Unlock()
 	go func() {
 		defer close(done)
+		if s.memory != nil {
+			defer s.memory.End()
+		}
 		err := fn(ctx, m.event)
 		m.closeOpen()
 		// A reload no step boundary reached runs now, while the thread is

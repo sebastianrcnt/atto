@@ -63,6 +63,9 @@ func (a *App) submitShell(text, cmd string, exclude bool) {
 		a.restoreToEditor([]string{text})
 		return
 	}
+	if a.memory != nil {
+		a.memory.Begin()
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	run := &shellRun{cancel: cancel}
 	a.shell = run
@@ -88,6 +91,9 @@ func (a *App) submitShell(text, cmd string, exclude bool) {
 			})
 		})
 		a.ui.Do(func() {
+			if a.memory != nil {
+				defer a.memory.End()
+			}
 			cancel()
 			if a.shell != run { // dropped with its session
 				return

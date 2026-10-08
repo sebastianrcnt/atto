@@ -247,5 +247,5 @@ func (a *App) answerPrompt(id string, ans server.PromptAnswer) error {
 }
 
 func (l remoteSession) Answer(id string, ans server.PromptAnswer) error {
-	return l.do(func() error { return l.a.answerPrompt(id, ans) })
+	return l.input(func() error { return l.a.answerPrompt(id, ans) })
 }

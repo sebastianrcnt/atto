@@ -79,6 +79,7 @@ type App struct {
 	copyEnv copyEnv
 	toast   toast
 
+	memory  core.IdleMemory
 	busy    bool
 	runKind string // "turn", "compact" or "branchSummary" while busy
 	// typed is the message the user typed that started the running turn (nil
@@ -252,7 +253,9 @@ func Run(opts Options) error {
 		quit:       make(chan struct{}),
 
 		clipboard: images.SystemClipboardImage,
+		memory:    core.NewIdleMemory(),
 	}
+	defer a.memory.Close()
 	ag.SteerNote = a.goal.SteerNote // a message sent while the goal runs says so
 	if opts.Inline || rendererMode(settings.Renderer) == tui.Inline {
 		a.ui.Mode = tui.Inline
@@ -321,6 +324,7 @@ func Run(opts Options) error {
 		if a.cancel != nil {
 			a.cancel()
 		}
+		a.memory.Close()
 		a.stopRemote()
 	})
 	a.ui.Stop()
@@ -519,6 +523,10 @@ func (a *App) doQuit() { a.quitOnce.Do(func() { close(a.quit) }) }
 // --- input ---
 
 func (a *App) onInput(data string) bool {
+	if a.memory != nil {
+		a.memory.Begin()
+		defer a.memory.End()
+	}
 	if a.modal != nil {
 		return false // the focused modal handles everything
 	}
@@ -622,6 +630,10 @@ func (a *App) interrupt() bool {
 }
 
 func (a *App) submit(text string, att []tui.Attachment) {
+	if a.memory != nil {
+		a.memory.Begin()
+		defer a.memory.End()
+	}
 	if a.refuseReadOnly(text) {
 		return
 	}
@@ -713,6 +725,9 @@ func (a *App) runTurn(text string, att []tui.Attachment, typed bool) {
 
 // start runs fn in the background, routing its events into the UI.
 func (a *App) start(activity string, fn func(context.Context, func(any)) error) {
+	if a.memory != nil {
+		a.memory.Begin()
+	}
 	a.typed, a.replied = nil, false
 	ctx, cancel := context.WithCancel(context.Background())
 	a.busy, a.cancel = true, cancel
@@ -752,6 +767,9 @@ func (a *App) start(activity string, fn func(context.Context, func(any)) error) 
 		}
 		ctxTokens := a.agent.ContextTokens() // safe: the run is over
 		a.ui.Do(func() {
+			if a.memory != nil {
+				defer a.memory.End()
+			}
 			a.pendingEvents = append(a.pendingEvents, reported...)
 			a.tr().End() // a compaction that did not finish disappears
 			a.busy = false

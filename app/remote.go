@@ -470,6 +470,16 @@ func (l remoteSession) do(fn func() error) error {
 	return err
 }
 
+func (l remoteSession) input(fn func() error) error {
+	return l.do(func() error {
+		if l.a.memory != nil {
+			l.a.memory.Begin()
+			defer l.a.memory.End()
+		}
+		return fn()
+	})
+}
+
 func (l remoteSession) Thread(items bool, at func()) (server.ThreadInfo, error) {
 	var info server.ThreadInfo
 	err := l.do(func() error {
@@ -513,7 +523,7 @@ func (l remoteSession) Model() config.ModelRef {
 
 func (l remoteSession) Send(input string, imgs []provider.Image) (status, turnID string, err error) {
 	a := l.a
-	err = l.do(func() error {
+	err = l.input(func() error {
 		if why := a.sess.ReadOnly(); why != "" {
 			return errors.New(why)
 		}
@@ -550,7 +560,7 @@ func (l remoteSession) Send(input string, imgs []provider.Image) (status, turnID
 
 func (l remoteSession) Interrupt() bool {
 	ok := false
-	_ = l.do(func() error {
+	_ = l.input(func() error {
 		ok = l.a.interrupt()
 		return nil
 	})
@@ -559,7 +569,7 @@ func (l remoteSession) Interrupt() bool {
 
 func (l remoteSession) Background() bool {
 	ok := false
-	_ = l.do(func() error {
+	_ = l.input(func() error {
 		ok = l.a.busy && l.a.agent.Background()
 		return nil
 	})
@@ -568,7 +578,7 @@ func (l remoteSession) Background() bool {
 
 func (l remoteSession) SetModel(id string) (server.ThreadInfo, error) {
 	var info server.ThreadInfo
-	err := l.do(func() error {
+	err := l.input(func() error {
 		ref, ok := l.a.models.Find("", id)
 		if !ok {
 			return fmt.Errorf("unknown model %q", id)
@@ -582,7 +592,7 @@ func (l remoteSession) SetModel(id string) (server.ThreadInfo, error) {
 
 func (l remoteSession) SetEffort(level string) (server.ThreadInfo, error) {
 	var info server.ThreadInfo
-	err := l.do(func() error {
+	err := l.input(func() error {
 		levels := l.a.efforts()
 		found := false
 		for _, x := range levels {
@@ -599,7 +609,7 @@ func (l remoteSession) SetEffort(level string) (server.ThreadInfo, error) {
 }
 
 func (l remoteSession) Unsteer(input string, queued bool) error {
-	return l.do(func() error {
+	return l.input(func() error {
 		a := l.a
 		if queued {
 			for i, v := range slices.Backward(a.queued) {
@@ -627,7 +637,7 @@ func (l remoteSession) Unsteer(input string, queued bool) error {
 // clients follow the switch.
 func (l remoteSession) Rollback(n int) (string, error) {
 	var text string
-	err := l.do(func() error {
+	err := l.input(func() error {
 		a := l.a
 		if a.busy {
 			return errors.New("a turn is running; turn/interrupt first")
