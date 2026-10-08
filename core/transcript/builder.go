@@ -145,9 +145,13 @@ func (b *Builder) Add(it Item) {
 // End finishes what a run left open: text and reasoning complete, a
 // command, compaction or branch summary still running failed (it was
 // interrupted).
-func (b *Builder) End() { b.end(time.Now()) }
+func (b *Builder) End() { b.end(time.Now(), false) }
 
-func (b *Builder) end(at time.Time) {
+// EndTurn finishes the model's run without interrupting a user shell
+// command, which runs independently and may still produce output.
+func (b *Builder) EndTurn() { b.end(time.Now(), true) }
+
+func (b *Builder) end(at time.Time, keepShell bool) {
 	b.step = nil
 	b.closeText(at)
 	for _, it := range b.items { // in order, unlike the maps
@@ -157,7 +161,11 @@ func (b *Builder) end(at time.Time) {
 			b.endTool(it.CallID, ToolResult{Canceled: true, ExitCode: -1}, 0)
 		}
 	}
-	for _, c := range []**Item{&b.compact, &b.summary, &b.shell} {
+	open := []**Item{&b.compact, &b.summary}
+	if !keepShell {
+		open = append(open, &b.shell)
+	}
+	for _, c := range open {
 		if *c != nil {
 			it := *c
 			*c = nil

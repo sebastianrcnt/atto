@@ -21,13 +21,15 @@ type Client struct {
 	rw  io.ReadWriteCloser
 	wmu sync.Mutex
 
-	mu      sync.Mutex
-	nextID  int64
-	pending map[int64]chan rpcReply
-	queue   []Notification
-	wake    chan struct{}
-	err     error
-	done    chan struct{}
+	mu        sync.Mutex
+	nextID    int64
+	pending   map[int64]chan rpcReply
+	queue     []Notification
+	wake      chan struct{}
+	err       error
+	done      chan struct{}
+	closed    chan struct{}
+	closeOnce sync.Once
 
 	events chan Notification
 }
@@ -59,7 +61,7 @@ var ErrClosed = errors.New("connection to the atto server closed")
 // NewClient starts a client on rw, which it owns.
 func NewClient(rw io.ReadWriteCloser) *Client {
 	c := &Client{rw: rw, pending: map[int64]chan rpcReply{}, wake: make(chan struct{}, 1),
-		done: make(chan struct{}), events: make(chan Notification)}
+		done: make(chan struct{}), closed: make(chan struct{}), events: make(chan Notification)}
 	go c.read()
 	go c.pump()
 	return c
@@ -140,7 +142,11 @@ func (c *Client) pump() {
 				c.queue = nil
 				c.mu.Unlock()
 				for _, n := range rest {
-					c.events <- n
+					select {
+					case c.events <- n:
+					case <-c.closed:
+						return
+					}
 				}
 				return
 			}
@@ -148,7 +154,11 @@ func (c *Client) pump() {
 		n := c.queue[0]
 		c.queue = c.queue[1:]
 		c.mu.Unlock()
-		c.events <- n
+		select {
+		case c.events <- n:
+		case <-c.closed:
+			return
+		}
 	}
 }
 
@@ -219,4 +229,7 @@ func (c *Client) send(v any) error {
 }
 
 // Close ends the connection: the client detaches.
-func (c *Client) Close() error { return c.rw.Close() }
+func (c *Client) Close() error {
+	c.closeOnce.Do(func() { close(c.closed) })
+	return c.rw.Close()
+}

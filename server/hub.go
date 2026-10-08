@@ -134,6 +134,7 @@ func (s *Server) publish(method string, params map[string]any) {
 // resetNotification tells a client its events have a gap: it reads its
 // threads again, following from eventId.
 func (s *Server) resetNotification() []byte {
-	b, _ := json.Marshal(rpcNotification{JSONRPC: "2.0", Method: "events/reset", Params: map[string]any{"eventId": s.events.last(), "serverInstanceId": s.instance}})
+	seq := s.events.last()
+	b, _ := json.Marshal(rpcNotification{JSONRPC: "2.0", Method: "events/reset", EventID: seq, Params: map[string]any{"eventId": seq, "serverInstanceId": s.instance}})
 	return b
 }

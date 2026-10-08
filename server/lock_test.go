@@ -33,7 +33,7 @@ func TestStandaloneServerHoldsWriterLease(t *testing.T) {
 	work := setup(t)
 	s := New("test", work)
 	defer s.Close()
-	got, err := s.startThread(threadParams{})
+	got, err := s.startThread("", threadParams{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -49,28 +49,28 @@ func TestStandaloneServerHoldsWriterLease(t *testing.T) {
 	}
 	s2 := New("test", work)
 	defer s2.Close()
-	if _, err := s2.resumeThread(id); err == nil {
+	if _, err := s2.resumeThread("", threadParams{ThreadID: id}); err == nil {
 		t.Fatal("second writer opened session")
 	}
 	if _, err := session.LockTUI(path); err == nil {
 		t.Fatal("terminal opened server session")
 	}
 	s.Close()
-	if _, err := s2.resumeThread(id); err != nil {
+	if _, err := s2.resumeThread("", threadParams{ThreadID: id}); err != nil {
 		t.Fatal("lease not released:", err)
 	}
 }
 
-func TestStandalonePromptDoesNotAdvertiseGoals(t *testing.T) {
+func TestStandalonePromptAdvertisesGoals(t *testing.T) {
 	work := setup(t)
 	s := New("test", work)
 	defer s.Close()
-	got, err := s.startThread(threadParams{})
+	got, err := s.startThread("", threadParams{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	prompt := s.threads[got.(ThreadInfo).ID].agent.SystemPrompt()
-	if strings.Contains(prompt, "Goals:") || strings.Contains(prompt, "atto goal set") {
-		t.Fatal("standalone prompt advertises unsupported goals")
+	if !strings.Contains(prompt, "Goals:") || !strings.Contains(prompt, "atto goal set") {
+		t.Fatal("standalone runtime must advertise its supported goals")
 	}
 }

@@ -789,5 +789,87 @@ Tests compare simultaneous in-process, stdio and mid-stream clients with fresh
 snapshots; they cover lossless rendering, duplicate reduction and unattended work
 surviving transport EOF.
 
-The session runtime remains subsequent phase 1 work. The TUI, frozen web client and agent/subagent aliases are
-unchanged by the contract work.
+### Phase 1 C/D — the session runtime
+
+Each loaded thread now has one lane (`server/runtime.go`): requests, agent events,
+inbox ticks, retry/retirement callbacks and extension host calls enter it in order.
+The lane owns the agent, session writer/lease, hooks, extensions, MCP, transcript,
+goal driver, pending input, shell results, prompts and attachment/gate state.
+`core.TurnRunner[*pendingInput]` owns busy/cancel causes, steering, queue, send-now,
+settlement and inbox delivery; input IDs and client provenance remain runtime data.
+The port keeps today's `GoalDriver`, split agent package, request logging,
+`step_end`, connection handling and session summary cache. Resume uses
+`core.OpenDisplay`, restores only `session.Context`, reads session-wide snapshots
+and uses the lightweight accumulated usage instead of decoding abandoned branches.
+Project trust warnings remain enabled and execution still requires existing trust.
+
+Added protocol surface (documented in `server/protocol.go`):
+
+- `input/submit` with auto/queue/replace/steer intents; ID-based `turn/unsteer`,
+  `queue/resume`, and `input/recovered` addressed to the sending client.
+- `turn/interrupt` with sendPending (Esc, default) or cancel (Ctrl+C); actual turns
+  use `agent.ErrUserInterrupt`, while compaction/navigation/close use ordinary
+  cancellation. Hosted commands detach on a user interrupt, preserving quiet exits.
+- `shell/start`, `shell/interrupt`, and shell-aware `turn/background`; results that
+  finish during a run wait for its boundary and publish `contextPending` changes.
+  Model completion leaves independent shells open, preserving their later output;
+  snapshots preserve item start order even when concurrent commands finish late.
+- `goal/read|set|edit|pause|resume|clear`, goal retries, server-owned confirmation
+  prompts, first-answer-wins `prompt/answer`, and `client/gate` for local pickers.
+- `commands/list|run`, `thread/setContextMode|setName|setLabel`, `thread/tree`,
+  `thread/navigate|fork`, `thread/context|reload|debugRequest`, and legacy handoff.
+- `thread/attach|detach|close`, `job/stopAll`, `timer/list|create|cancel`, activity,
+  status, branch-change and closed notifications.
+
+Retirement is configurable with `Retire` and `Retention`: in-process retention is
+zero; `DefaultSessionRetention` is one minute for future workers. The standalone
+servers retain their existing process lifetime (retirement off until configured).
+Busy runs, shell commands, queued input, jobs, timers, active unheld goals and open
+prompts prevent retirement. Timers recheck this condition on the lane, so a stale
+retirement callback cannot close a newly attached client. Explicit close waits for
+runs and user shells before stopping jobs and releasing the writer lease.
+
+Behavior changes and deliberate compatibility choices:
+
+- Standalone servers now advertise and execute goals. Display-only runtime notices
+  are included in snapshots and notifications, as in the terminal.
+- Revision-1 methods/shapes remain; the default interrupt now has Esc semantics,
+  while clients wanting Ctrl+C explicitly select `mode: "cancel"`.
+- Connection EOF detaches; CLI process shutdown still explicitly closes its runtime.
+  Stdio cancellation now closes its pipes so a blocked scanner can stop.
+- Queued prompts wait rather than receiving unattended defaults. Explicit close or
+  extension reload cancels disposed questions; this is not an approval decision.
+- Quiet interrupt exits cannot wake an idle thread. They are polled when the next
+  turn starts as well as by ticks, so a fast turn cannot miss them indefinitely.
+- HTTP/SSE keeps legacy bearer clients working without requiring them to echo a
+  client ID: they share an anonymous handler identity, and connected SSE streams
+  count as interactive. JSON-lines clients have independent connection identities.
+- Front-end-only slash commands remain marked local. Pickers/rendering/login and
+  other local presentation stay with the front end; execution is exposed via RPC.
+- Legacy background-owner resume is still refused, not silently converted into a
+  read-only resume. The `agent/*` methods and frozen-web `subagent/*` aliases remain.
+
+Verification includes scripted-provider tests for start/steer/queue/takeback,
+Ctrl+Enter, both interrupt modes and per-client recovery; failed-turn queue pause;
+picker gates; goal execution, pause and retry interruption; first-answer prompts,
+unattended/queued prompts, real extension approvals and `step_end`; deferred and
+excluded shells, shells outliving turns and snapshot order; live output clipping;
+tree/fork/labels/branch summaries; commands/context/reload/debug;
+timers; detach/retirement and shutdown. `TestServerCLIEndToEnd` builds the real
+binary and exercises both `atto app-server` and `atto serve`; on Unix it also
+verifies an actual hosted command survives a protocol user interrupt and its quiet
+exit does not start another model turn. Existing trust, locking, replay, extension,
+usage, HTTP/SSE and current cancellation regression tests remain in place.
+
+### What phase 2 needs
+
+The TUI still executes through App; `server.Live` and `/remote` remain functional.
+Phase 2 must replace App execution with `Client`/`ThreadView`, translate editor
+intents and recovered drafts (including image labels), attach/detach/gate pickers,
+render protocol prompts/activity/notices/items, refresh snapshots on branch/reset,
+and use `thread/tree` rather than reading the runtime's writer. Keep local UI/login
+commands and PTY pane behavior. Test especially reconnect, snapshot/event ordering,
+late block IDs, input recovery, prompt races, trust gates and shell interruption.
+Daemon workers, registry routing, print-on-worker execution, durable accepted-input
+journaling/request dedupe and a full Codex-dialect adapter remain later phases.
+The web client is unchanged.

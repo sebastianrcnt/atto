@@ -3,6 +3,8 @@ package server
 import (
 	"encoding/json"
 	"slices"
+
+	"github.com/sebastianrcnt/atto/core"
 )
 
 // ThreadView is a client's copy of a thread's state: a snapshot (thread/read,
@@ -11,17 +13,18 @@ import (
 // (their event ID is at most the snapshot's), are ignored, so a client
 // that reads while events arrive applies each change exactly once.
 type ThreadView struct {
-	Info    ThreadInfo // Items unused: see Items
-	Items   []Item
-	EventID int64 // the snapshot's cursor
-	index   map[string]int
+	Info          ThreadInfo // Items unused: see Items
+	Items         []Item
+	EventID       int64 // the snapshot's cursor
+	index         map[string]int
+	NeedsSnapshot bool // replay reset or branch change requires thread/read
 }
 
 // Reset replaces the view with snapshot info.
 func (v *ThreadView) Reset(info ThreadInfo) {
 	v.Items = slices.Clone(info.Items)
 	info.Items = nil
-	v.Info, v.EventID = info, info.EventID
+	v.Info, v.EventID, v.NeedsSnapshot = info, info.EventID, false
 	v.index = map[string]int{}
 	for i, it := range v.Items {
 		v.index[it.ID] = i
@@ -30,6 +33,13 @@ func (v *ThreadView) Reset(info ThreadInfo) {
 
 // Apply brings the view up to date with n; it reports whether n changed it.
 func (v *ThreadView) Apply(n Notification) bool {
+	if n.Method == "events/reset" {
+		v.NeedsSnapshot = true
+		return true
+	}
+	if v.NeedsSnapshot {
+		return false
+	}
 	if n.EventID != 0 && n.EventID <= v.EventID {
 		return false
 	}
@@ -37,19 +47,26 @@ func (v *ThreadView) Apply(n Notification) bool {
 		return false
 	}
 	var p struct {
-		Item    *Item         `json:"item"`
-		ItemID  string        `json:"itemId"`
-		Delta   string        `json:"delta"`
-		Display *BlockDisplay `json:"display"`
-		Thread  *ThreadInfo   `json:"thread"`
-		TurnID  string        `json:"turnId"`
-		Usage   *Usage        `json:"usage"`
-		Context *int          `json:"contextTokens"`
-		Pending *PendingInput `json:"pending"`
-		Goal    *GoalInfo     `json:"goal"`
-		UI      *ExtensionUI  `json:"ui"`
-		Prompt  *Prompt       `json:"prompt"`
-		ID      string        `json:"id"`
+		Item      *Item           `json:"item"`
+		ItemID    string          `json:"itemId"`
+		Delta     string          `json:"delta"`
+		Display   *BlockDisplay   `json:"display"`
+		Thread    *ThreadInfo     `json:"thread"`
+		TurnID    string          `json:"turnId"`
+		Usage     *Usage          `json:"usage"`
+		Context   *int            `json:"contextTokens"`
+		Pending   *PendingInput   `json:"pending"`
+		Goal      *GoalInfo       `json:"goal"`
+		UI        *ExtensionUI    `json:"ui"`
+		Prompt    *Prompt         `json:"prompt"`
+		ID        string          `json:"id"`
+		Activity  json.RawMessage `json:"activity"`
+		StartedAt int64           `json:"startedAt"`
+		RunKind   string          `json:"runKind"`
+		Verb      string          `json:"verb"`
+		Jobs      int             `json:"jobs"`
+		Timers    int             `json:"timers"`
+		Loaded    *core.Loaded    `json:"context"`
 	}
 	if json.Unmarshal(n.Params, &p) != nil {
 		return false
@@ -74,7 +91,16 @@ func (v *ThreadView) Apply(n Notification) bool {
 			return false
 		}
 		if v.Items[i].Type == ItemCommand {
-			v.Items[i].Output += p.Delta
+			it := &v.Items[i]
+			it.Output += p.Delta
+			// Match the transcript builder's live output bound. Completed
+			// items supply the final tidy output and full-output reference.
+			const tail = 64 * 1024
+			if len(it.Output) > 2*tail {
+				cut := len(it.Output) - tail
+				it.Dropped += cut
+				it.Output = it.Output[cut:]
+			}
 		} else {
 			v.Items[i].Text += p.Delta
 		}
@@ -92,12 +118,27 @@ func (v *ThreadView) Apply(n Notification) bool {
 		t.Items = nil
 		v.Info = t
 	case "turn/started":
-		v.Info.Busy, v.Info.TurnID = true, p.TurnID
+		v.Info.Busy, v.Info.TurnID, v.Info.RunKind = true, p.TurnID, p.RunKind
+		v.Info.Turn = &TurnInfo{StartedAt: p.StartedAt, Verb: p.Verb}
 	case "turn/completed":
-		v.Info.Busy, v.Info.TurnID, v.Info.Turn = false, "", nil
+		v.Info.Busy, v.Info.TurnID, v.Info.Turn, v.Info.Activity, v.Info.RunKind = false, "", nil, nil, ""
 		if p.Context != nil {
 			v.Info.ContextTokens = *p.Context
 		}
+	case "turn/activity":
+		var activity *Activity
+		if json.Unmarshal(p.Activity, &activity) != nil {
+			return false
+		}
+		v.Info.Activity = activity
+	case "thread/status":
+		v.Info.Jobs, v.Info.Timers = p.Jobs, p.Timers
+	case "thread/reloaded":
+		if p.Loaded != nil {
+			v.Info.Context = p.Loaded
+		}
+	case "thread/branchChanged", "thread/switched", "thread/closed":
+		v.NeedsSnapshot = true
 	case "thread/usage":
 		v.Info.Usage = p.Usage
 		if p.Context != nil {

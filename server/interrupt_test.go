@@ -19,7 +19,7 @@ func TestInterruptAndShutdownCauses(t *testing.T) {
 			work := setup(t)
 			s := New("test", work)
 			defer s.Close()
-			res, err := s.startThread(threadParams{})
+			res, err := s.startThread("", threadParams{})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -29,7 +29,7 @@ func TestInterruptAndShutdownCauses(t *testing.T) {
 				t.Fatal(err)
 			}
 			causes := make(chan error, 1)
-			if _, err := s.begin(th, func(ctx context.Context, emit func(any)) error {
+			if _, err := beginForTest(s, th, func(ctx context.Context, emit func(any)) error {
 				<-ctx.Done()
 				causes <- context.Cause(ctx)
 				return ctx.Err()
@@ -60,13 +60,13 @@ func TestShutdownStopsLateInterruptDetach(t *testing.T) {
 	work := setup(t)
 	s := New("test", work)
 	defer s.Close()
-	res, err := s.startThread(threadParams{})
+	res, err := s.startThread("", threadParams{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	th, _ := s.thread(res.(ThreadInfo).ID)
 	release := make(chan struct{})
-	if _, err := s.begin(th, func(ctx context.Context, emit func(any)) error {
+	if _, err := beginForTest(s, th, func(ctx context.Context, emit func(any)) error {
 		<-ctx.Done()
 		<-release // a host still registering the interrupted command
 		dir := filepath.Join(jobs.Root(th.id), "1")
@@ -81,15 +81,12 @@ func TestShutdownStopsLateInterruptDetach(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	th.mu.Lock()
-	th.turns.Cancel(agent.ErrUserInterrupt)
-	th.mu.Unlock()
+	_ = th.call(func() error { th.turns.Cancel(agent.ErrUserInterrupt); return nil })
 	closed := make(chan struct{})
 	go func() { s.Close(); close(closed) }()
 	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(10 * time.Millisecond) {
-		th.mu.Lock()
-		closing := th.closing
-		th.mu.Unlock()
+		var closing bool
+		_ = th.call(func() error { closing = th.closing; return nil })
 		if closing {
 			break
 		}

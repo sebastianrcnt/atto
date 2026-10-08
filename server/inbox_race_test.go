@@ -12,7 +12,9 @@ func TestInboxEventsRequeuedWhenBeginRefuses(t *testing.T) {
 	t.Setenv("ATTO_DIR", t.TempDir())
 	s := &Server{Notify: func(string, map[string]any) {}}
 	for _, closing := range []bool{false, true} {
-		th := &thread{id: "s", closing: closing}
+		th := &thread{s: s, id: "s", closing: closing}
+		th.startLane()
+		t.Cleanup(th.stopLane)
 		th.turns.Busy = !closing
 		evs := []events.Event{
 			{Time: time.Now().Add(-time.Second), Source: "job", Text: "finished", Title: "first"},
@@ -24,7 +26,7 @@ func TestInboxEventsRequeuedWhenBeginRefuses(t *testing.T) {
 			}
 		}
 		drained := events.Drain(th.id)
-		s.beginInboxTurn(th, drained)
+		_ = th.call(func() error { th.beginInboxTurn(drained); return nil })
 		got := events.Drain(th.id)
 		if !reflect.DeepEqual(got, drained) {
 			t.Fatalf("inbox lost on refused begin: got %v, want %v", got, drained)

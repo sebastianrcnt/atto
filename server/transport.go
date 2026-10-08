@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/subtle"
 	"encoding/hex"
@@ -60,6 +61,10 @@ const webCSP = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-
 // "Authorization: Bearer" or ?token= (EventSource cannot set headers).
 func (s *Server) HTTPHandler(token string) http.Handler {
 	b := s.events
+	// Legacy HTTP clients share an anonymous transport identity; they need
+	// not echo a new field to keep working. JSON-lines connections have
+	// independent identities.
+	c := &clientConn{id: fmt.Sprintf("h%d", clientSeq.Add(1))}
 	clients := func() {
 		if s.OnClients != nil {
 			s.OnClients(b.clients()) // outside the broker's lock: the hook may wait for a UI
@@ -95,7 +100,7 @@ func (s *Server) HTTPHandler(token string) http.Handler {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		resp := s.Handle(r.Context(), body)
+		resp := s.Handle(context.WithValue(r.Context(), clientKey{}, c), body)
 		w.Header().Set("Content-Type", "application/json")
 		if resp == nil {
 			w.WriteHeader(http.StatusNoContent)
@@ -121,6 +126,12 @@ func (s *Server) HTTPHandler(token string) http.Handler {
 			last, _ = strconv.ParseInt(h, 10, 64)
 		}
 		backlog, ch, kick, gap := b.subscribe(last)
+		s.httpStreams.Add(1)
+		defer func() {
+			if s.httpStreams.Add(-1) == 0 {
+				s.clientGone(c.id)
+			}
+		}()
 		clients()
 		defer clients()
 		defer b.unsubscribe(ch)

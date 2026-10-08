@@ -111,11 +111,13 @@ func TestScriptedModelTurn(t *testing.T) {
 			done <- struct{}{}
 		}
 	}
-	info, err := s.startThread(threadParams{})
+	info, err := s.startThread("", threadParams{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.startTurn(threadParams{ThreadID: info.(ThreadInfo).ID, Input: "go"}); err != nil {
+	c := Connect(context.Background(), s)
+	defer c.Close()
+	if err := c.Call(context.Background(), "turn/start", map[string]any{"threadId": info.(ThreadInfo).ID, "input": "go"}, nil); err != nil {
 		t.Fatal(err)
 	}
 	select {

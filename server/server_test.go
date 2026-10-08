@@ -101,7 +101,9 @@ func TestStdioTurn(t *testing.T) {
 	var types []string
 	done := wait(func(m msg) bool {
 		if m.Method == "item/completed" {
-			types = append(types, m.Params["item"].(map[string]any)["type"].(string))
+			if kind := m.Params["item"].(map[string]any)["type"].(string); kind != ItemNotice {
+				types = append(types, kind)
+			}
 		}
 		return m.Method == "turn/completed"
 	})
@@ -131,12 +133,20 @@ func TestStdioTurn(t *testing.T) {
 	info := resp.Result.(ThreadInfo)
 	var got []string
 	for _, it := range info.Items {
-		got = append(got, it.Type)
+		if it.Type != ItemNotice {
+			got = append(got, it.Type)
+		}
 	}
 	if strings.Join(got, ",") != want {
 		t.Fatalf("resumed items %v", got)
 	}
-	cmd := info.Items[2]
+	var cmd Item
+	for _, it := range info.Items {
+		if it.Type == ItemCommand {
+			cmd = it
+			break
+		}
+	}
 	if cmd.Command != "echo hi" || cmd.ExitCode == nil || *cmd.ExitCode != 0 || !strings.Contains(cmd.Output, "hi") {
 		t.Fatalf("resumed command %+v", cmd)
 	}

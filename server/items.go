@@ -1,106 +1,13 @@
 package server
 
 import (
-	"github.com/sebastianrcnt/atto/agent"
+	"time"
+
 	"github.com/sebastianrcnt/atto/core/transcript"
 	"github.com/sebastianrcnt/atto/extensions"
 	"github.com/sebastianrcnt/atto/provider"
 	"github.com/sebastianrcnt/atto/session"
-	"time"
 )
-
-// itemMapper sends one turn's items to clients. The thread's transcript
-// builder makes the items from the agent's events; this turns them into
-// item/started, item/delta, item/updated and item/completed notifications
-// and keeps the completed ones on the thread.
-type itemMapper struct {
-	s      *Server
-	t      *thread
-	turnID string
-}
-
-// handler is the transcript handler for the turn.
-func (m *itemMapper) handler() transcript.Handler {
-	return transcript.Handler{
-		Started: func(it *transcript.Item) {
-			m.s.notify(m.t, "item/started", map[string]any{"turnId": m.turnID, "item": wireItem(m.t.id, it)})
-		},
-		Delta: func(it *transcript.Item, d string) {
-			m.s.notify(m.t, "item/delta", map[string]any{"turnId": m.turnID, "itemId": it.ID, "delta": d})
-		},
-		Updated: func(it *transcript.Item) {
-			m.s.notify(m.t, "item/updated", map[string]any{"turnId": m.turnID, "item": wireItem(m.t.id, it)})
-		},
-		Completed: func(it *transcript.Item) {
-			w := wireItem(m.t.id, it)
-			m.t.mu.Lock()
-			w = m.t.withDisplay(w)
-			m.t.items = append(m.t.items, w)
-			m.t.mu.Unlock()
-			m.s.notify(m.t, "item/completed", map[string]any{"turnId": m.turnID, "item": w})
-		},
-		Saved: func(it *transcript.Item) {
-			m.t.mu.Lock()
-			defer m.t.mu.Unlock()
-			m.t.blocks.saved(m.t.id, it)
-			// Reasoning completes when the text starts, before the response
-			// is saved: the kept item learns its block ID now.
-			for i := len(m.t.items) - 1; i >= 0; i-- {
-				if m.t.items[i].ID == it.ID {
-					m.t.items[i].BlockID = blockID(m.t.id, it)
-					m.t.items[i].EntryID = it.EntryID
-					m.s.notify(m.t, "item/updated", map[string]any{"turnId": m.turnID, "item": m.t.items[i]})
-					break
-				}
-			}
-		},
-	}
-}
-
-// event passes an agent event (or transcript.Input) to the builder, and
-// keeps the usage the turn reports.
-func (m *itemMapper) event(ev any) {
-	m.t.feed.Lock()
-	defer m.t.feed.Unlock()
-	m.t.tr.Event(ev)
-	switch e := ev.(type) {
-	case agent.StepEnd:
-		m.t.mu.Lock()
-		m.t.usage.PromptTokens += e.Usage.PromptTokens
-		m.t.usage.CachedTokens += e.Usage.CachedTokens
-		m.t.usage.CompletionTokens += e.Usage.CompletionTokens
-		m.t.total.Add(e.Usage)
-		m.t.turn.InputTokens += max(0, e.Usage.PromptTokens-e.Usage.CachedTokens-e.Usage.CacheWriteTokens)
-		m.t.turn.OutputTokens += e.Usage.CompletionTokens
-		m.t.ctxTokens = e.Context
-		total := m.t.total
-		m.t.mu.Unlock()
-		m.s.notify(m.t, "thread/usage", map[string]any{"usage": total, "step": StepUsage(e.Usage), "contextTokens": e.Context})
-	case agent.SteerCommitted:
-		// The user's steers it took are no longer pending (inbox events
-		// and extensions' messages are steers too, never listed).
-		m.t.mu.Lock()
-		n := len(m.t.turns.Steers)
-		for _, text := range e.Texts {
-			m.t.turns.Committed(text)
-		}
-		changed := len(m.t.turns.Steers) != n
-		m.t.mu.Unlock()
-		if changed {
-			m.s.pendingChanged(m.t)
-		}
-	case agent.HookNotice:
-		// Also as the notification clients had before hook items.
-		m.s.notify(m.t, "hook", map[string]any{"turnId": m.turnID, "event": e.Event, "message": e.Message, "blocked": e.Blocked})
-	}
-}
-
-// closeOpen completes everything still open when the turn ends.
-func (m *itemMapper) closeOpen() {
-	m.t.feed.Lock()
-	defer m.t.feed.Unlock()
-	m.t.tr.End()
-}
 
 // wireItem is the protocol form of a transcript item of session sid.
 func wireItem(sid string, it *transcript.Item) Item {

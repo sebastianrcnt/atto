@@ -26,7 +26,9 @@ func RunStdio(version string) error {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
-	return New(version, cwd).ServeStdio(ctx, os.Stdin, os.Stdout)
+	runtime := New(version, cwd)
+	defer runtime.Close()
+	return runtime.ServeStdio(ctx, os.Stdin, os.Stdout)
 }
 
 // TLSWarning is said when the web client is served beyond this machine.
@@ -69,7 +71,9 @@ func RunHTTP(version string, args []string, out io.Writer) error {
 	if err != nil {
 		return err
 	}
-	srv := &http.Server{Handler: New(version, cwd).HTTPHandler(token), ReadHeaderTimeout: 10 * time.Second}
+	runtime := New(version, cwd)
+	defer runtime.Close()
+	srv := &http.Server{Handler: runtime.HTTPHandler(token), ReadHeaderTimeout: 10 * time.Second}
 
 	addr := ln.Addr().String()
 	banner(out, version, cwd, addr, token)

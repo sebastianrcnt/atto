@@ -9,6 +9,7 @@ import (
 
 	"github.com/sebastianrcnt/atto/agent"
 	"github.com/sebastianrcnt/atto/config"
+	"github.com/sebastianrcnt/atto/session"
 )
 
 type memoryCalls struct {
@@ -50,9 +51,11 @@ func TestIdleMemoryConcurrentTurns(t *testing.T) {
 	var threads []*thread
 	var finishes []chan struct{}
 	for i, err := range []error{nil, context.Canceled, errors.New("failed")} {
-		th := &thread{id: string(rune('a' + i)), agent: agent.New(config.ModelRef{}, "", t.TempDir())}
+		th := &thread{s: s, id: string(rune('a' + i)), agent: agent.New(config.ModelRef{}, "", t.TempDir()), sess: session.New(t.TempDir())}
+		th.startLane()
+		t.Cleanup(func() { th.sess.Close(); th.stopLane() })
 		finish := make(chan struct{})
-		if _, e := s.begin(th, func(context.Context, func(any)) error {
+		if _, e := beginForTest(s, th, func(context.Context, func(any)) error {
 			<-finish
 			return err
 		}); e != nil {
@@ -64,13 +67,13 @@ func TestIdleMemoryConcurrentTurns(t *testing.T) {
 	if active, _, _ := m.state(); active != 3 {
 		t.Fatalf("active %d, want 3 turns", active)
 	}
-	if _, err := s.begin(threads[0], nil); err == nil {
+	if _, err := beginForTest(s, threads[0], nil); err == nil {
 		t.Fatal("accepted a second turn on a busy thread")
 	}
 	for i, th := range threads {
 		close(finishes[i])
 		select {
-		case <-th.done:
+		case <-th.runDone:
 		case <-time.After(5 * time.Second):
 			t.Fatal("turn did not finish")
 		}

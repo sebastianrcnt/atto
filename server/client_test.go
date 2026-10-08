@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"strings"
 	"testing"
 	"time"
 
@@ -110,6 +111,7 @@ func TestClientsSeeTheSameThread(t *testing.T) {
 	vc, ec := follow(t, c, th.ID)
 	for _, ch := range []<-chan string{ea, eb, ec} {
 		waitMethod(t, ch, "turn/completed")
+		waitMethod(t, ch, "thread/updated")
 	}
 	var fresh ThreadInfo
 	if err := c.Call(ctx, "thread/read", map[string]any{"threadId": th.ID}, &fresh); err != nil {
@@ -209,5 +211,51 @@ func TestConnectionEOFDoesNotInterruptTurn(t *testing.T) {
 			t.Fatal("detached turn stayed busy")
 		}
 		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+func TestThreadViewRuntimeStateAndReset(t *testing.T) {
+	v := &ThreadView{}
+	v.Reset(ThreadInfo{ID: "s", EventID: 4})
+	for _, n := range []Notification{
+		{Method: "turn/started", EventID: 5, Params: json.RawMessage(`{"threadId":"s","turnId":"t","startedAt":123,"runKind":"turn","activity":"Thinking"}`)},
+		{Method: "turn/activity", EventID: 6, Params: json.RawMessage(`{"threadId":"s","activity":{"phase":"Working","runKind":"turn","startedAt":123,"toolsRunning":1}}`)},
+		{Method: "thread/status", EventID: 7, Params: json.RawMessage(`{"threadId":"s","jobs":2,"timers":3}`)},
+	} {
+		if !v.Apply(n) {
+			t.Fatalf("not reduced: %+v", n)
+		}
+	}
+	if !v.Info.Busy || v.Info.Turn == nil || v.Info.Turn.StartedAt != 123 || v.Info.Activity.ToolsRunning != 1 || v.Info.Jobs != 2 || v.Info.Timers != 3 {
+		t.Fatalf("state: %+v", v.Info)
+	}
+	if !v.Apply(Notification{Method: "events/reset", Params: json.RawMessage(`{"eventId":1,"serverInstanceId":"new"}`)}) || !v.NeedsSnapshot {
+		t.Fatal("reset did not request a new snapshot")
+	}
+	v.Reset(ThreadInfo{ID: "s", EventID: 1})
+	if v.NeedsSnapshot || v.EventID != 1 {
+		t.Fatal("snapshot did not clear reset")
+	}
+	if !v.Apply(Notification{Method: "thread/branchChanged", EventID: 2, Params: json.RawMessage(`{"threadId":"s"}`)}) || !v.NeedsSnapshot {
+		t.Fatal("branch change did not request a new snapshot")
+	}
+}
+
+func TestThreadViewClipsLiveCommandOutputLikeBuilder(t *testing.T) {
+	var b transcript.Builder
+	b.Event(transcript.ShellStart{Command: "make"})
+	v := ThreadView{}
+	items := b.Items()
+	v.Reset(ThreadInfo{ID: "s", Items: []Item{wireItem("s", &items[0])}})
+	for i, chunk := range []string{strings.Repeat("a", 100*1024), strings.Repeat("b", 40*1024), "last"} {
+		b.Event(transcript.ShellOutput{Chunk: chunk})
+		params, _ := json.Marshal(map[string]any{"threadId": "s", "itemId": v.Items[0].ID, "delta": chunk})
+		if !v.Apply(Notification{Method: "item/delta", EventID: int64(i + 1), Params: params}) {
+			t.Fatal("delta not applied")
+		}
+		want := b.Items()[0]
+		if it := v.Items[0]; it.Output != want.Output || it.Dropped != want.Dropped {
+			t.Fatalf("live clipping differs: %d/%d bytes, %d/%d dropped", len(it.Output), len(want.Output), it.Dropped, want.Dropped)
+		}
 	}
 }

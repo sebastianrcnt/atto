@@ -42,3 +42,21 @@ func TestShellInterrupted(t *testing.T) {
 		t.Fatalf("%+v", it)
 	}
 }
+
+func TestShellOutlivesModelTurn(t *testing.T) {
+	var b Builder
+	b.Event(ShellStart{Command: "make"})
+	b.Event(ShellOutput{Chunk: "first\n"})
+	b.EndTurn()
+	if it := b.Items()[0]; it.Status != InProgress {
+		t.Fatalf("shell closed with turn: %+v", it)
+	}
+	b.Event(ShellOutput{Chunk: "last\n"})
+	if it := b.Items()[0]; it.Output != "first\nlast\n" {
+		t.Fatalf("lost late output: %+v", it)
+	}
+	b.Event(ShellEnd{Exec: session.BashExec{Command: "make", Output: "first\nlast\n"}})
+	if it := b.Items()[0]; it.Status != Completed || it.Result == nil || it.Result.Failed() {
+		t.Fatalf("lost shell completion: %+v", it)
+	}
+}

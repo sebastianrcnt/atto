@@ -68,7 +68,9 @@ func (s *Server) ServeConn(ctx context.Context, rw io.ReadWriter) error {
 	defer s.removeClient(c)
 	// Subscribe before handling requests: a fast turn must not outrun its client.
 	_, ch, kick, _ := s.events.subscribe(s.events.last())
-	go s.forward(ctx, write, ch, kick)
+	forwardDone := make(chan struct{})
+	go func() { defer close(forwardDone); s.forward(ctx, write, ch, kick) }()
+	defer func() { cancel(); <-forwardDone }()
 
 	sc := bufio.NewScanner(rw)
 	sc.Buffer(make([]byte, 64*1024), 64<<20)
@@ -115,10 +117,7 @@ func (s *Server) forward(ctx context.Context, write func([]byte) error, ch chan 
 // ServeStdio speaks JSON-RPC as JSON lines on r/w (codex app-server style):
 // one request per line in, responses and notifications out.
 func (s *Server) ServeStdio(ctx context.Context, r io.Reader, w io.Writer) error {
-	return s.ServeConn(ctx, struct {
-		io.Reader
-		io.Writer
-	}{r, w})
+	return s.ServeConn(ctx, stdioConn{r, w})
 }
 
 func (s *Server) addClient(c *clientConn) {
@@ -141,7 +140,7 @@ func (s *Server) removeClient(c *clientConn) {
 func (s *Server) interactiveClients() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	n := 0
+	n := int(s.httpStreams.Load())
 	for _, c := range s.clients {
 		if c.interactive {
 			n++
@@ -150,6 +149,19 @@ func (s *Server) interactiveClients() int {
 	return n
 }
 
-// clientGone releases what a detached client held: its modal gates (see
-// gate.go). Nothing it started stops.
-func (s *Server) clientGone(id string) {}
+// stdioConn lets cancellation unblock a reader (including os.Stdin).
+// Plain non-closing readers and writers remain usable in embedded tests.
+type stdioConn struct {
+	io.Reader
+	io.Writer
+}
+
+func (c stdioConn) Close() error {
+	if r, ok := c.Reader.(io.Closer); ok {
+		_ = r.Close()
+	}
+	if w, ok := c.Writer.(io.Closer); ok {
+		return w.Close()
+	}
+	return nil
+}

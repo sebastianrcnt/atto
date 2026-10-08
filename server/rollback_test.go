@@ -29,7 +29,10 @@ func itemTexts(r map[string]any) string {
 	items, _ := r["items"].([]any)
 	s := ""
 	for _, it := range items {
-		s += fmt.Sprint(it.(map[string]any)["text"]) + ";"
+		item := it.(map[string]any)
+		if item["type"] != ItemNotice {
+			s += fmt.Sprint(item["text"]) + ";"
+		}
 	}
 	return s
 }
