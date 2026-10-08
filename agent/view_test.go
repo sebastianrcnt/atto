@@ -14,10 +14,11 @@ import (
 	"github.com/sebastianrcnt/atto/config"
 	"github.com/sebastianrcnt/atto/images"
 	"github.com/sebastianrcnt/atto/session"
+	"github.com/sebastianrcnt/atto/shell"
 )
 
 // viewAgent is an agent whose shell runs the test binary as atto view
-// ("$VIEW_EXE" _view, see TestMain) in a directory holding shot.png.
+// (see TestMain) in a directory holding shot.png.
 func viewAgent(t *testing.T, url string, input ...string) *Agent {
 	t.Helper()
 	dir := t.TempDir()
@@ -36,13 +37,56 @@ func viewAgent(t *testing.T, url string, input ...string) *Agent {
 	return a
 }
 
-const viewCmd = `"$VIEW_EXE" _view shot.png`
+func viewCommand(kind shell.Kind) string {
+	switch kind {
+	case shell.PowerShell:
+		return `& "$env:VIEW_EXE" _view shot.png`
+	case shell.Cmd:
+		return `"%VIEW_EXE%" _view shot.png`
+	default:
+		return `"$VIEW_EXE" _view shot.png`
+	}
+}
+
+func viewDirCommand(kind shell.Kind) string {
+	switch kind {
+	case shell.PowerShell:
+		return `Write-Output "dir=$env:ATTO_VIEW_DIR"; if (!(Test-Path -PathType Container $env:ATTO_VIEW_DIR)) { exit 1 }`
+	case shell.Cmd:
+		return `echo dir=%ATTO_VIEW_DIR% & if not exist "%ATTO_VIEW_DIR%\" exit /b 1`
+	default:
+		return `echo "dir=$ATTO_VIEW_DIR"; test -d "$ATTO_VIEW_DIR"`
+	}
+}
+
+func TestViewCommands(t *testing.T) {
+	for _, tt := range []struct {
+		kind shell.Kind
+		view string
+		dir  string
+	}{
+		{shell.Bash, `"$VIEW_EXE" _view shot.png`, `echo "dir=$ATTO_VIEW_DIR"; test -d "$ATTO_VIEW_DIR"`},
+		{shell.Sh, `"$VIEW_EXE" _view shot.png`, `echo "dir=$ATTO_VIEW_DIR"; test -d "$ATTO_VIEW_DIR"`},
+		{shell.PowerShell, `& "$env:VIEW_EXE" _view shot.png`, `Write-Output "dir=$env:ATTO_VIEW_DIR"; if (!(Test-Path -PathType Container $env:ATTO_VIEW_DIR)) { exit 1 }`},
+		{shell.Cmd, `"%VIEW_EXE%" _view shot.png`, `echo dir=%ATTO_VIEW_DIR% & if not exist "%ATTO_VIEW_DIR%\" exit /b 1`},
+	} {
+		t.Run(string(tt.kind), func(t *testing.T) {
+			if got := viewCommand(tt.kind); got != tt.view {
+				t.Fatalf("view command %q, want %q", got, tt.view)
+			}
+			if got := viewDirCommand(tt.kind); got != tt.dir {
+				t.Fatalf("directory command %q, want %q", got, tt.dir)
+			}
+		})
+	}
+}
 
 func TestViewAttachesToToolResult(t *testing.T) {
 	t.Setenv("ATTO_DIR", t.TempDir())
-	srv, seen := fakeServer(t, toolCall(viewCmd), text("a gray square"), text("NOTES"))
+	srv, seen := fakeServer(t, toolCall(viewCommand(shell.Default().Kind)), text("a gray square"), text("NOTES"))
 	a := viewAgent(t, srv.URL, "text", "image")
 	w := session.New(t.TempDir())
+	t.Cleanup(w.Close)
 	a.Record = w.Append
 	var ended ToolEnd
 	err := a.Run(context.Background(), "look at it", func(ev any) {
@@ -108,7 +152,7 @@ func TestViewAttachesToToolResult(t *testing.T) {
 
 func TestViewTextModel(t *testing.T) {
 	t.Setenv("ATTO_DIR", t.TempDir())
-	srv, seen := fakeServer(t, toolCall(viewCmd), text("ok"))
+	srv, seen := fakeServer(t, toolCall(viewCommand(shell.Default().Kind)), text("ok"))
 	a := viewAgent(t, srv.URL) // no "image" input
 	if err := a.Run(context.Background(), "look", func(any) {}); err != nil {
 		t.Fatal(err)
@@ -124,7 +168,7 @@ func TestViewTextModel(t *testing.T) {
 
 func TestViewDirOnlyForForegroundCalls(t *testing.T) {
 	dir := t.TempDir()
-	srv, seen := fakeServer(t, toolCall(`echo "dir=$ATTO_VIEW_DIR"; test -d "$ATTO_VIEW_DIR"`), text("ok"))
+	srv, seen := fakeServer(t, toolCall(viewDirCommand(shell.Default().Kind)), text("ok"))
 	a := newTestAgent(srv.URL)
 	a.Cwd = dir
 	if err := a.Run(context.Background(), "go", func(any) {}); err != nil {
@@ -135,7 +179,7 @@ func TestViewDirOnlyForForegroundCalls(t *testing.T) {
 		t.Fatalf("output %q", out)
 	}
 	// The directory goes with the call.
-	d := strings.TrimPrefix(strings.SplitN(out, "\n", 2)[0], "dir=")
+	d := strings.TrimPrefix(strings.TrimSuffix(strings.SplitN(out, "\n", 2)[0], "\r"), "dir=")
 	if _, err := os.Stat(d); !os.IsNotExist(err) {
 		t.Fatalf("%s left behind: %v", d, err)
 	}
