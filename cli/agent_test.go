@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -162,7 +163,10 @@ func TestAgentRefusals(t *testing.T) {
 	if out, err := runAgent(t, "send", "/root", "hello root", "-session", b.Session); err != nil || !strings.Contains(out, "sent to /root:") {
 		t.Fatalf("send to the root: %q %v", out, err)
 	}
-	if evs := events.Drain("p1"); len(evs) == 0 || !strings.Contains(evs[len(evs)-1].Text, "From: /root/a/b\nTo: /root\n") || !evs[len(evs)-1].Quiet {
+	// Agent a runs too: its final answer may arrive after the message.
+	if evs := events.Drain("p1"); !slices.ContainsFunc(evs, func(e events.Event) bool {
+		return strings.Contains(e.Text, "From: /root/a/b\nTo: /root\n") && e.Quiet
+	}) {
 		t.Fatalf("root inbox %+v", evs)
 	}
 	if out, _ := runAgent(t, "list", "-session", "p1"); !strings.Contains(out, "/root/a ") || !strings.Contains(out, "/root/a/b") {

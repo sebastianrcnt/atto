@@ -345,14 +345,13 @@ func TestGoalInterruptPauses(t *testing.T) {
 	if m.Started(5*time.Second) == 0 {
 		t.Fatal("goal did not run")
 	}
+	// Esc acts on what the screen shows: wait until it shows the turn.
+	within(t, a, "the running goal turn", func() bool { return a.busy })
 	key(a, "\x1b")
 	within(t, a, "paused goal", func() bool { return !a.busy && a.theGoal() != nil && a.theGoal().Status == goal.Paused })
-	if g := a.theGoal(); g.Note != "interrupted" {
-		t.Fatalf("goal: %+v", g)
-	}
-	if !strings.Contains(shown(a), "Goal paused") || a.goalActive() {
-		t.Fatal("interrupted goal was not announced and paused")
-	}
+	within(t, a, "the announced pause", func() bool {
+		return a.theGoal().Note == "interrupted" && strings.Contains(bodyText(a), "Goal paused") && !a.goalActive()
+	})
 }
 
 func TestGoalModelReportsAreAnnounced(t *testing.T) {

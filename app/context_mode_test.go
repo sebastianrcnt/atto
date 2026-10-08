@@ -160,23 +160,22 @@ func TestPriceTierSelectionNotices(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	a.ui.Do(func() { a.rpcErr("models/reload", nil) })
-	a.models = models
+	a.ui.Do(func() { a.rpcErr("models/reload", nil); a.models = models })
 	typeLine(a, "/reload")
 	settle(a) // startup/resume-equivalent loaded notice
-	a.cmdModel("t/m")
+	a.ui.Do(func() { a.cmdModel("t/m") })
 	typeLine(a, "/reload")
 	settle(a)
-	got := tui.StripEscapes(strings.Join(a.ui.Body.Render(300), "\n"))
+	got := bodyText300(a)
 	if n := strings.Count(got, "No price-tier cap for t/m:"); n != 3 {
 		t.Fatalf("%d notices: %s", n, got)
 	}
 	// Finding the selected model, even without tiers, silences notices.
 	writeTestFile(t, filepath.Join(config.Dir(), "cache", "catalog.json"), `{"t":{"models":{"m":{}}}}`)
-	a.cmdModel("t/m")
+	a.ui.Do(func() { a.cmdModel("t/m") })
 	typeLine(a, "/reload")
 	settle(a)
-	got = tui.StripEscapes(strings.Join(a.ui.Body.Render(300), "\n"))
+	got = bodyText300(a)
 	if n := strings.Count(got, "No price-tier cap for t/m:"); n != 3 {
 		t.Fatalf("flat catalog model got a warning: %s", got)
 	}
@@ -223,4 +222,10 @@ func setTestLongContext(a *App, long bool) {
 	if !long {
 		a.info.AutoCompactCap = ref.Model.Cost.ContextPriceBoundary()
 	}
+}
+
+// bodyText300 renders the transcript 300 columns wide under the UI lock.
+func bodyText300(a *App) (text string) {
+	a.ui.Do(func() { text = tui.StripEscapes(strings.Join(a.ui.Body.Render(300), "\n")) })
+	return text
 }
