@@ -57,6 +57,10 @@ var policyText = regexp.MustCompile(`(?i)content.?(filter|policy|management)|saf
 // that would otherwise mean a bad request.
 var passingText = regexp.MustCompile(`(?i)unavailable|overloaded|gateway|time-?d? ?out|temporar|try again|at capacity|rate.?limit`)
 
+// ErrNotRetryable, wrapped in an error, says that trying again will not
+// help, though the provider did not refuse anything.
+var ErrNotRetryable = errors.New("retrying will not help")
+
 // IsPermanent reports whether sending the request again would fail the
 // same way: an interrupt, a usage limit, a context overflow (compact
 // instead), an authentication or permission failure, a missing model or
@@ -66,7 +70,7 @@ func IsPermanent(err error) bool {
 	switch {
 	case err == nil:
 		return false
-	case errors.Is(err, context.Canceled):
+	case errors.Is(err, context.Canceled), errors.Is(err, ErrNotRetryable):
 		return true
 	case errors.Is(err, context.DeadlineExceeded):
 		return false

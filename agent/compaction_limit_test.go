@@ -1,11 +1,15 @@
 package agent
 
 import (
+	"context"
+	"os"
+	"strings"
 	"testing"
 
 	"github.com/sebastianrcnt/atto/ai"
 	"github.com/sebastianrcnt/atto/config"
 	"github.com/sebastianrcnt/atto/provider"
+	"github.com/sebastianrcnt/atto/session"
 )
 
 func TestCompactionLimits(t *testing.T) {
@@ -79,5 +83,82 @@ func TestCompactionReason(t *testing.T) {
 		if _, cap, reason := a.compactionPlan(); reason != tc.reason || cap != tc.cap && tc.reason != "" {
 			t.Errorf("%s: reason %q cap %d, want %q %d", tc.name, reason, cap, tc.reason, tc.cap)
 		}
+	}
+}
+
+const bigUsage = `{"choices":[],"usage":{"prompt_tokens":950,"completion_tokens":10}}`
+
+func smallWindowAgent(url string) *Agent {
+	return New(config.ModelRef{ProviderName: "t", Provider: config.Provider{BaseURL: url},
+		Model: config.Model{ID: "m", ContextWindow: 1000}}, "", os.TempDir())
+}
+
+// A reply that takes the context past the limit is followed by a
+// compaction even when no tool ran: a steer sends the turn round again.
+func TestCompactsBeforeTheRequestAfterASteer(t *testing.T) {
+	srv, seen := fakeServer(t, append(text("first"), bigUsage), text("NOTES"), text("second"))
+	a := smallWindowAgent(srv.URL)
+	a.Steer("one more thing")
+	compactions := 0
+	err := a.Run(context.Background(), "go", func(ev any) {
+		if _, ok := ev.(CompactStart); ok {
+			compactions++
+		}
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reqs := seen(); compactions != 1 || len(reqs) != 3 {
+		t.Fatalf("%d compactions, %d requests", compactions, len(reqs))
+	}
+}
+
+// Same for a Continue of a conversation already over the limit.
+func TestContinueCompactsFirst(t *testing.T) {
+	srv, seen := fakeServer(t, text("NOTES"), text("done"))
+	a := smallWindowAgent(srv.URL)
+	a.Restore([]session.Entry{
+		{Type: session.TypeMessage, Message: &provider.Message{Role: "user", Content: "go"}},
+		{Type: session.TypeMessage, Message: &provider.Message{Role: "assistant", Content: "ok"}, Usage: &provider.Usage{PromptTokens: 950}},
+		{Type: session.TypeMessage, Message: &provider.Message{Role: "user", Content: "more"}},
+	})
+	if err := a.Continue(context.Background(), func(any) {}); err != nil {
+		t.Fatal(err)
+	}
+	if n := len(seen()); n != 2 {
+		t.Fatalf("%d requests, want the compaction and the answer", n)
+	}
+}
+
+// The message about to be added counts toward the limit, and it reaches the
+// model whole: the compaction comes before it.
+func TestCompactsBeforeALargeNewMessage(t *testing.T) {
+	srv, seen := fakeServer(t,
+		append(text("a"), `{"choices":[],"usage":{"prompt_tokens":500,"completion_tokens":10}}`),
+		text("NOTES"), text("b"))
+	a := smallWindowAgent(srv.URL)
+	compactions := 0
+	emit := func(ev any) {
+		if _, ok := ev.(CompactStart); ok {
+			compactions++
+		}
+	}
+	if err := a.Run(context.Background(), "hi", emit); err != nil {
+		t.Fatal(err)
+	}
+	if compactions != 0 {
+		t.Fatal("compacted a small conversation")
+	}
+	paste := strings.Repeat("x", 1700) // ~425 tokens: 510 + 425 is past the 900 limit
+	if err := a.Run(context.Background(), paste, emit); err != nil {
+		t.Fatal(err)
+	}
+	reqs := seen()
+	if compactions != 1 || len(reqs) != 3 {
+		t.Fatalf("%d compactions, %d requests", compactions, len(reqs))
+	}
+	last := reqs[2][len(reqs[2])-1]["content"].(string)
+	if !strings.HasSuffix(last, paste) {
+		t.Fatalf("the message was cut: %.80q", last)
 	}
 }

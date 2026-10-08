@@ -834,9 +834,13 @@ func (a *Agent) ContextTokens() int {
 	return a.LastUsage.PromptTokens + a.LastUsage.CompletionTokens + a.sinceUsage/4
 }
 
-func (a *Agent) needsCompact() bool {
+func (a *Agent) needsCompact() bool { return a.needsCompactWith(0) }
+
+// needsCompactWith is needsCompact for a conversation that is about to grow
+// by extra characters (a message not yet appended).
+func (a *Agent) needsCompactWith(extra int) bool {
 	limit, _ := a.CompactionLimit()
-	return limit > 0 && len(a.messages) > 0 && a.ContextTokens() >= limit
+	return limit > 0 && len(a.messages) > 0 && a.ContextTokens()+extra/4 >= limit
 }
 
 // appendMessage adds m to the conversation and records it. meta carries
@@ -1042,9 +1046,10 @@ func (a *Agent) RunWithImages(ctx context.Context, input string, imgs []provider
 	}
 	// The last attempt at this message failed before the model answered it:
 	// it is still in the conversation, so run it again as Continue does
-	// instead of adding a copy. (Compaction would rewrite it, so it waits.)
+	// instead of adding a copy. (Compaction would rewrite it, so it waits;
+	// nothing has been added since the first attempt was checked.)
 	if a.unanswered(raw, imgs) {
-		return a.loop(ctx, emit)
+		return a.loop(ctx, emit, true)
 	}
 	if n := a.modelChangeNote(); n != "" {
 		input += "\n\n" + n
@@ -1052,7 +1057,9 @@ func (a *Agent) RunWithImages(ctx context.Context, input string, imgs []provider
 	if note != "" {
 		input += "\n\n" + note
 	}
-	if a.needsCompact() {
+	// The message counts too: a large paste can take the request past the
+	// limit by itself, and compacting after it was added would cut it.
+	if a.needsCompactWith(len(input) + len(imgs)*imageChars) {
 		if err := a.compact(ctx, emit, true); err != nil {
 			return err
 		}
@@ -1060,7 +1067,7 @@ func (a *Agent) RunWithImages(ctx context.Context, input string, imgs []provider
 	m := provider.Message{Role: "user", Content: input, Images: imgs}
 	a.appendMessage(m, session.Entry{})
 	a.sent = sentInput{input: raw, imgs: imgs, msg: m, index: len(a.messages) - 1}
-	return a.loop(ctx, emit)
+	return a.loop(ctx, emit, true)
 }
 
 // Continue runs the rest of a turn that was stopped, without a new user
@@ -1068,17 +1075,29 @@ func (a *Agent) RunWithImages(ctx context.Context, input string, imgs []provider
 // the model has not answered yet (experimental, for runs left in the
 // background).
 func (a *Agent) Continue(ctx context.Context, emit func(any)) error {
-	return a.loop(ctx, emit)
+	return a.loop(ctx, emit, false)
 }
 
 // loop is the turn: model calls and tool calls until the model stops.
-func (a *Agent) loop(ctx context.Context, emit func(any)) error {
+// checked says the conversation was already measured against the
+// compaction limit, as RunWithImages does before it adds the message.
+func (a *Agent) loop(ctx context.Context, emit func(any), checked bool) error {
 	stopBlocks := 0 // Stop hook continuations in this turn
 	a.stopReq.Store(false)
 
 	for step := 1; ; step++ {
 		if a.MaxSteps > 0 && step > a.MaxSteps {
 			return ErrMaxSteps
+		}
+		// Every request is measured, whatever sent the turn round again: tool
+		// results, a steer, a Stop hook's reason. The last reply may have
+		// taken the context past the limit.
+		if step > 1 || !checked {
+			if a.needsCompact() {
+				if err := a.compact(ctx, emit, true); err != nil {
+					return err
+				}
+			}
 		}
 		var thinkStart, thinkEnd time.Time
 		var drafts *draftTracker
@@ -1231,11 +1250,6 @@ func (a *Agent) loop(ctx context.Context, emit func(any)) error {
 		}
 		a.runBoundary()
 		a.commitSteers(emit)
-		if a.needsCompact() {
-			if err := a.compact(ctx, emit, true); err != nil {
-				return err
-			}
-		}
 	}
 }
 
@@ -1473,7 +1487,7 @@ func (a *Agent) compact(ctx context.Context, emit func(any), auto bool) error {
 		return fmt.Errorf("compaction failed: %w", err)
 	}
 	if cut != "" {
-		return fmt.Errorf("compaction failed: the handoff notes were cut off (%s), twice; the conversation is unchanged", cut)
+		return fmt.Errorf("compaction failed: the handoff notes were cut off (%s), twice; the conversation is unchanged: %w", cut, ai.ErrNotRetryable)
 	}
 	notes := strings.TrimSpace(res.Message.Content)
 	if notes == "" {
