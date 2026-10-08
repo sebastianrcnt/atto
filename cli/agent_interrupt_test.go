@@ -72,3 +72,44 @@ func TestAgentInterruptKeepsHostedCommand(t *testing.T) {
 		t.Fatalf("job died with the successor: %+v %v", j, err)
 	}
 }
+
+func TestAgentInterruptForceStopsUnresponsiveWorker(t *testing.T) {
+	agentServer(t, func(int, string) string { return textAnswer("unused") })
+	t.Chdir(t.TempDir())
+	enableAgents(t, "")
+	old := agentInterruptWait
+	agentInterruptWait = 40 * time.Millisecond
+	t.Cleanup(func() { agentInterruptWait = old })
+	// This worker has no control-request watcher: it ignores the request.
+	worker, err := jobs.Start("root", t.TempDir(), "unresponsive worker", "sleep 30", nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	st := agentstate.State{Parent: "root", Name: "a", Session: "unresponsive", Turns: 1, Job: worker.ID}
+	if err := agentstate.Save(st); err != nil {
+		t.Fatal(err)
+	}
+	if err := agentstate.SaveTurn(st.Parent, st.Name, agentstate.Turn{N: 1, Status: agentstate.Running, Started: time.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	child, err := jobs.Start(st.Session, t.TempDir(), "worker command", "sleep 30", nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { jobs.KillAll("root"); jobs.KillAll(st.Session) })
+	out, err := runAgent(t, "interrupt", "a", "-session", "root")
+	if err != nil || !strings.Contains(out, "force-stopped") {
+		t.Fatalf("fallback: %q %v", out, err)
+	}
+	if turn := st.Latest(); turn.Status != agentstate.Stopped || turn.Ended.IsZero() {
+		t.Fatalf("fallback did not record a stopped turn: %+v", turn)
+	}
+	for _, handle := range []struct {
+		owner string
+		id    int
+	}{{"root", worker.ID}, {st.Session, child.ID}} {
+		if j, err := jobs.Get(handle.owner, handle.id); err != nil || j.Status != jobs.Killed {
+			t.Fatalf("unresponsive job survived: %+v %v", j, err)
+		}
+	}
+}

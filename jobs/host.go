@@ -168,10 +168,17 @@ func (h *Host) send(c hostControl) error {
 
 // Detach asks the host to turn the command into a job of session. The
 // answer arrives on Status: Job, DetachError, or Exit if it ended first.
-// quietExit marks an interrupt-detached job: its exit waits for the next turn
-// rather than waking an idle session.
-func (h *Host) Detach(session, name string, quietExit ...bool) error {
-	quiet := len(quietExit) > 0 && quietExit[0]
+func (h *Host) Detach(session, name string) error {
+	return h.detach(session, name, false)
+}
+
+// DetachQuiet is Detach for a user interrupt: the job's exit event waits
+// for the next turn rather than waking an idle session.
+func (h *Host) DetachQuiet(session, name string) error {
+	return h.detach(session, name, true)
+}
+
+func (h *Host) detach(session, name string, quiet bool) error {
 	return h.send(hostControl{Op: "detach", Session: session, Name: name, QuietExit: quiet})
 }
 

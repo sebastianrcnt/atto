@@ -83,6 +83,10 @@ wait and report accept -json: one object; duration is in seconds.
 Old names still work: start (spawn), next (task, idle), steer (task,
 running), wait-any (wait), stop (interrupt), rm (close), presets (roles).`
 
+// agentInterruptWait gives a worker time to record a graceful stop before
+// an unresponsive process is force-stopped. Tests shorten it.
+var agentInterruptWait = 10 * time.Second
+
 // RunAgent implements "atto agent".
 func RunAgent(args []string, out io.Writer) error {
 	if len(args) == 0 || args[0] == "-h" || args[0] == "-help" || args[0] == "--help" || args[0] == "help" {
@@ -248,9 +252,19 @@ func RunAgent(args []string, out io.Writer) error {
 		}
 		// Wait for the turn to record its stop, so an immediate task or
 		// close sees an idle agent rather than racing the cancellation.
-		for deadline := time.Now().Add(10 * time.Second); st.Latest().Status.Active(); time.Sleep(20 * time.Millisecond) {
+		for deadline := time.Now().Add(agentInterruptWait); st.Latest().Status.Active(); time.Sleep(20 * time.Millisecond) {
 			if time.Now().After(deadline) {
-				return fmt.Errorf("agent %s is still stopping", addr)
+				if _, err := jobs.Kill(st.Parent, st.Job); err != nil {
+					return err
+				}
+				jobs.KillAll(st.Session)
+				t := st.Latest()
+				t.Status, t.Ended = agentstate.Stopped, time.Now()
+				if err := agentstate.SaveTurn(st.Parent, st.Name, t); err != nil {
+					return err
+				}
+				fmt.Fprintf(out, "agent %s force-stopped after it did not respond to the interrupt. Give it a new task with atto agent task %s \"...\"\n", addr, addr)
+				return nil
 			}
 		}
 		fmt.Fprintf(out, "agent %s interrupted. Give it a new task with atto agent task %s \"...\"\n", addr, addr)

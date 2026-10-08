@@ -141,7 +141,7 @@ func TestInterruptDetachPostsQuietExit(t *testing.T) {
 			t.Cleanup(func() { KillAll(s) })
 			var out syncBuf
 			h := startHost(t, "sleep 0.3; echo done; exit "+strconv.Itoa(code), &out)
-			if err := h.Detach(s, "interrupted", true); err != nil {
+			if err := h.DetachQuiet(s, "interrupted"); err != nil {
 				t.Fatal(err)
 			}
 			if st := <-h.Status(); st.Job != 1 {

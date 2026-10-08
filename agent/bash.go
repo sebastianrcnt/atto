@@ -263,12 +263,16 @@ func runHosted(ctx context.Context, sh shell.Shell, cwd string, env []string, se
 		h.Kill()
 	}
 	detach := func(why string) {
+		request := h.Detach
+		if why == BackgroundInterrupt {
+			request = h.DetachQuiet
+		}
 		switch {
 		case detaching != "" || res.Canceled || res.TimedOut:
 		case session == "" && why == BackgroundTimeout:
 			timedOut("")
 		case session == "":
-		case h.Detach(session, args.Description, why == BackgroundInterrupt) != nil:
+		case request(session, args.Description) != nil:
 			if why == BackgroundTimeout {
 				timedOut("")
 			} else if why == BackgroundInterrupt {
@@ -315,7 +319,7 @@ wait:
 				if detaching != "" {
 					// A timeout or Ctrl+B may already be moving it. Quiet that
 					// job too, before releasing the host.
-					if h.Detach(session, args.Description, true) == nil {
+					if h.DetachQuiet(session, args.Description) == nil {
 						detaching = BackgroundInterrupt
 					}
 				} else {
@@ -340,7 +344,7 @@ wait:
 		// Status and cancellation can become ready together at detach.
 		// Even if status won the select, keep the interrupt's quiet exit.
 		if !args.userCommand && errors.Is(context.Cause(ctx), ErrUserInterrupt) && res.Background != BackgroundInterrupt {
-			if h.Detach(session, args.Description, true) == nil {
+			if h.DetachQuiet(session, args.Description) == nil {
 				res.Background = BackgroundInterrupt
 			}
 		}
