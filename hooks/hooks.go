@@ -190,12 +190,10 @@ func (r *Runner) execTimeout(ctx context.Context, h config.HookSpec, input []byt
 	default: // "command"
 		cmd := shell.Command(ctx, h.Command) // same shell as the agent: bash, or PowerShell on Windows
 		cmd.Dir = r.cwd
-		killTreeOnCancel(cmd)
-		cmd.WaitDelay = 2 * time.Second // a child that escaped must not hold the output pipes open
 		cmd.Stdin = bytes.NewReader(input)
 		var stdout, stderr bytes.Buffer
 		cmd.Stdout, cmd.Stderr = &stdout, &stderr
-		err := cmd.Run()
+		err := shell.Run(cmd)
 		res.stdout = stdout.String()
 		if err != nil {
 			var ee *exec.ExitError

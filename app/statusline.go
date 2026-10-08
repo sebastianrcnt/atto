@@ -6,7 +6,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/sebastianrcnt/atto/core"
 	"os"
 	"path/filepath"
 	"slices"
@@ -14,6 +13,7 @@ import (
 	"time"
 
 	"github.com/sebastianrcnt/atto/config"
+	"github.com/sebastianrcnt/atto/core"
 	"github.com/sebastianrcnt/atto/shell"
 	"github.com/sebastianrcnt/atto/tui"
 )
@@ -198,15 +198,10 @@ func runStatusCommand(command string, input []byte, cwd string) ([]string, error
 	cmd.Stdin = bytes.NewReader(input)
 	tree := shell.NewTree(cmd)
 	defer tree.Close()
-	defer tree.Kill()
-	cmd.WaitDelay = 2 * time.Second
+	defer tree.Kill() // status commands must not leave background work, even on success
 	var out bytes.Buffer
 	cmd.Stdout = &out
-	if err := cmd.Start(); err != nil {
-		return nil, err
-	}
-	tree.Started()
-	err := cmd.Wait()
+	err := tree.Run()
 	if err != nil {
 		return nil, err
 	}

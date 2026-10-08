@@ -39,16 +39,9 @@ func (e *ext) jsExec(command string, opts *goja.Object) goja.Value {
 		cmd := shell.Command(ctx, command)
 		cmd.Dir = dir
 		cmd.Env = append(os.Environ(), "ATTO_SESSION_ID="+id, "ATTO_EXTENSION="+name)
-		tree := shell.NewTree(cmd)
-		defer tree.Close()
-		cmd.WaitDelay = 2 * time.Second
 		var stdout, stderr bytes.Buffer
 		cmd.Stdout, cmd.Stderr = &stdout, &stderr
-		err := cmd.Start()
-		if err == nil {
-			tree.Started()
-			err = cmd.Wait()
-		}
+		err := shell.Run(cmd)
 		code, killed := 0, false
 		var ee *exec.ExitError
 		switch {
