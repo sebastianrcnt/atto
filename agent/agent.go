@@ -270,7 +270,7 @@ type Agent struct {
 	// SetStart (core.Bind).
 	Subagent *Subagent
 
-	// LastUsage is the usage of the most recent model call.
+	// LastUsage is the most recent nonzero usage reported by the model.
 	LastUsage provider.Usage
 	// sinceUsage counts characters appended after the last reported usage.
 	sinceUsage int
@@ -770,7 +770,7 @@ func (a *Agent) Restore(entries []session.Entry) {
 				continue
 			}
 			a.messages = append(a.messages, withImageData(*e.Message))
-			if e.Usage != nil {
+			if e.Usage != nil && (e.Usage.PromptTokens > 0 || e.Usage.CompletionTokens > 0) {
 				a.LastUsage, a.sinceUsage = *e.Usage, 0
 			} else {
 				a.sinceUsage += messageChars(*e.Message)
@@ -1191,7 +1191,9 @@ func (a *Agent) loop(ctx context.Context, emit func(any), checked bool) error {
 		usage := res.Usage
 		a.appendMessage(res.Message, session.Entry{Usage: &usage, ThinkingMs: thinkMs})
 		a.messageSaved(res.Message, emit)
-		a.LastUsage, a.sinceUsage = usage, 0
+		if usage.PromptTokens > 0 || usage.CompletionTokens > 0 {
+			a.LastUsage, a.sinceUsage = usage, 0
+		}
 		emit(StepEnd{Usage: usage, Context: a.ContextTokens()})
 
 		if len(res.Message.ToolCalls) == 0 {

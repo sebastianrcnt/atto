@@ -162,3 +162,60 @@ func TestCompactsBeforeALargeNewMessage(t *testing.T) {
 		t.Fatalf("the message was cut: %.80q", last)
 	}
 }
+
+func TestCompactsAfterToolRoundsWithoutUsage(t *testing.T) {
+	srv, seen := fakeServer(t, toolCall("printf '%16000s' '' | tr ' ' x"), toolCall("printf '%16000s' '' | tr ' ' x"),
+		toolCall("printf '%16000s' '' | tr ' ' x"), text("NOTES"), text("done"))
+	a := newTestAgent(srv.URL)
+	a.model.Model.ContextWindow = 12000
+	a.system, a.sinceUsage = "system", len("system")
+	steps, compactions, retries := 0, 0, 0
+	err := a.Run(context.Background(), "go", func(ev any) {
+		switch ev.(type) {
+		case StepEnd:
+			steps++
+		case CompactStart:
+			compactions++
+			if steps != 3 {
+				t.Errorf("compaction after %d steps, want 3", steps)
+			}
+		case StreamRetry:
+			retries++
+		}
+	})
+	if err != nil || compactions != 1 || retries != 0 || len(seen()) != 5 {
+		t.Fatalf("err %v, compactions %d, retries %d, requests %d", err, compactions, retries, len(seen()))
+	}
+}
+
+func TestMissingUsageKeepsTheLastReportedEstimate(t *testing.T) {
+	for _, usage := range []provider.Usage{{}, {PromptTokens: 100}, {CompletionTokens: 100}} {
+		srv, _ := fakeServer(t, text("no usage"),
+			append(text("reported usage"), `{"choices":[],"usage":{"prompt_tokens":200,"completion_tokens":10}}`))
+		a := newTestAgent(srv.URL)
+		a.LastUsage = usage
+		a.sinceUsage = 40
+		var recorded []session.Entry
+		a.Record = func(e session.Entry) { recorded = append(recorded, e) }
+		if err := a.Run(context.Background(), "go", func(any) {}); err != nil {
+			t.Fatal(err)
+		}
+		want := usage.PromptTokens + usage.CompletionTokens + a.sinceUsage/4
+		if a.LastUsage != usage || a.sinceUsage <= 40 || a.ContextTokens() != want {
+			t.Fatalf("usage %+v, appended %d, context %d, want %d", a.LastUsage, a.sinceUsage, a.ContextTokens(), want)
+		}
+		restored := newTestAgent(srv.URL)
+		entries := []session.Entry{{Type: session.TypeMessage, Message: &provider.Message{Role: "assistant", Content: ""}, Usage: &usage},
+			{Type: session.TypeMessage, Message: &provider.Message{Role: "user", Content: strings.Repeat("x", 40)}}}
+		restored.Restore(append(entries, recorded...))
+		if restored.LastUsage != a.LastUsage || restored.ContextTokens() != a.ContextTokens() {
+			t.Fatalf("restored usage %+v, context %d; live context %d", restored.LastUsage, restored.ContextTokens(), a.ContextTokens())
+		}
+		if err := a.Run(context.Background(), "again", func(any) {}); err != nil {
+			t.Fatal(err)
+		}
+		if a.ContextTokens() != 210 || a.sinceUsage != 0 {
+			t.Fatalf("reported usage did not reset estimate: %d, appended %d", a.ContextTokens(), a.sinceUsage)
+		}
+	}
+}
