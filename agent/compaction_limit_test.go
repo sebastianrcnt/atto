@@ -219,3 +219,55 @@ func TestMissingUsageKeepsTheLastReportedEstimate(t *testing.T) {
 		}
 	}
 }
+
+func TestDenseTextEstimate(t *testing.T) {
+	for _, tc := range []struct {
+		name, text string
+		dense      bool
+	}{
+		{"prose", strings.Repeat("This is ordinary prose about the task. ", 20), false},
+		{"short JSON", `{"value":123}`, false},
+		{"JSON", strings.Repeat(`{"value":123,"ok":true},`, 20), true},
+		{"logs", strings.Repeat("2026-10-08T12:34:56Z error=123 path=/usr/bin/test\n", 20), true},
+		{"base64", strings.Repeat("YWJjZGVmMDEyMzQ1", 20), true},
+		{"minified code", strings.Repeat("x=(a+b);f(x);", 20), true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			want := len(tc.text)
+			if tc.dense {
+				want = (want*4 + 2) / 3
+			}
+			if got := estimateChars(tc.text); got != want {
+				t.Fatalf("estimated characters %d, want %d", got, want)
+			}
+			a := &Agent{LastUsage: provider.Usage{PromptTokens: 100}}
+			a.appendMessage(provider.Message{Role: "tool", Content: tc.text}, session.Entry{})
+			if got := a.ContextTokens(); got != 100+want/4 {
+				t.Fatalf("context %d, want %d", got, 100+want/4)
+			}
+			restored := &Agent{}
+			restored.Restore([]session.Entry{
+				{Type: session.TypeMessage, Message: &provider.Message{Role: "assistant"}, Usage: &a.LastUsage},
+				{Type: session.TypeMessage, Message: &provider.Message{Role: "tool", Content: tc.text}},
+			})
+			if restored.ContextTokens() != a.ContextTokens() {
+				t.Fatal("restoring changed the estimate")
+			}
+		})
+	}
+}
+
+func TestDenseToolResultsTriggerCompaction(t *testing.T) {
+	a := &Agent{model: config.ModelRef{Model: config.Model{ContextWindow: 10000}},
+		LastUsage: provider.Usage{PromptTokens: 6000}}
+	for range 2 {
+		a.appendMessage(provider.Message{Role: "tool", Content: strings.Repeat(`{"key":123},`, 450)}, session.Entry{})
+	}
+	if !a.needsCompact() {
+		t.Fatalf("dense results did not trigger compaction: %d tokens", a.ContextTokens())
+	}
+	// At four bytes per token these same results would still be below 90%.
+	if 6000+2*len(strings.Repeat(`{"key":123},`, 450))/4 >= 9000 {
+		t.Fatal("test results would trigger even without the denser estimate")
+	}
+}

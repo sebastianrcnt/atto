@@ -272,7 +272,7 @@ type Agent struct {
 
 	// LastUsage is the most recent nonzero usage reported by the model.
 	LastUsage provider.Usage
-	// sinceUsage counts characters appended after the last reported usage.
+	// sinceUsage counts estimated characters appended after the last reported usage.
 	sinceUsage int
 
 	steerMu  sync.Mutex
@@ -821,15 +821,39 @@ func withImageData(m provider.Message) provider.Message {
 const imageChars = 7373
 
 func messageChars(m provider.Message) int {
-	n := len(m.Content) + len(m.ReasoningContent) + len(m.Images)*imageChars
+	n := estimateChars(m.Content) + estimateChars(m.ReasoningContent) + len(m.Images)*imageChars
 	for _, tc := range m.ToolCalls {
-		n += len(tc.Function.Name) + len(tc.Function.Arguments)
+		n += len(tc.Function.Name) + estimateChars(tc.Function.Arguments)
 	}
 	return n
 }
 
+// estimateChars keeps the usual four bytes per token for prose. Text with
+// little whitespace and many digits or punctuation, or long unbroken runs
+// (base64, minified code), gets the more conservative three bytes per token.
+func estimateChars(s string) int {
+	spaces, dense, run, longest := 0, 0, 0, 0
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if c == ' ' || c == '\n' || c == '\r' || c == '\t' {
+			spaces++
+			run = 0
+		} else {
+			run++
+			longest = max(longest, run)
+			if c >= '0' && c <= '9' || strings.ContainsRune(`{}[]:,_=+/\"`, rune(c)) {
+				dense++
+			}
+		}
+	}
+	if len(s) >= 64 && (longest >= 64 || spaces*8 < len(s) && dense*8 >= len(s)) {
+		return (len(s)*4 + 2) / 3
+	}
+	return len(s)
+}
+
 // ContextTokens estimates the current context size: the last reported
-// usage plus ~4 characters per token for anything appended since.
+// usage plus ~4 bytes per token for prose appended since (~3 for dense text).
 func (a *Agent) ContextTokens() int {
 	return a.LastUsage.PromptTokens + a.LastUsage.CompletionTokens + a.sinceUsage/4
 }
@@ -1059,7 +1083,7 @@ func (a *Agent) RunWithImages(ctx context.Context, input string, imgs []provider
 	}
 	// The message counts too: a large paste can take the request past the
 	// limit by itself, and compacting after it was added would cut it.
-	if a.needsCompactWith(len(input) + len(imgs)*imageChars) {
+	if a.needsCompactWith(estimateChars(input) + len(imgs)*imageChars) {
 		if err := a.compact(ctx, emit, true); err != nil {
 			return err
 		}
