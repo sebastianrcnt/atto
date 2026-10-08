@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -29,18 +30,31 @@ var ErrNoViewDir = errors.New("the command this ran in has ended")
 // Drop leaves im, prepared from the file name, in dir for the agent to
 // attach to the command's result. The file appears whole or not at all.
 func Drop(dir, name string, im provider.Image) error {
+	return drop(dir, name, im, time.Now())
+}
+
+func drop(dir, name string, im provider.Image, now time.Time) error {
 	if st, err := os.Stat(dir); err != nil || !st.IsDir() {
 		return ErrNoViewDir
 	}
-	if n := len(viewFiles(dir)); n >= MaxViewed {
+	files := viewFiles(dir)
+	if len(files) >= MaxViewed {
 		return fmt.Errorf("at most %d images per command", MaxViewed)
 	}
 	data, err := json.Marshal(viewed{Name: name, Data: im.Data})
 	if err != nil {
 		return err
 	}
-	// Named by time, so Collect returns images in the order they came.
-	f, err := os.CreateTemp(dir, fmt.Sprintf("%020d-*.tmp", time.Now().UnixNano()))
+	// Keep sequential drops ordered even when the clock has not advanced
+	// (Windows clocks can have a much coarser resolution than UnixNano).
+	stamp := now.UnixNano()
+	if len(files) > 0 {
+		last, _, _ := strings.Cut(filepath.Base(files[len(files)-1]), "-")
+		if previous, err := strconv.ParseInt(last, 10, 64); err == nil {
+			stamp = max(stamp, previous+1)
+		}
+	}
+	f, err := os.CreateTemp(dir, fmt.Sprintf("%020d-*.tmp", stamp))
 	if err != nil {
 		return err
 	}
