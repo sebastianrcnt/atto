@@ -1,0 +1,321 @@
+[2m∴ We need big integer arithmetic. Lua 5.1 has numbers (doubles) only. We need to implement bignum multiplication via strings/tables. Let me write a bignum library using arrays of digits base 10^k. Task …[0m
+[36m▶ lua[0m
+  
+  -- big integer helpers using base 10^9 arrays (least significant first)
+  local BASE = 1000000000
+  
+  local function fromstr(s)
+    s = s:match("^%s*(.-)%s*$")
+    local a = {}
+    local n = #s
+    local i = n
+    while i > 0 do
+      local lo = math.max(1, i-8)
+      a[#a+1] = tonumber(s:sub(lo, i))
+      i = lo - 1
+    end
+    return a
+  end
+  
+  local function norm(a)
+    while #a > 1 and a[#a] == 0 do a[#a] = nil end
+    return a
+  end
+  
+  local function tostr(a)
+    a = norm(a)
+    local parts = { tostring(a[#a]) }
+    for i = #a-1, 1, -1 do
+      parts[#parts+1] = string.format("%09d", a[i])
+    end
+    return table.concat(parts)
+  end
+  
+  local function mul(a, b)
+    local c = {}
+    for i = 1, #a do c[i + #b] = 0 end -- ensure length maybe
+    for i = 1, #a do
+      local ai = a[i]
+      if ai ~= 0 then
+        local carry = 0
+        for j = 1, #b do
+          local cur = c[i+j-1] or 0
+          local v = cur + ai * b[j] + carry
+          c[i+j-1] = v % BASE
+          carry = math.floor(v / BASE)
+        end
+        local k = i + #b
+        while carry > 0 do
+          local cur = c[k] or 0
+          local v = cur + carry
+          c[k] = v % BASE
+          carry = math.floor(v / BASE)
+          k = k + 1
+        end
+      end
+    end
+    return norm(c)
+  end
+  
+  -- mul by small number (fits in integer)
+  local function mulsmall(a, m)
+    local carry = 0
+    for i = 1, #a do
+      local v = a[i] * m + carry
+      a[i] = v % BASE
+      carry = math.floor(v / BASE)
+    end
+    while carry > 0 do
+      a[#a+1] = carry % BASE
+      carry = math.floor(carry / BASE)
+    end
+    return norm(a)
+  end
+  
+  -- mod by big number: use long division base BASE
+  local function mod(a, m)
+    a = norm(a)
+    m = norm(m)
+    -- compare lengths
+    local function cmp(a, b)
+      if #a ~= #b then return a > b and 1 or -1 end
+      for i = #a, 1, -1 do
+        if a[i] ~= b[i] then return a[i] > b[i] and 1 or -1 end
+      end
+      return 0
+    end
+    -- simple repeated: do digit-by-digit long division
+    local rem = {}
+    for i = #a, 1, -1 do
+      -- rem = rem*BASE + a[i]
+      local carry = a[i]
+      for j = 1, #rem do
+        local v = rem[j] * BASE + carry
+        rem[j] = v % BASE
+        carry = math.floor(v / BASE)
+      end
+      while carry > 0 do
+        rem[#rem+1] = carry % BASE
+        carry = math.floor(carry / BASE)
+      end
+      norm(rem)
+      -- subtract m* q where q found via binary search / approximation
+      -- approximate: use top digits
+      local lo, hi = 0, BASE-1
+      -- need multiply m by q (small) then compare
+      local function mulsmalloccal(x, q)
+        local t = {}
+        for k = 1, #x do t[k] = x[k] end
+        local carry = 0
+        for k = 1, #t do
+          local v = t[k] * q + carry
+          t[k] = v % BASE
+          carry = math.floor(v / BASE)
+        end
+        while carry > 0 do t[#t+1] = carry % BASE; carry = math.floor(carry/BASE) end
+        return norm(t)
+      end
+      while lo < hi do
+        local mid = math.floor((lo + hi + 1)/2)
+        local prod = mulsmalloccal(m, mid)
+        if cmp(prod, rem) <= 0 then lo = mid else hi = mid - 1 end
+      end
+      if lo > 0 then
+        local prod = mulsmalloccal(m, lo)
+        local borrow = 0
+        for j = 1, #rem do
+          local v = rem[j] - (prod[j] or 0) - borrow
+          if v < 0 then v = v + BASE; borrow = 1 else borrow = 0 end
+          rem[j] = v
+        end
+        norm(rem)
+      end
+    end
+    return norm(rem)
+  end
+  
+  local A = fromstr("7926685613381132823756537228191667758153")
+  local B = fromstr("6536379771845492382175875568769168175327")
+  local P = mul(A, B)
+  local prod = tostr(P)
+  
+  -- 30!
+  local f = {1}
+  for n = 1, 30 do mulsmall(f, n) end
+  local M = fromstr("984738291748392817483921")
+  local r = mod(f, M)
+  local rem = tostr(r)
+  
+  print("30! =", tostr(f))
+  sys.exit{report = prod .. "," .. rem}
+
+[2m  error: <string>:79: attempt to compare table with table
+[0m[2m∴ Line 79: `while carry > 0 do rem[#rem+1] = carry % BASE ...` hmm. Let me check: In mod, `cmp(rem, m)`? Actually error at line 79 is comparing table with table. Let's find: In cmp function, `#a ~= #b` …[0m
+[36m▶ lua[0m
+  
+  local BASE = 1000000
+  local FMT = "%06d"
+  
+  local function fromstr(s)
+    s = s:match("^%s*(.-)%s*$")
+    local a = {}
+    local n = #s
+    local i = n
+    while i > 0 do
+      local lo = math.max(1, i-(#tostring(BASE)-1))
+      a[#a+1] = tonumber(s:sub(lo, i))
+      i = lo - 1
+    end
+    return a
+  end
+  
+  local function norm(a)
+    while #a > 1 and a[#a] == 0 do a[#a] = nil end
+    return a
+  end
+  
+  local function tostr(a)
+    a = norm(a)
+    local parts = { tostring(a[#a]) }
+    for i = #a-1, 1, -1 do parts[#parts+1] = string.format(FMT, a[i]) end
+    return table.concat(parts)
+  end
+  
+  local function mul(a, b)
+    local c = {}
+    for i = 1, #a do
+      local ai = a[i]
+      if ai ~= 0 then
+        local carry = 0
+        for j = 1, #b do
+          local cur = c[i+j-1] or 0
+          local v = cur + ai * b[j] + carry
+          c[i+j-1] = v % BASE
+          carry = math.floor(v / BASE)
+        end
+        local k = i + #b
+        while carry > 0 do
+          local cur = c[k] or 0
+          local v = cur + carry
+          c[k] = v % BASE
+          carry = math.floor(v / BASE)
+          k = k + 1
+        end
+      end
+    end
+    return norm(c)
+  end
+  
+  local function mulsmall(a, m)
+    local carry = 0
+    for i = 1, #a do
+      local v = a[i] * m + carry
+      a[i] = v % BASE
+      carry = math.floor(v / BASE)
+    end
+    while carry > 0 do
+      a[#a+1] = carry % BASE
+      carry = math.floor(carry / BASE)
+    end
+    return norm(a)
+  end
+  
+  local function cmp(a, b)
+    a, b = norm(a), norm(b)
+    if #a ~= #b then return (#a > #b) and 1 or -1 end
+    for i = #a, 1, -1 do
+      if a[i] ~= b[i] then return (a[i] > b[i]) and 1 or -1 end
+    end
+    return 0
+  end
+  
+  local function sub(a, b) -- a >= b
+    local borrow = 0
+    local r = {}
+    for j = 1, #a do
+      local v = a[j] - (b[j] or 0) - borrow
+      if v < 0 then v = v + BASE; borrow = 1 else borrow = 0 end
+      r[j] = v
+    end
+    return norm(r)
+  end
+  
+  local function mod(a, m)
+    a, m = norm(a), norm(m)
+    if cmp(a, m) < 0 then return a end
+    local rem = {0}
+    for i = #a, 1, -1 do
+      local carry = a[i]
+      for j = 1, #rem do
+        local v = rem[j] * BASE + carry
+        rem[j] = v % BASE
+        carry = math.floor(v / BASE)
+      end
+      while carry > 0 do rem[#rem+1] = carry % BASE; carry = math.floor(carry/BASE) end
+      norm(rem)
+      -- find q in [0, BASE-1] with q*m <= rem
+      local q = BASE - 1
+      local lo, hi = 0, BASE-1
+      while lo < hi do
+        local mid = math.floor((lo + hi + 1)/2)
+        local prod = mulsmall({m[1], m[2], m[3], m[4], m[5], m[6], m[7], m[8]}, mid) -- copy below
+        if cmp(prod, rem) <= 0 then lo = mid else hi = mid - 1 end
+      end
+      q = lo
+      if q > 0 then
+        local copy = {}
+        for k = 1, #m do copy[k] = m[k] end
+        local prod = mulsmall(copy, q)
+        rem = sub(rem, prod)
+      end
+    end
+    return norm(rem)
+  end
+  
+  local function copy(a) local t={} for i=1,#a do t[i]=a[i] end return t end
+  
+  -- fix mod's copy usage
+  local function mod2(a, m)
+    a, m = norm(copy(a)), norm(copy(m))
+    local rem = {0}
+    for i = #a, 1, -1 do
+      local carry = a[i]
+      for j = 1, #rem do
+        local v = rem[j] * BASE + carry
+        rem[j] = v % BASE
+        carry = math.floor(v / BASE)
+      end
+      while carry > 0 do rem[#rem+1] = carry % BASE; carry = math.floor(carry/BASE) end
+      norm(rem)
+      local lo, hi = 0, BASE-1
+      while lo < hi do
+        local mid = math.floor((lo + hi + 1)/2)
+        local prod = mulsmall(copy(m), mid)
+        if cmp(prod, rem) <= 0 then lo = mid else hi = mid - 1 end
+      end
+      if lo > 0 then
+        rem = sub(rem, mulsmall(copy(m), lo))
+      end
+    end
+    return norm(rem)
+  end
+  
+  local A = fromstr("7926685613381132823756537228191667758153")
+  local B = fromstr("6536379771845492382175875568769168175327")
+  local prod = tostr(mul(A, B))
+  
+  local f = {1}
+  for n = 1, 30 do mulsmall(f, n) end
+  local M = fromstr("984738291748392817483921")
+  local rem = tostr(mod2(f, M))
+  
+  print("30! =", tostr(copy(f)))
+  print("prod digits:", #prod)
+  sys.exit{report = prod .. "," .. rem}
+
+[2m  30! =	265252859812191058636308480000000
+  prod digits:	70
+[0m2026-10-07T14:44:44.342+09:00 sys.exit args={"report":"5182255541007467066416480471976107378103584501280973528048838867691031,965864779356398786670"} result="5182255541007467066416480471976107378103584501280973528048838867691031,965864779356398786670"
+runs: 1 pure, 1 impure
+
+[2 steps, 2288 tokens in last prompt, 1 syscalls]

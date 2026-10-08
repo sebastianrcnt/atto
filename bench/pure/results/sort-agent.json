@@ -1,0 +1,13 @@
+{
+  "completion_tokens": 4271,
+  "impure_runs": 1,
+  "prompt_tokens": 8918,
+  "pure_runs": 1,
+  "report": "1001134",
+  "steps": 3,
+  "syscalls": 1,
+  "id": "sort",
+  "mode": "agent",
+  "wall_seconds": 44.065,
+  "correct": true
+}

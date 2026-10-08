@@ -1,0 +1,84 @@
+{
+  "model": "orca-local",
+  "base_url": "http://192.168.0.235:8081/v1",
+  "runs": [
+    {
+      "completion_tokens": 3978,
+      "impure_runs": 1,
+      "prompt_tokens": 2288,
+      "pure_runs": 1,
+      "report": "5182255541007467066416480471976107378103584501280973528048838867691031,965864779356398786670",
+      "steps": 2,
+      "syscalls": 1,
+      "id": "arithmetic",
+      "mode": "agent",
+      "wall_seconds": 45.203,
+      "correct": false
+    },
+    {
+      "completion_tokens": 70551,
+      "impure_runs": 0,
+      "prompt_tokens": 156,
+      "pure_runs": 0,
+      "report": "",
+      "steps": 1,
+      "syscalls": 0,
+      "id": "arithmetic",
+      "mode": "baseline",
+      "wall_seconds": 673.665,
+      "correct": false
+    },
+    {
+      "completion_tokens": 598,
+      "impure_runs": 1,
+      "prompt_tokens": 1231,
+      "pure_runs": 1,
+      "report": "Friday,272025",
+      "steps": 3,
+      "syscalls": 1,
+      "id": "calendar",
+      "mode": "agent",
+      "wall_seconds": 10.841,
+      "correct": true
+    },
+    {
+      "completion_tokens": 12212,
+      "impure_runs": 0,
+      "prompt_tokens": 72,
+      "pure_runs": 0,
+      "report": "Friday,272025",
+      "steps": 1,
+      "syscalls": 0,
+      "id": "calendar",
+      "mode": "baseline",
+      "wall_seconds": 127.579,
+      "correct": true
+    },
+    {
+      "completion_tokens": 4271,
+      "impure_runs": 1,
+      "prompt_tokens": 8918,
+      "pure_runs": 1,
+      "report": "1001134",
+      "steps": 3,
+      "syscalls": 1,
+      "id": "sort",
+      "mode": "agent",
+      "wall_seconds": 44.065,
+      "correct": true
+    },
+    {
+      "completion_tokens": 45122,
+      "impure_runs": 0,
+      "prompt_tokens": 4029,
+      "pure_runs": 0,
+      "report": "1001134",
+      "steps": 1,
+      "syscalls": 0,
+      "id": "sort",
+      "mode": "baseline",
+      "wall_seconds": 402.68,
+      "correct": true
+    }
+  ]
+}

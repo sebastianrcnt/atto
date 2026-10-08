@@ -1,0 +1,13 @@
+{
+  "completion_tokens": 12212,
+  "impure_runs": 0,
+  "prompt_tokens": 72,
+  "pure_runs": 0,
+  "report": "Friday,272025",
+  "steps": 1,
+  "syscalls": 0,
+  "id": "calendar",
+  "mode": "baseline",
+  "wall_seconds": 127.579,
+  "correct": true
+}

@@ -1,0 +1,37 @@
+[2m∴ Compute weekday and day difference. Use Lua. Weekday reference: need consistent. Use days since some epoch, mod 7. Let's define a function to compute days from civil date (Hinnant's algorithm).[0m
+[36m▶ lua[0m
+  local function days_from_civil(y,m,d)
+    y = y - (m <= 2 and 1 or 0)
+    local era = math.floor((y >= 0 and y or y-3999)/4000)
+    local yoe = y - era*4000
+    local doy = math.floor((153*(m + (m>2 and -3 or 9)) + 2)/5) + d-1
+    local doe = yoe*365 + math.floor(yoe/4) - math.floor(yoe/100) + math.floor(yoe/400) + doy
+    return era*146097 + doe - 719468
+  end
+  local a = days_from_civil(2199,3,1)
+  local b = days_from_civil(1643,2,17)
+  local c = days_from_civil(2387,11,29)
+  print(a%7, (a%7+7)%7)
+  print(c-b)
+  -- weekday names indexed: known anchor: 1970-01-01 is Thursday (weekday 4 if 0=Sunday)
+  local d0 = days_from_civil(1970,1,1)
+  print(d0, d0%7, (d0%7+7)%7)
+  local names={"Thursday","Friday","Saturday","Sunday","Monday","Tuesday","Wednesday"}
+  print(names[(a%7)+1])
+  print(os)
+
+[2m  1	1
+  272025
+  0	0	0
+  Friday
+  nil
+[0m[2m∴ Anchor: days_from_civil(1970,1,1)=0 which is Thursday. a%7=1 => Friday. Good. Difference: 272025 days from Feb 17 1643 to Nov 29 2387. Check leap-year handling proleptic Gregorian: fine. Sanity check:…[0m
+[2m∴ I need to re-output via sys.exit.[0m
+[36m▶ lua[0m
+  return sys.exit{report="Friday,272025"}
+
+[2m  (no output)
+[0m2026-10-07T14:56:08.858+09:00 sys.exit args={"report":"Friday,272025"} result="Friday,272025"
+runs: 1 pure, 1 impure
+
+[3 steps, 1231 tokens in last prompt, 1 syscalls]
