@@ -104,7 +104,7 @@ func remoteApp(t *testing.T, model *remoteModel) *App {
 		})
 		waitIdle(t, a)
 		jobs.KillAll(a.sess.ID)
-		a.sess.Close()
+		a.closeSession()
 	})
 	return a
 }

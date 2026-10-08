@@ -49,7 +49,7 @@ func paneApp(t *testing.T, on bool) (*App, *recTerm) {
 	}
 	a.build()
 	a.newSession("")
-	t.Cleanup(func() { a.sess.Close() })
+	t.Cleanup(a.closeSession)
 	a.pane.on = on
 	return a, rec
 }
@@ -133,5 +133,32 @@ func TestExitMenuDetachesInPane(t *testing.T) {
 	}
 	if got := rec.take(); got != daemon.MarkerSeq("detach") {
 		t.Fatalf("wrote %q", got)
+	}
+}
+
+func TestAppFixturesReleaseSessionLease(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		make func(*testing.T) *App
+	}{
+		{"tree", treeApp},
+		{"pane", func(t *testing.T) *App { a, _ := paneApp(t, false); return a }},
+		{"loaded", loadedApp},
+	} {
+		released := false
+		t.Run(tt.name, func(t *testing.T) {
+			a := tt.make(t)
+			if a.unlock == nil {
+				t.Fatal("fixture has no session lease")
+			}
+			unlock := a.unlock
+			a.unlock = func() {
+				unlock()
+				released = true
+			}
+		})
+		if !released {
+			t.Errorf("%s fixture retained its session lease", tt.name)
+		}
 	}
 }

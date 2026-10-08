@@ -29,9 +29,9 @@ func treeApp(t *testing.T) *App {
 	}
 	a.build()
 	a.newSession("")
-	// Close the session file before the temp dirs go: Windows can't
-	// delete an open file. (Cleanups run last-registered first.)
-	t.Cleanup(func() { a.sess.Close() })
+	// Close the session file and its lease before the temp dirs go:
+	// Windows can't delete open files. (Cleanups run last-registered first.)
+	t.Cleanup(a.closeSession)
 	return a
 }
 

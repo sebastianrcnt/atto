@@ -214,7 +214,7 @@ func TestDiffBlockIsDisplayOnlyAndSurvivesResume(t *testing.T) {
 	r.build()
 	r.newSession("")
 	r.resume(a.sess.Path)
-	t.Cleanup(func() { r.sess.Close() })
+	t.Cleanup(r.closeSession)
 	bs := textBlocks(r)
 	if len(bs) != 1 {
 		t.Fatalf("%d blocks after resume", len(bs))

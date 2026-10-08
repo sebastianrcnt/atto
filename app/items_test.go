@@ -81,7 +81,7 @@ func TestLiveBlocksMatchResume(t *testing.T) {
 	b.build()
 	b.newSession("")
 	b.resume(a.sess.Path)
-	t.Cleanup(func() { b.sess.Close() })
+	t.Cleanup(b.closeSession)
 	if got := transcriptLines(b); got != live {
 		t.Fatalf("resumed:\n%s\nlive:\n%s", got, live)
 	}

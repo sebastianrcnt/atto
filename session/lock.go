@@ -78,7 +78,7 @@ func readLockInfo(f *os.File) LockInfo {
 // LockedBy probes the OS lock, not the metadata. Partial or unreadable
 // metadata must not make an actively held lease appear free.
 func LockedBy(path string) (LockInfo, bool) {
-	f, err := os.OpenFile(LockPath(path), os.O_RDWR, 0)
+	f, err := openLockFile(LockPath(path), false)
 	if errors.Is(err, os.ErrNotExist) {
 		return LockInfo{}, false
 	}
@@ -184,7 +184,7 @@ func lockAs(path string, pid int, kind string) (release func(), err error) {
 		}
 		return releaseLocked(key, h), nil
 	}
-	f, err := os.OpenFile(key, os.O_CREATE|os.O_RDWR, 0o600)
+	f, err := openLockFile(key, true)
 	if err != nil {
 		return nil, err
 	}

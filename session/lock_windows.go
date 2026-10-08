@@ -37,3 +37,23 @@ func unlockFile(f *os.File) error {
 	return nil
 }
 func fileLockBusy(err error) bool { return errors.Is(err, windows.ERROR_LOCK_VIOLATION) }
+
+// Archive and delete remove the sidecar while still holding its lease.
+// os.OpenFile does not request delete sharing on Windows.
+func openLockFile(path string, create bool) (*os.File, error) {
+	name, err := windows.UTF16PtrFromString(path)
+	if err != nil {
+		return nil, &os.PathError{Op: "open", Path: path, Err: err}
+	}
+	disposition := uint32(windows.OPEN_EXISTING)
+	if create {
+		disposition = windows.OPEN_ALWAYS
+	}
+	h, err := windows.CreateFile(name, windows.GENERIC_READ|windows.GENERIC_WRITE,
+		windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE|windows.FILE_SHARE_DELETE,
+		nil, disposition, windows.FILE_ATTRIBUTE_NORMAL, 0)
+	if err != nil {
+		return nil, &os.PathError{Op: "open", Path: path, Err: err}
+	}
+	return os.NewFile(uintptr(h), path), nil
+}

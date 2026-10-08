@@ -182,7 +182,7 @@ func TestBlockDisplayLifecycle(t *testing.T) {
 	b.build()
 	b.newSession("")
 	b.resume(a.sess.Path)
-	t.Cleanup(func() { b.sess.Close() })
+	t.Cleanup(b.closeSession)
 	if got := noDuration(answerLines(b)); got != noDuration(shown) {
 		t.Fatalf("resumed:\n%s\nlive:\n%s", got, shown)
 	}

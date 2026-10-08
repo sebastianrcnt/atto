@@ -38,7 +38,7 @@ func StartBackground(path string, cmd *exec.Cmd) error {
 	h := heldLocks.locks[key]
 	fresh := h == nil
 	if fresh {
-		f, err := os.OpenFile(key, os.O_CREATE|os.O_RDWR, 0o600)
+		f, err := openLockFile(key, true)
 		if err != nil {
 			return err
 		}
