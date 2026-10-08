@@ -742,3 +742,35 @@ tree}.go`, `cli/{print,bgrun,agent,agent_external,agent_worktree,daemon,jobs,goa
 context,mcp}.go`, `cmd/atto/main.go`. Extension/notification/tree semantics:
 `extensions/{host,extensions,api_ui,api_events,runtime,uistate}.go`,
 `hooks/hooks.go`, `goal/goal.go`, `agentstate/{state,tree,turnlock,shutdown,slots*}.go`.
+
+## 7. Adopted decisions
+
+The split follows the archived implementation's decisions: detach does not stop
+execution; goals, jobs and timers continue without clients; prompts are server
+objects, the first answer wins and unattended prompts are not auto-answered;
+clients are equal; daemon PTY panes and `atto attach` remain; the protocol is
+versioned and negotiated; Windows retains an in-process runtime. The TUI keeps
+its present execution path during phase 1 and becomes a runtime client in phase 2.
+
+## 8. Implementation status on main
+
+### Phase 1 A — protocol contract
+
+`initialize` negotiates the newest supported revision from `protocolVersions`
+(revisions 1–2); omitting the list preserves existing clients. It returns a
+per-run `serverInstanceId` alongside the existing name, version, event cursor and
+settings. Standalone and Live use the same negotiation. `clientInfo` accepts the
+Codex name/title/version shape and `capabilities` accepts the same extensible
+object shape. `initialized` is explicitly recognized, but optional: existing
+HTTP and stdio clients do not gain a handshake gate. This is not a Codex-dialect
+adapter and it does not claim Codex's response DTOs or execution safety policies.
+
+JSON-RPC errors retain their existing codes/messages and add `data.reason`.
+Negotiation failures use `unsupportedProtocol`; busy starts and committed steers
+have specific reasons; legacy error paths receive a code-derived reason until
+they move into the runtime. `provider/providertest` supplies a scripted streaming
+model with gates, slow replies and saved request bodies for protocol tests.
+
+Connection IDs, the common event hub, the Go client and the session runtime are
+subsequent phase 1 work. The TUI, frozen web client and agent/subagent aliases are
+unchanged by the contract work.

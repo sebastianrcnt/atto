@@ -36,16 +36,17 @@ type Server struct {
 	// as it changes (set before HTTPHandler).
 	OnClients func(n int)
 
-	memory  core.IdleMemory
-	mu      sync.Mutex
-	threads map[string]*thread
-	stop    chan struct{}
-	live    Live    // set by NewLive: the one conversation served
-	events  *broker // the HTTP transport's, for eventSeq
+	memory   core.IdleMemory
+	mu       sync.Mutex
+	threads  map[string]*thread
+	stop     chan struct{}
+	live     Live    // set by NewLive: the one conversation served
+	instance string  // identifies this server run
+	events   *broker // the HTTP transport's, for eventSeq
 }
 
 func New(version, cwd string) *Server {
-	s := &Server{Version: version, Cwd: cwd, threads: map[string]*thread{}, Notify: func(string, map[string]any) {}, stop: make(chan struct{})}
+	s := &Server{Version: version, Cwd: cwd, threads: map[string]*thread{}, Notify: func(string, map[string]any) {}, stop: make(chan struct{}), instance: newInstanceID()}
 	s.memory = core.NewIdleMemory()
 	go s.watchInbox()
 	return s
@@ -245,7 +246,7 @@ func (s *Server) eventSeq() int64 {
 func (s *Server) Handle(ctx context.Context, raw []byte) *rpcResponse {
 	var req rpcRequest
 	if err := json.Unmarshal(raw, &req); err != nil {
-		return &rpcResponse{JSONRPC: "2.0", ID: json.RawMessage("null"), Error: &rpcError{codeParse, err.Error()}}
+		return &rpcResponse{JSONRPC: "2.0", ID: json.RawMessage("null"), Error: &rpcError{Code: codeParse, Message: err.Error(), Data: &ErrorData{Reason: ReasonParse}}}
 	}
 	result, err := s.call(ctx, req.Method, req.Params)
 	if req.ID == nil {
@@ -255,9 +256,13 @@ func (s *Server) Handle(ctx context.Context, raw []byte) *rpcResponse {
 	var rerr *rpcError
 	switch {
 	case errors.As(err, &rerr):
-		resp.Error = rerr
+		copy := *rerr
+		if copy.Data == nil {
+			copy.Data = &ErrorData{Reason: errorReason(copy.Code)}
+		}
+		resp.Error = &copy
 	case err != nil:
-		resp.Error = &rpcError{codeServer, err.Error()}
+		resp.Error = failure(ReasonInternal, "%s", err)
 	default:
 		if result == nil {
 			result = map[string]any{}
@@ -270,7 +275,7 @@ func (s *Server) Handle(ctx context.Context, raw []byte) *rpcResponse {
 func (e *rpcError) Error() string { return e.Message }
 
 func invalid(format string, args ...any) error {
-	return &rpcError{codeInvalidParams, fmt.Sprintf(format, args...)}
+	return &rpcError{Code: codeInvalidParams, Message: fmt.Sprintf(format, args...)}
 }
 
 func decode[T any](raw json.RawMessage) (T, error) {
@@ -300,6 +305,10 @@ type threadParams struct {
 	Cancel bool    `json:"cancel"`
 	// turn/unsteer: a queued follow-up rather than a steer
 	Queued bool `json:"queued"`
+	// initialize
+	ProtocolVersions []int         `json:"protocolVersions"`
+	Client           *ClientInfo   `json:"clientInfo"`
+	Capabilities     *Capabilities `json:"capabilities"`
 	// job/output, job/stop; agent/read
 	Job   int    `json:"job"`
 	Lines int    `json:"lines"`
@@ -326,7 +335,9 @@ func (s *Server) call(ctx context.Context, method string, raw json.RawMessage) (
 	}
 	switch method {
 	case "initialize":
-		return map[string]any{"name": "atto", "version": s.Version, "protocolVersion": ProtocolVersion, "eventId": s.eventSeq(), "settings": clientSettings()}, nil
+		return s.initialize(p, nil)
+	case "initialized":
+		return nil, nil
 	case "models/list":
 		return s.listModels()
 	case "thread/start":
@@ -360,7 +371,7 @@ func (s *Server) call(ctx context.Context, method string, raw json.RawMessage) (
 		busy := t.turns.Busy
 		t.mu.Unlock()
 		if !busy {
-			return nil, &rpcError{codeServer, "no turn is running; use turn/start"}
+			return nil, failure(ReasonNotFound, "no turn is running; use turn/start")
 		}
 		if strings.TrimSpace(p.Input) == "" {
 			return nil, invalid("input is required")
@@ -382,7 +393,7 @@ func (s *Server) call(ctx context.Context, method string, raw json.RawMessage) (
 		ok := t.turns.Unsteer(t.agent, p.Input)
 		t.mu.Unlock()
 		if !ok {
-			return nil, &rpcError{codeServer, "that message is no longer pending: the turn has taken it"}
+			return nil, failure(ReasonAlreadyCommitted, "that message is no longer pending: the turn has taken it")
 		}
 		s.pendingChanged(t)
 		return nil, nil
@@ -400,7 +411,7 @@ func (s *Server) call(ctx context.Context, method string, raw json.RawMessage) (
 			return nil, err
 		}
 		if !t.agent.Background() {
-			return nil, &rpcError{codeServer, "no command is running that can move to the background"}
+			return nil, &rpcError{Code: codeServer, Message: "no command is running that can move to the background"}
 		}
 		return nil, nil
 	case "turn/interrupt":
@@ -413,7 +424,7 @@ func (s *Server) call(ctx context.Context, method string, raw json.RawMessage) (
 		t.mu.Unlock()
 		return nil, nil
 	}
-	return nil, &rpcError{codeMethodNotFound, "unknown method " + method}
+	return nil, &rpcError{Code: codeMethodNotFound, Message: "unknown method " + method}
 }
 
 func (s *Server) thread(id string) (*thread, error) {
@@ -667,7 +678,7 @@ func (s *Server) begin(t *thread, fn func(ctx context.Context, emit func(any)) e
 	t.mu.Lock()
 	if t.turns.Busy || t.closing {
 		t.mu.Unlock()
-		return "", &rpcError{codeServer, "a turn is already running; use turn/steer or turn/interrupt"}
+		return "", failure(ReasonBusy, "a turn is already running; use turn/steer or turn/interrupt")
 	}
 	if s.memory != nil {
 		s.memory.Begin()
