@@ -689,10 +689,12 @@ export default function (atto: any) {
 	if args.Command != "spin # seen" {
 		t.Fatalf("%q", args.Command)
 	}
-	in := info(t, m, "flaky")
-	if in.Status != Failed || !strings.Contains(in.Error, "interrupted") {
-		t.Fatalf("a runaway script is interrupted and disabled: %+v", in)
-	}
+	// The answer timeout and the watchdog are separate timers: on a slow
+	// machine the call can give up before the script is interrupted.
+	eventually(t, "a runaway script is interrupted and disabled", func() bool {
+		in := info(t, m, "flaky")
+		return in.Status == Failed && strings.Contains(in.Error, "interrupted")
+	})
 	// The status changes before the notice is sent.
 	eventually(t, "the disabled notice", func() bool {
 		return slices.ContainsFunc(h.snapshot().notices, func(n string) bool { return strings.HasPrefix(n, "error flaky: extension disabled") })

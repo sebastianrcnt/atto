@@ -216,7 +216,7 @@ func TestStandaloneCenterPicks(t *testing.T) {
 // a phone-narrow terminal rows drop the status and age columns.
 func TestCenterScreenLayouts(t *testing.T) {
 	a, _ := paneApp(t, false)
-	now := time.Now()
+	now := time.Now().Add(-time.Minute) // saved sessions predate the current one
 	var saved []session.Summary
 	for i := range 40 {
 		saved = append(saved, session.Summary{ID: fmt.Sprintf("s%d", i), Cwd: fmt.Sprintf("/w/p%d", i%5), Name: fmt.Sprintf("task %d", i), Updated: now.Add(-time.Duration(i) * time.Hour)})
