@@ -178,3 +178,132 @@ func TestCompactionDoesNotConsumeStreamRetry(t *testing.T) {
 		}
 	}
 }
+
+func lengthReply(tokens int) []string {
+	return []string{fmt.Sprintf(`{"choices":[{"delta":{"content":"truncated reply"},"finish_reason":"length"}],"usage":{"prompt_tokens":100,"completion_tokens":%d}}`, tokens)}
+}
+
+func TestTurnCompactsOnEarlyLength(t *testing.T) {
+	for _, tools := range []bool{false, true} {
+		t.Run(fmt.Sprint("tools=", tools), func(t *testing.T) {
+			reply := lengthReply(10)
+			if tools {
+				reply = append(toolCallFinish("echo should-not-run", "length"), reply...)
+			}
+			srv, seen := fakeServer(t, reply, text("notes"), text("done"))
+			a := newTestAgent(srv.URL)
+			a.model.Model.MaxTokens = 1000
+			var rec []session.Entry
+			a.Record = func(e session.Entry) { rec = append(rec, e) }
+			starts, retries := 0, 0
+			err := a.Run(context.Background(), "go", func(ev any) {
+				switch ev.(type) {
+				case ToolStart:
+					starts++
+				case StreamRetry:
+					retries++
+				}
+			})
+			if err != nil || len(seen()) != 3 || starts != 0 || retries != 1 {
+				t.Fatalf("err %v, requests %d, starts %d, retries %d", err, len(seen()), starts, retries)
+			}
+			for _, req := range seen()[1:] {
+				for _, m := range req {
+					if m["role"] == "assistant" || m["role"] == "tool" {
+						t.Fatalf("replayed truncated reply: %v", m)
+					}
+				}
+			}
+			for _, e := range rec {
+				if e.Message != nil && e.Message.Role == "assistant" && e.Message.Content != "done" {
+					t.Fatalf("saved truncated reply: %+v", e.Message)
+				}
+			}
+		})
+	}
+}
+
+func TestTurnDoesNotCompactNormalLength(t *testing.T) {
+	for _, tokens := range []int{0, 900, 1000} {
+		t.Run(fmt.Sprint(tokens), func(t *testing.T) {
+			srv, seen := fakeServer(t, lengthReply(tokens))
+			a := newTestAgent(srv.URL)
+			a.model.Model.MaxTokens = 1000
+			err := a.Run(context.Background(), "go", func(any) {})
+			if err != nil || len(seen()) != 1 || a.messages[len(a.messages)-1].Content != "truncated reply" {
+				t.Fatalf("err %v, requests %d, messages %v", err, len(seen()), a.messages)
+			}
+		})
+	}
+}
+
+func TestTurnContextRecoveryIsBounded(t *testing.T) {
+	noWait(t)
+	length := sse(lengthReply(10)...)
+	overflow := status(400, "This model's maximum context length is 1000 tokens")
+	notes := sse(text("notes")...)
+	for _, c := range []struct {
+		name          string
+		first, second func(http.ResponseWriter)
+		fails         bool
+	}{
+		{"length twice", length, length, false},
+		{"overflow twice", overflow, overflow, true},
+		{"length then overflow", length, overflow, true},
+		{"overflow then length", overflow, length, false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			srv, count := scriptedServer(t, c.first, notes, c.second)
+			a := newTestAgent(srv.URL)
+			a.model.Model.MaxTokens = 1000
+			retries, compacts := 0, 0
+			err := a.Run(context.Background(), "go", func(ev any) {
+				switch ev.(type) {
+				case StreamRetry:
+					retries++
+				case CompactEnd:
+					compacts++
+				}
+			})
+			if (err != nil) != c.fails || count() != 3 || retries != 1 || compacts != 1 {
+				t.Fatalf("err %v, requests %d, retries %d, compacts %d", err, count(), retries, compacts)
+			}
+		})
+	}
+}
+
+func TestTurnContextRecoveryBudgetSurvivesToolStep(t *testing.T) {
+	noWait(t)
+	overflow := status(400, "This model's maximum context length is 1000 tokens")
+	srv, count := scriptedServer(t, overflow, sse(text("notes")...), sse(toolCall("echo ok")...), overflow)
+	a := newTestAgent(srv.URL)
+	compacts := 0
+	err := a.Run(context.Background(), "go", func(ev any) {
+		if _, ok := ev.(CompactEnd); ok {
+			compacts++
+		}
+	})
+	if err == nil || count() != 4 || compacts != 1 {
+		t.Fatalf("err %v, requests %d, compacts %d", err, count(), compacts)
+	}
+}
+
+func TestTurnContextRecoveryBudgetResets(t *testing.T) {
+	srv, seen := fakeServer(t, lengthReply(10), text("notes"), text("done"),
+		lengthReply(10), text("more notes"), text("done again"))
+	a := newTestAgent(srv.URL)
+	a.model.Model.MaxTokens = 1000
+	compacts := 0
+	for range 2 {
+		if err := a.Run(context.Background(), "go", func(ev any) {
+			if _, ok := ev.(CompactEnd); ok {
+				compacts++
+			}
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(seen()) != 6 || compacts != 2 {
+		t.Fatalf("requests %d, compacts %d", len(seen()), compacts)
+	}
+}

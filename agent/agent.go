@@ -82,7 +82,7 @@ const ExtensionEvent = "extension "
 
 // StreamRetry reports a model request that failed and is sent again within
 // the turn: the reply streamed so far (if any) is dropped, not kept.
-// Context-overflow compaction has its own one-retry budget.
+// Context-pressure compaction has its own one-retry budget per turn.
 type StreamRetry struct {
 	Attempt, Of int
 	Wait        time.Duration
@@ -91,8 +91,8 @@ type StreamRetry struct {
 
 // streamRetries is how many times a failed model request is sent again
 // within a turn before the turn fails (codex's stream_max_retries).
-// ai.IsPermanent failures are not retried; a context overflow is compacted
-// once instead.
+// ai.IsPermanent failures are not retried; context pressure is compacted
+// once per turn instead.
 const streamRetries = 5
 
 // maxRetryWait caps a provider's Retry-After for these retries.
@@ -1082,7 +1082,8 @@ func (a *Agent) Continue(ctx context.Context, emit func(any)) error {
 // checked says the conversation was already measured against the
 // compaction limit, as RunWithImages does before it adds the message.
 func (a *Agent) loop(ctx context.Context, emit func(any), checked bool) error {
-	stopBlocks := 0 // Stop hook continuations in this turn
+	stopBlocks := 0    // Stop hook continuations in this turn
+	compacted := false // context-pressure recovery, once per turn
 	a.stopReq.Store(false)
 
 	for step := 1; ; step++ {
@@ -1103,7 +1104,7 @@ func (a *Agent) loop(ctx context.Context, emit func(any), checked bool) error {
 		var drafts *draftTracker
 		var res provider.Result
 		var err error
-		for attempt, compacted := 1, false; ; {
+		for attempt := 1; ; {
 			thinkStart, thinkEnd = time.Time{}, time.Time{}
 			drafts = &draftTracker{emit: emit}
 			h := provider.Handler{
@@ -1124,20 +1125,32 @@ func (a *Agent) loop(ctx context.Context, emit func(any), checked bool) error {
 			}
 			client, req := a.request()
 			res, err = client.Stream(ctx, req, h)
-			if err == nil || ctx.Err() != nil {
+			if ctx.Err() != nil {
 				break
 			}
-			// The request no longer fits: compact once and send it again.
-			if ai.IsContextOverflow(err) && !compacted && len(a.messages) > 1 {
+			// An early length stop can mean the server ran out of context,
+			// rather than output tokens. Leave 10% slack for provider accounting;
+			// unknown usage is not enough to tell.
+			earlyLength := err == nil && res.FinishReason == "length" && req.MaxTokens > 0 &&
+				res.Usage.CompletionTokens > 0 && res.Usage.CompletionTokens < req.MaxTokens*9/10
+			// Neither the failed reply nor its tool calls enter the context.
+			if (ai.IsContextOverflow(err) || earlyLength) && !compacted && len(a.messages) > 0 {
 				compacted = true
 				drafts.endAll()
-				emit(StreamRetry{Attempt: 1, Of: 1, Err: err.Error()})
+				why := "response ended before the output token limit"
+				if err != nil {
+					why = err.Error()
+				}
+				emit(StreamRetry{Attempt: 1, Of: 1, Err: why})
 				if cerr := a.compact(ctx, emit, true); cerr != nil {
+					if err == nil {
+						err = cerr
+					}
 					break
 				}
 				continue
 			}
-			if ai.IsPermanent(err) || attempt > streamRetries {
+			if err == nil || ai.IsContextOverflow(err) || ai.IsPermanent(err) || attempt > streamRetries {
 				break
 			}
 			// Anything else may pass: drop what streamed and send it again.
