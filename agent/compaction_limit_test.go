@@ -10,6 +10,7 @@ import (
 	"github.com/sebastianrcnt/atto/config"
 	"github.com/sebastianrcnt/atto/provider"
 	"github.com/sebastianrcnt/atto/session"
+	"github.com/sebastianrcnt/atto/shell"
 )
 
 func TestCompactionLimits(t *testing.T) {
@@ -164,8 +165,11 @@ func TestCompactsBeforeALargeNewMessage(t *testing.T) {
 }
 
 func TestCompactsAfterToolRoundsWithoutUsage(t *testing.T) {
-	srv, seen := fakeServer(t, toolCall("printf '%16000s' '' | tr ' ' x"), toolCall("printf '%16000s' '' | tr ' ' x"),
-		toolCall("printf '%16000s' '' | tr ' ' x"), text("NOTES"), text("done"))
+	command := "printf '%16000s' '' | tr ' ' x"
+	if shell.Default().Kind == shell.PowerShell {
+		command = "[Console]::Write(('x' * 16000))"
+	}
+	srv, seen := fakeServer(t, toolCall(command), toolCall(command), toolCall(command), text("NOTES"), text("done"))
 	a := newTestAgent(srv.URL)
 	a.model.Model.ContextWindow = 12000
 	a.system, a.sinceUsage = "system", len("system")
