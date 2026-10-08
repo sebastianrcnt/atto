@@ -11,7 +11,7 @@ You have one tool, cmd (cmd.exe). Use it for everything: exploring (dir, type, f
 You have one tool, bash. Use it for everything: exploring (ls, rg, cat, sed -n), editing files (heredocs, sed, python scripts, patch), building, and testing.
 {{- end}}
 Every {{.Tool}} call needs a short description of what it does, shown to the user, e.g. "JIT compile atto.py", "Run unit tests", "Read main.go".
-Commands time out after 60 seconds by default; set timeout for longer builds or tests.
+Commands wait in the foreground for 10 seconds by default (timeout may be at most 30 seconds). A command still running becomes a background job; follow it with "atto job wait <id> -timeout 10m" or its exit event, rather than raising the foreground wait for a long build or test. Without a shell host or session, timeout instead kills the command (default 60 seconds, maximum 30 minutes).
 The full transcript of this session, including anything removed by compaction, can be searched with "atto history grep <regexp>" and read with "atto history show <n>".
 After you change AGENTS.md files, skills or atto's settings, "atto reload" applies them to this session; "atto context" shows what is loaded.
 To look at an image file (a screenshot, a rendered plot), run "atto view <path>": the image is attached to that command's result.

@@ -22,6 +22,9 @@ const (
 	DefaultBashTimeout = 60 * time.Second
 	MaxBashTimeout     = 30 * time.Minute
 
+	DefaultShellWait = 10 * time.Second
+	MaxShellWait     = 30 * time.Second
+
 	// DefaultToolOutputTokens is how much output goes back to the model
 	// unless settings.json says otherwise (SetToolOutputTokenLimit).
 	DefaultToolOutputTokens = 10_000
@@ -59,11 +62,11 @@ var bashSchema = json.RawMessage(`{
     },
     "timeout": {
       "type": "integer",
-      "description": "Timeout in seconds. Default 60. Raise it for long builds or test suites."
+      "description": "Foreground wait in seconds: default 10, maximum 30. A command still running becomes a background job; use atto job wait or its exit event. Without a shell host or session this is a kill timeout: default 60, maximum 1800."
     },
     "run_in_background": {
       "type": "boolean",
-      "description": "Start the command as a background job and return at once with its id. For dev servers, watchers, long builds."
+      "description": "Start a background job and return its id immediately instead of waiting up to timeout. Use for dev servers, watchers and long builds; use atto job wait or its exit event to follow completion."
     }
   },
   "required": ["description", "command"]
@@ -84,7 +87,7 @@ type BashArgs struct {
 	Background bool `json:"run_in_background,omitempty"`
 }
 
-// TimeLimit is how long the command may run.
+// TimeLimit is the kill timeout for a direct or session-less command.
 func (a BashArgs) TimeLimit() time.Duration { return a.timeout() }
 
 func (a BashArgs) timeout() time.Duration {
@@ -94,13 +97,30 @@ func (a BashArgs) timeout() time.Duration {
 	return time.Duration(min(a.Timeout, int(MaxBashTimeout/time.Second))) * time.Second
 }
 
+// foregroundWait is how long a hosted command waits before becoming a job.
+func (a BashArgs) foregroundWait() time.Duration {
+	if a.Timeout <= 0 {
+		return DefaultShellWait
+	}
+	return time.Duration(min(a.Timeout, int(MaxShellWait/time.Second))) * time.Second
+}
+
+func (a BashArgs) waitLimit(session string) time.Duration {
+	if ShellHost && session != "" {
+		return a.foregroundWait()
+	}
+	return a.timeout()
+}
+
 type BashResult struct {
 	Output   string // raw combined output (possibly capped)
 	ExitCode int
 	TimedOut bool
 	Canceled bool
 	Duration time.Duration
-	Err      error // failure to start, etc.
+	// WaitLimit is the foreground wait or kill timeout actually used.
+	WaitLimit time.Duration
+	Err       error // failure to start, etc.
 
 	// Job is the background job the command became (Background says
 	// why); it is still running. Output is what it wrote until then.
@@ -159,9 +179,10 @@ func RunBash(ctx context.Context, cwd string, env []string, args BashArgs, onOut
 
 // RunShell executes args.Command with sh in cwd. The whole process tree
 // (process group on Unix, job object on Windows) is killed when ctx is
-// canceled. At the timeout the command moves to the background as a job
-// of the session in env (ATTO_SESSION_ID) when it runs under a shell
-// host; otherwise it is killed.
+// canceled. Under a shell host, a command still running after the
+// foreground wait (10 seconds by default, up to 30) becomes a job of the
+// session in env (ATTO_SESSION_ID). Without a host or session, the command
+// is killed at its timeout instead (60 seconds by default, up to 30 minutes).
 func RunShell(ctx context.Context, sh shell.Shell, cwd string, env []string, args BashArgs, onOutput func(string)) BashResult {
 	return runShell(ctx, sh, cwd, env, args, onOutput, nil)
 }
@@ -218,10 +239,14 @@ func runHosted(ctx context.Context, sh shell.Shell, cwd string, env []string, se
 		}
 		return BashResult{}, false
 	}
-	timer := time.NewTimer(args.timeout())
+	limit := args.timeout()
+	if session != "" {
+		limit = args.foregroundWait()
+	}
+	timer := time.NewTimer(limit)
 	defer timer.Stop()
 
-	var res BashResult
+	res := BashResult{WaitLimit: limit}
 	done := ctx.Done()
 	detaching := "" // why a detach is pending
 	exited := false
@@ -319,7 +344,7 @@ func runDirect(ctx context.Context, sh shell.Shell, cwd string, env []string, ar
 		tree.Started()
 		err = cmd.Wait()
 	}
-	res := BashResult{Duration: time.Since(start)}
+	res := BashResult{Duration: time.Since(start), WaitLimit: args.timeout()}
 	w.mu.Lock()
 	res.Output = w.buf.String()
 	if w.dropped > 0 {
@@ -353,6 +378,10 @@ func (r BashResult) ForModel(args BashArgs) string {
 	if r.Job > 0 {
 		return r.backgroundForModel(args)
 	}
+	limit := r.WaitLimit
+	if limit == 0 {
+		limit = args.timeout()
+	}
 	out := truncateMiddle(tidy(r.Output))
 	var b strings.Builder
 	b.WriteString(out)
@@ -363,9 +392,9 @@ func (r BashResult) ForModel(args BashArgs) string {
 	case r.Canceled:
 		b.WriteString("[canceled by user]")
 	case r.TimedOut && r.Note != "":
-		fmt.Fprintf(&b, "[timed out after %s and killed: it could not move to the background (%s)]", args.timeout(), r.Note)
+		fmt.Fprintf(&b, "[timed out after %s and killed: it could not move to the background (%s)]", limit, r.Note)
 	case r.TimedOut:
-		fmt.Fprintf(&b, "[timed out after %s; pass a larger timeout if the command needs more time]", args.timeout())
+		fmt.Fprintf(&b, "[timed out after %s; pass a larger timeout if the command needs more time]", limit)
 	case r.ExitCode != 0:
 		fmt.Fprintf(&b, "[exit code %d]", r.ExitCode)
 	case out == "":
@@ -397,7 +426,11 @@ func (r BashResult) backgroundForModel(args BashArgs) string {
 	case BackgroundUser:
 		fmt.Fprintf(&b, "[the user moved this command to the background after %s; it is still running as job %d%s.", r.Duration.Round(time.Second), r.Job, shown)
 	default:
-		fmt.Fprintf(&b, "[still running after %s; moved to the background as job %d%s.", args.timeout(), r.Job, shown)
+		limit := r.WaitLimit
+		if limit == 0 {
+			limit = args.foregroundWait()
+		}
+		fmt.Fprintf(&b, "[still running after %s; moved to the background as job %d%s.", limit, r.Job, shown)
 	}
 	fmt.Fprintf(&b, " You will get an [atto event] when it exits. Output: atto job output %d · stop: atto job kill %d]", r.Job, r.Job)
 	return b.String()

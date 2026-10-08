@@ -79,3 +79,25 @@ func TestAgentTemplateNames(t *testing.T) {
 		}
 	}
 }
+
+func TestShellForegroundWaitContract(t *testing.T) {
+	for _, kind := range []string{"bash", "powershell", "cmd"} {
+		t.Run(kind, func(t *testing.T) {
+			tool := Render("bash_tool", map[string]any{"Kind": kind})
+			for _, want := range []string{"default 10 seconds, maximum 30", "background job", "atto job wait <id> -timeout 10m", "Without a shell host or session", "default 60 seconds, maximum 30 minutes"} {
+				if !strings.Contains(tool, want) {
+					t.Errorf("tool prompt lacks %q: %s", want, tool)
+				}
+			}
+			system := Render("system", System{Kind: kind, Tool: kind})
+			for _, want := range []string{"10 seconds by default", "at most 30 seconds", "atto job wait <id> -timeout 10m", "Without a shell host or session", "default 60 seconds, maximum 30 minutes"} {
+				if !strings.Contains(system, want) {
+					t.Errorf("system prompt lacks %q: %s", want, system)
+				}
+			}
+			if strings.Contains(system, "set timeout for longer builds") {
+				t.Error("system prompt still suggests a longer foreground wait for builds")
+			}
+		})
+	}
+}

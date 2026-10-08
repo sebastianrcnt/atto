@@ -222,7 +222,7 @@ To use the terminal's own selection instead, hold the key that bypasses mouse re
 
 ## How it works
 
-**One tool.** The model works through a single shell tool: bash on macOS and Linux, PowerShell on Windows. Everything else is a command it can run:
+**One tool.** The model works through a single shell tool: bash on macOS and Linux, PowerShell on Windows. Hosted commands wait in the foreground for 10 seconds by default; the model can set `timeout` up to 30 seconds. A command still running then becomes a background job, with its id and output so far returned to the model. Long builds and tests keep running: the model can use `atto job wait <id> -timeout 10m`, read `atto job output <id>`, or wait for the exit event. `run_in_background` starts a job immediately; `Ctrl+B` still moves the running command to a job at once. Without a shell host or session, commands cannot detach and retain the kill timeout (60 seconds by default, up to 30 minutes). Everything else is a command it can run:
 
 - `atto history grep` searches the session transcript, including turns that were compacted away.
 - `atto job start` runs a command in the background. With `-notify REGEXP` (and `-notify-limit N`, default 50) each matching output line wakes the agent while the job keeps running; matches within a second are batched.

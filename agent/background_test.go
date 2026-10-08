@@ -75,7 +75,7 @@ func TestRunInBackgroundNeedsSession(t *testing.T) {
 	}
 }
 
-// A command still running at its timeout becomes a job: the same
+// A command still running after its foreground wait becomes a job: the same
 // process, its output so far reported and kept in the job log, which goes
 // on to the end.
 func TestTimeoutMovesCommandToBackground(t *testing.T) {
@@ -87,7 +87,7 @@ func TestTimeoutMovesCommandToBackground(t *testing.T) {
 	if d := time.Since(start); d > 2500*time.Millisecond {
 		t.Fatalf("returned after %s, not at the timeout", d)
 	}
-	if res.Job != 1 || res.Background != BackgroundTimeout || res.TimedOut || res.Output != "before\n" || streamed.String() != "before\n" {
+	if res.Job != 1 || res.Background != BackgroundTimeout || res.WaitLimit != time.Second || res.TimedOut || res.Output != "before\n" || streamed.String() != "before\n" {
 		t.Fatalf("%+v (streamed %q)", res, streamed.String())
 	}
 	out := res.ForModel(args)
@@ -110,7 +110,7 @@ func TestTimeoutMovesCommandToBackground(t *testing.T) {
 		t.Fatalf("job log %q", log)
 	}
 	evs := waitEvent(t, s)
-	if len(evs) != 1 || !strings.Contains(evs[0].Text, "exited with code 4") || !strings.Contains(evs[0].Text, "after") {
+	if len(evs) != 1 || !events.Wakes(evs) || !strings.Contains(evs[0].Text, "exited with code 4") || !strings.Contains(evs[0].Text, "after") {
 		t.Fatalf("event %+v", evs)
 	}
 }
