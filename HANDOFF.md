@@ -1,58 +1,58 @@
-# Handoff — 2026-10-09
+# Handoff — 2026-10-09 (night)
 
-State when this was written: `main` = `150ed3d` (pushed); the locally installed `atto` was built from it. Open issue: **#31**
-(cmd.exe quoting). #32 is closed (CI run 37821095567 green on Linux, macOS, Windows). Nothing is running; agent `/root/yield` was
-closed and its branch deleted. The refactor commits below have not been through CI yet; the nightly run will cover them.
+State when this was written: `main` = `a59521f` (pushed); the locally installed `atto` was built from it. Nothing is running;
+agents `/root/split2`, `/root/split3` and `/root/split4` are closed and their branches deleted. Open issues: none from tonight.
 
-## What was done today
+## Engine / front-end split (done tonight)
 
-| Area | Commits / issues |
-|---|---|
-| Shell yield (#32, Codex-style) | `653074e`: a hosted model command waits 10 s (the model may ask for up to 30 s), then becomes a job. Without a shell host or session the old kill timeout applies (60 s, max 30 min). `!` commands keep their long wait. `e10e149`: a **user interrupt** (Esc, Ctrl+Enter, Ctrl+C in a turn, exit-menu cancel, remote `turn/interrupt`, `atto agent interrupt`) detaches a running hosted command into a job instead of killing it. The cause is `agent.ErrUserInterrupt`, passed through `context.WithCancelCause`. Such a job exits "quietly" (`Job.QuietExit`): its event does not wake an idle session. Quit, shutdown, `-p`, hooks and direct runs still kill. `atto agent interrupt` now writes a per-turn request file (`agentstate/interrupt.go`) that the worker watches |
-| Request log | `ab448b1`: `~/.atto/logs/requests.log` (JSONL, rotates at 2 MB to `.1`) records `retry`, `failed` and `recovered` model requests. Each line has the session, model, error, wait, elapsed time and connection (`ai.WithConnTrace`: local/remote address, reused, idle ms). Requests that succeed on the first try are not logged |
-| Network resilience | `f88404a`: model requests use a shared transport (`ai/connections.go`) with HTTP/2 health checks (15 s, ping timeout 5 s) and a 30 s idle timeout. A response read that stays silent for 120 s fails with `ai.ErrStreamStalled`. After a connection-level error, the retry loop calls `ai.ResetConnections()` so the next attempt dials fresh. Prompted by repeated OpenAI errors when the Mac moved from Wi-Fi to Ethernet. The real network switch was not reproduced |
-| #32 follow-up | `a79ffa2`: `atto agent interrupt` force-stops a worker that does not stop within 10 s (old kill path); `jobs.Host.DetachQuiet` replaces the variadic flag |
-| Refactor | `80ef8c0`: `agent/agent.go` split (879 lines) into `stream.go` (retries, overflow recovery), `turn.go`, `compact.go`, `tools.go`; no behaviour change. `150ed3d`: `core.TurnRunner[T]` (`core/turn.go`) holds busy state, cancel cause (`Interrupt` = user stop), steers, queued follow-ups, `Settle` (TUI end-of-turn policy), inbox-event delivery rules and the print/worker boundary inbox; used by the TUI, server, `-p` and workers. Smoke-tested with a real model: a 13 s command yielded at 10 s and the model waited for the job |
-| Issues | #31 filed (cmd.exe gets `\"`-escaped scripts; reproduced on winvm before it went down) |
+The user's request: separate execution from front ends, so any client (TUI, web, others) attaches and detaches and atto can run
+without its TUI, the way Codex's app-server does. Design and per-phase status: `docs/tui-as-client.md`. Protocol reference for
+client authors: `docs/protocol.md`. Reference implementation: `archive/atto2` (`1a9dc7a`).
+
+| Phase | Commits | What |
+|---|---|---|
+| 1 contract + runtime | `177199d`, `2a3af83`, `0086a01` | protocol revisions (`protocolVersions`, Codex-shaped `initialize`/`initialized`, `data.reason`); one event hub for every transport; `server.Client`/`Connect`; the session runtime (`server/runtime.go` and friends) owns execution: input, steer, queue, interrupts (#32 semantics), goals, prompts, shell, tree, inbox |
+| 2 TUI as client | `c4a881f`, `e43c781`, `59b30f8` | App owns no agent/writer/hooks/extensions/MCP/goal/inbox; it renders runtime notifications. `server.Live` is gone; `/remote` is `server.Scope` over the same runtime; the frozen web client is unchanged |
+| 3 workers | `d773cfc`, `2b138cb`, `7a9f540` | with the daemon each session runs in a worker (`atto _session-server`, unix socket); the TUI, panes, `atto connect`, app-server, serve, `/remote` and `-p` on a live session are its clients. Exit/Ctrl+D detaches; an unattended idle worker retires after 1 min; `/close` ends it; crash → reconnect. `ATTO_NO_DAEMON=1`/Windows: in-process as before |
+| 4 transports + docs | `4b6a948`, `d4fcfae`, `a59521f` | `atto app-server --listen stdio:// \| unix:///path \| ws://IP:PORT` (hand-written RFC 6455, bearer token off loopback, Origin check, `--allow-origin`); `atto serve` has `/ws`; `docs/protocol.md` (tests keep it in step with the dispatcher); `examples/clients/stdio.py` and `index.html` |
+
+Fixes made while verifying (direct commits): `shutdown` read thread state outside the UI lock (race); test races; `TestAgentRefusals`
+flake; extension watchdog test flake; **an old daemon left running across an upgrade**: the new binary now runs in-process while
+it runs (`daemon.Usable`) and still lists/attaches/kills/stops its panes (pane ops downgrade the protocol; execution ops never do);
+SIGTERM shuts app-server/serve down cleanly.
+
+Verified live (isolated `ATTO_DIR`, real model) for every phase: `-p`, `-p` with a 12 s command, app-server turns, TUI with and
+without the daemon (`scratchpad/smoke.sh`), steer, Esc detaching a running command into a job, `!`, `/jobs`, `/context`, `/model`,
+`/clear` + `/resume`, `/remote` RPC+SSE; detach mid-turn then `atto connect`; app-server `thread/resume` of the TUI's session with
+the turn appearing in the TUI; 1-minute retirement; `/close`; `kill -9` of a worker → "Reconnected."; ws turn with and without token;
+unix socket 0600 and removed on exit. CI was green after phase 3; the run after phase 4 was started at the end of the night.
 
 ## Things to know
 
-- **The model-facing shell contract changed:** long commands become jobs after 10 to 30 s. The tool schema, `prompts/bash_tool.md`,
-  `prompts/system.md`, README and the golden files were updated. Watch live runs for models that poll badly or misread the job message.
-- **Codex comparison (from source, openai/codex `e9e6cf6`):**
-  - unified exec yields after `yield_time_ms` (10 s default, 250 ms to 30 s);
-  - an interrupt does not kill background terminals;
-  - `/ps` lists them and `/stop` stops them;
-  - the model polls with `write_stdin`.
-
-  atto's equivalents are `/jobs` and `/stop`, plus exit events instead of polling.
-- **VMs:** linuxvm and winvm are both down, and the user wants them skipped. Windows coverage is `GOOS=windows go vet` plus CI
-  (nightly at 03:00 KST, or `gh workflow run ci.yml`).
-- Earlier notes still hold (see the 2026-10-08 handoff in git history):
-  - the state directory migration;
-  - the "subagent" compatibility names, which must stay while the frozen web client is in use;
-  - hook approvals by content hash;
-  - Windows job objects;
-  - atto2 is archived.
+- **The user's real daemon is still the old version** (protocol 2, several panes). Until it stops, new `atto` prints
+  "running without the daemon" and runs in-process; `atto attach` still reaches the old panes. After closing those panes,
+  `atto daemon stop -force` switches to workers.
+- **Behaviour changes on purpose:** switching away from a busy session (/clear, /resume, /new) no longer cancels it; in daemon
+  mode exit detaches instead of ending the session (use `/close`).
+- **Known limits** (documented in tui-as-client.md): a crashed worker restores only saved session state (unsaved queued input
+  and in-flight extension prompts are lost); the daemon's worker registry is in memory (workers orphaned by a daemon crash are not
+  adopted; leases still prevent a second writer); no durable input journal; no full Codex-dialect adapter; WS reconnect is
+  snapshot-based.
+- **`atto agent` execution was deliberately not moved** onto workers (phase H). It is used constantly; move it only with care.
+- A fresh `ATTO_DIR` picks the first available model until the catalog cache exists (old behaviour, not a regression).
+- VMs (linuxvm, winvm) are down; Windows coverage is `GOOS=windows go vet` plus CI.
 
 ## Not done / open decisions
 
-1. **#31 cmd.exe quoting:** proposed fix: set `SysProcAttr.CmdLine` raw for `Cmd`, and route `config/resolve_config_value.go`'s
-   `cmd /C` through the shell package. That path affects `!command` config values even on machines with PowerShell.
-2. **`-m` / `enabled` restrictions for `atto agent`:** still undecided. See the 2026-10-08 handoff.
-3. **Request log scope:** it logs only problems. An "all requests" mode (e.g. `debug.requestLog: "all"`) was offered but not asked for.
-4. **Network:** a third option is to watch macOS route changes and reset the pool at once. It was deferred until `requests.log`
-   shows whether health checks and the reset are enough.
-5. **Front-end differences the turn runner kept on purpose or by accident** (decide whether to unify):
-   the daemon keeps uncommitted steers for its next turn instead of the TUI's `Settle` (possibly accidental); daemon steers do not
-   wake `atto sleep` / `atto job wait` (TUI ones do); the daemon steers events into any busy work, the TUI holds them during
-   compaction; the daemon's RPC interrupt uses the user-interrupt cause even for compaction; the daemon rejects queued follow-ups.
-6. **Estimates are heuristics** (`estimateChars`). Compaction on a one-message conversation costs one extra request. Both unchanged.
+1. Phase H: `atto agent spawn/task/wait` through workers; durable accepted-input journaling and request dedupe.
+2. `-m` / `enabled` restrictions for `atto agent`; request log "all" mode; macOS route-change pool reset (all still undecided).
+3. Lazy transcript display loading for huge sessions (the display path still loads the whole active branch).
 
 ## How the work is done
 
 - Implementation goes to `atto agent spawn NAME "<brief>" -worktree -m openai/gpt-6.1-sol -effort high`, run from a plain shell.
-  Follow-ups go to the same agent with `atto agent task NAME "..."`, one turn per step with a review in between. Briefs live in
-  `/tmp/atto-runs/` (`common2.txt` holds the shared rules). They are not in the repo.
-- Small, well-understood changes may be done directly when the user asks ("네가 해").
+  Briefs live in `/tmp/atto-runs/` (`common2.txt`, `w12_common.txt`, `w12_phase*.txt`). gpt-6.1-sol tends to stop after part of a
+  brief: end briefs with "you alone do all of it in this turn".
+- Before merging: full checks, `-race` on touched packages, a build in the scratchpad, `smoke.sh BINARY` (SMOKE OK), then live
+  checks of what changed.
 - Sources of truth: the GitHub issues and the memory directory `~/.claude/projects/-Volumes-t5-atto/memory/`.
