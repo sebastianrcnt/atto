@@ -1,4 +1,4 @@
-package subagent
+package agentstate
 
 import (
 	"os"
@@ -94,7 +94,7 @@ func TestStateUniqueAndTurnStatus(t *testing.T) {
 		t.Fatal("bad name saved")
 	}
 	if _, err := Load("p1", "b"); err == nil {
-		t.Fatal("loaded a missing subagent")
+		t.Fatal("loaded a missing agent")
 	}
 	got, err := Load("p1", "a")
 	if err != nil || got.Latest().Status != Idle {

@@ -12,10 +12,10 @@ import (
 	"time"
 
 	"github.com/sebastianrcnt/atto/agent"
+	"github.com/sebastianrcnt/atto/agentstate"
 	"github.com/sebastianrcnt/atto/config"
 	"github.com/sebastianrcnt/atto/fsutil"
 	"github.com/sebastianrcnt/atto/session"
-	"github.com/sebastianrcnt/atto/subagent"
 )
 
 func externalParentPath() (string, string, error) {
@@ -84,7 +84,7 @@ func externalParent(out io.Writer, create bool) (string, func(), error) {
 }
 
 func forgetExternalParent(parent string) error {
-	if len(subagent.List(parent)) != 0 {
+	if len(agentstate.List(parent)) != 0 {
 		return nil
 	}
 	p, err := session.Find(parent)

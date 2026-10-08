@@ -12,11 +12,11 @@ import (
 	"strings"
 
 	"github.com/sebastianrcnt/atto/agent"
+	"github.com/sebastianrcnt/atto/agentstate"
 	"github.com/sebastianrcnt/atto/config"
 	"github.com/sebastianrcnt/atto/extensions"
 	"github.com/sebastianrcnt/atto/mcp"
 	"github.com/sebastianrcnt/atto/skills"
-	"github.com/sebastianrcnt/atto/subagent"
 )
 
 // Origin says where the model or effort in use came from.
@@ -49,14 +49,14 @@ type Loaded struct {
 	// MCPIgnored is a <project>/.atto/mcp.json that is not read.
 	MCPIgnored string       `json:"mcp_ignored,omitempty"`
 	Config     []ConfigFile `json:"config"`
-	// Subagents says whether atto agent is on, and Presets are the
-	// presets it starts subagents from (listed in the prompt when on).
-	Subagents      bool              `json:"subagents"`
-	Presets        []subagent.Preset `json:"subagent_presets,omitempty"`
-	PresetWarnings []string          `json:"subagent_preset_warnings,omitempty"`
-	Model          Choice            `json:"model"`
-	Effort         Choice            `json:"effort"`
-	Prompt         Prompt            `json:"system_prompt"`
+	// Agents says whether atto agent is on, and Presets are the
+	// presets it starts agents from (listed in the prompt when on).
+	Agents         bool                `json:"subagents"`
+	Presets        []agentstate.Preset `json:"subagent_presets,omitempty"`
+	PresetWarnings []string            `json:"subagent_preset_warnings,omitempty"`
+	Model          Choice              `json:"model"`
+	Effort         Choice              `json:"effort"`
+	Prompt         Prompt              `json:"system_prompt"`
 	// Context is what else goes to the model besides the system prompt
 	// and the conversation: the tool schema, how images are sent, hook
 	// output.
@@ -216,10 +216,10 @@ func Collect(ag *agent.Agent, hookSrc []config.HookSource, modelFrom, effortFrom
 
 	l.Config = configFiles(src.Cwd)
 
-	if st, _ := config.LoadSettings(); st.SubagentsEnabled() {
-		l.Subagents = true
+	if st, _ := config.LoadSettings(); st.AgentsEnabled() {
+		l.Agents = true
 	}
-	l.Presets, l.PresetWarnings = subagent.LoadPresets(subagent.Dirs(src.Cwd, agent.ProjectRoot(src.Cwd)))
+	l.Presets, l.PresetWarnings = agentstate.LoadPresets(agentstate.Dirs(src.Cwd, agent.ProjectRoot(src.Cwd)))
 
 	m, effort := ag.Current()
 	l.Model = Choice{Name: "none", Origin: modelFrom}
@@ -264,8 +264,8 @@ func Collect(ag *agent.Agent, hookSrc []config.HookSource, modelFrom, effortFrom
 		l.Prompt.Parts = append(l.Prompt.Parts, Part{Name: "MCP servers", Detail: "one line naming " + strings.Join(names, ", ") + "; used through atto mcp in the shell"})
 	}
 
-	if l.Subagents {
-		l.Prompt.Parts = append(l.Prompt.Parts, Part{Name: "subagents", Detail: "atto agent and " + plural(len(l.Presets), "preset")})
+	if l.Agents {
+		l.Prompt.Parts = append(l.Prompt.Parts, Part{Name: "agents", Detail: "atto agent and " + plural(len(l.Presets), "preset")})
 	}
 
 	tool := ag.Shell.ToolName()
@@ -493,7 +493,7 @@ func (l Loaded) Summary() []Row {
 		rows = append(rows, Row{"MCP", "ignored: " + ShortPath(l.MCPIgnored)})
 	}
 
-	if l.Subagents { // off by default: no row then
+	if l.Agents { // off by default: no row then
 		var names []string
 		for _, p := range l.Presets {
 			names = append(names, p.Name)
@@ -677,7 +677,7 @@ func (l Loaded) Details() []Section {
 	out = append(out, s)
 
 	s = Section{Title: "Agent roles (atto agent)"}
-	if !l.Subagents {
+	if !l.Agents {
 		s.Title += " · off: \"agents\": {\"enabled\": true} in " + ShortPath(config.SettingsPath()) + " turns them on"
 	}
 	for _, p := range l.Presets {

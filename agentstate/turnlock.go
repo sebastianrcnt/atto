@@ -1,4 +1,4 @@
-package subagent
+package agentstate
 
 import (
 	"os"

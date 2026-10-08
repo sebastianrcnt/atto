@@ -16,12 +16,12 @@ import (
 	"time"
 
 	"github.com/sebastianrcnt/atto/agent"
+	"github.com/sebastianrcnt/atto/agentstate"
 	"github.com/sebastianrcnt/atto/config"
 	"github.com/sebastianrcnt/atto/core"
 	"github.com/sebastianrcnt/atto/events"
 	"github.com/sebastianrcnt/atto/jobs"
 	"github.com/sebastianrcnt/atto/session"
-	"github.com/sebastianrcnt/atto/subagent"
 	"github.com/sebastianrcnt/atto/tui"
 )
 
@@ -121,7 +121,7 @@ func RunAgent(args []string, out io.Writer) error {
 			override = true
 		}
 	})
-	if override && (os.Getenv("ATTO_SESSION_ID") != "" || config.InAgent() || config.InSubagent()) {
+	if override && (os.Getenv("ATTO_SESSION_ID") != "" || config.InAgent() || config.InAgentCommand()) {
 		return fmt.Errorf("-m and -effort are for external callers only; inside atto use -role")
 	}
 	switch sub {
@@ -135,12 +135,12 @@ func RunAgent(args []string, out io.Writer) error {
 	}
 	switch sub {
 	case "spawn", "task", "send":
-		if !settings.SubagentsEnabled() {
+		if !settings.AgentsEnabled() {
 			return fmt.Errorf(`agents are off. Only the user can turn them on: "agents": {"enabled": true} in %s`, config.SettingsPath())
 		}
 	}
 	if *session == "" {
-		if config.InAgent() || config.InSubagent() { // atto's own commands always name their session
+		if config.InAgent() || config.InAgentCommand() { // atto's own commands always name their session
 			return requireSession(*session)
 		}
 		parentOut := out
@@ -178,7 +178,7 @@ func RunAgent(args []string, out io.Writer) error {
 		return agentList(out, *session)
 	case "roles":
 		cwd, _ := os.Getwd()
-		presets, warns := subagent.LoadPresets(subagent.Dirs(cwd, agent.ProjectRoot(cwd)))
+		presets, warns := agentstate.LoadPresets(agentstate.Dirs(cwd, agent.ProjectRoot(cwd)))
 		for _, p := range presets {
 			src := "built-in"
 			if p.Path != "" {
@@ -191,9 +191,9 @@ func RunAgent(args []string, out io.Writer) error {
 		}
 		return nil
 	case "wait":
-		var cands []subagent.State
+		var cands []agentstate.State
 		if len(words) == 0 {
-			cands = subagent.List(*session)
+			cands = agentstate.List(*session)
 		}
 		for _, w := range words {
 			st, err := agentAt(*session, w)
@@ -212,7 +212,7 @@ func RunAgent(args []string, out io.Writer) error {
 
 	switch sub {
 	case "spawn":
-		if err := subagent.ValidName(addr); err != nil {
+		if err := agentstate.ValidName(addr); err != nil {
 			return err
 		}
 		if role == "" && args[0] == "start" && len(words) >= 2 && isPreset(words[0]) { // start NAME PRESET "task"
@@ -221,8 +221,8 @@ func RunAgent(args []string, out io.Writer) error {
 		if text == "" {
 			return fmt.Errorf(`give the agent its task: atto agent spawn %s "..."`, addr)
 		}
-		if d, maxd := subagent.Depth(*session), settings.AgentMaxDepth(); d >= maxd {
-			return fmt.Errorf("agents may nest %d deep (\"agents\": {\"maxDepth\": N} in settings.json raises it), and this session is %s: do the work yourself", maxd, subagent.PathOf(*session))
+		if d, maxd := agentstate.Depth(*session), settings.AgentMaxDepth(); d >= maxd {
+			return fmt.Errorf("agents may nest %d deep (\"agents\": {\"maxDepth\": N} in settings.json raises it), and this session is %s: do the work yourself", maxd, agentstate.PathOf(*session))
 		}
 		if role == "" {
 			role = "general"
@@ -255,17 +255,17 @@ func RunAgent(args []string, out io.Writer) error {
 		if err != nil {
 			return err
 		}
-		release, err := subagent.LockTurn(st.Parent, st.Name)
+		release, err := agentstate.LockTurn(st.Parent, st.Name)
 		if err != nil {
 			return err
 		}
 		defer release()
-		st, err = subagent.Load(st.Parent, st.Name)
+		st, err = agentstate.Load(st.Parent, st.Name)
 		if err != nil {
 			return err
 		}
-		from, to := subagent.PathOf(*session), subagent.PathOf(st.Session)
-		msg := subagent.Envelope(subagent.NewTask, from, to, text)
+		from, to := agentstate.PathOf(*session), agentstate.PathOf(st.Session)
+		msg := agentstate.Envelope(agentstate.NewTask, from, to, text)
 		if t := st.Latest(); t.Status.Active() || args[0] == "steer" {
 			if err := events.Push(st.Session, events.Event{Source: "agent", Text: msg, Title: "◆ new task from " + from}); err != nil {
 				return err
@@ -281,15 +281,15 @@ func RunAgent(args []string, out io.Writer) error {
 		if text == "" {
 			return fmt.Errorf(`usage: atto agent send AGENT "<text>"`)
 		}
-		t, err := subagent.Resolve(*session, addr)
+		t, err := agentstate.Resolve(*session, addr)
 		if err != nil {
 			return err
 		}
 		if t.Session == *session {
 			return errors.New("that is you: send messages to other agents")
 		}
-		from := subagent.PathOf(*session)
-		if err := events.Push(t.Session, events.Event{Source: "agent", Quiet: true, Text: subagent.Envelope(subagent.Message, from, t.Path, text), Title: "◆ message from " + from}); err != nil {
+		from := agentstate.PathOf(*session)
+		if err := events.Push(t.Session, events.Event{Source: "agent", Quiet: true, Text: agentstate.Envelope(agentstate.Message, from, t.Path, text), Title: "◆ message from " + from}); err != nil {
 			return err
 		}
 		when := "with its next turn"
@@ -309,21 +309,21 @@ var agentAliases = map[string]string{
 
 // agentAt is the agent addr names, seen from session: one that some
 // session started, not a root.
-func agentAt(session, addr string) (subagent.State, error) {
-	t, err := subagent.Resolve(session, addr)
+func agentAt(session, addr string) (agentstate.State, error) {
+	t, err := agentstate.Resolve(session, addr)
 	if err != nil {
-		return subagent.State{}, err
+		return agentstate.State{}, err
 	}
 	if t.State == nil {
-		return subagent.State{}, fmt.Errorf("%s is not an agent anyone started (message it with atto agent send %s)", t.Path, addr)
+		return agentstate.State{}, fmt.Errorf("%s is not an agent anyone started (message it with atto agent send %s)", t.Path, addr)
 	}
 	return *t.State, nil
 }
 
 func isPreset(name string) bool {
 	cwd, _ := os.Getwd()
-	presets, _ := subagent.LoadPresets(subagent.Dirs(cwd, agent.ProjectRoot(cwd)))
-	_, err := subagent.Find(presets, name)
+	presets, _ := agentstate.LoadPresets(agentstate.Dirs(cwd, agent.ProjectRoot(cwd)))
+	_, err := agentstate.Find(presets, name)
 	return err == nil
 }
 
@@ -333,12 +333,12 @@ func isPreset(name string) bool {
 // uncommitted changes and not force; its branch stays. Named agents are
 // all closed or none; -done closes those it can and errs about the rest.
 func agentRemove(out io.Writer, parent string, names []string, done, force bool) error {
-	var trees [][]subagent.State // each: an agent and its descendants, deepest first
+	var trees [][]agentstate.State // each: an agent and its descendants, deepest first
 	var refused []string
-	check := func(tree []subagent.State) error {
+	check := func(tree []agentstate.State) error {
 		for _, s := range tree {
 			if t := s.Latest(); t.Status.Active() {
-				return fmt.Errorf("agent %s is %s: interrupt it first (atto agent interrupt %s)", subagent.PathOf(s.Session), t.Status, subagent.PathOf(s.Session))
+				return fmt.Errorf("agent %s is %s: interrupt it first (atto agent interrupt %s)", agentstate.PathOf(s.Session), t.Status, agentstate.PathOf(s.Session))
 			}
 		}
 		for _, s := range tree {
@@ -352,7 +352,7 @@ func agentRemove(out io.Writer, parent string, names []string, done, force bool)
 	case done && len(names) > 0, !done && len(names) == 0:
 		return fmt.Errorf("usage: atto agent close AGENT... | atto agent close -done")
 	case done:
-		for _, s := range subagent.List(parent) {
+		for _, s := range agentstate.List(parent) {
 			tree := subtree(s)
 			if err := check(tree); err != nil {
 				if !strings.Contains(err.Error(), "interrupt it first") {
@@ -386,7 +386,7 @@ func agentRemove(out io.Writer, parent string, names []string, done, force bool)
 				blocked[s.Parent] = true
 				continue
 			}
-			path := subagent.PathOf(s.Session)
+			path := agentstate.PathOf(s.Session)
 			if s.Worktree != "" {
 				line, err := removeWorktree(s, force)
 				if err != nil {
@@ -401,7 +401,7 @@ func agentRemove(out io.Writer, parent string, names []string, done, force bool)
 					fmt.Fprintf(out, "warning: agent %s: archiving its session: %v\n", path, err)
 				}
 			}
-			subagent.Remove(s.Parent, s.Name)
+			agentstate.Remove(s.Parent, s.Name)
 			fmt.Fprintf(out, "closed agent %s (session %s archived)\n", path, s.Session)
 		}
 	}
@@ -412,17 +412,17 @@ func agentRemove(out io.Writer, parent string, names []string, done, force bool)
 }
 
 // subtree is s and the agents below it, deepest first.
-func subtree(s subagent.State) []subagent.State {
-	var out []subagent.State
-	for _, c := range subagent.List(s.Session) {
+func subtree(s agentstate.State) []agentstate.State {
+	var out []agentstate.State
+	for _, c := range agentstate.List(s.Session) {
 		out = append(out, subtree(c)...)
 	}
 	return append(out, s)
 }
 
-// checkWorktree refuses to remove a subagent whose worktree has
+// checkWorktree refuses to remove an agent whose worktree has
 // uncommitted changes, unless force.
-func checkWorktree(s subagent.State, force bool) error {
+func checkWorktree(s agentstate.State, force bool) error {
 	if force {
 		return nil
 	}
@@ -457,23 +457,23 @@ func contains(list []string, s string) bool {
 	return slices.Contains(list, s)
 }
 
-// agentStart creates subagent name from preset and starts its first turn.
+// agentStart creates agent name from preset and starts its first turn.
 func agentStart(out io.Writer, settings config.Settings, parent, name, preset, task, model, effortOverride string, useWorktree bool) error {
-	release, err := subagent.StartWork(parent)
+	release, err := agentstate.StartWork(parent)
 	if err != nil {
 		return err
 	}
 	defer release()
 
 	if task == "" {
-		return fmt.Errorf("give the subagent its task: atto agent start %s %s \"...\"", name, preset)
+		return fmt.Errorf("give the agent its task: atto agent start %s %s \"...\"", name, preset)
 	}
 	cwd, err := os.Getwd()
 	if err != nil {
 		return err
 	}
-	presets, _ := subagent.LoadPresets(subagent.Dirs(cwd, agent.ProjectRoot(cwd)))
-	p, err := subagent.Find(presets, preset)
+	presets, _ := agentstate.LoadPresets(agentstate.Dirs(cwd, agent.ProjectRoot(cwd)))
+	p, err := agentstate.Find(presets, preset)
 	if err != nil {
 		return err
 	}
@@ -488,14 +488,14 @@ func agentStart(out io.Writer, settings config.Settings, parent, name, preset, t
 		p.Effort = effortOverride
 	}
 	pm, pe := sessionModel(parent)
-	ref, effort, err := subagentModel(models, settings, p, pm, pe)
+	ref, effort, err := agentModel(models, settings, p, pm, pe)
 	if err != nil {
 		return err
 	}
 	var wt worktree
 	if useWorktree {
-		if _, err := subagent.Load(parent, name); err == nil {
-			return fmt.Errorf("a subagent named %q exists: give it a follow-up with atto agent next %s, or pick another name", name, name)
+		if _, err := agentstate.Load(parent, name); err == nil {
+			return fmt.Errorf("an agent named %q exists: give it a follow-up with atto agent next %s, or pick another name", name, name)
 		}
 		if wt, err = planWorktree(cwd, parent, name); err != nil {
 			return err
@@ -510,13 +510,13 @@ func agentStart(out io.Writer, settings config.Settings, parent, name, preset, t
 			wt.undo()
 		}
 	}
-	w := session.NewSubagent(cwd, parent)
-	st := subagent.State{
+	w := session.NewAgent(cwd, parent)
+	st := agentstate.State{
 		Name: name, Parent: parent, Session: w.ID, Preset: p.Name, Instructions: p.Instructions,
 		Model: ref.String(), Effort: effort, Cwd: cwd, Task: task, Created: time.Now(),
 		Worktree: wt.Path, Branch: wt.Branch, Base: wt.Base, Repo: wt.Repo,
 	}
-	if err := subagent.Create(st); err != nil {
+	if err := agentstate.Create(st); err != nil {
 		undo()
 		return err
 	}
@@ -524,16 +524,16 @@ func agentStart(out io.Writer, settings config.Settings, parent, name, preset, t
 	w.Append(session.Entry{Type: session.TypeName, Name: name})
 	w.Close()
 	if err := w.Err(); err != nil {
-		subagent.Remove(parent, name)
+		agentstate.Remove(parent, name)
 		undo()
 		return err
 	}
 	if err := startTurnLocked(&st, task); err != nil {
-		subagent.Remove(parent, name)
+		agentstate.Remove(parent, name)
 		undo()
 		return err
 	}
-	fmt.Fprintf(out, "agent %s started (session %s, %s · %s, role %s, job %d).\n", subagent.PathOf(st.Session), st.Session, st.Model, orDash(effort), p.Name, st.Job)
+	fmt.Fprintf(out, "agent %s started (session %s, %s · %s, role %s, job %d).\n", agentstate.PathOf(st.Session), st.Session, st.Model, orDash(effort), p.Name, st.Job)
 	if useWorktree {
 		fmt.Fprintf(out, "It works in worktree %s on branch %s (from %.7s); atto agent close %s removes the worktree and keeps the branch.\n", st.Worktree, st.Branch, st.Base, name)
 	}
@@ -550,8 +550,8 @@ func orDash(s string) string {
 
 // startTurn starts the next turn of st with message text, as a job of the
 // parent session, and saves st.
-func startTurn(st *subagent.State, text string) error {
-	release, err := subagent.StartWork(st.Session)
+func startTurn(st *agentstate.State, text string) error {
+	release, err := agentstate.StartWork(st.Session)
 	if err != nil {
 		return err
 	}
@@ -559,14 +559,14 @@ func startTurn(st *subagent.State, text string) error {
 	return startTurnLocked(st, text)
 }
 
-func startTurnLocked(st *subagent.State, text string) error {
+func startTurnLocked(st *agentstate.State, text string) error {
 	exe, err := os.Executable()
 	if err != nil {
 		return err
 	}
 	st.Turns++
 	st.Prompt, st.Job = text, 0
-	if err := subagent.Save(*st); err != nil {
+	if err := agentstate.Save(*st); err != nil {
 		return err
 	}
 	args := []string{exe, "_agent-turn", "-session", st.Parent, st.Name, fmt.Sprint(st.Turns)}
@@ -575,7 +575,7 @@ func startTurnLocked(st *subagent.State, text string) error {
 		return fmt.Errorf("starting agent %s: %w", st.Name, err)
 	}
 	st.Job = j.ID
-	return subagent.Save(*st)
+	return agentstate.Save(*st)
 }
 
 // sessionModel is the model (provider/id) and effort session id last
@@ -600,12 +600,12 @@ func sessionModel(id string) (model, effort string) {
 	return model, effort
 }
 
-// subagentModel picks an agent's model and effort: its role's, else
+// agentModel picks an agent's model and effort: its role's, else
 // settings.json's agents.model and .effort, else what the parent
 // session uses. A model or effort named in a preset or the settings must
 // exist; one inherited from the parent that the model doesn't offer gives
 // way to the default.
-func subagentModel(models config.ModelsFile, settings config.Settings, p subagent.Preset, parentModel, parentEffort string) (config.ModelRef, string, error) {
+func agentModel(models config.ModelsFile, settings config.Settings, p agentstate.Preset, parentModel, parentEffort string) (config.ModelRef, string, error) {
 	cfgModel, cfgEffort := settings.AgentDefaults()
 	model, from := p.Model, "role "+p.Name
 	if model == "" && cfgModel != "" {
@@ -642,10 +642,10 @@ func subagentModel(models config.ModelsFile, settings config.Settings, p subagen
 
 // takeFinalAnswer removes from parent's inbox the final answers of st that
 // wait there: its report says the same, once.
-func takeFinalAnswer(parent string, st subagent.State) {
+func takeFinalAnswer(parent string, st agentstate.State) {
 	evs := events.Drain(parent)
 	var keep []events.Event
-	mark := "◆ agent " + subagent.PathOf(st.Session) + " "
+	mark := "◆ agent " + agentstate.PathOf(st.Session) + " "
 	for _, e := range evs {
 		if e.Source == "agent" && strings.HasPrefix(e.Title, mark) {
 			continue
@@ -657,19 +657,19 @@ func takeFinalAnswer(parent string, st subagent.State) {
 
 // agentWait blocks until the first of cands that is running ends, then
 // prints its report.
-func agentWait(out io.Writer, parent string, cands []subagent.State, timeout time.Duration, jsonOut bool) error {
+func agentWait(out io.Writer, parent string, cands []agentstate.State, timeout time.Duration, jsonOut bool) error {
 	if len(cands) == 1 && !cands[0].Latest().Status.Active() {
 		takeFinalAnswer(parent, cands[0])
 		return writeAgentReport(out, cands[0], jsonOut) // already over
 	}
-	var running []subagent.State
+	var running []agentstate.State
 	for _, s := range cands {
 		if s.Latest().Status.Active() {
 			running = append(running, s)
 		}
 	}
 	if len(running) == 0 {
-		return fmt.Errorf("no subagent is running (see atto agent list)")
+		return fmt.Errorf("no agent is running (see atto agent list)")
 	}
 	start := time.Now()
 	for {
@@ -691,7 +691,7 @@ func agentWait(out io.Writer, parent string, cands []subagent.State, timeout tim
 	}
 }
 
-func stateNames(sts []subagent.State) string {
+func stateNames(sts []agentstate.State) string {
 	var names []string
 	for _, s := range sts {
 		names = append(names, s.Name)
@@ -700,11 +700,11 @@ func stateNames(sts []subagent.State) string {
 }
 
 // agentReport is what atto agent report prints: a status line and the
-// subagent's last message.
-func agentReport(st subagent.State) string {
+// agent's last message.
+func agentReport(st agentstate.State) string {
 	t := st.Latest()
 	var b strings.Builder
-	fmt.Fprintf(&b, "agent %s · turn %d %s", subagent.PathOf(st.Session), t.N, t.Status)
+	fmt.Fprintf(&b, "agent %s · turn %d %s", agentstate.PathOf(st.Session), t.N, t.Status)
 	if d := t.Duration(); d > 0 {
 		fmt.Fprintf(&b, " · %s", tui.FormatDuration(d))
 	}
@@ -734,7 +734,7 @@ func agentReport(st subagent.State) string {
 }
 
 // writeAgentReport keeps the machine report independent of text formatting.
-func writeAgentReport(out io.Writer, st subagent.State, jsonOut bool) error {
+func writeAgentReport(out io.Writer, st agentstate.State, jsonOut bool) error {
 	if !jsonOut {
 		_, err := fmt.Fprint(out, agentReport(st))
 		return err
@@ -746,26 +746,26 @@ func writeAgentReport(out io.Writer, st subagent.State, jsonOut bool) error {
 	}
 	t := st.Latest()
 	return json.NewEncoder(out).Encode(struct {
-		Name     string          `json:"name"`
-		Status   subagent.Status `json:"status"`
-		Turn     int             `json:"turn"`
-		Duration float64         `json:"duration"`
-		Tokens   tokens          `json:"tokens"`
-		Cost     float64         `json:"cost,omitempty"`
-		Session  string          `json:"session"`
-		Model    string          `json:"model"`
-		Message  string          `json:"message"`
-		Error    string          `json:"error,omitempty"`
-		Worktree string          `json:"worktree,omitempty"`
-		Branch   string          `json:"branch,omitempty"`
+		Name     string            `json:"name"`
+		Status   agentstate.Status `json:"status"`
+		Turn     int               `json:"turn"`
+		Duration float64           `json:"duration"`
+		Tokens   tokens            `json:"tokens"`
+		Cost     float64           `json:"cost,omitempty"`
+		Session  string            `json:"session"`
+		Model    string            `json:"model"`
+		Message  string            `json:"message"`
+		Error    string            `json:"error,omitempty"`
+		Worktree string            `json:"worktree,omitempty"`
+		Branch   string            `json:"branch,omitempty"`
 	}{st.Name, t.Status, t.N, t.Duration().Seconds(), tokens{t.PromptTokens, t.CachedTokens, t.OutputTokens}, t.Cost, st.Session, st.Model, session.LastAssistant(st.Session), t.Error, st.Worktree, st.Branch})
 }
 
 func agentList(out io.Writer, parent string) error {
-	var rows []subagent.State
+	var rows []agentstate.State
 	var walk func(p string)
 	walk = func(p string) {
-		for _, s := range subagent.List(p) {
+		for _, s := range agentstate.List(p) {
 			rows = append(rows, s)
 			walk(s.Session)
 		}
@@ -783,14 +783,14 @@ func agentList(out io.Writer, parent string) error {
 		if t.Duration() > 0 {
 			d = tui.FormatDuration(t.Duration())
 		}
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n", subagent.PathOf(s.Session), s.Preset, s.Model, t.Status, d, tui.Truncate(tui.FirstLine(s.Task), 60, "…"))
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n", agentstate.PathOf(s.Session), s.Preset, s.Model, t.Status, d, tui.Truncate(tui.FirstLine(s.Task), 60, "…"))
 	}
 	if err := tw.Flush(); err != nil {
 		return err
 	}
 	for _, s := range rows {
 		if s.Worktree != "" {
-			fmt.Fprintf(out, "%s: worktree %s · branch %s\n", subagent.PathOf(s.Session), s.Worktree, s.Branch)
+			fmt.Fprintf(out, "%s: worktree %s · branch %s\n", agentstate.PathOf(s.Session), s.Worktree, s.Branch)
 		}
 	}
 	return nil
@@ -802,10 +802,10 @@ type ExitCode int
 
 func (e ExitCode) Error() string { return fmt.Sprintf("exit status %d", int(e)) }
 
-// RunAgentTurn is the hidden entry point of a subagent's turn (atto
+// RunAgentTurn is the hidden entry point of an agent's turn (atto
 // _agent-turn -session <parent> <name> <turn>), started by atto agent as
 // a job of the parent session. It waits for a slot, runs the turn as
-// atto -p resuming the subagent's session, records how it went and tells
+// atto -p resuming the agent's session, records how it went and tells
 // the parent. It exits 0 once it has told the parent, however the turn
 // went.
 func RunAgentTurn(args []string, _ io.Writer) error {
@@ -815,47 +815,47 @@ func RunAgentTurn(args []string, _ io.Writer) error {
 		return fmt.Errorf("usage: atto _agent-turn -session <parent> <name> <turn> (started by atto agent)")
 	}
 	name := fs.Arg(0)
-	st, err := subagent.Load(*parent, name)
+	st, err := agentstate.Load(*parent, name)
 	if err != nil {
 		return err
 	}
 	if fmt.Sprint(st.Turns) != fs.Arg(1) {
 		return fmt.Errorf("agent %s is at turn %d, not %s", name, st.Turns, fs.Arg(1))
 	}
-	t := subagent.Turn{N: st.Turns, Status: subagent.Queued, Queued: time.Now()}
-	_ = subagent.SaveTurn(*parent, name, t)
+	t := agentstate.Turn{N: st.Turns, Status: agentstate.Queued, Queued: time.Now()}
+	_ = agentstate.SaveTurn(*parent, name, t)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	release, err := subagent.Acquire(ctx, *parent, func() int {
+	release, err := agentstate.Acquire(ctx, *parent, func() int {
 		s, _ := config.LoadSettings()
-		return s.SubagentLimit()
+		return s.AgentLimit()
 	})
 	stop()
 	if err != nil {
 		return err
 	}
 	defer release()
-	t.Status, t.Started = subagent.Running, time.Now()
-	_ = subagent.SaveTurn(*parent, name, t)
+	t.Status, t.Started = agentstate.Running, time.Now()
+	_ = agentstate.SaveTurn(*parent, name, t)
 
 	var res printResult
 	runErr := RunPrint(PrintOptions{
 		Prompt: st.Prompt, Model: st.Model, Effort: st.Effort, Resume: st.Session, Format: "text", Verbose: true,
-		Subagent: &agent.Subagent{Name: name, Preset: st.Preset, Instructions: st.Instructions, Worktree: st.Worktree, Branch: st.Branch,
-			Path: subagent.PathOf(st.Session), Parent: subagent.PathOf(*parent), CanSpawn: canSpawn(st.Session)},
+		Worker: &agent.Worker{Name: name, Preset: st.Preset, Instructions: st.Instructions, Worktree: st.Worktree, Branch: st.Branch,
+			Path: agentstate.PathOf(st.Session), Parent: agentstate.PathOf(*parent), CanSpawn: canSpawn(st.Session)},
 		done: func(r printResult) { res = r },
 	})
 	t.Ended = time.Now()
 	t.PromptTokens, t.CachedTokens, t.OutputTokens = res.Usage.InputTokens, res.Usage.CachedInputTokens, res.Usage.OutputTokens
 	t.Cost, t.Steps = res.cost, res.NumSteps
-	t.Status = subagent.Done
+	t.Status = agentstate.Done
 	switch {
 	case res.Error != "":
-		t.Status, t.Error = subagent.Failed, res.Error
+		t.Status, t.Error = agentstate.Failed, res.Error
 	case runErr != nil && !errors.Is(runErr, ErrPrintFailed):
-		t.Status, t.Error = subagent.Failed, runErr.Error()
+		t.Status, t.Error = agentstate.Failed, runErr.Error()
 	}
-	releaseTurn, err := subagent.LockTurn(st.Parent, st.Name)
+	releaseTurn, err := agentstate.LockTurn(st.Parent, st.Name)
 	if err != nil {
 		return err
 	}
@@ -865,7 +865,7 @@ func RunAgentTurn(args []string, _ io.Writer) error {
 	if err := events.Push(*parent, turnEvent(st, t)); err != nil {
 		return err
 	}
-	if err := subagent.SaveTurn(*parent, name, t); err != nil {
+	if err := agentstate.SaveTurn(*parent, name, t); err != nil {
 		return err
 	}
 	// Tasks accepted after the final poll need a successor, not an idle inbox.
@@ -887,10 +887,10 @@ const finalAnswerMax = 8000
 
 // turnEvent tells the parent session that an agent's turn ended, with its
 // final answer, as codex delivers FINAL_ANSWER.
-func turnEvent(st subagent.State, t subagent.Turn) events.Event {
-	from, to := subagent.PathOf(st.Session), subagent.PathOf(st.Parent)
+func turnEvent(st agentstate.State, t agentstate.Turn) events.Event {
+	from, to := agentstate.PathOf(st.Session), agentstate.PathOf(st.Parent)
 	what := "finished"
-	if t.Status == subagent.Failed {
+	if t.Status == agentstate.Failed {
 		what = "failed"
 	}
 	detail := tui.FormatDuration(t.Duration())
@@ -907,12 +907,12 @@ func turnEvent(st subagent.State, t subagent.Turn) events.Event {
 		}
 		body += "\n\n" + msg
 	}
-	return events.Event{Source: "agent", Text: subagent.Envelope(subagent.FinalAnswer, from, to, body),
+	return events.Event{Source: "agent", Text: agentstate.Envelope(agentstate.FinalAnswer, from, to, body),
 		Title: fmt.Sprintf("◆ agent %s %s after %s", from, what, tui.FormatDuration(t.Duration()))}
 }
 
 // canSpawn reports whether agent session may start agents of its own.
 func canSpawn(session string) bool {
 	s, _ := config.LoadSettings()
-	return s.SubagentsEnabled() && subagent.Depth(session) < s.AgentMaxDepth()
+	return s.AgentsEnabled() && agentstate.Depth(session) < s.AgentMaxDepth()
 }

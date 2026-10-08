@@ -92,8 +92,8 @@ func TestImageFlagRepeats(t *testing.T) {
 	}
 }
 
-// A top-level agent may drive subagents from its shell (atto agent
-// refuses start/next for a subagent itself); plain atto stays refused.
+// A top-level agent may drive agents from its shell (atto agent
+// refuses start/next for an agent itself); plain atto stays refused.
 func TestNestedAllowsAgent(t *testing.T) {
 	for _, cmd := range []string{"agent", "_agent-turn"} {
 		if nestedRefused[cmd] || subcommands()[cmd] == nil {

@@ -40,13 +40,13 @@ const EnvAgent = "ATTO_AGENT"
 // InAgent reports whether this process was started by an atto agent.
 func InAgent() bool { return os.Getenv(EnvAgent) != "" }
 
-// EnvSubagent is set, besides EnvAgent, in the environment of the commands
-// a subagent runs (atto agent). Subagents can't start subagents of their
+// EnvLegacyAgent is set, besides EnvAgent, in the environment of the commands
+// an agent runs (atto agent). Agents can't start agents of their
 // own: atto agent start and next refuse when it is set.
-const EnvSubagent = "ATTO_SUBAGENT"
+const EnvLegacyAgent = "ATTO_SUBAGENT"
 
-// InSubagent reports whether this process was started by a subagent.
-func InSubagent() bool { return os.Getenv(EnvSubagent) != "" }
+// InAgentCommand reports whether this process was started by an agent.
+func InAgentCommand() bool { return os.Getenv(EnvLegacyAgent) != "" }
 
 // EnvView names the directory "atto view" leaves images in for the
 // command that ran it: the agent sets it for each foreground shell call
@@ -75,12 +75,12 @@ func ExtensionsDir() string { return filepath.Join(Dir(), "extensions") }
 func PromptsDir() string    { return filepath.Join(Dir(), "prompts") }
 func SkillsDir() string     { return filepath.Join(Dir(), "skills") }
 
-// AgentsDir holds the user's subagent profiles (<name>.md); a project's
+// AgentsDir holds the user's agent profiles (<name>.md); a project's
 // are in .atto/agents.
 func AgentsDir() string { return filepath.Join(Dir(), "agents") }
 
-// SubagentsDir holds the state of the subagents each session started.
-func SubagentsDir() string { return filepath.Join(Dir(), "subagents") }
+// AgentStateDir holds the state of the agents each session started.
+func AgentStateDir() string { return filepath.Join(Dir(), "subagents") }
 
 // SkillsCacheDir is where the built-in skills are written, so the model
 // can read them as files (see package skills).
@@ -158,8 +158,8 @@ type Settings struct {
 	Remote *RemoteSettings `json:"remote,omitempty"`
 	// Agents configures atto agent: agents other agents start. "subagents",
 	// its old name, is read when "agents" is absent.
-	Agents    *SubagentSettings `json:"agents,omitempty"`
-	Subagents *SubagentSettings `json:"subagents,omitempty"`
+	Agents       *AgentSettings `json:"agents,omitempty"`
+	LegacyAgents *AgentSettings `json:"subagents,omitempty"`
 	// Daemon: false runs the TUI in the terminal's own process instead of
 	// a pane of the atto daemon (package daemon). ATTO_NO_DAEMON=1 does
 	// the same for one run.
@@ -169,16 +169,16 @@ type Settings struct {
 // DaemonOn reports whether interactive atto runs in the daemon.
 func (s Settings) DaemonOn() bool { return s.Daemon == nil || *s.Daemon }
 
-// SubagentSettings is settings.json's "subagents".
-type SubagentSettings struct {
+// AgentSettings configures agents in settings.json.
+type AgentSettings struct {
 	// Enabled turns on atto agent (off by default): the model may then
-	// start subagents from presets, when the user asks for them.
+	// start agents from presets, when the user asks for them.
 	Enabled bool `json:"enabled,omitempty"`
-	// MaxConcurrent caps the subagent turns a session runs at once; more
+	// MaxConcurrent caps the agent turns a session runs at once; more
 	// wait in a queue. Default 3.
 	MaxConcurrent int `json:"maxConcurrent,omitempty"`
-	// Model and Effort apply to subagents whose preset names none;
-	// without them a subagent uses the model and effort of the session
+	// Model and Effort apply to agents whose preset names none;
+	// without them an agent uses the model and effort of the session
 	// that starts it.
 	Model  string `json:"model,omitempty"`
 	Effort string `json:"effort,omitempty"`
@@ -188,17 +188,17 @@ type SubagentSettings struct {
 }
 
 // agents is the agent settings, under either name.
-func (s Settings) agents() *SubagentSettings {
+func (s Settings) agents() *AgentSettings {
 	if s.Agents != nil {
 		return s.Agents
 	}
-	return s.Subagents
+	return s.LegacyAgents
 }
 
-// SubagentsEnabled reports whether atto agent is turned on.
-func (s Settings) SubagentsEnabled() bool { return s.agents() != nil && s.agents().Enabled }
+// AgentsEnabled reports whether atto agent is turned on.
+func (s Settings) AgentsEnabled() bool { return s.agents() != nil && s.agents().Enabled }
 
-// DefaultAgentDepth is SubagentSettings.MaxDepth's default, as codex's.
+// DefaultAgentDepth is AgentSettings.MaxDepth's default, as codex's.
 const DefaultAgentDepth = 1
 
 // AgentMaxDepth is how deep agent trees may grow.
@@ -217,15 +217,15 @@ func (s Settings) AgentDefaults() (model, effort string) {
 	return "", ""
 }
 
-// DefaultMaxSubagents is SubagentSettings.MaxConcurrent's default.
-const DefaultMaxSubagents = 3
+// DefaultMaxAgents is AgentSettings.MaxConcurrent's default.
+const DefaultMaxAgents = 3
 
-// SubagentLimit is how many subagent turns may run at once.
-func (s Settings) SubagentLimit() int {
+// AgentLimit is how many agent turns may run at once.
+func (s Settings) AgentLimit() int {
 	if a := s.agents(); a != nil && a.MaxConcurrent > 0 {
 		return a.MaxConcurrent
 	}
-	return DefaultMaxSubagents
+	return DefaultMaxAgents
 }
 
 // RemoteSettings is settings.json's "remote".

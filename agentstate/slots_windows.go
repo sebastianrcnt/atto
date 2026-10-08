@@ -1,6 +1,6 @@
 //go:build windows
 
-package subagent
+package agentstate
 
 import (
 	"os"

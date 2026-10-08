@@ -1,4 +1,4 @@
-package subagent
+package agentstate
 
 import (
 	"context"
@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-// Slots cap how many subagent turns of one session run at once. Each is a
+// Slots cap how many agent turns of one session run at once. Each is a
 // file a running turn holds locked (flock, LockFileEx); the lock goes
 // with the process, however it ends, so a stopped or crashed turn frees
 // its slot.

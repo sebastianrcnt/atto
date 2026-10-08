@@ -57,7 +57,7 @@ func TestCenterListsSessionsByProjectAndState(t *testing.T) {
 		[]session.Summary{
 			{ID: "s2", Cwd: "/w/api", Preview: "fix the api please", Branch: "main", Updated: now},
 			{ID: "old", Cwd: "/w/web", Name: "css cleanup", Branch: "dev", Updated: now.Add(-3 * time.Hour)},
-			{ID: "kid", Cwd: "/w/api", Preview: "a subagent", AgentOf: "s2", Updated: now},
+			{ID: "kid", Cwd: "/w/api", Preview: "an agent", AgentOf: "s2", Updated: now},
 		})
 	a.cmdAgents("")
 	waitCenter(t, a)
@@ -68,7 +68,7 @@ func TestCenterListsSessionsByProjectAndState(t *testing.T) {
 			t.Fatalf("center lacks %q:\n%s", want, text)
 		}
 	}
-	if !strings.Contains(text, "└─ /root/a subagent") {
+	if !strings.Contains(text, "└─ /root/an agent") {
 		t.Fatalf("agent tree missing:\n%s", text)
 	}
 

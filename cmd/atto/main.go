@@ -42,7 +42,7 @@ usage:
   atto attach [ID] | attach -l      return to an atto running in the daemon
                                     (closed terminal, SSH drop, /detach)
   atto agents                       every atto the daemon runs, with goals and
-                                    subagents; enter attaches (← in atto too)
+                                    agents; enter attaches (← in atto too)
   atto daemon [status|kill|stop]    the daemon interactive atto runs in
   atto sessions [list|show|rename|archive|unarchive|delete]
                                     manage saved sessions (atto sessions -h)
@@ -51,7 +51,7 @@ usage:
   atto goal [status|set|complete|...]  the session goal (or /goal, -goal)
   atto view <image>...              from the agent's shell: show the model an image file
   atto agent start|steer|next|wait|report|list|stop ...
-                                    subagents: background child sessions (atto agent -h)
+                                    agents: background child sessions (atto agent -h)
   atto context [-json]              what a session here loads: AGENTS.md, skills,
                                     hooks, settings, model
   atto reload                       from the agent's shell: reload AGENTS.md, skills,

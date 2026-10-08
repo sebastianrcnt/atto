@@ -306,7 +306,7 @@ type threadParams struct {
 	Cancel bool    `json:"cancel"`
 	// turn/unsteer: a queued follow-up rather than a steer
 	Queued bool `json:"queued"`
-	// job/output, job/stop; subagent/read
+	// job/output, job/stop; agent/read
 	Job   int    `json:"job"`
 	Lines int    `json:"lines"`
 	Name  string `json:"name"`

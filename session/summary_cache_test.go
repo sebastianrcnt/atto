@@ -56,9 +56,9 @@ func TestListCachesUnchangedSummaries(t *testing.T) {
 	}
 }
 
-func TestListSkipsSubagentHistory(t *testing.T) {
+func TestListSkipsWorkerHistory(t *testing.T) {
 	t.Setenv("ATTO_DIR", t.TempDir())
-	w := NewSubagent("/work", "root")
+	w := NewAgent("/work", "root")
 	w.Append(Entry{Type: TypeMessage, Message: &provider.Message{Role: "user", Content: strings.Repeat("x", 2*1024*1024)}})
 	w.Close()
 	var before, after runtime.MemStats
@@ -69,7 +69,7 @@ func TestListSkipsSubagentHistory(t *testing.T) {
 		t.Fatalf("list: %+v %v", list, err)
 	}
 	if allocated := after.TotalAlloc - before.TotalAlloc; allocated > 512*1024 {
-		t.Fatalf("subagent history loaded: %d bytes", allocated)
+		t.Fatalf("agent history loaded: %d bytes", allocated)
 	}
 }
 

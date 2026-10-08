@@ -20,7 +20,7 @@ shared, UI-independent foundations.
 
 The most consequential decisions are session lifetime, whether client-local
 pickers should hold automatic work, how interactive prompts behave with no
-clients, and whether ordinary subagent CLI turns join the same server ownership
+clients, and whether ordinary agent CLI turns join the same server ownership
 model. Detach must not mean session end. An update of the frontend must not be an
 update/restart of a busy execution worker.
 
@@ -33,7 +33,7 @@ update/restart of a busy execution worker.
 | Interactive `atto`, `app.Run` | `app.App`: agent, hooks, extensions, MCP, goal, cancel funcs, scheduler | Editor/key handlers/slash callbacks on TUI goroutine | App holds TUI writer lease; clear/resume/normal exit clean up session jobs/tree |
 | `atto serve`, `server.New` | `server.Server`'s `thread` objects | JSON-RPC `Handle`, HTTP POST + SSE | Server lease for each loaded thread; `Server.Close` ends all loaded sessions |
 | TUI `/remote`, `server.NewLive` | **Still App** | `server.Live` adapter calls App through `ui.Do` | Live server owns no writer or execution; App publishes protocol notifications |
-| `atto -p`, `_continue`, `_agent-turn` | `cli.RunPrint`, fresh agent/core per run | CLI flags, inbox/step boundaries | Run/background lease; normally ends jobs at completion; subagent runs preserve agent children |
+| `atto -p`, `_continue`, `_agent-turn` | `cli.RunPrint`, fresh agent/core per run | CLI flags, inbox/step boundaries | Run/background lease; normally ends jobs at completion; agent runs preserve agent children |
 
 Interactive startup (`cmd/atto/main.go`) normally asks `daemon.Run` to start the
 whole interactive binary in a PTY pane. Inside that pane `app.Run` still does all
@@ -73,7 +73,7 @@ branch movement using `thread/switched`. `turn/start` and `turn/steer` mean
   happen outside an active run. Steers commit at step boundaries, after the
   step's tools or at a model stop, not instantly on Enter.
 * `core.Bind` sets start time/prompt, session/environment, writer callbacks and
-  hook/extension/MCP session identity; it opens the subagent tree. It **does not
+  hook/extension/MCP session identity; it opens the agent tree. It **does not
   acquire the writer lease**. `core.Open` likewise returns a writer without
   taking a lease; `core.Read` is the read-only load path. Ownership must be
   enforced before these are used for writing.
@@ -99,7 +99,7 @@ branch movement using `thread/switched`. `turn/start` and `turn/steer` mean
 Both App and standalone server implement agent/core construction and binding,
 run start/end, settings recording, cancellation/background requests, inbox
 polling, boundary reloads, transcript replay, item/block-display state, extension
-status/widgets/text, session naming, usage accumulation, job/subagent projection
+status/widgets/text, session naming, usage accumulation, job/agent projection
 and snapshots. Shared `core` reduces construction duplication; it has not removed
 the orchestration duplication.
 
@@ -178,8 +178,8 @@ mutations belong to the server. Names in the last column are detailed in §4.
 | Skills/AGENTS/context reload (`loaded.go`, commands.go, core/reload.go) | Partial Loaded on start/resume, thread/reloaded from inbox `atto reload`; no direct reload/skill invocation | thread/reload with forModel distinction; context read and command catalog. Expand skill instructions server-side from loaded snapshot. Boundary reload and transactional error behavior; frontend settings updates notified separately. |
 | Read-only/background sessions (`background_exit.go`, resume.go) | Partial TUI snapshots/ctrl+r; standalone resume refuses locked owner | Same-owner sessions attach as equal clients, not read-only because busy. Explicit read-only capability for legacy/foreign owner, offline history or observer, no writer/goal/inbox consumption. Refresh snapshot until legacy owner exits, then reacquire lease deliberately. |
 | Usage/activity/status (`statusline.go`, activity.go, remote.go) | Existing ThreadInfo usage, TurnInfo, thread/usage; partial activity and priced/subscription metadata | Add activity/retry/tool timing/tokens and counts, long context, git/workspace, runtime memory. Distinguish session lifetime spend from active-context usage. Run custom statusLine command once in server; publish output/error, with explicit ANSI policy and memory semantics. Width/spinner/clock/cost display stay local. |
-| Agent center, all-session tree (`agents.go`, cli/daemon.go) | Partial subagent/list/read scoped to parent; thread/list omits full global live hierarchy | Daemon registry sessions/list + sessions/changed merges workers/saved/agent/external parent metadata; server parent/subagent APIs. Client groups/filters/folds locally, selects target without moving another client. No pane-state proxy for execution truth. |
-| Subagents, agent messages/tasks (`cli/agent.go`, subagent/) | Partial list/read only; execution via _agent-turn processes/jobs and inbox files | Migrate spawn/task/send/stop/close/report/wait to subagent RPC backed by workers/registry, retaining hierarchy/slots/worktrees/final answers. Attach to a busy child worker, never concurrently resume its writer. External parents remain durable tree anchors, not fake running agents. |
+| Agent center, all-session tree (`agents.go`, cli/daemon.go) | Partial agent/list/read scoped to parent; thread/list omits full global live hierarchy | Daemon registry sessions/list + sessions/changed merges workers/saved/agent/external parent metadata; server parent/agent APIs. Client groups/filters/folds locally, selects target without moving another client. No pane-state proxy for execution truth. |
+| Agents, agent messages/tasks (`cli/agent.go`, agent/) | Partial list/read only; execution via _agent-turn processes/jobs and inbox files | Migrate spawn/task/send/stop/close/report/wait to agent RPC backed by workers/registry, retaining hierarchy/slots/worktrees/final answers. Attach to a busy child worker, never concurrently resume its writer. External parents remain durable tree anchors, not fake running agents. |
 | Exit/background continuation/update (`background_exit.go`, `cli/bgrun.go`, `pane.go`) | Partial tool-background only; today detach leaves whole TUI, non-daemon background cancels/replays turn | Separate client/detach from session/close. Keep old menu behavior during in-process parity phase; daemon mode detach leaves current request/tool/queue/goal/extensions/MCP untouched. Explicit shutdown stops tree/jobs/hooks and releases lease. Updating TUI reconnects to old worker. |
 | Ancillary UI: copy/mentions/login/update/render settings (`copy.go`, mention.go, login.go, updatecmd.go) | Not a general execution protocol | Copy/OSC52, search, editor history, selection, renderer, mouse, expansion and frontend update are local. Mentions need workspace/list when client lacks worker FS; login/logout operate server-host credentials through local privileged auth flow, never broadcast secrets in prompt/SSE. Reload model availability afterwards; preserve first-run no-model UI. |
 
@@ -194,7 +194,7 @@ web client / Java client ── HTTP/stdio ─────┼─ protocol dispat
                                               agent + scheduler + transcript
                                               writer lease + writer
                                               goal + inbox + hooks + extensions
-                                              MCP + jobs/subagent coordination
+                                              MCP + jobs/agent coordination
 ```
 
 Use `server.Server` as the protocol facade with a session-runtime component;
@@ -332,16 +332,16 @@ hash) to a durable `session.NewExternal` parent when `atto agent` is run from a
 shell without session env. It serializes mapping creation/removal. This parent is
 an organizational session with name/External metadata, not a model loop.
 
-`atto agent spawn/task/send/stop/close` currently manipulates subagent state,
+`atto agent spawn/task/send/stop/close` currently manipulates agent state,
 turn locks, tree shutdown markers, slots, worktrees and inbox files. Spawn makes a
 child session immediately. Tasks/messages use envelopes `NEW_TASK`, `MESSAGE`,
 `FINAL_ANSWER`; `_agent-turn` runs as a **job process of the parent**, acquires a
-slot, calls `RunPrint` with the child's session run lease and subagent prompt,
+slot, calls `RunPrint` with the child's session run lease and agent prompt,
 reports usage/final answer, then retires or starts a successor when waking inbox
 work raced with its final poll. Child agents can start descendants. Closing a
 root uses tree locks/closed markers so teardown cannot race with new descendants;
 worktree removal refuses dirty trees unless forced. None of this is the server's
-current subagent/list/read execution model.
+current agent/list/read execution model.
 
 Stage that migration separately, but include it in the target: each child has
 one worker holding its writer lease; `atto agent` becomes a thin local protocol
@@ -585,7 +585,7 @@ Java/phone UI feature work are not included (they consume the same protocol).
 | E: TUI becomes local client | (1) protocol item-to-block rendering adapter; (2) replace input/key execution calls; (3) replace goal/jobs/status/session/extension reads; (4) remove direct ownership fields; (5) `/remote` uses common facade, retain legacy background path | 2–4 d | Optimistic UI duplication, changed notices/focus, no-model/login; app rendering golden tests + local/web simultaneous parity; App cannot reach agent/writer. |
 | F: daemon session workers | (1) worker entrypoint/socket readiness/lease; (2) registry find-or-start/routing; (3) connect/attach/stdio bridge; (4) PTY view-to-worker reference and crash survival; (5) gateway serve/remote routing + revocation | 6–9 d | Writer split-brain, stale sockets, cwd/env and secrets, mixed protocols; kill view during fake stream/tool and prove same worker/turn continues. |
 | G: frontend lifecycle & center | (1) detach vs close UX; (2) independent local atto attach; (3) sessions registry center + tree; (4) idle policy/worker-version update; (5) retire handoff path for managed sessions | 4–7 d | Intentional lifetime change, orphan resources, scheduling timers without views; restart/update TUI does not repeat provider request; session close still cleans tree. |
-| H: subagent/print convergence | (1) protocol-backed agent spawn/tasks/messages; (2) child worker slots/worktree/shutdown; (3) final-answer/wait/report parity and external anchors; (4) migrate saved print/background workflows; (5) remove obsolete execution paths | 7–11 d | Duplicate final answers/turn consumers, close/spawn races, print output contract; existing CLI/subagent regressions plus protocol tree tests. |
+| H: agent/print convergence | (1) protocol-backed agent spawn/tasks/messages; (2) child worker slots/worktree/shutdown; (3) final-answer/wait/report parity and external anchors; (4) migrate saved print/background workflows; (5) remove obsolete execution paths | 7–11 d | Duplicate final answers/turn consumers, close/spawn races, print output contract; existing CLI/agent regressions plus protocol tree tests. |
 | I: release hardening | (1) chaos/backpressure/security/version tests; (2) legacy read-only fallback + rollout docs; (3) cleanup imports/dead adapters, review all inventory rows | 3–5 d | Lost accepted input, schema skew, platform shutdown; full offline test matrix and no-code-path execution fallback on managed sessions. |
 
 Implementation should not force a one-shot App rewrite. Keep the legacy runtime
@@ -635,7 +635,7 @@ the in-process architecture exit gate: the UI must stop owning execution.
    consumer retirement, slots/depth, final answer once with wait/report,
    close/spawn serialization, dirty worktree refusal, mixed legacy child leases,
    independent child client attachment and server-only shutdown propagation.
-8. Run `go test ./...`, focused `-race` suites for server/app/events/subagent/
+8. Run `go test ./...`, focused `-race` suites for server/app/events/agent/
    session/daemon, and platform CI. Add dependency checks prohibiting App imports
    of agent execution/writer APIs (render value types may need extraction);
    frontend tests assert no filesystem inbox drains or background subprocesses
@@ -667,7 +667,7 @@ print compatibility may keep those until explicitly migrated. Replace agents
 center filesystem scans/pane markers with catalog state. PTY screen/mode sharing
 and OSC redraw markers can be dropped if legacy screen sharing is not retained.
 `_agent-turn` RunPrint orchestration and per-turn extension/MCP teardown go away
-when subagent workers take ownership; job supervisors themselves need not.
+when agent workers take ownership; job supervisors themselves need not.
 
 Do not prematurely remove `core`, `agent`, `session` OS locks, durable tree/slot
 coordination or the file ingress used by `atto job/goal/reload` from tool shells.
@@ -709,7 +709,7 @@ but persistent inbox/job state remains useful for recovery/external callers.
    follow its selection, or be stable session-scoped? Should `atto serve` manage
    new session workers or only expose existing ones? Recommend scoped/revocable
    links and daemon routing; shutting a gateway never shuts sessions.
-9. **Subagent/print scope:** finish child-worker/CLI convergence in this project
+9. **Worker/print scope:** finish child-worker/CLI convergence in this project
    or ship TUI worker attachment first with legacy child read-only fallback?
    Full "one owner per session, every frontend equal" requires the former.
    Should idle child workers keep extensions/MCP resident between tasks (semantic
@@ -741,4 +741,4 @@ images,cmd}.go`. Lifecycle/control: `daemon/{proto,server_unix,client_unix,strea
 tree}.go`, `cli/{print,bgrun,agent,agent_external,agent_worktree,daemon,jobs,goal,
 context,mcp}.go`, `cmd/atto/main.go`. Extension/notification/tree semantics:
 `extensions/{host,extensions,api_ui,api_events,runtime,uistate}.go`,
-`hooks/hooks.go`, `goal/goal.go`, `subagent/{state,tree,turnlock,shutdown,slots*}.go`.
+`hooks/hooks.go`, `goal/goal.go`, `agent/{state,tree,turnlock,shutdown,slots*}.go`.

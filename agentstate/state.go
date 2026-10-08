@@ -1,4 +1,4 @@
-package subagent
+package agentstate
 
 import (
 	"encoding/json"
@@ -16,7 +16,7 @@ import (
 	"github.com/sebastianrcnt/atto/jobs"
 )
 
-// State is a subagent as atto agent left it. Only atto agent (start,
+// State is an agent as atto agent left it. Only atto agent (start,
 // next) writes it; the turn process writes its Turn.
 type State struct {
 	Name    string `json:"name"`
@@ -42,7 +42,7 @@ type State struct {
 	Job      int       `json:"job,omitempty"` // the parent's job running the latest turn
 }
 
-// Status is where a subagent's latest turn is.
+// Status is where an agent's latest turn is.
 type Status string
 
 const (
@@ -57,7 +57,7 @@ const (
 // Active reports whether a turn is queued or running.
 func (s Status) Active() bool { return s == Queued || s == Running }
 
-// Turn is how a subagent's turn went, written by the process running it.
+// Turn is how an agent's turn went, written by the process running it.
 type Turn struct {
 	N       int       `json:"turn"`
 	Status  Status    `json:"status"`
@@ -88,7 +88,7 @@ func (t Turn) Duration() time.Duration {
 
 var nameRE = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*$`)
 
-// ValidName checks a subagent or preset name: lowercase letters, digits
+// ValidName checks an agent or preset name: lowercase letters, digits
 // and dashes.
 func ValidName(name string) error {
 	if !nameRE.MatchString(name) || len(name) > 40 {
@@ -97,16 +97,16 @@ func ValidName(name string) error {
 	return nil
 }
 
-// Dir holds the subagents of session parent.
-func Dir(parent string) string { return filepath.Join(config.SubagentsDir(), parent) }
+// Dir holds the agents of session parent.
+func Dir(parent string) string { return filepath.Join(config.AgentStateDir(), parent) }
 
 func statePath(parent, name string) string { return filepath.Join(Dir(parent), name+".json") }
 func turnPath(parent, name string) string  { return filepath.Join(Dir(parent), name+".turn.json") }
 
-// ErrNotFound is wrapped by Load for a name no subagent has.
-var ErrNotFound = errors.New("no such subagent")
+// ErrNotFound is wrapped by Load for a name no agent has.
+var ErrNotFound = errors.New("no such agent")
 
-// Load reads the subagent name of session parent.
+// Load reads the agent name of session parent.
 func Load(parent, name string) (State, error) {
 	var s State
 	if err := ValidName(name); err != nil {
@@ -137,7 +137,7 @@ func Save(s State) error {
 	return fsutil.WriteAtomic(statePath(s.Parent, s.Name), data, 0o644)
 }
 
-// Create saves s as a new subagent; the name must be free.
+// Create saves s as a new agent; the name must be free.
 func Create(s State) error {
 	if err := ValidName(s.Name); err != nil {
 		return err
@@ -147,7 +147,7 @@ func Create(s State) error {
 	}
 	f, err := os.OpenFile(statePath(s.Parent, s.Name), os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
 	if errors.Is(err, os.ErrExist) {
-		return fmt.Errorf("a subagent named %q exists: give it a follow-up with atto agent next %s, or pick another name", s.Name, s.Name)
+		return fmt.Errorf("an agent named %q exists: give it a follow-up with atto agent next %s, or pick another name", s.Name, s.Name)
 	}
 	if err != nil {
 		return err
@@ -156,7 +156,7 @@ func Create(s State) error {
 	return Save(s)
 }
 
-// Remove deletes the subagent's state (its session stays).
+// Remove deletes the agent's state (its session stays).
 func Remove(parent, name string) {
 	if s, err := Load(parent, name); err == nil && s.Session != "" {
 		_ = os.Remove(upPath(s.Session))
@@ -165,7 +165,7 @@ func Remove(parent, name string) {
 	_ = os.Remove(turnPath(parent, name))
 }
 
-// List returns the subagents of session parent, oldest first.
+// List returns the agents of session parent, oldest first.
 func List(parent string) []State {
 	paths, _ := filepath.Glob(filepath.Join(Dir(parent), "*.json"))
 	var out []State
@@ -182,7 +182,7 @@ func List(parent string) []State {
 	return out
 }
 
-// SaveTurn records how turn t of subagent name is going.
+// SaveTurn records how turn t of agent name is going.
 func SaveTurn(parent, name string, t Turn) error {
 	if err := os.MkdirAll(Dir(parent), 0o755); err != nil {
 		return err
@@ -247,7 +247,7 @@ func (s State) Latest() Turn {
 // ListAll returns agents from every parent, including agents whose parent
 // session no longer exists. Like List, it reads only the agent state files.
 func ListAll() []State {
-	dirs, _ := os.ReadDir(config.SubagentsDir())
+	dirs, _ := os.ReadDir(config.AgentStateDir())
 	var out []State
 	for _, d := range dirs {
 		if d.IsDir() && d.Name() != "_up" {

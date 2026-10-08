@@ -52,7 +52,7 @@ type System struct {
 	Kind    string // "powershell", "cmd", or anything else for bash
 	WinPS51 bool   // Windows PowerShell 5.1, which lacks && and ||
 	Tool    string // the shell tool's name
-	Sub     string // the paragraph about subagents, or ""
+	Sub     string // the paragraph about agents, or ""
 	MCP     string // the configured MCP servers, comma-separated, or ""
 	Cwd     string
 	OS      string
@@ -61,8 +61,8 @@ type System struct {
 	Date    string
 }
 
-// Subagent is the data of "subagent".
-type Subagent struct {
+// Agent is the data of "agent".
+type Agent struct {
 	Name, Preset, Instructions string
 	Path, Parent               string // its path and its parent's: /root/tests, /root
 	Worktree, Branch           string // with -worktree

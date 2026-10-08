@@ -8,10 +8,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/sebastianrcnt/atto/agentstate"
 	"github.com/sebastianrcnt/atto/daemon"
 	"github.com/sebastianrcnt/atto/provider"
 	"github.com/sebastianrcnt/atto/session"
-	"github.com/sebastianrcnt/atto/subagent"
 	"github.com/sebastianrcnt/atto/tui"
 )
 
@@ -36,10 +36,10 @@ func smallCenter() *agentCenter {
 			{ID: "orphan", Name: "orphan", AgentOf: "gone", Cwd: "/other"},
 		},
 		agents: []centerAgent{
-			{state: subagent.State{Session: "tests", Parent: "root", Name: "tests", Preset: "tester", Model: "fake/fast", Branch: "atto/tests", Task: "Run the suite\nThen review failures"}, turn: subagent.Turn{Status: subagent.Running, PromptTokens: 120, CachedTokens: 20, OutputTokens: 30, Started: time.Unix(1, 0), Ended: time.Unix(3, 0)}},
-			{state: subagent.State{Session: "lint", Parent: "tests", Name: "lint", Preset: "review", Model: "fake/fast", Task: "Lint all packages"}, turn: subagent.Turn{Status: subagent.Idle}},
-			{state: subagent.State{Session: "docs", Parent: "root", Name: "docs", Preset: "writer", Model: "fake/fast", Task: "Update README"}, turn: subagent.Turn{Status: subagent.Done}},
-			{state: subagent.State{Session: "check", Parent: "shell", Name: "check", Preset: "general", Model: "fake/fast", Task: "Check shell agents"}, turn: subagent.Turn{Status: subagent.Failed}},
+			{state: agentstate.State{Session: "tests", Parent: "root", Name: "tests", Preset: "tester", Model: "fake/fast", Branch: "atto/tests", Task: "Run the suite\nThen review failures"}, turn: agentstate.Turn{Status: agentstate.Running, PromptTokens: 120, CachedTokens: 20, OutputTokens: 30, Started: time.Unix(1, 0), Ended: time.Unix(3, 0)}},
+			{state: agentstate.State{Session: "lint", Parent: "tests", Name: "lint", Preset: "review", Model: "fake/fast", Task: "Lint all packages"}, turn: agentstate.Turn{Status: agentstate.Idle}},
+			{state: agentstate.State{Session: "docs", Parent: "root", Name: "docs", Preset: "writer", Model: "fake/fast", Task: "Update README"}, turn: agentstate.Turn{Status: agentstate.Done}},
+			{state: agentstate.State{Session: "check", Parent: "shell", Name: "check", Preset: "general", Model: "fake/fast", Task: "Check shell agents"}, turn: agentstate.Turn{Status: agentstate.Failed}},
 		},
 	})
 	return c
@@ -86,7 +86,7 @@ func TestCenterFoldAndFilter(t *testing.T) {
 		t.Fatalf("fold %v", got)
 	}
 	// Refresh keeps folds and selection, and tabs reveal working descendants.
-	c.apply(centerSnapshot{saved: []session.Summary{{ID: "root", Cwd: "/work"}, {ID: "tests", Name: "tests", AgentOf: "root", Cwd: "/work"}}, agents: []centerAgent{{state: subagent.State{Session: "tests", Parent: "root", Name: "tests", Task: "Run suite"}, turn: subagent.Turn{Status: subagent.Running}}}})
+	c.apply(centerSnapshot{saved: []session.Summary{{ID: "root", Cwd: "/work"}, {ID: "tests", Name: "tests", AgentOf: "root", Cwd: "/work"}}, agents: []centerAgent{{state: agentstate.State{Session: "tests", Parent: "root", Name: "tests", Task: "Run suite"}, turn: agentstate.Turn{Status: agentstate.Running}}}})
 	if len(c.shown()) != 1 || c.sel != 0 {
 		t.Fatal("refresh lost fold/selection")
 	}
@@ -158,7 +158,7 @@ func TestCenterOpensAgentTranscript(t *testing.T) {
 	for _, locked := range []bool{false, true} {
 		t.Run(map[bool]string{false: "idle", true: "running"}[locked], func(t *testing.T) {
 			a, _ := paneApp(t, false)
-			w := session.NewSubagent(a.cwd, a.sess.ID)
+			w := session.NewAgent(a.cwd, a.sess.ID)
 			w.Append(session.Entry{Type: session.TypeName, Name: "tests"})
 			w.Append(session.Entry{Type: session.TypeMessage, Message: &provider.Message{Role: "user", Content: "Run tests"}})
 			w.Close()
@@ -222,21 +222,21 @@ func TestCenterDaemonOpensAgent(t *testing.T) {
 
 func TestCenterStateStatusVocabulary(t *testing.T) {
 	for _, test := range []struct {
-		status subagent.Status
+		status agentstate.Status
 		tab    int
 	}{
-		{subagent.Idle, tabReady}, {subagent.Queued, tabWorking}, {subagent.Running, tabWorking},
-		{subagent.Done, tabReady}, {subagent.Failed, tabInactive}, {subagent.Stopped, tabInactive},
+		{agentstate.Idle, tabReady}, {agentstate.Queued, tabWorking}, {agentstate.Running, tabWorking},
+		{agentstate.Done, tabReady}, {agentstate.Failed, tabInactive}, {agentstate.Stopped, tabInactive},
 	} {
 		c := &agentCenter{}
-		c.apply(centerSnapshot{agents: []centerAgent{{state: subagent.State{Session: "child", Parent: "gone", Name: "child"}, turn: subagent.Turn{Status: test.status}}}})
+		c.apply(centerSnapshot{agents: []centerAgent{{state: agentstate.State{Session: "child", Parent: "gone", Name: "child"}, turn: agentstate.Turn{Status: test.status}}}})
 		if c.items[0].tab != test.tab {
 			t.Fatalf("%s mapped to %s", test.status, c.items[0].status())
 		}
 	}
 	// A live pane's question overrides agent turn state.
 	c := &agentCenter{}
-	c.apply(centerSnapshot{panes: []daemon.Pane{{Session: "child", State: "waiting"}}, agents: []centerAgent{{state: subagent.State{Session: "child", Parent: "gone", Name: "child"}, turn: subagent.Turn{Status: subagent.Running}}}})
+	c.apply(centerSnapshot{panes: []daemon.Pane{{Session: "child", State: "waiting"}}, agents: []centerAgent{{state: agentstate.State{Session: "child", Parent: "gone", Name: "child"}, turn: agentstate.Turn{Status: agentstate.Running}}}})
 	if c.items[0].tab != tabNeedsYou {
 		t.Fatal("pane waiting state lost")
 	}
@@ -250,20 +250,20 @@ func TestCenterScanIncludesShellNestedAndClosedAgents(t *testing.T) {
 	root := session.NewExternal("/project")
 	root.Append(session.Entry{Type: session.TypeName, Name: "atto agent (external)"})
 	root.Close()
-	child := session.NewSubagent("/trees/tests", root.ID)
+	child := session.NewAgent("/trees/tests", root.ID)
 	child.Append(session.Entry{Type: session.TypeName, Name: "tests"})
 	child.Append(session.Entry{Type: session.TypeModel, Provider: "fake", Model: "fast"})
 	child.Append(session.Entry{Type: session.TypeMessage, Message: &provider.Message{Role: "user", Content: "Run suite"}})
 	child.Append(session.Entry{Type: session.TypeMessage, Message: &provider.Message{Role: "assistant", Content: "Suite passes"}})
 	child.Close()
-	nested := session.NewSubagent("/trees/tests", child.ID)
+	nested := session.NewAgent("/trees/tests", child.ID)
 	nested.Append(session.Entry{Type: session.TypeName, Name: "lint"})
 	nested.Close()
-	for _, st := range []subagent.State{
+	for _, st := range []agentstate.State{
 		{Parent: root.ID, Session: child.ID, Name: "tests", Cwd: "/trees/tests", Task: "Run suite", Preset: "tester", Model: "fake/fast"},
 		{Parent: child.ID, Session: nested.ID, Name: "lint", Cwd: "/trees/tests", Task: "Lint suite", Preset: "review", Model: "fake/fast"},
 	} {
-		if err := subagent.Save(st); err != nil {
+		if err := agentstate.Save(st); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -282,8 +282,8 @@ func TestCenterScanIncludesShellNestedAndClosedAgents(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	subagent.Remove(child.ID, "lint")
-	subagent.Remove(root.ID, "tests")
+	agentstate.Remove(child.ID, "lint")
+	agentstate.Remove(root.ID, "tests")
 	c.reload()
 	sh = c.shown()
 	if got := treeIDs(sh); !reflect.DeepEqual(got, []string{root.ID, child.ID, nested.ID}) {
@@ -315,7 +315,7 @@ func TestCenterEmptyParentStillAnchorsAgent(t *testing.T) {
 	parent := session.New("/work")
 	parent.Append(session.Entry{Type: session.TypeName, Name: "empty parent"})
 	parent.Close()
-	child := session.NewSubagent("/work", parent.ID)
+	child := session.NewAgent("/work", parent.ID)
 	child.Append(session.Entry{Type: session.TypeName, Name: "tests"})
 	child.Close()
 	c := &agentCenter{}
@@ -332,7 +332,7 @@ func TestCenterPaneIdentityAndAgentViewerState(t *testing.T) {
 		{ID: 1, Session: "agent", State: "idle"},
 		{ID: 2, Session: "agent", State: "working"},
 		{ID: 3}, {ID: 4},
-	}, agents: []centerAgent{{state: subagent.State{Session: "agent", Parent: "gone", Name: "tests"}, turn: subagent.Turn{Status: subagent.Running}}}})
+	}, agents: []centerAgent{{state: agentstate.State{Session: "agent", Parent: "gone", Name: "tests"}, turn: agentstate.Turn{Status: agentstate.Running}}}})
 	sh := c.shown()
 	if len(sh) != 3 || len(c.items) != 3 {
 		t.Fatalf("duplicate or missing panes: %+v", sh)
@@ -343,7 +343,7 @@ func TestCenterPaneIdentityAndAgentViewerState(t *testing.T) {
 		}
 	}
 	// A single idle viewer pane must not downgrade a headless running turn.
-	c.apply(centerSnapshot{panes: []daemon.Pane{{ID: 1, Session: "agent", State: "idle"}}, agents: []centerAgent{{state: subagent.State{Session: "agent", Parent: "gone", Name: "tests"}, turn: subagent.Turn{Status: subagent.Running}}}})
+	c.apply(centerSnapshot{panes: []daemon.Pane{{ID: 1, Session: "agent", State: "idle"}}, agents: []centerAgent{{state: agentstate.State{Session: "agent", Parent: "gone", Name: "tests"}, turn: agentstate.Turn{Status: agentstate.Running}}}})
 	if c.items[0].tab != tabWorking {
 		t.Fatal("idle viewer hid working agent")
 	}

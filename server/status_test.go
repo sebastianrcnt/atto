@@ -10,11 +10,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/sebastianrcnt/atto/agentstate"
 	"github.com/sebastianrcnt/atto/config"
 	"github.com/sebastianrcnt/atto/jobs"
 	"github.com/sebastianrcnt/atto/provider"
 	"github.com/sebastianrcnt/atto/session"
-	"github.com/sebastianrcnt/atto/subagent"
 )
 
 // notes records a server's notifications.
@@ -188,8 +188,8 @@ func TestPendingSteers(t *testing.T) {
 	}
 }
 
-// Jobs and subagents come from the session's files.
-func TestJobsAndSubagents(t *testing.T) {
+// Jobs and agents come from the session's files.
+func TestJobsAndAgents(t *testing.T) {
 	work := setup(t)
 	s := New("test", work)
 	t.Cleanup(s.Close)
@@ -220,27 +220,27 @@ func TestJobsAndSubagents(t *testing.T) {
 		t.Fatalf("job/stop of an exited job: %+v", resp)
 	}
 
-	// A subagent whose turn is done, with its own session.
-	w := session.NewSubagent(work, id)
+	// A agent whose turn is done, with its own session.
+	w := session.NewAgent(work, id)
 	w.Append(session.Entry{Type: session.TypeMessage, Message: &provider.Message{Role: "user", Content: "look"}})
 	w.Append(session.Entry{Type: session.TypeMessage, Message: &provider.Message{Role: "assistant", Content: "found it"}})
 	w.Close()
-	st := subagent.State{Name: "scout", Parent: id, Session: w.ID, Preset: "general", Model: "fake/m", Cwd: work, Task: "look", Created: time.Now(), Turns: 1, Prompt: "look"}
-	if err := subagent.Create(st); err != nil {
+	st := agentstate.State{Name: "scout", Parent: id, Session: w.ID, Preset: "general", Model: "fake/m", Cwd: work, Task: "look", Created: time.Now(), Turns: 1, Prompt: "look"}
+	if err := agentstate.Create(st); err != nil {
 		t.Fatal(err)
 	}
-	subagent.SaveTurn(id, "scout", subagent.Turn{N: 1, Status: subagent.Done, Started: start, Ended: end, PromptTokens: 50, OutputTokens: 9})
+	agentstate.SaveTurn(id, "scout", agentstate.Turn{N: 1, Status: agentstate.Done, Started: start, Ended: end, PromptTokens: 50, OutputTokens: 9})
 	subs := call(t, s, "subagent/list", map[string]any{"threadId": id})["subagents"].([]any)
 	if len(subs) != 1 {
-		t.Fatalf("subagent/list %v", subs)
+		t.Fatalf("agent/list %v", subs)
 	}
 	// Its turn ran with no job left: it stands as recorded.
 	sa := subs[0].(map[string]any)
 	if sa["name"] != "scout" || sa["threadId"] != w.ID || sa["turn"].(float64) != 1 || sa["durationMs"].(float64) != 5000 || sa["outputTokens"].(float64) != 9 {
-		t.Fatalf("subagent %v", sa)
+		t.Fatalf("agent %v", sa)
 	}
 	r := call(t, s, "subagent/read", map[string]any{"threadId": id, "name": "scout"})
 	if r["message"] != "found it" || itemTexts(r) != "look;found it;" {
-		t.Fatalf("subagent/read %v", r)
+		t.Fatalf("agent/read %v", r)
 	}
 }

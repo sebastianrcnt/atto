@@ -50,11 +50,11 @@ type PrintOptions struct {
 	// -session names without a new message, holding its lock, and notify
 	// the Notification hook when done.
 	Background bool
-	// Subagent runs a turn of a subagent (atto _agent-turn): its prompt
-	// says so, its commands can't start subagents, and what arrives in the
+	// Worker runs a turn of an agent (atto _agent-turn): its prompt
+	// says so, its commands can't start agents, and what arrives in the
 	// session's inbox (the parent's steers, its jobs' events) is delivered
 	// while it works, and in another turn after it.
-	Subagent *agent.Subagent
+	Worker *agent.Worker
 	// done, if set, receives the result before RunPrint returns.
 	done func(printResult)
 }
@@ -248,7 +248,7 @@ func RunPrint(o PrintOptions) error {
 		return err
 	}
 	ag.MaxSteps = o.MaxSteps
-	ag.Subagent = o.Subagent
+	ag.Worker = o.Worker
 	// Extensions have no UI here: notices go to stderr, dialogs get their
 	// default answers, and sendMessage steers the run.
 	ext := core.LoadExtensions(ag, &extensions.Headless{Out: os.Stderr, Send: ag.Steer})
@@ -256,8 +256,8 @@ func RunPrint(o PrintOptions) error {
 	mc := core.LoadMCP(ag) // servers start on first use and end with the run
 	defer mc.Close()
 	core.Bind(ag, hk, sess, start, !o.NoSave)
-	if o.Subagent != nil {
-		ag.SetSession(sess.ID, append(core.Env(sess.ID), config.EnvSubagent+"=1"))
+	if o.Worker != nil {
+		ag.SetSession(sess.ID, append(core.Env(sess.ID), config.EnvLegacyAgent+"=1"))
 	}
 	ext.SessionStart(source)
 	if hk != nil {
@@ -321,7 +321,7 @@ func RunPrint(o PrintOptions) error {
 		input = d.Goal.Continuation()
 	}
 	imgs := o.Images // with the first turn only
-	if o.Subagent != nil {
+	if o.Worker != nil {
 		// Messages that came before the turn go with its prompt.
 		if text := inboxText(sess.ID); text != "" {
 			input += "\n\n" + text
@@ -335,7 +335,7 @@ func RunPrint(o PrintOptions) error {
 	poll = func() string {
 		ag.AtBoundary(poll)
 		_, evs := events.SplitReload(core.Poll(sess.ID))
-		if ag.AtStop() && (o.Subagent == nil || !events.Wakes(evs)) {
+		if ag.AtStop() && (o.Worker == nil || !events.Wakes(evs)) {
 			events.Requeue(sess.ID, evs)
 			return ""
 		}
@@ -364,7 +364,7 @@ func RunPrint(o PrintOptions) error {
 		}
 	})
 	// What arrived as the turn ended gets a turn of its own.
-	for o.Subagent != nil && runErr == nil && ctx.Err() == nil {
+	for o.Worker != nil && runErr == nil && ctx.Err() == nil {
 		_, evs := events.SplitReload(core.Poll(sess.ID))
 		if !events.Wakes(evs) {
 			events.Requeue(sess.ID, evs) // quiet messages wait for its next turn
@@ -385,7 +385,7 @@ func RunPrint(o PrintOptions) error {
 		}
 	}
 	leave := core.Leave
-	if o.Subagent != nil {
+	if o.Worker != nil {
 		leave = core.LeaveKeepingAgents // the turns of its own agents go on
 	}
 	if n := leave(sess.ID); n > 0 { // jobs end with the run

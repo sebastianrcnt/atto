@@ -10,7 +10,7 @@ func TestListAllIncludesAgentSummaries(t *testing.T) {
 	parent := NewExternal("/work")
 	parent.Append(Entry{Type: TypeName, Name: "external"})
 	parent.Close()
-	agent := NewSubagent("/work", parent.ID)
+	agent := NewAgent("/work", parent.ID)
 	agent.Append(Entry{Type: TypeName, Name: "tests"})
 	agent.Close()
 	// Prime the header-only default cache, then request the full summaries.

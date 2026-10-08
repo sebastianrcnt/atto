@@ -37,9 +37,9 @@
 //	job/list       {threadId}                      → {jobs: [Job]}  (the session's background jobs)
 //	job/output     {threadId, job, lines?}         → {output}  (the last lines, 200 by default)
 //	job/stop       {threadId, job}                 → {job}
-//	subagent/list  {threadId}                      → {subagents: [Subagent]}
+//	subagent/list  {threadId}                      → {subagents: [Agent]}
 //	subagent/read  {threadId, name}                → {subagent, message, items}
-//	               a subagent's transcript (its own session), read only,
+//	               an agent's transcript (its own session), read only,
 //	               and its last message
 //
 // Notifications (all carry threadId):
@@ -394,9 +394,9 @@ type Job struct {
 	RuntimeMs int64 `json:"runtimeMs"`
 }
 
-// Subagent is a subagent of the thread's session (package subagent, atto
+// Agent is an agent of the thread's session (package agentstate, atto
 // agent) with its latest turn.
-type Subagent struct {
+type Agent struct {
 	Name     string `json:"name"`
 	Preset   string `json:"preset"`
 	Model    string `json:"model"`

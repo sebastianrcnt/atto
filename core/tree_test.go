@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/sebastianrcnt/atto/agentstate"
 	"github.com/sebastianrcnt/atto/jobs"
-	"github.com/sebastianrcnt/atto/subagent"
 )
 
 func treeJob(t *testing.T, owner string, id int, kind, name string) {
@@ -25,10 +25,10 @@ func treeJob(t *testing.T, owner string, id int, kind, name string) {
 
 func TestRootLeaveStopsDescendantsOfCompletedAgent(t *testing.T) {
 	t.Setenv("ATTO_DIR", t.TempDir())
-	a := subagent.State{Parent: "root", Name: "a", Session: "a-session"}
-	b := subagent.State{Parent: a.Session, Name: "b", Session: "b-session"}
-	for _, s := range []subagent.State{a, b} {
-		if err := subagent.Save(s); err != nil {
+	a := agentstate.State{Parent: "root", Name: "a", Session: "a-session"}
+	b := agentstate.State{Parent: a.Session, Name: "b", Session: "b-session"}
+	for _, s := range []agentstate.State{a, b} {
+		if err := agentstate.Save(s); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -44,12 +44,12 @@ func TestRootLeaveStopsDescendantsOfCompletedAgent(t *testing.T) {
 			t.Fatalf("descendant job: %+v %v", j, err)
 		}
 	}
-	if release, err := subagent.StartWork(b.Session); err == nil {
+	if release, err := agentstate.StartWork(b.Session); err == nil {
 		release()
 		t.Fatal("closed tree accepted new work")
 	}
-	subagent.OpenTree("root")
-	release, err := subagent.StartWork(b.Session)
+	agentstate.OpenTree("root")
+	release, err := agentstate.StartWork(b.Session)
 	if err != nil {
 		t.Fatal("reopened tree:", err)
 	}

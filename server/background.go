@@ -1,15 +1,15 @@
 package server
 
 import (
+	"github.com/sebastianrcnt/atto/agentstate"
 	"github.com/sebastianrcnt/atto/config"
 	"github.com/sebastianrcnt/atto/jobs"
 	"github.com/sebastianrcnt/atto/session"
-	"github.com/sebastianrcnt/atto/subagent"
 )
 
 // What runs beside a thread's turns, for the web client's panels: the
 // session's background jobs (atto job, like the TUI's /jobs) and its
-// subagents (atto agent). Both live in files under ~/.atto keyed by the
+// agents (atto agent). Both live in files under ~/.atto keyed by the
 // session ID, so a live session reads them the same way.
 
 // clientSettings is what of settings.json clients follow (initialize).
@@ -18,7 +18,7 @@ func clientSettings() map[string]any {
 	return map[string]any{"toolGroups": s.ToolGroups == nil || *s.ToolGroups}
 }
 
-// background serves job/* and subagent/* for session sid.
+// background serves job/* and agent/* for session sid.
 func background(method, sid string, p threadParams) (any, error) {
 	switch method {
 	case "job/list":
@@ -53,13 +53,13 @@ func background(method, sid string, p threadParams) (any, error) {
 		}
 		return map[string]any{"job": wireJob(j)}, nil
 	case "subagent/list":
-		out := []Subagent{}
-		for _, st := range subagent.List(sid) {
-			out = append(out, wireSubagent(st))
+		out := []Agent{}
+		for _, st := range agentstate.List(sid) {
+			out = append(out, wireAgent(st))
 		}
 		return map[string]any{"subagents": out}, nil
 	case "subagent/read":
-		st, err := subagent.Load(sid, p.Name)
+		st, err := agentstate.Load(sid, p.Name)
 		if err != nil {
 			return nil, invalid("%v", err)
 		}
@@ -76,7 +76,7 @@ func background(method, sid string, p threadParams) (any, error) {
 				msg = items[i].Text
 			}
 		}
-		return map[string]any{"subagent": wireSubagent(st), "message": msg, "items": items}, nil
+		return map[string]any{"subagent": wireAgent(st), "message": msg, "items": items}, nil
 	}
 	return nil, &rpcError{codeMethodNotFound, "unknown method " + method}
 }
@@ -88,9 +88,9 @@ func wireJob(j jobs.Job) Job {
 	}
 }
 
-func wireSubagent(st subagent.State) Subagent {
+func wireAgent(st agentstate.State) Agent {
 	t := st.Latest()
-	return Subagent{
+	return Agent{
 		Name: st.Name, Preset: st.Preset, Model: st.Model, Effort: st.Effort, ThreadID: st.Session,
 		Task: st.Task, Prompt: st.Prompt, Turn: t.N, Status: string(t.Status),
 		DurationMs: t.Duration().Milliseconds(), Error: t.Error,

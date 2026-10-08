@@ -17,7 +17,7 @@ import (
 )
 
 // The test binary also serves the processes atto agent starts: job
-// supervisors (_supervise) and subagent turns (_agent-turn).
+// supervisors (_supervise) and agent turns (_agent-turn).
 func TestMain(m *testing.M) {
 	mcptest.ServeIfRequested()
 	if len(os.Args) >= 2 {
@@ -42,7 +42,7 @@ func TestMain(m *testing.M) {
 		}
 	}
 	// Helper processes keep the environment supplied by their test.
-	for _, key := range []string{config.EnvAgent, config.EnvSubagent, "ATTO_SESSION_ID", config.EnvDir} {
+	for _, key := range []string{config.EnvAgent, config.EnvLegacyAgent, "ATTO_SESSION_ID", config.EnvDir} {
 		os.Unsetenv(key)
 	}
 	os.Exit(m.Run())

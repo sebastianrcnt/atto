@@ -20,6 +20,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/sebastianrcnt/atto/agentstate"
 	"github.com/sebastianrcnt/atto/ai"
 	"github.com/sebastianrcnt/atto/config"
 	"github.com/sebastianrcnt/atto/images"
@@ -28,7 +29,6 @@ import (
 	"github.com/sebastianrcnt/atto/session"
 	"github.com/sebastianrcnt/atto/shell"
 	"github.com/sebastianrcnt/atto/skills"
-	"github.com/sebastianrcnt/atto/subagent"
 )
 
 // HookOutcome is what hooks decided for one event.
@@ -265,10 +265,10 @@ type Agent struct {
 	// start and on Reload), not per request, so the prompt only changes
 	// when the configuration does.
 	MCP MCPServers
-	// Subagent, if set, makes this agent a subagent (atto agent): its
+	// Worker, if set, marks an agent working for another (atto agent): its
 	// prompt says so and carries the preset's instructions. Set it before
 	// SetStart (core.Bind).
-	Subagent *Subagent
+	Worker *Worker
 
 	// LastUsage is the most recent nonzero usage reported by the model.
 	LastUsage provider.Usage
@@ -479,8 +479,8 @@ func (a *Agent) Reload() (changed bool) {
 	return true
 }
 
-// Subagent describes an agent working for another one (atto agent).
-type Subagent struct {
+// Worker describes an agent working for another one (atto agent).
+type Worker struct {
 	Name, Preset string
 	Instructions string // its role's
 	// Path and Parent: where it is in its tree, /root/tests under /root.
@@ -491,17 +491,17 @@ type Subagent struct {
 	Worktree, Branch string
 }
 
-// subagentPart is the prompt's paragraph about agents: for an agent, what
+// workerPart is the prompt's paragraph about agents: for an agent, what
 // it is; for any session (an agent too, when it may) that may start
 // agents, how, with the roles. It has no trailing newline.
-func subagentPart(sub *Subagent, enabled bool, presets []subagent.Preset) string {
+func workerPart(sub *Worker, enabled bool, presets []agentstate.Preset) string {
 	var parts []string
 	if sub != nil {
-		parts = append(parts, prompts.Render("subagent", prompts.Subagent{Name: sub.Name, Preset: sub.Preset, Instructions: sub.Instructions, Path: sub.Path, Parent: sub.Parent, Worktree: sub.Worktree, Branch: sub.Branch}))
+		parts = append(parts, prompts.Render("agent", prompts.Agent{Name: sub.Name, Preset: sub.Preset, Instructions: sub.Instructions, Path: sub.Path, Parent: sub.Parent, Worktree: sub.Worktree, Branch: sub.Branch}))
 	}
 	if enabled && (sub == nil || sub.CanSpawn) {
-		list := strings.TrimSuffix(subagent.PromptList(presets), "\n")
-		parts = append(parts, prompts.Render("subagent_parent", map[string]any{"Presets": list}))
+		list := strings.TrimSuffix(agentstate.PromptList(presets), "\n")
+		parts = append(parts, prompts.Render("agent_parent", map[string]any{"Presets": list}))
 	}
 	return strings.Join(parts, "\n\n")
 }
@@ -536,11 +536,11 @@ func (a *Agent) scan(start time.Time) (Sources, string) {
 	if a.MCP != nil {
 		mcp = a.MCP.PromptServers()
 	}
-	var presets []subagent.Preset
-	if (a.Subagent == nil || a.Subagent.CanSpawn) && st.SubagentsEnabled() {
-		presets, _ = subagent.LoadPresets(subagent.Dirs(a.Cwd, projectRoot(a.Cwd)))
+	var presets []agentstate.Preset
+	if (a.Worker == nil || a.Worker.CanSpawn) && st.AgentsEnabled() {
+		presets, _ = agentstate.LoadPresets(agentstate.Dirs(a.Cwd, projectRoot(a.Cwd)))
 	}
-	sub := subagentPart(a.Subagent, st.SubagentsEnabled(), presets)
+	sub := workerPart(a.Worker, st.AgentsEnabled(), presets)
 	prompt := buildPrompt(a.Cwd, a.Shell, start, sk, files, mcp, sub, a.NoGoals)
 	var instr strings.Builder
 	writeInstructions(&instr, files)
@@ -1723,7 +1723,7 @@ func systemPrompt(cwd string, sh shell.Shell, start time.Time, sk []skills.Skill
 	return buildPrompt(cwd, sh, start, sk, loadInstructions(cwd), nil, "")
 }
 
-// sub is the paragraph about subagents (see subagentPart), "" for none.
+// sub is the paragraph about agents (see workerPart), "" for none.
 // The MCP server names are sorted, so the text depends on the
 // configuration alone.
 func buildPrompt(cwd string, sh shell.Shell, start time.Time, sk []skills.Skill, instr []instructionFile, mcp []string, sub string, noGoals ...bool) string {

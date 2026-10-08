@@ -1,11 +1,11 @@
-// Package subagent keeps what atto agent needs on disk: the presets that
-// describe kinds of subagents, the state of the subagents a session
+// Package agentstate keeps what atto agent needs on disk: the presets that
+// describe kinds of agents, the state of the agents a session
 // started, and the slots that cap how many of their turns run at once.
 //
-// A subagent is a named child session working for a parent session. Each
+// A agent is a named child session working for a parent session. Each
 // of its turns runs headless in the background as a job of the parent
 // (atto _agent-turn), so atto job's wait and kill apply to it.
-package subagent
+package agentstate
 
 import (
 	"fmt"
@@ -19,9 +19,9 @@ import (
 	"github.com/sebastianrcnt/atto/skills"
 )
 
-// Preset is a kind of subagent: a Markdown file whose frontmatter names
+// Preset is a kind of agent: a Markdown file whose frontmatter names
 // and describes it and may pick its model and effort. The body is added to
-// the subagent's system prompt. Subagents start only from presets, so the
+// the agent's system prompt. Agents start only from presets, so the
 // model can't pick a model or instructions of its own.
 type Preset struct {
 	Name         string `json:"name"`

@@ -8,12 +8,12 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/sebastianrcnt/atto/agentstate"
 	"github.com/sebastianrcnt/atto/config"
-	"github.com/sebastianrcnt/atto/subagent"
 )
 
-// A subagent started with -worktree works in a git worktree of its own,
-// on a new branch made from the parent's HEAD, so subagents editing files
+// A agent started with -worktree works in a git worktree of its own,
+// on a new branch made from the parent's HEAD, so agents editing files
 // at the same time don't clobber each other or the parent's checkout.
 //
 // The worktree lives under the atto dir (<atto dir>/worktrees/<parent>/
@@ -23,11 +23,11 @@ import (
 // are short, and the parent's part keeps names reused by other sessions
 // (or after rm, which keeps the branch) from colliding.
 
-// worktree is where a new subagent's worktree goes.
+// worktree is where a new agent's worktree goes.
 type worktree struct {
 	Repo   string // the parent's repository (top level)
 	Path   string // the worktree
-	Cwd    string // the subagent's directory in it: the parent's, relatively
+	Cwd    string // the agent's directory in it: the parent's, relatively
 	Branch string
 	Base   string // the commit it starts from
 }
@@ -54,7 +54,7 @@ func worktreePath(parent, name string) string {
 	return filepath.Join(config.Dir(), "worktrees", parent, name)
 }
 
-// planWorktree checks that a worktree for subagent name can be made from
+// planWorktree checks that a worktree for agent name can be made from
 // cwd's repository and says where it would go.
 func planWorktree(cwd, parent, name string) (worktree, error) {
 	if _, err := exec.LookPath("git"); err != nil {
@@ -76,7 +76,7 @@ func planWorktree(cwd, parent, name string) (worktree, error) {
 		return worktree{}, fmt.Errorf("-worktree: %q is not a valid branch name", w.Branch)
 	}
 	if _, err := git(cwd, "rev-parse", "--verify", "--quiet", "refs/heads/"+w.Branch); err == nil {
-		return worktree{}, fmt.Errorf("-worktree: branch %s exists (from an earlier subagent?): merge or delete it (git branch -D %s), or pick another name", w.Branch, w.Branch)
+		return worktree{}, fmt.Errorf("-worktree: branch %s exists (from an earlier agent?): merge or delete it (git branch -D %s), or pick another name", w.Branch, w.Branch)
 	}
 	if _, err := os.Stat(w.Path); err == nil {
 		return worktree{}, fmt.Errorf("-worktree: %s exists: remove it (git worktree remove %s), or pick another name", w.Path, w.Path)
@@ -104,7 +104,7 @@ func (w worktree) undo() {
 
 // worktreeDirt is what keeps st's worktree from being removed: git
 // status lines, at most a few, "" when clean or gone.
-func worktreeDirt(st subagent.State) (string, error) {
+func worktreeDirt(st agentstate.State) (string, error) {
 	if st.Worktree == "" {
 		return "", nil
 	}
@@ -127,7 +127,7 @@ func worktreeDirt(st subagent.State) (string, error) {
 
 // removeWorktree removes st's worktree (forcing past uncommitted changes
 // when force) and keeps its branch. It returns a line about the branch.
-func removeWorktree(st subagent.State, force bool) (string, error) {
+func removeWorktree(st agentstate.State, force bool) (string, error) {
 	if _, err := os.Stat(st.Worktree); err == nil {
 		args := []string{"worktree", "remove"}
 		if force {

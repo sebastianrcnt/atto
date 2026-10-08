@@ -14,11 +14,11 @@ import (
 	"time"
 
 	"github.com/sebastianrcnt/atto/agent"
+	"github.com/sebastianrcnt/atto/agentstate"
 	"github.com/sebastianrcnt/atto/config"
 	"github.com/sebastianrcnt/atto/events"
 	"github.com/sebastianrcnt/atto/jobs"
 	"github.com/sebastianrcnt/atto/session"
-	"github.com/sebastianrcnt/atto/subagent"
 )
 
 // agentServer is a fake model; answer gives the stream for the n-th
@@ -39,7 +39,7 @@ func agentServer(t *testing.T, answer func(n int, body string) string) (bodies f
 	dir := t.TempDir()
 	t.Setenv(config.EnvDir, dir)
 	t.Setenv(config.EnvAgent, "")
-	t.Setenv(config.EnvSubagent, "")
+	t.Setenv(config.EnvLegacyAgent, "")
 	t.Setenv("ATTO_SESSION_ID", "")
 	models := `{"providers":{"fake":{"baseUrl":"` + srv.URL + `","models":[` +
 		`{"id":"m","contextWindow":10000,"efforts":["low","medium","high"]},` +
@@ -64,7 +64,7 @@ func quoteJSON(s string) string {
 	return string(b)
 }
 
-func enableSubagents(t *testing.T, extra string) {
+func enableAgents(t *testing.T, extra string) {
 	t.Helper()
 	if err := os.WriteFile(config.SettingsPath(), []byte(`{"subagents":{"enabled":true`+extra+`}}`), 0o644); err != nil {
 		t.Fatal(err)
@@ -78,19 +78,19 @@ func runAgent(t *testing.T, args ...string) (string, error) {
 	return out.String(), err
 }
 
-func TestSubagentModel(t *testing.T) {
+func TestWorkerModel(t *testing.T) {
 	agentServer(t, func(int, string) string { return "" })
 	models, err := config.LoadModels()
 	if err != nil {
 		t.Fatal(err)
 	}
-	gen := subagent.General
+	gen := agentstate.General
 	var none config.Settings
-	set := config.Settings{Subagents: &config.SubagentSettings{Model: "fake/small", Effort: "low"}}
+	set := config.Settings{LegacyAgents: &config.AgentSettings{Model: "fake/small", Effort: "low"}}
 	for _, c := range []struct {
 		name     string
 		settings config.Settings
-		preset   subagent.Preset
+		preset   agentstate.Preset
 		pm, pe   string
 		model    string
 		effort   string
@@ -98,12 +98,12 @@ func TestSubagentModel(t *testing.T) {
 	}{
 		{"parent's model and effort", none, gen, "fake/m", "high", "fake/m", "high", ""},
 		{"settings over the parent", set, gen, "fake/m", "high", "fake/small", "low", ""},
-		{"preset over settings", set, subagent.Preset{Name: "p", Model: "fake/m", Effort: "medium"}, "fake/small", "low", "fake/m", "medium", ""},
-		{"an inherited effort the model lacks gives way", none, subagent.Preset{Name: "p", Model: "fake/small"}, "fake/m", "high", "fake/small", "low", ""},
-		{"a preset's unknown model", none, subagent.Preset{Name: "p", Model: "fake/nope"}, "", "", "", "", "role p: unknown model"},
-		{"a preset's effort the model lacks", none, subagent.Preset{Name: "p", Model: "fake/small", Effort: "high"}, "", "", "", "", "role p: small has no effort"},
+		{"preset over settings", set, agentstate.Preset{Name: "p", Model: "fake/m", Effort: "medium"}, "fake/small", "low", "fake/m", "medium", ""},
+		{"an inherited effort the model lacks gives way", none, agentstate.Preset{Name: "p", Model: "fake/small"}, "fake/m", "high", "fake/small", "low", ""},
+		{"a preset's unknown model", none, agentstate.Preset{Name: "p", Model: "fake/nope"}, "", "", "", "", "role p: unknown model"},
+		{"a preset's effort the model lacks", none, agentstate.Preset{Name: "p", Model: "fake/small", Effort: "high"}, "", "", "", "", "role p: small has no effort"},
 	} {
-		ref, effort, err := subagentModel(models, c.settings, c.preset, c.pm, c.pe)
+		ref, effort, err := agentModel(models, c.settings, c.preset, c.pm, c.pe)
 		if c.err != "" {
 			if err == nil || !strings.Contains(err.Error(), c.err) {
 				t.Errorf("%s: err %v", c.name, err)
@@ -123,7 +123,7 @@ func TestAgentRefusals(t *testing.T) {
 	if _, err := runAgent(t, "start", "a", "general", "task", "-session", "p1"); err == nil || !strings.Contains(err.Error(), `"enabled": true`) {
 		t.Fatalf("off: %v", err)
 	}
-	enableSubagents(t, "")
+	enableAgents(t, "")
 	for _, c := range []struct {
 		args []string
 		err  string
@@ -131,10 +131,10 @@ func TestAgentRefusals(t *testing.T) {
 		{[]string{"spawn", "Bad_Name", "x"}, "lowercase"},
 		{[]string{"spawn", "a", "x", "-role", "nope"}, `no preset "nope" (presets: general`},
 		{[]string{"spawn", "a"}, "give the agent its task"},
-		{[]string{"task", "a", "more"}, "no such subagent"},
-		{[]string{"send", "/root/zz", "hi"}, "no such subagent"},
+		{[]string{"task", "a", "more"}, "no such agent"},
+		{[]string{"send", "/root/zz", "hi"}, "no such agent"},
 		{[]string{"send", "..", "hi"}, "no parent agent"},
-		{[]string{"wait"}, "no subagent is running"},
+		{[]string{"wait"}, "no agent is running"},
 		{[]string{"task", "/root", "x"}, "not an agent anyone started"},
 	} {
 		if _, err := runAgent(t, append(c.args, "-session", "p1")...); err == nil || !strings.Contains(err.Error(), c.err) {
@@ -146,16 +146,16 @@ func TestAgentRefusals(t *testing.T) {
 	if _, err := runAgent(t, "spawn", "a", "the task", "-session", "p1"); err != nil {
 		t.Fatal(err)
 	}
-	a, _ := subagent.Load("p1", "a")
+	a, _ := agentstate.Load("p1", "a")
 	if _, err := runAgent(t, "spawn", "b", "deeper", "-session", a.Session); err == nil || !strings.Contains(err.Error(), "maxDepth") {
 		t.Fatalf("spawn below the depth: %v", err)
 	}
-	enableSubagents(t, `,"maxDepth":2`)
+	enableAgents(t, `,"maxDepth":2`)
 	if out, err := runAgent(t, "spawn", "b", "deeper", "-session", a.Session); err != nil || !strings.Contains(out, "agent /root/a/b started") {
 		t.Fatalf("nested spawn: %q %v", out, err)
 	}
 	// Seen from the nested agent: its parent, the root and itself.
-	b, _ := subagent.Load(a.Session, "b")
+	b, _ := agentstate.Load(a.Session, "b")
 	if out, err := runAgent(t, "send", "..", "found it", "-session", b.Session); err != nil || !strings.Contains(out, "sent to /root/a") {
 		t.Fatalf("send to the parent: %q %v", out, err)
 	}
@@ -185,9 +185,9 @@ func TestAgentRefusals(t *testing.T) {
 	}
 }
 
-// A subagent turn takes the parent's messages from its inbox at step
+// A agent turn takes the parent's messages from its inbox at step
 // boundaries, and one that arrives as the turn ends gets a turn of its own.
-func TestSubagentTurnDeliversSteers(t *testing.T) {
+func TestWorkerTurnDeliversSteers(t *testing.T) {
 	var id string
 	push := func(text string) {
 		_ = events.Push(id, events.Event{Source: "parent", Text: "Message from the parent agent: " + text})
@@ -205,7 +205,7 @@ func TestSubagentTurnDeliversSteers(t *testing.T) {
 	})
 	cwd := t.TempDir()
 	t.Chdir(cwd)
-	w := session.NewSubagent(cwd, "p1")
+	w := session.NewAgent(cwd, "p1")
 	w.Append(session.Entry{Type: session.TypeName, Name: "a"})
 	w.Close()
 	id = w.ID
@@ -213,7 +213,7 @@ func TestSubagentTurnDeliversSteers(t *testing.T) {
 	quiet(t)
 
 	var res printResult
-	err := RunPrint(PrintOptions{Prompt: "the task", Resume: id, Format: "text", Subagent: &agent.Subagent{Name: "a", Preset: "general"}, done: func(r printResult) { res = r }})
+	err := RunPrint(PrintOptions{Prompt: "the task", Resume: id, Format: "text", Worker: &agent.Worker{Name: "a", Preset: "general"}, done: func(r printResult) { res = r }})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -244,7 +244,7 @@ func TestAgentStartWaitReport(t *testing.T) {
 	})
 	cwd := t.TempDir()
 	t.Chdir(cwd)
-	enableSubagents(t, `,"maxConcurrent":1`)
+	enableAgents(t, `,"maxConcurrent":1`)
 	if err := os.MkdirAll(filepath.Join(cwd, ".atto", "agents"), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -274,7 +274,7 @@ func TestAgentStartWaitReport(t *testing.T) {
 	if evs := events.Drain(parent); len(evs) != 0 {
 		t.Fatalf("the final answer waits in the inbox after wait printed it: %+v", evs)
 	}
-	st1, _ := subagent.Load(parent, "bugs")
+	st1, _ := agentstate.Load(parent, "bugs")
 	ev := turnEvent(st1, st1.Latest())
 	if ev.Source != "agent" || !strings.Contains(ev.Text, "Message Type: FINAL_ANSWER\nFrom: /root/bugs\nTo: /root") ||
 		!strings.Contains(ev.Text, "Turn 1 finished") || !strings.Contains(ev.Text, "found 3 bugs") || ev.Quiet {
@@ -305,26 +305,26 @@ func TestAgentStartWaitReport(t *testing.T) {
 		t.Fatalf("list %q", out)
 	}
 	if l, _ := session.List("", false); len(l) != 0 {
-		t.Fatalf("the subagent's session is listed: %+v", l)
+		t.Fatalf("the agent's session is listed: %+v", l)
 	}
 	out, err = runAgent(t, "report", "bugs", "-session", parent)
 	if err != nil || !strings.Contains(out, "fixed them") {
 		t.Fatalf("report %q %v", out, err)
 	}
 	// Removed: gone from the list, its session archived, its name free.
-	st, _ := subagent.Load(parent, "bugs")
+	st, _ := agentstate.Load(parent, "bugs")
 	out, err = runAgent(t, "close", "bugs", "-session", parent)
 	if err != nil || !strings.Contains(out, "closed agent /root/bugs") {
 		t.Fatalf("rm: %q %v", out, err)
 	}
-	if l := subagent.List(parent); len(l) != 0 {
+	if l := agentstate.List(parent); len(l) != 0 {
 		t.Fatalf("listed after rm: %+v", l)
 	}
 	if p, err := session.Find(st.Session); err != nil || !strings.HasPrefix(p, config.ArchivedDir()) {
 		t.Fatalf("the session is not archived: %s %v", p, err)
 	}
 	if _, err := runAgent(t, "rm", "bugs", "-session", parent); err == nil {
-		t.Fatal("rm of a removed subagent")
+		t.Fatal("rm of a removed agent")
 	}
 }
 
@@ -336,7 +336,7 @@ func TestAgentWaitTimeout(t *testing.T) {
 	})
 	defer close(release)
 	t.Chdir(t.TempDir())
-	enableSubagents(t, "")
+	enableAgents(t, "")
 	if _, err := runAgent(t, "start", "slow", "general", "x", "-session", "p1"); err != nil {
 		t.Fatal(err)
 	}
@@ -358,11 +358,11 @@ func TestAgentWaitTimeout(t *testing.T) {
 	if err != nil || !strings.Contains(out, "interrupted") {
 		t.Fatalf("stop: %q %v", out, err)
 	}
-	st, _ := subagent.Load("p1", "slow")
-	if s := st.Latest().Status; s != subagent.Stopped {
+	st, _ := agentstate.Load("p1", "slow")
+	if s := st.Latest().Status; s != agentstate.Stopped {
 		t.Fatalf("status %s", s)
 	}
-	if out, err := runAgent(t, "rm", "-done", "-session", "p1"); err != nil || !strings.Contains(out, "closed agent /root/slow") || len(subagent.List("p1")) != 0 {
+	if out, err := runAgent(t, "rm", "-done", "-session", "p1"); err != nil || !strings.Contains(out, "closed agent /root/slow") || len(agentstate.List("p1")) != 0 {
 		t.Fatalf("rm -done: %q %v", out, err)
 	}
 }
@@ -374,7 +374,7 @@ func TestAgentQueueBeyondLimit(t *testing.T) {
 		return textAnswer("ok")
 	})
 	t.Chdir(t.TempDir())
-	enableSubagents(t, `,"maxConcurrent":1`)
+	enableAgents(t, `,"maxConcurrent":1`)
 	for _, n := range []string{"one", "two"} {
 		if _, err := runAgent(t, "start", n, "general", "x", "-session", "p1"); err != nil {
 			t.Fatal(err)
@@ -409,7 +409,7 @@ func TestAgentExternalParent(t *testing.T) {
 	if err := os.Mkdir(filepath.Join(root, ".git"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	enableSubagents(t, "")
+	enableAgents(t, "")
 	// Commands that only read create no parent.
 	path, _, _ := externalParentPath()
 	if out, err := runAgent(t, "list"); err != nil || out != "no agents\n" {
@@ -459,7 +459,7 @@ func TestAgentExternalParent(t *testing.T) {
 			t.Fatalf("%s: %q %v", cmd, out, err)
 		}
 	}
-	st, _ := subagent.Load(parent, "a")
+	st, _ := agentstate.Load(parent, "a")
 	if st.Effort != "high" {
 		t.Fatalf("effort: %s", st.Effort)
 	}
@@ -483,8 +483,8 @@ func TestAgentExternalParent(t *testing.T) {
 func TestAgentExternalModelFlags(t *testing.T) {
 	agentServer(t, func(int, string) string { return textAnswer("ok") })
 	t.Chdir(t.TempDir())
-	enableSubagents(t, "")
-	for _, env := range []string{"ATTO_SESSION_ID", config.EnvAgent, config.EnvSubagent} {
+	enableAgents(t, "")
+	for _, env := range []string{"ATTO_SESSION_ID", config.EnvAgent, config.EnvLegacyAgent} {
 		t.Setenv(env, "inside")
 		for _, flags := range [][]string{{"-m", "fake/m"}, {"-effort", "high"}, {"-m", ""}} {
 			args := append([]string{"start", "a", "general", "task", "-session", "explicit"}, flags...)
@@ -505,7 +505,7 @@ func TestAgentExternalModelFlags(t *testing.T) {
 	if _, err := runAgent(t, "wait", "a", "-session", "explicit", "-timeout", "30s"); err != nil {
 		t.Fatal(err)
 	}
-	st, _ := subagent.Load("explicit", "a")
+	st, _ := agentstate.Load("explicit", "a")
 	if st.Model != "fake/small" || st.Effort != "low" {
 		t.Fatalf("state: %+v", st)
 	}
@@ -521,8 +521,8 @@ func TestAgentListTaskSummary(t *testing.T) {
 		{"unicode", strings.Repeat("é", 80), strings.Repeat("é", 59) + "…"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			st := subagent.State{Name: c.name, Parent: c.name, Session: "s1", Task: c.task}
-			if err := subagent.Create(st); err != nil {
+			st := agentstate.State{Name: c.name, Parent: c.name, Session: "s1", Task: c.task}
+			if err := agentstate.Create(st); err != nil {
 				t.Fatal(err)
 			}
 			var out strings.Builder
@@ -540,9 +540,9 @@ func TestAgentListTaskSummary(t *testing.T) {
 	}
 }
 
-func st0(t *testing.T, parent string) subagent.State {
+func st0(t *testing.T, parent string) agentstate.State {
 	t.Helper()
-	l := subagent.List(parent)
+	l := agentstate.List(parent)
 	if len(l) == 0 {
 		t.Fatal("no agent")
 	}
@@ -555,18 +555,18 @@ func TestAgentTurnLeavesQuietMessages(t *testing.T) {
 	var id string
 	bodies := agentServer(t, func(n int, body string) string {
 		if n == 1 {
-			_ = events.Push(id, events.Event{Source: "agent", Quiet: true, Text: subagent.Envelope(subagent.Message, "/root", "/root/a", "fyi")})
+			_ = events.Push(id, events.Event{Source: "agent", Quiet: true, Text: agentstate.Envelope(agentstate.Message, "/root", "/root/a", "fyi")})
 		}
 		return textAnswer("done")
 	})
 	cwd := t.TempDir()
 	t.Chdir(cwd)
-	w := session.NewSubagent(cwd, "p1")
+	w := session.NewAgent(cwd, "p1")
 	w.Append(session.Entry{Type: session.TypeName, Name: "a"})
 	w.Close()
 	id = w.ID
 	quiet(t)
-	if err := RunPrint(PrintOptions{Prompt: "the task", Resume: id, Format: "text", Subagent: &agent.Subagent{Name: "a", Preset: "general"}}); err != nil {
+	if err := RunPrint(PrintOptions{Prompt: "the task", Resume: id, Format: "text", Worker: &agent.Worker{Name: "a", Preset: "general"}}); err != nil {
 		t.Fatal(err)
 	}
 	if b := bodies(); len(b) != 1 {
@@ -617,8 +617,8 @@ func TestAgentTaskDuringFinalizationStartsSuccessor(t *testing.T) {
 	close(release)
 	deadline := time.Now().Add(20 * time.Second)
 	for time.Now().Before(deadline) {
-		st, err := subagent.Load("root", "a")
-		if err == nil && st.Turns == 2 && st.Latest().Status == subagent.Done {
+		st, err := agentstate.Load("root", "a")
+		if err == nil && st.Turns == 2 && st.Latest().Status == agentstate.Done {
 			if len(bodies()) != 2 || !strings.Contains(bodies()[1], "second") {
 				t.Fatalf("successor requests: %v", bodies())
 			}
@@ -626,7 +626,7 @@ func TestAgentTaskDuringFinalizationStartsSuccessor(t *testing.T) {
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-	st, err := subagent.Load("root", "a")
+	st, err := agentstate.Load("root", "a")
 	t.Logf("agent state: %+v (%v), latest: %+v", st, err, st.Latest())
 	for _, j := range jobs.List("root") {
 		output, _ := os.ReadFile(jobs.OutputPath("root", j.ID))

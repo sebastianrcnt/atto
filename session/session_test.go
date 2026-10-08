@@ -133,9 +133,9 @@ func TestWriteAfterCloseKeepsNoHandle(t *testing.T) {
 	}
 }
 
-func TestSubagentSessionsAreNotListed(t *testing.T) {
+func TestWorkerSessionsAreNotListed(t *testing.T) {
 	t.Setenv("ATTO_DIR", t.TempDir())
-	w := NewSubagent("/work", "parent1")
+	w := NewAgent("/work", "parent1")
 	w.Append(Entry{Type: TypeMessage, Message: &provider.Message{Role: "user", Content: "task"}})
 	w.Close()
 	h, _, err := Load(w.Path)

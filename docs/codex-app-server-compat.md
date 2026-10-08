@@ -106,7 +106,7 @@ Codex ThreadItem is a **tagged union**; atto Item is a struct with a string `typ
 | `fileChange` | missing structured item | `{id,changes:[{path,kind,diff}],status}`. atto shell editing is just commandExecution: cannot reliably infer patches from arbitrary shell text. Git before/after diff is possible UI aid, not exact per-tool semantics; structured edit events would require instrumentation. |
 | `mcpToolCall` | missing structured item | `server,tool,arguments,status,result,error,durationMs,appContext,mcpAppUi,...`; atto MCP-backed shell commands are not sufficient to reconstruct rich results/progress. |
 | `dynamicToolCall`, `functionCallOutput` | missing | Client-owned tools, structured arguments/content and subsequent tool-output input are not atto's single bash tool interface. Requires new agent/tool integration, not just JSON translation. |
-| `collabAgentToolCall`, `subAgentActivity` | conceptual subagents exist | Codex sender/receiver thread IDs, tool/status/agent-state maps and activity events versus atto subagent list/read and shell-mediated lifecycle. Need explicit observer/state projection, not regex parsing of shell command text. |
+| `collabAgentToolCall`, `subAgentActivity` | conceptual agents exist | Codex sender/receiver thread IDs, tool/status/agent-state maps and activity events versus atto agent list/read and shell-mediated lifecycle. Need explicit observer/state projection, not regex parsing of shell command text. |
 | `plan` | missing | Proposed plan text and plan notifications; atto can write plan prose but no plan item lifecycle. |
 | `webSearch`, `imageView`, `imageGeneration`, `sleep` | missing dedicated items | atto can call shell/web tools, `atto view`, jobs/timers; these lack matching typed records. atto command images expose only name/dimensions, not Codex imageView path/resource identity. |
 | `enteredReviewMode`, `exitedReviewMode` | missing | Require review runtime. |
@@ -454,8 +454,8 @@ Extracted from the snapshot's `client_request_definitions!` registry. **E** mark
 | `job/list` | Partial backgroundTerminals/list, but numeric jobs/monitors differ |
 | `job/output` | No matching job-tail RPC |
 | `job/stop` | Partial backgroundTerminals/terminate; different identity/runtime |
-| `subagent/list` | No dedicated matching list; Codex projects subagents as threads/items |
-| `subagent/read` | No dedicated matching read; Codex uses thread/read + collab items |
+| `agent/list` | No dedicated matching list; Codex projects agents as threads/items |
+| `agent/read` | No dedicated matching read; Codex uses thread/read + collab items |
 | `prompt/answer` | No matching picker-mirror RPC; server requests are duplex instead |
 
 ## Appendix B. Complete Codex server-notification inventory

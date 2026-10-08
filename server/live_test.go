@@ -286,12 +286,12 @@ func TestLiveSessionProtocol(t *testing.T) {
 		t.Fatalf("unsteered %v, rolled back %d", f.unsteered, f.rolled)
 	}
 	f.mu.Unlock()
-	// Jobs and subagents are the session's, read from files.
+	// Jobs and agents are the session's, read from files.
 	if r := c.must("job/list", map[string]any{}); len(r["jobs"].([]any)) != 0 {
 		t.Fatalf("job/list %v", r)
 	}
 	if r := c.must("subagent/list", map[string]any{}); len(r["subagents"].([]any)) != 0 {
-		t.Fatalf("subagent/list %v", r)
+		t.Fatalf("agent/list %v", r)
 	}
 	if _, ok := init["settings"].(map[string]any)["toolGroups"]; !ok {
 		t.Fatalf("initialize without settings: %v", init)

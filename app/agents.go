@@ -10,9 +10,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/sebastianrcnt/atto/agentstate"
 	"github.com/sebastianrcnt/atto/daemon"
 	"github.com/sebastianrcnt/atto/session"
-	"github.com/sebastianrcnt/atto/subagent"
 	"github.com/sebastianrcnt/atto/tui"
 )
 
@@ -93,7 +93,7 @@ type centerItem struct {
 	updated                        time.Time
 	parent, agentPath, role, model string
 	external, archived             bool
-	turn                           *subagent.Turn
+	turn                           *agentstate.Turn
 	// Tree-only presentation fields, populated by centerTree.
 	depth           int
 	prefix, project string
@@ -174,14 +174,14 @@ type centerSnapshot struct {
 }
 
 type centerAgent struct {
-	state subagent.State
-	turn  subagent.Turn
+	state agentstate.State
+	turn  agentstate.Turn
 }
 
 func scanCenter() centerSnapshot {
 	panes, _ := listPanes()
 	snapshot := centerSnapshot{panes: panes, saved: listSaved()}
-	for _, s := range subagent.ListAll() {
+	for _, s := range agentstate.ListAll() {
 		snapshot.agents = append(snapshot.agents, centerAgent{s, s.Latest()})
 	}
 	// A parent may have no user message yet (for example a shell using
@@ -344,9 +344,9 @@ func (c *agentCenter) apply(snapshot centerSnapshot) {
 		}
 		if it.pane == nil && (!it.current || viewer) && !it.archived {
 			switch turn.Status {
-			case subagent.Running, subagent.Queued:
+			case agentstate.Running, agentstate.Queued:
 				it.tab = tabWorking
-			case subagent.Idle, subagent.Done:
+			case agentstate.Idle, agentstate.Done:
 				it.tab = tabReady
 			default:
 				it.tab = tabInactive
@@ -491,11 +491,11 @@ func centerTree(items []centerItem) []centerItem {
 		}
 	}
 	for _, it := range roots {
-		walk(it, 0, "", it.cwd, subagent.RootPath)
+		walk(it, 0, "", it.cwd, agentstate.RootPath)
 	}
 	for _, it := range items {
 		if !seen[it.id] {
-			walk(it, 0, "", it.cwd, subagent.RootPath)
+			walk(it, 0, "", it.cwd, agentstate.RootPath)
 		}
 	}
 	return out

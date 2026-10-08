@@ -210,7 +210,7 @@ func Format(evs []Event) string {
 }
 
 // envelopeStart begins a message one agent sends another (see package
-// subagent): an event of its own kind, not prefixed.
+// agent): an event of its own kind, not prefixed.
 const envelopeStart = `<atto_internal_context source="agent">`
 
 // IsEvent reports whether a message to the model is events: prefixed, or

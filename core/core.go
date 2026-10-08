@@ -16,13 +16,13 @@ import (
 	"time"
 
 	"github.com/sebastianrcnt/atto/agent"
+	"github.com/sebastianrcnt/atto/agentstate"
 	"github.com/sebastianrcnt/atto/config"
 	"github.com/sebastianrcnt/atto/events"
 	"github.com/sebastianrcnt/atto/goal"
 	"github.com/sebastianrcnt/atto/hooks"
 	"github.com/sebastianrcnt/atto/jobs"
 	"github.com/sebastianrcnt/atto/session"
-	"github.com/sebastianrcnt/atto/subagent"
 )
 
 // DefaultEffort applies when neither a flag, the session nor settings.json
@@ -168,7 +168,7 @@ func SetHooks(ag *agent.Agent, hk *hooks.Runner) {
 // system prompt (a resumed session keeps its own, which keeps the prefix
 // cache); record makes the agent append its messages to the file.
 func Bind(ag *agent.Agent, hk *hooks.Runner, file *session.Writer, start time.Time, record bool) {
-	subagent.OpenTree(file.ID)
+	agentstate.OpenTree(file.ID)
 	ag.SetStart(start)
 	ag.SetSession(file.ID, Env(file.ID))
 	ag.Record, ag.EntryID = nil, nil
@@ -249,7 +249,7 @@ func (s Saved) Branch() []session.Entry { return session.Active(s.Entries) }
 // codex) and its goal file goes (the session file keeps the goal's last
 // snapshot). Returns how many jobs were stopped.
 func Leave(id string) int {
-	release, err := subagent.CloseTree(id)
+	release, err := agentstate.CloseTree(id)
 	if err == nil {
 		defer release()
 	}
@@ -261,7 +261,7 @@ func Leave(id string) int {
 		}
 		seen[session] = true
 		n := 0
-		for _, s := range subagent.List(session) {
+		for _, s := range agentstate.List(session) {
 			n += stop(s.Session)
 		}
 		_ = goal.Clear(session)
@@ -276,7 +276,7 @@ func Leave(id string) int {
 func LeaveKeepingAgents(id string) int {
 	_ = goal.Clear(id)
 	children := make(map[int]bool)
-	for _, s := range subagent.List(id) {
+	for _, s := range agentstate.List(id) {
 		children[s.Job] = true
 	}
 	return jobs.KillAllExcept(id, func(j jobs.Job) bool { return j.Kind() == "agent" || children[j.ID] })

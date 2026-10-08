@@ -86,7 +86,7 @@ type Job struct {
 	// Command then only describes the job.
 	Args []string `json:"args,omitempty"`
 	// Quiet: a clean exit posts no event, for a command that tells the
-	// session how it went itself (a subagent turn).
+	// session how it went itself (an agent turn).
 	Quiet bool `json:"quiet,omitempty"`
 }
 

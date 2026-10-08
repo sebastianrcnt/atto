@@ -95,7 +95,7 @@ type Entry struct {
 	Cwd           string `json:"cwd,omitempty"`
 	ParentSession string `json:"parentSession,omitempty"` // path of the session this was forked from
 	GitBranch     string `json:"gitBranch,omitempty"`     // branch checked out in Cwd when the session began ("HEAD" if detached)
-	// AgentOf is the ID of the session a subagent session works for (atto
+	// AgentOf is the ID of the session an agent session works for (atto
 	// agent). Such sessions are left out of default listings.
 	AgentOf  string `json:"agentOf,omitempty"`
 	External bool   `json:"external,omitempty"` // lightweight external orchestration parent
@@ -253,8 +253,8 @@ func NewExternal(cwd string) *Writer {
 	return w
 }
 
-// NewSubagent is New for the session of a subagent working for parent.
-func NewSubagent(cwd, parent string) *Writer {
+// NewAgent is New for the session of an agent working for parent.
+func NewAgent(cwd, parent string) *Writer {
 	w := New(cwd)
 	w.agentOf = parent
 	return w
@@ -485,13 +485,13 @@ type Summary struct {
 	Branch      string // git branch when the session began; "" if unknown
 	Size        int64  // file size in bytes
 	Running     int    // pid of the background process writing it; 0 if none
-	AgentOf     string // the session a subagent session works for
+	AgentOf     string // the session an agent session works for
 	External    bool
 }
 
 // List returns sessions, newest first. If cwd is non-empty only sessions
 // started in that directory are returned. archived selects archived
-// sessions instead of active ones. Subagent sessions are left out: they
+// sessions instead of active ones. Worker sessions are left out: they
 // are reached through atto agent (or by ID).
 func List(cwd string, archived bool) ([]Summary, error) {
 	return list(cwd, archived, false)
