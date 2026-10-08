@@ -5,11 +5,15 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/sebastianrcnt/atto/agent"
+	"github.com/sebastianrcnt/atto/ai"
+	"github.com/sebastianrcnt/atto/config"
 	"github.com/sebastianrcnt/atto/events"
 	"github.com/sebastianrcnt/atto/goal"
 	"github.com/sebastianrcnt/atto/provider"
@@ -562,7 +566,7 @@ func TestGoalDriverRetryCountResets(t *testing.T) {
 
 func TestGoalDriverOtherFailuresStallAtOnce(t *testing.T) {
 	t.Setenv("ATTO_DIR", t.TempDir())
-	for i, err := range []error{errors.New("401: invalid api key"), errors.New("400: invalid request: tools must be an array"), errors.New("404: model not found")} {
+	for i, err := range []error{errors.New("401: invalid api key"), errors.New("400: invalid request: tools must be an array"), errors.New("404: model not found"), fmt.Errorf("%w: notes cut off twice: %w", agent.ErrCompaction, ai.ErrNotRetryable)} {
 		g, _ := goal.New("ship it")
 		d := GoalDriver{Session: fmt.Sprint("other", i), Goal: g, Retrying: func(Retry) { t.Fatal("retried") }}
 		d.BeginTurn()
@@ -646,5 +650,75 @@ func TestGoalDriverRunRetries(t *testing.T) {
 	}
 	if err := d2.Run(ctx, "go", turn2, func(any) {}, nil); !errors.Is(err, errUnavailable) || calls != 1 {
 		t.Fatalf("%v, %d calls", err, calls)
+	}
+}
+
+func TestGoalDriverCompactionFailures(t *testing.T) {
+	t.Setenv("ATTO_DIR", t.TempDir())
+	fastRetries(t)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, `{"error":{"message":"upstream unavailable"}}`, http.StatusServiceUnavailable)
+	}))
+	defer srv.Close()
+	ag := agent.New(config.ModelRef{ProviderName: "test", Provider: config.Provider{BaseURL: srv.URL},
+		Model: config.Model{ID: "m", ContextWindow: 40000}}, "", t.TempDir())
+	ag.Restore([]session.Entry{
+		{Type: session.TypeMessage, Message: &provider.Message{Role: "user", Content: "hi"}},
+		{Type: session.TypeMessage, Message: &provider.Message{Role: "assistant", Content: "hello"}, Usage: &provider.Usage{PromptTokens: 37000}},
+	})
+	g, _ := goal.New("ship it")
+	d := GoalDriver{Session: "s"}
+	d.Set(g)
+	calls := 0
+	err := d.Run(context.Background(), g.Continuation(), func(ctx context.Context, input string, emit func(any)) error {
+		calls++
+		return ag.Run(ctx, input, emit)
+	}, func(any) {}, nil)
+	if !errors.Is(err, agent.ErrCompaction) || calls != 2 || g.Status != goal.Blocked || g.Note != err.Error() || d.Pending() != nil {
+		t.Fatalf("err %v, calls %d, goal %+v, pending %+v", err, calls, g, d.Pending())
+	}
+}
+
+func TestGoalDriverCompactionFailureCountResets(t *testing.T) {
+	t.Setenv("ATTO_DIR", t.TempDir())
+	failure := fmt.Errorf("%w: upstream unavailable", agent.ErrCompaction)
+	for _, intervening := range []error{nil, errUnavailable} {
+		g, _ := goal.New("ship it")
+		d := GoalDriver{Session: "s"}
+		d.Set(g)
+		for _, err := range []error{failure, intervening, failure} {
+			d.BeginTurn()
+			d.Event(agent.ToolStart{})
+			if !d.EndTurn(err) {
+				t.Fatalf("intervening %v: goal %+v", intervening, g)
+			}
+		}
+		g.Status = goal.Paused
+		d.Set(g)
+		g.Status = goal.Active
+		d.Set(g)
+		d.BeginTurn()
+		if !d.EndTurn(failure) {
+			t.Fatal("resume kept the failure count")
+		}
+	}
+}
+
+func TestGoalDriverSuccessfulCompactionResetsFailures(t *testing.T) {
+	t.Setenv("ATTO_DIR", t.TempDir())
+	g, _ := goal.New("ship it")
+	d := GoalDriver{Session: "s"}
+	d.Set(g)
+	failure := fmt.Errorf("%w: upstream unavailable", agent.ErrCompaction)
+	d.BeginTurn()
+	d.EndTurn(failure)
+	d.BeginTurn()
+	d.Event(agent.CompactEnd{})
+	if !d.EndTurn(failure) || d.Pending() == nil {
+		t.Fatal("a successful compaction did not reset the failure streak")
+	}
+	d.BeginTurn()
+	if d.EndTurn(fmt.Errorf("%w: 429: You have hit your usage limit", agent.ErrCompaction)) || g.Status != goal.UsageLimited {
+		t.Fatalf("compaction usage limit: %+v", g)
 	}
 }

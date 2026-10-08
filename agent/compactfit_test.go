@@ -146,7 +146,7 @@ func TestCompactionRewritesCutNotes(t *testing.T) {
 		switch {
 		case n != 2:
 			t.Errorf("%s: %d requests", c.name, n)
-		case c.fails && (err == nil || !strings.Contains(err.Error(), "cut off") || !ai.IsPermanent(err) || len(a.messages) != 2 || len(saved) != 0):
+		case c.fails && (err == nil || !strings.Contains(err.Error(), "cut off") || !ai.IsPermanent(err) || !errors.Is(err, ErrCompaction) || len(a.messages) != 2 || len(saved) != 0):
 			t.Errorf("%s: err %v, messages %d, saved %v", c.name, err, len(a.messages), saved)
 		case !c.fails && (err != nil || len(saved) != 1 || saved[0] != c.answers[2]+"|stop"):
 			t.Errorf("%s: err %v, saved %q", c.name, err, saved)

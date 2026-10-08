@@ -79,8 +79,9 @@ type GoalDriver struct {
 	replaced        bool // the running turn is being interrupted for a message of the user (see Replace)
 	held            bool // waiting for the user after a turn with user input
 
-	retries int    // transient failures in a row, retried so far
-	retry   *Retry // the retry waiting to start (see Pending)
+	compactionFailures int    // consecutive turns that failed to compact
+	retries            int    // transient failures in a row, retried so far
+	retry              *Retry // the retry waiting to start (see Pending)
 	// live mirrors that the goal is active, for SteerNote, which the agent
 	// calls from its turn's goroutine.
 	live atomic.Bool
@@ -128,13 +129,13 @@ func (d *GoalDriver) changed() {
 func (d *GoalDriver) Set(g *goal.Goal) {
 	if g != d.Goal { // another goal: the running turn is not part of it yet
 		d.counted, d.timing, d.lastFold = false, false, time.Now()
-		d.retries, d.retry = 0, nil
+		d.retries, d.retry, d.compactionFailures = 0, nil, 0
 		d.track()
 	}
 	d.Goal = g
 	d.live.Store(running(g))
 	if !running(g) { // paused, cleared, finished: nothing to retry
-		d.retries, d.retry = 0, nil
+		d.retries, d.retry, d.compactionFailures = 0, nil, 0
 	}
 	if g == nil {
 		_ = goal.Clear(d.Session)
@@ -296,6 +297,8 @@ func (d *GoalDriver) Elapsed() int64 {
 // model call is accounted.
 func (d *GoalDriver) Event(ev any) {
 	switch e := ev.(type) {
+	case agent.CompactEnd:
+		d.compactionFailures = 0
 	case agent.ToolStart:
 		d.tools++
 	case agent.StepEnd:
@@ -334,6 +337,11 @@ func (d *GoalDriver) EndTurn(err error) bool {
 	if g == nil {
 		return false
 	}
+	if errors.Is(err, agent.ErrCompaction) {
+		d.compactionFailures++
+	} else {
+		d.compactionFailures = 0
+	}
 	wasActive := g.Status == goal.Active
 	var failed error
 	switch {
@@ -348,6 +356,9 @@ func (d *GoalDriver) EndTurn(err error) bool {
 	switch {
 	case replaced:
 		g.Turns++ // cut off, so neither progress nor a lack of it
+	case failed != nil && goal.IsTransient(failed) && d.compactionFailures >= 2 && g.Status == goal.Active:
+		g.Turns++
+		g.Status, g.Note = goal.Blocked, failed.Error()
 	case failed != nil && goal.IsTransient(failed) && g.Status == goal.Active:
 		g.Turns++ // not yet a stall (see GoalDriver)
 		switch {

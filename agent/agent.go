@@ -1465,6 +1465,9 @@ var SummaryPrefix = prompts.Render("compact_prefix", nil) + "\n\n"
 // keeps 20k tokens of user messages).
 const keepUserTokens = 20000
 
+// ErrCompaction identifies a failed attempt to write handoff notes.
+var ErrCompaction = errors.New("compaction failed")
+
 // Compact replaces the conversation with handoff notes written by the model.
 func (a *Agent) Compact(ctx context.Context, emit func(any)) error {
 	return a.compact(ctx, emit, false)
@@ -1478,7 +1481,7 @@ func (a *Agent) Compact(ctx context.Context, emit func(any)) error {
 // and only the earlier prefix is summarized.
 func (a *Agent) compact(ctx context.Context, emit func(any), auto bool) error {
 	if len(a.messages) == 0 {
-		return fmt.Errorf("nothing to compact")
+		return fmt.Errorf("%w: nothing to compact", ErrCompaction)
 	}
 	if a.Hooks != nil {
 		emitHook(emit, "PreCompact", a.Hooks.PreCompact(ctx, auto))
@@ -1545,10 +1548,10 @@ func (a *Agent) compact(ctx context.Context, emit func(any), auto bool) error {
 	// to check that the compaction kept the server's prefix cache.
 	ai.PinRecentRequests("compaction", sent+1)
 	if err != nil {
-		return fmt.Errorf("compaction failed: %w", err)
+		return fmt.Errorf("%w: %w", ErrCompaction, err)
 	}
 	if cut != "" {
-		return fmt.Errorf("compaction failed: the handoff notes were cut off (%s), twice; the conversation is unchanged: %w", cut, ai.ErrNotRetryable)
+		return fmt.Errorf("%w: the handoff notes were cut off (%s), twice; the conversation is unchanged: %w", ErrCompaction, cut, ai.ErrNotRetryable)
 	}
 	notes := strings.TrimSpace(res.Message.Content)
 	if notes == "" {
