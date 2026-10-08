@@ -24,7 +24,7 @@ func NewTree(cmd *exec.Cmd) *Tree {
 	cmd.SysProcAttr = &syscall.SysProcAttr{CreationFlags: windows.CREATE_NEW_PROCESS_GROUP | consoleFlags()}
 	if job, err := windows.CreateJobObject(nil, nil); err == nil {
 		info := windows.JOBOBJECT_EXTENDED_LIMIT_INFORMATION{}
-		info.BasicLimitInformation.LimitFlags = windows.JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+		info.BasicLimitInformation.LimitFlags = windows.JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE | windows.JOB_OBJECT_LIMIT_BREAKAWAY_OK
 		if _, err := windows.SetInformationJobObject(job, windows.JobObjectExtendedLimitInformation,
 			uintptr(unsafe.Pointer(&info)), uint32(unsafe.Sizeof(info))); err == nil {
 			t.job = job
@@ -89,7 +89,19 @@ func consoleFlags() uint32 {
 
 // Detach makes cmd outlive its parent console.
 func Detach(cmd *exec.Cmd) {
-	cmd.SysProcAttr = &syscall.SysProcAttr{CreationFlags: windows.CREATE_NEW_PROCESS_GROUP | windows.DETACHED_PROCESS}
+	cmd.SysProcAttr = &syscall.SysProcAttr{CreationFlags: windows.CREATE_NEW_PROCESS_GROUP | windows.DETACHED_PROCESS | breakawayFlags()}
+}
+
+// Escape our kill-on-close tree when explicitly detaching. An enclosing job
+// (for example a CI runner's) may forbid breakaway, so don't request it there.
+func breakawayFlags() uint32 {
+	var info windows.JOBOBJECT_EXTENDED_LIMIT_INFORMATION
+	if err := windows.QueryInformationJobObject(0, windows.JobObjectExtendedLimitInformation,
+		uintptr(unsafe.Pointer(&info)), uint32(unsafe.Sizeof(info)), nil); err == nil &&
+		info.BasicLimitInformation.LimitFlags&windows.JOB_OBJECT_LIMIT_BREAKAWAY_OK != 0 {
+		return windows.CREATE_BREAKAWAY_FROM_JOB
+	}
+	return 0
 }
 
 // Isolate makes cmd outlive its parent on a console of its own, hidden.

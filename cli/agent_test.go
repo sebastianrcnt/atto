@@ -16,6 +16,7 @@ import (
 	"github.com/sebastianrcnt/atto/agent"
 	"github.com/sebastianrcnt/atto/config"
 	"github.com/sebastianrcnt/atto/events"
+	"github.com/sebastianrcnt/atto/jobs"
 	"github.com/sebastianrcnt/atto/session"
 	"github.com/sebastianrcnt/atto/subagent"
 )
@@ -618,6 +619,12 @@ func TestAgentTaskDuringFinalizationStartsSuccessor(t *testing.T) {
 			return
 		}
 		time.Sleep(20 * time.Millisecond)
+	}
+	st, err := subagent.Load("root", "a")
+	t.Logf("agent state: %+v (%v), latest: %+v", st, err, st.Latest())
+	for _, j := range jobs.List("root") {
+		output, _ := os.ReadFile(jobs.OutputPath("root", j.ID))
+		t.Logf("job: %+v\n%s", j, output)
 	}
 	t.Fatal("task accepted during finalization had no successor")
 }
