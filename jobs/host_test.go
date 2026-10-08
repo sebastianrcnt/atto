@@ -4,6 +4,8 @@ package jobs
 
 import (
 	"errors"
+	"os/exec"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -92,9 +94,19 @@ func TestHostForegroundDiesWithAtto(t *testing.T) {
 		t.Fatalf("status %+v", st)
 	}
 	_ = h.Wait()
-	for deadline := time.Now().Add(3 * time.Second); !gone(h.PID); time.Sleep(20 * time.Millisecond) {
+	// Killed descendants keep the group present until the OS reaps them;
+	// loaded runners may need longer. Stay below the command's 30s sleep
+	// so a surviving command cannot pass by finishing normally.
+	for deadline := time.Now().Add(10 * time.Second); !gone(h.PID); time.Sleep(20 * time.Millisecond) {
 		if time.Now().After(deadline) {
-			t.Fatal("the command outlived atto")
+			processes, err := exec.Command("ps", "-axo", "pid,ppid,pgid,state,command").CombinedOutput()
+			var group []string
+			for line := range strings.SplitSeq(string(processes), "\n") {
+				if fields := strings.Fields(line); len(fields) >= 3 && fields[2] == strconv.Itoa(h.PID) {
+					group = append(group, line)
+				}
+			}
+			t.Fatalf("the command outlived atto (process group %d, ps error %v):\n%s", h.PID, err, strings.Join(group, "\n"))
 		}
 	}
 }
