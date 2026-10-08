@@ -5,11 +5,10 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"os"
 	"path/filepath"
 	"sort"
-	"strings"
 
+	"github.com/sebastianrcnt/atto/approval"
 	"github.com/sebastianrcnt/atto/fsutil"
 )
 
@@ -105,40 +104,20 @@ func ProjectHooks(cwd string) ([]ProjectHook, error) {
 	return out, nil
 }
 
-type hookApprovals struct {
-	Approved map[string]string `json:"approved"`
-	Denied   map[string]string `json:"denied,omitempty"`
-}
+type hookApprovals = approval.Decisions
 
 func loadHookApprovals() hookApprovals {
-	a := hookApprovals{}
-	if data, err := os.ReadFile(HookApprovalsPath()); err == nil {
-		_ = json.Unmarshal(data, &a)
-	}
-	if a.Approved == nil {
-		a.Approved = map[string]string{}
-	}
-	if a.Denied == nil {
-		a.Denied = map[string]string{}
-	}
+	a, _ := fsutil.ReadJSON[hookApprovals](HookApprovalsPath())
 	return a
 }
 
-func hookKey(h ProjectHook) string {
-	path := h.Path
-	if abs, err := filepath.Abs(path); err == nil {
-		path = abs
-	}
-	return filepath.Clean(path) + "#" + h.Hash()
-}
+func hookKey(h ProjectHook) string { return approval.Path(h.Path) + "#" + h.Hash() }
 
 func HookApprovalOf(h ProjectHook) string {
-	a := loadHookApprovals()
-	key, hash := hookKey(h), h.Hash()
-	switch {
-	case a.Approved[key] == hash:
+	switch loadHookApprovals().Of(hookKey(h), h.Hash()) {
+	case approval.Approved:
 		return HookApproved
-	case a.Denied[key] == hash:
+	case approval.Denied:
 		return HookDenied
 	default:
 		return HookPending
@@ -151,35 +130,15 @@ func SetHookApproval(h ProjectHook, allow bool) error {
 	if h.Path == "" || sameHookPath(h.Path, SettingsPath()) {
 		return fmt.Errorf("user hooks need no approval")
 	}
-	return editHookApprovals(func(a *hookApprovals) {
-		key := hookKey(h)
-		if allow {
-			a.Approved[key] = h.Hash()
-			delete(a.Denied, key)
-		} else {
-			a.Denied[key] = h.Hash()
-			delete(a.Approved, key)
-		}
-	})
+	return editHookApprovals(func(a *hookApprovals) { a.Set(hookKey(h), h.Hash(), allow) })
 }
 
 func RevokeHook(h ProjectHook) error {
-	return editHookApprovals(func(a *hookApprovals) {
-		delete(a.Approved, hookKey(h))
-		delete(a.Denied, hookKey(h))
-	})
+	return editHookApprovals(func(a *hookApprovals) { a.Forget(hookKey(h)) })
 }
 
 func editHookApprovals(edit func(*hookApprovals)) error {
-	return fsutil.WithFileLock(HookApprovalsPath(), func() error {
-		a := loadHookApprovals()
-		edit(&a)
-		data, err := json.MarshalIndent(a, "", "  ")
-		if err != nil {
-			return err
-		}
-		return fsutil.WriteAtomic(HookApprovalsPath(), append(data, '\n'), 0o600)
-	})
+	return fsutil.EditJSON(HookApprovalsPath(), func(a *hookApprovals) { a.Init(); edit(a) })
 }
 
 // ApprovedHookSources leaves user hooks alone and removes unapproved project
@@ -216,21 +175,6 @@ func ApprovedHookSources(sources []HookSource, cwd string) []HookSource {
 // RevokeProjectHooks forgets every recorded hook decision for cwd, including
 // content no longer in the file that could otherwise regain trust if restored.
 func RevokeProjectHooks(cwd string) error {
-	path, err := filepath.Abs(ProjectSettingsPath(cwd))
-	if err != nil {
-		return err
-	}
-	prefix := filepath.Clean(path) + "#"
-	return editHookApprovals(func(a *hookApprovals) {
-		for key := range a.Approved {
-			if strings.HasPrefix(key, prefix) {
-				delete(a.Approved, key)
-			}
-		}
-		for key := range a.Denied {
-			if strings.HasPrefix(key, prefix) {
-				delete(a.Denied, key)
-			}
-		}
-	})
+	prefix := approval.Path(ProjectSettingsPath(cwd)) + "#"
+	return editHookApprovals(func(a *hookApprovals) { a.ForgetPrefix(prefix) })
 }

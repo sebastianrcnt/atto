@@ -1,8 +1,11 @@
 package config
 
 import (
+	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 )
 
@@ -100,5 +103,53 @@ func TestUserSettingsAreNotProjectHooks(t *testing.T) {
 	loaded, err := LoadHooks(root)
 	if err != nil || len(loaded["Stop"]) != 1 {
 		t.Fatalf("the same user settings should load only once, without approval: %+v, %v", loaded, err)
+	}
+}
+
+func TestOldHookApprovalFile(t *testing.T) {
+	t.Setenv(EnvDir, t.TempDir())
+	h := ProjectHook{Path: ProjectSettingsPath(t.TempDir()), Event: "Stop", Spec: HookSpec{Command: "one"}}
+	old := struct {
+		Approved map[string]string `json:"approved"`
+		Denied   map[string]string `json:"denied,omitempty"`
+	}{map[string]string{hookKey(h): h.Hash()}, nil}
+	data, err := json.MarshalIndent(old, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	data = append(data, '\n')
+	if err := os.WriteFile(HookApprovalsPath(), data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if HookApprovalOf(h) != HookApproved {
+		t.Fatal("old approval lost")
+	}
+	if err := editHookApprovals(func(*hookApprovals) {}); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := os.ReadFile(HookApprovalsPath()); err != nil || string(got) != string(data) {
+		t.Fatalf("format changed: %s %v", got, err)
+	}
+}
+
+func TestConcurrentHookApprovals(t *testing.T) {
+	t.Setenv(EnvDir, t.TempDir())
+	path := ProjectSettingsPath(t.TempDir())
+	var wg sync.WaitGroup
+	var hooks []ProjectHook
+	for i := range 24 {
+		h := ProjectHook{Path: path, Event: "Stop", Spec: HookSpec{Command: fmt.Sprint(i)}}
+		hooks = append(hooks, h)
+		wg.Go(func() {
+			if err := SetHookApproval(h, true); err != nil {
+				t.Error(err)
+			}
+		})
+	}
+	wg.Wait()
+	for _, h := range hooks {
+		if HookApprovalOf(h) != HookApproved {
+			t.Errorf("lost hook %s", h.Name())
+		}
 	}
 }

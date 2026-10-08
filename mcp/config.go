@@ -30,6 +30,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/sebastianrcnt/atto/approval"
 	"github.com/sebastianrcnt/atto/config"
 	"github.com/sebastianrcnt/atto/fsutil"
 )
@@ -208,12 +209,7 @@ func parseFile(data []byte) (map[string]json.RawMessage, error) {
 	return f.Servers, nil
 }
 
-func absPath(p string) string {
-	if a, err := filepath.Abs(p); err == nil {
-		return a
-	}
-	return p
-}
+func absPath(p string) string { return approval.Path(p) }
 
 // Put writes server name into the file of scope, keeping the file's other
 // servers and fields as they are.

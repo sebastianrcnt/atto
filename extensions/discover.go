@@ -1,7 +1,6 @@
 package extensions
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -12,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/sebastianrcnt/atto/agent"
+	"github.com/sebastianrcnt/atto/approval"
 	"github.com/sebastianrcnt/atto/config"
 	"github.com/sebastianrcnt/atto/fsutil"
 	"github.com/sebastianrcnt/atto/mcp"
@@ -116,23 +116,10 @@ func samePath(a, b string) bool {
 
 // approvals is extension-approvals.json: the hash of the code approved
 // for each project extension, by the entry file's absolute path.
-type approvals struct {
-	Approved map[string]string `json:"approved"`
-	Denied   map[string]string `json:"denied,omitempty"`
-}
+type approvals = approval.Decisions
 
 func loadApprovals() approvals {
-	a := approvals{Approved: map[string]string{}, Denied: map[string]string{}}
-	data, err := os.ReadFile(config.ExtensionApprovalsPath())
-	if err == nil {
-		_ = json.Unmarshal(data, &a)
-	}
-	if a.Approved == nil {
-		a.Approved = map[string]string{}
-	}
-	if a.Denied == nil {
-		a.Denied = map[string]string{}
-	}
+	a, _ := fsutil.ReadJSON[approvals](config.ExtensionApprovalsPath())
 	return a
 }
 
@@ -140,13 +127,6 @@ func loadApprovals() approvals {
 // with exactly this code.
 func approved(path, code string) bool {
 	return ApprovalOf(Spec{Path: path, Source: Project}, hash(code)) == mcp.Approved
-}
-
-func absPath(p string) string {
-	if a, err := filepath.Abs(p); err == nil {
-		return a
-	}
-	return p
 }
 
 // ErrNotFound is returned by Approve for a name no extension has.
@@ -181,15 +161,7 @@ func ApprovalOf(s Spec, codeHash string) mcp.Approval {
 	if codeHash == "" {
 		return mcp.Pending
 	}
-	a := loadApprovals()
-	key := absPath(s.Path)
-	switch {
-	case a.Approved[key] == codeHash:
-		return mcp.Approved
-	case a.Denied[key] == codeHash:
-		return mcp.Denied
-	}
-	return mcp.Pending
+	return loadApprovals().Of(approval.Path(s.Path), codeHash)
 }
 
 // SetApproval records a decision for exactly the code the user reviewed.
@@ -201,16 +173,7 @@ func SetApproval(s Spec, codeHash string, allow bool) error {
 	if codeHash == "" {
 		return fmt.Errorf("%s has no bundled code to approve", s.Name)
 	}
-	return editApprovals(func(a *approvals) {
-		key := absPath(s.Path)
-		if allow {
-			a.Approved[key] = codeHash
-			delete(a.Denied, key)
-		} else {
-			a.Denied[key] = codeHash
-			delete(a.Approved, key)
-		}
-	})
+	return editApprovals(func(a *approvals) { a.Set(approval.Path(s.Path), codeHash, allow) })
 }
 
 // Revoke forgets the decision for a project extension.
@@ -218,38 +181,16 @@ func Revoke(s Spec) error {
 	if s.Source != Project {
 		return fmt.Errorf("%s is a %s extension; those need no approval", s.Name, s.Source)
 	}
-	return editApprovals(func(a *approvals) {
-		delete(a.Approved, absPath(s.Path))
-		delete(a.Denied, absPath(s.Path))
-	})
+	return editApprovals(func(a *approvals) { a.Forget(approval.Path(s.Path)) })
 }
 
 func editApprovals(edit func(*approvals)) error {
-	return fsutil.WithFileLock(config.ExtensionApprovalsPath(), func() error {
-		a := loadApprovals()
-		edit(&a)
-		data, err := json.MarshalIndent(a, "", "  ")
-		if err != nil {
-			return err
-		}
-		return fsutil.WriteAtomic(config.ExtensionApprovalsPath(), append(data, '\n'), 0o600)
-	})
+	return fsutil.EditJSON(config.ExtensionApprovalsPath(), func(a *approvals) { a.Init(); edit(a) })
 }
 
 // RevokeProject forgets decisions for this project's extensions, including
 // entries that were removed from the repository since they were approved.
 func RevokeProject(cwd string) error {
-	prefix := absPath(config.ProjectExtensionsDir(agent.ProjectRoot(cwd))) + string(filepath.Separator)
-	return editApprovals(func(a *approvals) {
-		for key := range a.Approved {
-			if strings.HasPrefix(key, prefix) {
-				delete(a.Approved, key)
-			}
-		}
-		for key := range a.Denied {
-			if strings.HasPrefix(key, prefix) {
-				delete(a.Denied, key)
-			}
-		}
-	})
+	prefix := approval.Path(config.ProjectExtensionsDir(agent.ProjectRoot(cwd))) + string(filepath.Separator)
+	return editApprovals(func(a *approvals) { a.ForgetPrefix(prefix) })
 }
