@@ -117,7 +117,7 @@ func TestSubagentModel(t *testing.T) {
 }
 
 func TestAgentRefusals(t *testing.T) {
-	agentServer(t, func(int, string) string { return "" })
+	agentServer(t, func(int, string) string { return textAnswer("done") })
 	t.Chdir(t.TempDir())
 	// Off by default.
 	if _, err := runAgent(t, "start", "a", "general", "task", "-session", "p1"); err == nil || !strings.Contains(err.Error(), `"enabled": true`) {
@@ -174,9 +174,15 @@ func TestAgentRefusals(t *testing.T) {
 	if err := RunAgentTurn([]string{"-session", "p1", "zz", "1"}, io.Discard); err == nil {
 		t.Error("ran a turn of an agent that doesn't exist")
 	}
-	// Let both turns end before the temp dirs go.
-	_, _ = runAgent(t, "wait", "b", "-timeout", "30s", "-session", a.Session)
-	_, _ = runAgent(t, "wait", "a", "-timeout", "30s", "-session", "p1")
+	// The turn record can say done before its supervisor closes output.log.
+	// Wait for the jobs themselves before removing their directories.
+	for _, parent := range []string{a.Session, "p1"} {
+		for _, j := range jobs.List(parent) {
+			if _, why, err := jobs.Wait(parent, j.ID, 5*time.Second); err != nil || why != "done" {
+				t.Fatalf("job %s/%d: %s %v", parent, j.ID, why, err)
+			}
+		}
+	}
 }
 
 // A subagent turn takes the parent's messages from its inbox at step
