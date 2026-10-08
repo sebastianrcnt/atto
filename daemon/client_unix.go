@@ -85,8 +85,19 @@ func spawn(exe string) error {
 
 // request sends h to the daemon and returns its first answer.
 func request(h Hello, start bool) (net.Conn, byte, []byte, error) {
-	return requestVersion(h, start, Proto)
+	c, typ, b, err := requestVersion(h, start, Proto)
+	// The pane operations have kept their frames and shapes since version
+	// 1, so a daemon left running across an upgrade still lists, shows,
+	// kills and stops its panes. Never downgrade execution (new, workers).
+	if paneOp[h.Op] {
+		for version := Proto - 1; errors.Is(err, ErrProtocol) && version >= 1; version-- {
+			c, typ, b, err = requestVersion(h, start, version)
+		}
+	}
+	return c, typ, b, err
 }
+
+var paneOp = map[string]bool{"attach": true, "list": true, "kill": true, "stop": true}
 
 func requestVersion(h Hello, start bool, version int) (net.Conn, byte, []byte, error) {
 	c, err := dial(start)
@@ -133,11 +144,6 @@ func List() ([]Pane, error) {
 // Stop ends the daemon; with panes running only when force.
 func Stop(force bool) error {
 	c, _, _, err := request(Hello{Op: "stop", Force: force}, false)
-	// Stop is the one operation safe to send to an older daemon: it has
-	// always had these frames and this shape. Never downgrade execution.
-	for version := Proto - 1; errors.Is(err, ErrProtocol) && version >= 1; version-- {
-		c, _, _, err = requestVersion(Hello{Op: "stop", Force: force}, false, version)
-	}
 	if err != nil {
 		return err
 	}
