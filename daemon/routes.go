@@ -19,6 +19,16 @@ func Enabled() bool {
 	return settings.Daemon == nil || *settings.Daemon
 }
 
+// Usable is Enabled, unless a daemon of another protocol runs (the binary
+// was upgraded under it): then sessions run in-process until it stops.
+func Usable() bool {
+	if !Enabled() {
+		return false
+	}
+	_, err := Workers()
+	return !errors.Is(err, ErrProtocol)
+}
+
 // Routes supplies a protocol facade with the daemon's worker discovery.
 func Routes() *server.WorkerRoutes {
 	return &server.WorkerRoutes{

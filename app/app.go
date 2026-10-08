@@ -240,7 +240,7 @@ func Run(opts Options) error {
 	// a session left behind (/clear, /resume) closes once idle, as it
 	// always did, and everything ends with atto.
 	var srv *server.Server
-	workers := daemon.Enabled()
+	workers := daemon.Usable()
 	if !workers {
 		srv = server.New(Version, cwd)
 		srv.LockKind = session.KindTUI

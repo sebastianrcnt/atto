@@ -141,7 +141,7 @@ func subcommands() map[string]func([]string, io.Writer) error {
 		"serve": func(args []string, out io.Writer) error {
 			provider.UserAgent = "github.com/sebastianrcnt/atto/" + update.Current()
 			var routes *server.WorkerRoutes
-			if daemon.Enabled() {
+			if daemon.Usable() {
 				routes = daemon.Routes()
 			}
 			return server.RunHTTPWith(update.Current(), args, out, routes)
@@ -149,7 +149,7 @@ func subcommands() map[string]func([]string, io.Writer) error {
 		"app-server": func(args []string, out io.Writer) error {
 			provider.UserAgent = "github.com/sebastianrcnt/atto/" + update.Current()
 			var routes *server.WorkerRoutes
-			if daemon.Enabled() {
+			if daemon.Usable() {
 				routes = daemon.Routes()
 			}
 			return server.RunStdioWith(update.Current(), args, routes)
@@ -358,6 +358,8 @@ func main() {
 				os.Exit(code)
 			}
 			fmt.Fprintf(os.Stderr, "atto: running without the daemon: %v\n", derr)
+			// Sessions then run in this process too, not in its workers.
+			os.Setenv("ATTO_NO_DAEMON", "1")
 		}
 		err = app.Run(app.Options{Prompt: initialPrompt(positional), Inline: *inline, Continue: *cont, Resume: *resume, Model: *model, Session: *sessionID, Effort: *effort})
 	}
