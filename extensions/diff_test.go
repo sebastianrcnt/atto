@@ -31,7 +31,7 @@ func diffEnv(t *testing.T) string {
 	}
 	root, _ := filepath.EvalSymlinks(t.TempDir())
 	t.Setenv("ATTO_DIR", filepath.Join(root, "atto"))
-	t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull) // the user's diff settings are not under test
+	t.Setenv("GIT_CONFIG_GLOBAL", filepath.Join(t.TempDir(), "gitconfig")) // the user's diff settings are not under test
 	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
 	if err := config.Ensure(); err != nil {
 		t.Fatal(err)

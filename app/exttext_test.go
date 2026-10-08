@@ -31,7 +31,7 @@ func diffApp(t *testing.T) *App {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git is not installed")
 	}
-	t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
+	t.Setenv("GIT_CONFIG_GLOBAL", filepath.Join(t.TempDir(), "gitconfig"))
 	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
 	a := loadedApp(t)
 	if err := os.RemoveAll(filepath.Join(a.cwd, ".git")); err != nil { // loadedApp's stand-in
