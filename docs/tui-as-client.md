@@ -919,13 +919,80 @@ detach and exit with session persistence/lease release. Protocol tests cover
 scoped gateway isolation/replay, owner-detach prompt withdrawal and first-answer
 arbitration. The frozen `server/web` is unchanged.
 
-### What phase 3 needs
+### Phase 3 F/G/H — session workers and attachable clients
 
-Introduce per-session daemon workers and registry/socket routing; make daemon
-panes and `atto connect` clients of workers, with reconnect and detach lifecycle
-rather than shutting their in-process runtimes down. Route print/app-server
-attachment to an existing worker. Keep Windows in-process and legacy background
-handoff for non-daemon runs. Workers need their one-minute unattended idle unload,
-startup socket cleanup and crash/reconnect tests, including retaining running
-command clocks and restoring pending recovery/prompt state. Durable accepted-input
-journaling/request dedupe and the complete Codex-dialect adapter remain later work.
+The daemon now supervises `_session-server`: one runtime and writer lease per
+session, behind a peer-checked Unix socket (0600). Worker startup announces ready
+only after opening the session and socket. Find-or-start is serialized and resolves
+live empty sessions and ID prefixes before looking on disk; repeat opens converge
+on the same worker. Failed startup and worker exit remove their sockets; daemon
+startup removes stale worker sockets without touching live sockets or other files.
+Default paths are under `~/.atto/run`, with private, per-ATTO_DIR temporary socket
+names when a path would exceed macOS's Unix socket limit.
+
+Workers use `DefaultSessionRetention` (one minute). Client EOF and explicit detach
+leave work alone. The phase-1 runtime's retirement predicate and lane recheck remain
+the authority: runs, shells, queued work, active unheld goals, jobs, timers, retries
+and unanswered prompts prevent retirement. Retention is injectable through the
+hidden worker flag for tests, not a new user settings policy. Daemon protocol 3
+adds worker discovery and listing (incarnation ID, session, cwd, clients, busy,
+version, pid). Explicit daemon stop closes workers too; only this stop operation
+can use an older daemon control revision after an upgrade, never execution.
+
+Plain interactive atto and daemon panes use worker sockets when the daemon is
+available. `atto connect [session]` opens an independent TUI, with its own editor;
+`atto attach` still shares a pane's terminal bytes. Exit, `/quit` and empty-editor
+Ctrl+D detach, including during a turn. `/close` closes the runtime with reason
+`close`. `/clear`, `/new`, `/resume` and `/fork` move this client to another worker;
+old connections cannot apply notifications or callbacks to the new view. Startup
+keeps the terminal's project-trust deferral before SessionStart. Windows,
+`ATTO_NO_DAEMON=1` and `daemon: false` retain the phase-2 in-process path, retention
+zero and explicit shutdown on exit.
+
+`atto app-server` and `atto serve` use a protocol facade over workers by default;
+`-in-process` retains single-process operation. The facade has a separate upstream RPC
+connection for each frontend identity and one unattached observer per worker (so a
+later subscriber cannot outrun and suppress an earlier subscriber's backlog). It
+maps recovery/prompt provenance back to frontend identities, deduplicates fanout and translates worker snapshot cursors into its own
+ordered event stream. `thread/start` starts a worker, `thread/resume` joins it and
+`thread/list` includes live workers even before a first message is saved. Closing
+a facade detaches, never closes workers. HTTP/SSE retains its legacy anonymous
+identity and interactive capability. `/remote` uses the same facade and Scope
+policy, including terminal-local commands and session switching; the frozen web
+client is unchanged.
+
+`atto -p -session/-c` on a live worker sends input through that worker and returns
+the final answer in text or JSON. Like archived phase H, worker print refuses
+stream-json and per-run goal/image/model/effort/max-step overrides rather than
+silently changing a shared runtime; use `atto connect` for those controls. It waits
+past stale idle notifications and reports step/token usage. Worker print interruption follows runtime user-interrupt semantics, including
+hosted-command detach; standalone print keeps its ordinary signal cancellation.
+Plain print,
+`_continue` and `_agent-turn` keep today's execution and control paths. Agent-center
+and `atto agent list` projections include relevant worker execution state without
+moving agent spawn/task/wait/interrupt/close.
+
+A TUI losing its socket reconnects with bounded retries; the daemon restarts a
+crashed worker from its saved session if needed. Snapshot replay preserves running
+command clocks, prompts and other live state when reconnecting to a surviving
+worker. Failed sends restore the local draft and are not automatically resent.
+Incompatible revisions are refused with an actionable error rather than silently
+opening a different session; compatible old workers need not restart on upgrade.
+
+Coverage adds real worker readiness/single-writer/prefix routing/socket permissions,
+stale and failed-start cleanup, injected idle retirement without canceling detached
+turns, protocol-facade fanout/cursors/recovery identities, SSE capabilities and
+version refusal. Print tests cover answers, usage and stale idle notifications.
+Real-binary daemon PTY tests cover prompt/answer, Ctrl+D exit, killing the TUI
+mid-turn, `atto connect` to the same worker/turn, a simultaneous app-server client
+seeing one answer, print through that worker, transparent worker-crash reconnect
+and `/close`. Phase-1 tests continue to cover retirement blockers (goals, jobs,
+timers and prompts); phase-2 in-process and hosted user-interrupt tests remain.
+
+Remaining recovery boundary: a process crash restores only saved session state.
+In-flight model requests, accepted-but-unsaved queue entries and arbitrary extension
+promises/questions are not durable runtime checkpoints; they cannot safely be
+recreated merely from a prompt's display DTO. A surviving worker retains them
+across detach, but a killed worker cannot promise that recovery. Durable accepted-
+input journaling, request dedupe and runtime/prompt checkpointing remain follow-up
+work, together with the complete Codex-dialect adapter and WebSocket transport.

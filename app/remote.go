@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/sebastianrcnt/atto/config"
+	"github.com/sebastianrcnt/atto/daemon"
 	"github.com/sebastianrcnt/atto/server"
 	"github.com/sebastianrcnt/atto/tui"
 )
@@ -31,6 +32,7 @@ type remote struct {
 	token   string
 	links   []string
 	clients int
+	proxy   *server.Server
 }
 
 func (a *App) cmdRemote(arg string) {
@@ -103,11 +105,13 @@ func (a *App) startRemote(port int) {
 	}
 	srv := a.conn.own
 	if srv == nil {
-		ln.Close()
-		a.notice("Remote control is not available for a session in the daemon yet; run atto serve, or atto without the daemon (ATTO_NO_DAEMON=1).")
-		return
+		srv = server.New(Version, a.cwd)
+		srv.Workers = daemon.Routes()
 	}
 	r := &remote{token: token, addr: ln.Addr().String()}
+	if a.conn.own == nil {
+		r.proxy = srv
+	}
 	countClients := func(n int) {
 		go a.ui.Do(func() {
 			if a.remote == r {
@@ -153,6 +157,9 @@ func (a *App) stopRemote() {
 	}
 	a.remote = nil
 	_ = r.srv.Close()
+	if r.proxy != nil {
+		r.proxy.Close()
+	}
 }
 
 // showRemote prints the links, a QR code of the first, and the warnings.
@@ -215,8 +222,14 @@ func (a *App) remoteStatus() string {
 // remoteSwitched tells the gateway's clients the terminal shows another
 // session now.
 func (a *App) remoteSwitched() {
-	if a.remote != nil && a.conn != nil && a.conn.own != nil {
-		a.conn.own.Switched(a.threadID, a.remoteThread)
+	if a.remote != nil {
+		srv := a.remote.proxy
+		if srv == nil && a.conn != nil {
+			srv = a.conn.own
+		}
+		if srv != nil {
+			srv.Switched(a.threadID, a.remoteThread)
+		}
 	}
 	a.remoteThread = a.threadID
 }

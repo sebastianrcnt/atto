@@ -19,6 +19,7 @@ import (
 	"github.com/sebastianrcnt/atto/agentstate"
 	"github.com/sebastianrcnt/atto/config"
 	"github.com/sebastianrcnt/atto/core"
+	"github.com/sebastianrcnt/atto/daemon"
 	"github.com/sebastianrcnt/atto/events"
 	"github.com/sebastianrcnt/atto/jobs"
 	"github.com/sebastianrcnt/atto/session"
@@ -770,7 +771,7 @@ func agentList(out io.Writer, parent string) error {
 	walk(parent)
 	if len(rows) == 0 {
 		fmt.Fprintln(out, "no agents")
-		return nil
+		return listAgentWorkers(out, parent, rows)
 	}
 	tw := tabwriter.NewWriter(out, 0, 0, 2, ' ', 0)
 	fmt.Fprintln(tw, "AGENT\tROLE\tMODEL\tSTATUS\tTURN\tTASK")
@@ -789,6 +790,29 @@ func agentList(out io.Writer, parent string) error {
 		if s.Worktree != "" {
 			fmt.Fprintf(out, "%s: worktree %s · branch %s\n", agentstate.PathOf(s.Session), s.Worktree, s.Branch)
 		}
+	}
+	return listAgentWorkers(out, parent, rows)
+}
+
+// listAgentWorkers adds execution state for sessions represented in the tree;
+// legacy agent turns keep their existing state and control path.
+func listAgentWorkers(out io.Writer, parent string, rows []agentstate.State) error {
+	if !daemon.Enabled() {
+		return nil
+	}
+	workers, err := daemon.Workers()
+	if err != nil {
+		return err
+	}
+	for _, w := range workers {
+		if w.Session != parent && !slices.ContainsFunc(rows, func(st agentstate.State) bool { return st.Session == w.Session }) {
+			continue
+		}
+		state := "idle"
+		if w.Busy {
+			state = "working"
+		}
+		fmt.Fprintf(out, "session %s: worker %d · %s · %d client(s) · %s\n", w.Session, w.PID, state, w.Clients, w.Version)
 	}
 	return nil
 }

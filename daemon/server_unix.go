@@ -52,18 +52,20 @@ func Serve(exe string) error {
 	if err := privateDir(filepath.Dir(sock)); err != nil {
 		return err
 	}
+	cleanWorkerSockets()
 	_ = os.Remove(sock) // a dead daemon's: we hold the lock
 	ln, err := net.Listen("unix", sock)
 	if err != nil {
 		return err
 	}
 	_ = os.Chmod(sock, 0o600)
-	d := &daemon{exe: exe, ln: ln, panes: map[int]*pane{}, idleAfter: idleExit}
+	d := &daemon{exe: exe, ln: ln, panes: map[int]*pane{}, workers: map[string]*worker{}, idleAfter: idleExit}
 	d.idle = time.AfterFunc(d.idleAfter, func() { ln.Close() })
 	defer os.Remove(sock)
 	for {
 		c, err := ln.Accept()
 		if err != nil {
+			d.stopWorkers()
 			d.mu.Lock()
 			for _, p := range d.panes {
 				p.hangup()
@@ -80,6 +82,9 @@ type daemon struct {
 	ln        net.Listener
 	mu        sync.Mutex
 	panes     map[int]*pane
+	workers   map[string]*worker // by session
+	stopping  bool
+	wmu       sync.Mutex // serializes worker starts
 	next      int
 	idle      *time.Timer // ends the daemon when it fires with no pane
 	idleAfter time.Duration
@@ -161,7 +166,7 @@ func (c *client) send(typ byte, payload []byte) error {
 	if c.queued+len(payload) > clientQueueBytes {
 		return errors.New("daemon: client output queue full")
 	}
-	f := clientFrame{typ, slices.Clone(payload), typ == fExit || typ == fError || typ == fList}
+	f := clientFrame{typ, slices.Clone(payload), typ == fExit || typ == fError || typ == fList || typ == fWorker}
 	select {
 	case c.queue <- f:
 		c.queued += len(payload)
@@ -219,14 +224,23 @@ func (d *daemon) serve(conn net.Conn) {
 			c.close()
 		}
 	case "stop":
-		if n := len(d.list()); n > 0 && !h.Force {
-			fail("%d pane(s) running; atto daemon stop -force ends them", n)
+		if n, w := len(d.list()), len(d.workerList()); n+w > 0 && !h.Force {
+			fail("%d pane(s) and %d session(s) running; atto daemon stop -force ends them (and their sessions' work)", n, w)
 			return
 		}
+		d.stopWorkers()
 		if c.sendJSON(fExit, Exit{}) != nil {
 			c.close()
 		}
 		d.ln.Close()
+	case "worker":
+		if c.sendJSON(fWorker, d.startWorker(h)) != nil {
+			c.close()
+		}
+	case "workers":
+		if c.sendJSON(fWorker, d.workerList()) != nil {
+			c.close()
+		}
 	case "kill":
 		p := d.find(h.Target)
 		if p == nil {
@@ -372,7 +386,7 @@ func (p *pane) pump() {
 	d := p.d
 	d.mu.Lock()
 	delete(d.panes, p.info.ID)
-	if len(d.panes) == 0 {
+	if len(d.panes) == 0 && len(d.workers) == 0 {
 		d.idle.Reset(d.idleAfter)
 	}
 	d.mu.Unlock()

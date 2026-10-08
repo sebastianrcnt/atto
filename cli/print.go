@@ -176,6 +176,11 @@ func readStdinBytes(r io.Reader, wait time.Duration) ([]byte, error) {
 // RunPrint runs one prompt without the TUI. Assistant text goes to stdout;
 // in text mode tool activity goes to stderr with -v.
 func RunPrint(o PrintOptions) error {
+	if w, ok, err := workerFor(o); err != nil {
+		return err
+	} else if ok {
+		return printViaWorker(o, w, os.Stdout, os.Stderr)
+	}
 	settings, models, err := core.Load()
 	if err != nil {
 		return err

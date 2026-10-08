@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -84,11 +85,15 @@ func spawn(exe string) error {
 
 // request sends h to the daemon and returns its first answer.
 func request(h Hello, start bool) (net.Conn, byte, []byte, error) {
+	return requestVersion(h, start, Proto)
+}
+
+func requestVersion(h Hello, start bool, version int) (net.Conn, byte, []byte, error) {
 	c, err := dial(start)
 	if err != nil {
 		return nil, 0, nil, err
 	}
-	h.Proto = Proto
+	h.Proto = version
 	if err := writeJSON(c, fHello, h); err != nil {
 		c.Close()
 		return nil, 0, nil, fmt.Errorf("%w: %v", ErrUnavailable, err)
@@ -100,6 +105,9 @@ func request(h Hello, start bool) (net.Conn, byte, []byte, error) {
 	}
 	if typ == fError {
 		c.Close()
+		if strings.HasPrefix(string(b), "the running atto daemon speaks protocol ") {
+			return nil, 0, nil, fmt.Errorf("%w: %s", ErrProtocol, b)
+		}
 		return nil, 0, nil, errors.New(string(b))
 	}
 	return c, typ, b, nil
@@ -125,6 +133,11 @@ func List() ([]Pane, error) {
 // Stop ends the daemon; with panes running only when force.
 func Stop(force bool) error {
 	c, _, _, err := request(Hello{Op: "stop", Force: force}, false)
+	// Stop is the one operation safe to send to an older daemon: it has
+	// always had these frames and this shape. Never downgrade execution.
+	for version := Proto - 1; errors.Is(err, ErrProtocol) && version >= 1; version-- {
+		c, _, _, err = requestVersion(Hello{Op: "stop", Force: force}, false, version)
+	}
 	if err != nil {
 		return err
 	}

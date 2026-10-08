@@ -423,3 +423,70 @@ func TestTakebackBeforePendingNotification(t *testing.T) {
 	})
 	within(t, a, "ordered takeback", func() bool { return a.editor.Text() == "take this back" && len(a.pending.Steers) == 0 })
 }
+
+func TestWorkerConnectionSnapshotPreservesCommandClock(t *testing.T) {
+	a, m := liveApp(t, providertest.Reply{Command: "sleep 30", Description: "Attach command clock"})
+	typeLine(a, "run the clock")
+	if m.Started(5*time.Second) == 0 {
+		t.Fatal("no model request")
+	}
+	var id string
+	var started time.Time
+	within(t, a, "running tool", func() bool {
+		for key, tool := range a.tools {
+			if !tool.pending {
+				id, started = key, tool.start
+				return true
+			}
+		}
+		return false
+	})
+	worker := a.conn.own
+	old := a.conn
+	cn, err := dialConn(server.Connect(context.Background(), worker), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { a.ui.Do(func() { a.quitting = true }); cn.c.Close(); worker.Close() })
+	var info server.ThreadInfo
+	if err := cn.c.Call(context.Background(), "thread/attach", map[string]any{"threadId": a.threadID}, &info); err != nil {
+		t.Fatal(err)
+	}
+	a.ui.Do(func() { a.use(cn); a.show(info) })
+	old.c.Close()
+	a.ui.Do(func() {
+		tool := a.tools[id]
+		if tool == nil || tool.start.Sub(started) > time.Millisecond || started.Sub(tool.start) > time.Millisecond {
+			t.Fatalf("reattach reset command clock: before %v after %+v", started, tool)
+		}
+	})
+}
+
+func TestCloseCommandUsesCloseReason(t *testing.T) {
+	a, _ := liveApp(t)
+	witness := server.Connect(context.Background(), a.conn.own)
+	defer witness.Close()
+	if err := witness.Call(context.Background(), "ping", nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	typeLine(a, "/close")
+	within(t, a, "close exits the client", func() bool { return quitting(a) })
+	for {
+		select {
+		case n := <-witness.Events():
+			if n.Method != "thread/closed" {
+				continue
+			}
+			var p struct {
+				Reason string `json:"reason"`
+			}
+			_ = json.Unmarshal(n.Params, &p)
+			if p.Reason != "close" {
+				t.Fatalf("close reason %q", p.Reason)
+			}
+			return
+		case <-time.After(5 * time.Second):
+			t.Fatal("no session close")
+		}
+	}
+}

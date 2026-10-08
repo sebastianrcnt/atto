@@ -24,6 +24,12 @@ const helperEnv = "ATTO_DAEMON_TEST_HELPER"
 // TestMain lets the test binary be the program a pane runs: a line-based
 // stand-in for atto that speaks the markers.
 func TestMain(m *testing.M) {
+	if len(os.Args) > 1 && os.Args[1] == "_session-server" { // a session worker
+		if err := RunWorker("test", os.Args[2:]); err != nil {
+			os.Exit(1)
+		}
+		return
+	}
 	if os.Getenv(helperEnv) != "" {
 		helper()
 		return
@@ -589,6 +595,52 @@ func TestClientRejectsLegacyDaemon(t *testing.T) {
 	// daemon error that interactive startup would silently fall back from.
 	if err == nil || errors.Is(err, ErrUnavailable) || !strings.Contains(err.Error(), "protocol 1") {
 		t.Fatalf("legacy daemon error: %v", err)
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestStopOlderDaemonAfterUpgrade(t *testing.T) {
+	t.Setenv(config.EnvDir, t.TempDir())
+	if err := privateDir(RunDir()); err != nil {
+		t.Fatal(err)
+	}
+	ln, err := net.Listen("unix", SocketPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	done := make(chan error, 1)
+	go func() {
+		for _, version := range []int{Proto, Proto - 1} {
+			c, err := ln.Accept()
+			if err != nil {
+				done <- err
+				return
+			}
+			typ, b, err := readFrame(c)
+			var h Hello
+			if err != nil || typ != fHello || json.Unmarshal(b, &h) != nil || h.Op != "stop" || !h.Force || h.Proto != version {
+				c.Close()
+				done <- fmt.Errorf("stop hello: %c %s %v", typ, b, err)
+				return
+			}
+			if version == Proto {
+				err = writeFrame(c, fError, []byte(fmt.Sprintf("the running atto daemon speaks protocol %d, this atto %d: end its panes, then run atto daemon stop", Proto-1, Proto)))
+			} else {
+				err = writeJSON(c, fExit, Exit{})
+			}
+			c.Close()
+			if err != nil {
+				done <- err
+				return
+			}
+		}
+		done <- nil
+	}()
+	if err := Stop(true); err != nil {
+		t.Fatal(err)
 	}
 	if err := <-done; err != nil {
 		t.Fatal(err)

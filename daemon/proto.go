@@ -23,7 +23,8 @@ import (
 
 // Proto is the client-daemon protocol version. A client meeting a daemon
 // of another version refuses the request and explains how to stop it.
-const Proto = 2
+// Version 3 adds session workers.
+const Proto = 3
 
 // EnvPane is set to a pane's ID in the environment of the atto it runs.
 const EnvPane = "ATTO_DAEMON_PANE"
@@ -42,6 +43,7 @@ const (
 	fExit     = 'X' // daemon: Exit (JSON), the last frame
 	fList     = 'L' // daemon: []Pane (JSON)
 	fError    = 'E' // daemon: an error message, the last frame
+	fWorker   = 'W' // daemon: a session worker (JSON), or the list of them
 )
 
 // maxFrame bounds a frame's payload.
@@ -50,7 +52,7 @@ const maxFrame = 16 << 20
 // Hello is a client's request.
 type Hello struct {
 	Proto int    `json:"proto"`
-	Op    string `json:"op"` // new, attach, list, stop, kill
+	Op    string `json:"op"` // new, attach, list, stop, kill, worker, workers
 	// new: the atto arguments, working directory and environment.
 	Args []string `json:"args,omitempty"`
 	Cwd  string   `json:"cwd,omitempty"`
@@ -83,6 +85,20 @@ type Pane struct {
 	// runs), waiting (it needs the user: a question, a held goal) or idle.
 	State  string    `json:"state,omitempty"`
 	Active time.Time `json:"active"` // last input or attach
+}
+
+// Worker is a session worker the daemon runs: the runtime of one
+// session, reached at Socket.
+type Worker struct {
+	ID      string    `json:"id"`
+	Version string    `json:"version"`
+	Busy    bool      `json:"busy"`
+	Clients int       `json:"clients"`
+	Session string    `json:"session"`
+	Socket  string    `json:"socket"`
+	PID     int       `json:"pid"`
+	Cwd     string    `json:"cwd"`
+	Started time.Time `json:"started"`
 }
 
 // Exit ends an attachment.
@@ -129,3 +145,6 @@ func readFrame(r io.Reader) (byte, []byte, error) {
 // ErrUnavailable means there is no daemon here: not on this platform, or
 // turned off.
 var ErrUnavailable = errors.New("atto daemon unavailable")
+
+// ErrProtocol means this daemon and client cannot share the control protocol.
+var ErrProtocol = errors.New("incompatible atto daemon protocol")

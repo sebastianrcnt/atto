@@ -32,7 +32,7 @@ func (a *App) exitRunning() bool {
 // requestQuit is every way of exiting (ctrl+c, ctrl+d, /quit, /exit): the
 // menu when work would be lost, else it quits.
 func (a *App) requestQuit() {
-	if a.bgx.off || a.bgx.pending || a.readOnly != "" || !a.exitRunning() {
+	if a.workers() || a.bgx.off || a.bgx.pending || a.readOnly != "" || !a.exitRunning() {
 		a.doQuit()
 		return
 	}
@@ -41,7 +41,7 @@ func (a *App) requestQuit() {
 
 // exitMenuAvailable is whether ctrl+d may open the menu while a turn runs.
 func (a *App) exitMenuAvailable() bool {
-	return !a.bgx.off && a.readOnly == "" && a.exitRunning()
+	return !a.workers() && !a.bgx.off && a.readOnly == "" && a.exitRunning()
 }
 
 const (
@@ -96,7 +96,9 @@ func (a *App) exitMenu() {
 			a.runInBackground()
 		case exitDetach:
 			a.closeModal()
-			a.detach()
+			if !a.detach() { // atto connect: leaving is detaching
+				a.doQuit()
+			}
 		case exitQuit:
 			a.closeModal()
 			a.stopAndQuit()
@@ -123,7 +125,16 @@ func (a *App) stopAndQuit() {
 		a.doQuit() // the runtime of this process closes the session
 		return
 	}
-	a.rpc("thread/close", map[string]any{"reason": "exit"}, func(json.RawMessage, error) { a.doQuit() })
+	a.closeAndQuit()
+}
+
+// closeAndQuit is /close: an explicit session close, even in-process.
+func (a *App) closeAndQuit() {
+	if a.conn == nil {
+		a.doQuit()
+		return
+	}
+	a.rpc("thread/close", map[string]any{"reason": "close"}, func(json.RawMessage, error) { a.doQuit() })
 }
 
 // runInBackground hands the session to a background run; atto exits once
@@ -152,7 +163,7 @@ func (a *App) renderReadOnly(width int) []string {
 }
 
 // readOnlyAllowed are the commands that work on a read-only session.
-var readOnlyAllowed = []string{"quit", "exit", "resume", "clear", "tui"}
+var readOnlyAllowed = []string{"quit", "exit", "resume", "clear", "new", "tui", "agents", "close"}
 
 // refuseReadOnly refuses text typed into a read-only session (restoring it
 // to the editor), except the commands of readOnlyAllowed.

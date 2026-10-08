@@ -70,6 +70,7 @@ func (s *Server) httpHandler(token string, onClients func(int)) http.Handler {
 	c := &clientConn{id: fmt.Sprintf("h%d", clientSeq.Add(1))}
 	var streams atomic.Int64 // this handler's streams share one client identity
 	clients := func() {
+		s.routeInteractive(c.id, streams.Load() > 0)
 		if onClients != nil {
 			onClients(int(streams.Load())) // outside the broker's lock: the hook may wait for a UI
 		}

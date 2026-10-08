@@ -1,0 +1,432 @@
+//go:build !windows
+
+package daemon
+
+import (
+	"bufio"
+	"context"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"flag"
+	"fmt"
+	"io"
+	"net"
+	"os"
+	"os/exec"
+	"os/signal"
+	"path/filepath"
+	"slices"
+	"strings"
+	"sync"
+	"syscall"
+	"time"
+
+	"github.com/sebastianrcnt/atto/config"
+	"github.com/sebastianrcnt/atto/server"
+	"github.com/sebastianrcnt/atto/session"
+)
+
+// Session workers. Besides panes, the daemon runs one worker per session
+// a terminal shows: "atto _session-server", the session's runtime
+// (package server) behind a Unix socket of its own. A pane's TUI is a
+// client of the worker, so closing the terminal, or the TUI crashing,
+// ends a view and never the work; any number of terminals can show the
+// same session, each with its own editor. The daemon finds or starts the
+// worker of a session (one per session: it holds the session's writer
+// lease) and forgets it when it exits. A worker exits when its session
+// closes: explicitly, or once it has been idle with no client for the
+// retention period (one minute).
+
+// workerStartWait bounds how long the daemon waits for a worker to say it
+// is ready.
+const workerStartWait = 20 * time.Second
+
+// worker is a running session worker, in the daemon.
+type worker struct {
+	info Worker
+	cmd  *exec.Cmd
+	done chan struct{}
+}
+
+// workerReq is the "worker" request's answer.
+type workerAnswer struct {
+	Worker
+	Error    string `json:"error,omitempty"`
+	ReadOnly string `json:"readOnly,omitempty"`
+}
+
+// startWorker finds or starts the worker for h: Target names a session to
+// resume ("" starts a new one in h.Cwd; h.Args may carry -model and
+// -effort).
+func (d *daemon) startWorker(h Hello) workerAnswer {
+	d.wmu.Lock() // one start at a time: repeated starts converge
+	defer d.wmu.Unlock()
+	d.mu.Lock()
+	stopping := d.stopping
+	d.mu.Unlock()
+	if stopping {
+		return workerAnswer{Error: "the daemon is stopping"}
+	}
+	if h.Target != "" {
+		d.mu.Lock()
+		var found *worker
+		for id, w := range d.workers {
+			if id == h.Target {
+				found = w
+				break
+			}
+			if strings.HasPrefix(id, h.Target) {
+				if found != nil {
+					d.mu.Unlock()
+					return workerAnswer{Error: "ambiguous session " + h.Target}
+				}
+				found = w
+			}
+		}
+		d.mu.Unlock()
+		if found != nil {
+			return workerAnswer{Worker: found.info}
+		}
+		path, err := session.Find(h.Target)
+		if err != nil {
+			return workerAnswer{Error: err.Error()}
+		}
+		saved, err := session.Summarize(path)
+		if err != nil {
+			return workerAnswer{Error: err.Error()}
+		}
+		h.Target = saved.ID
+	}
+	sock, err := workerSocket()
+	if err != nil {
+		return workerAnswer{Error: err.Error()}
+	}
+	args := []string{"_session-server", "-socket", sock}
+	if h.Target != "" {
+		args = append(args, "-session", h.Target)
+	}
+	args = append(args, h.Args...)
+	cmd := exec.Command(d.exe, args...)
+	cmd.Dir = h.Cwd
+	cmd.Env = slices.DeleteFunc(slices.Clone(h.Env), func(e string) bool {
+		return strings.HasPrefix(e, EnvPane+"=") || strings.HasPrefix(e, EnvPaneToken+"=")
+	})
+	out, err := cmd.StdoutPipe()
+	if err != nil {
+		return workerAnswer{Error: err.Error()}
+	}
+	cmd.Stderr = nil
+	if log, err := os.OpenFile(LogPath(), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600); err == nil {
+		cmd.Stderr = log
+		defer log.Close()
+	}
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	if err := cmd.Start(); err != nil {
+		return workerAnswer{Error: err.Error()}
+	}
+	line := make(chan string, 1)
+	go func() {
+		s, _ := bufio.NewReader(out).ReadString('\n')
+		line <- strings.TrimSpace(s)
+		_, _ = io.Copy(io.Discard, out)
+	}()
+	var first string
+	select {
+	case first = <-line:
+	case <-time.After(workerStartWait):
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+		_ = os.Remove(sock)
+		return workerAnswer{Error: "the session's runtime did not start (see " + LogPath() + ")"}
+	}
+	verb, rest, _ := strings.Cut(first, " ")
+	switch verb {
+	case "ready":
+	case "readonly":
+		_ = cmd.Wait()
+		_ = os.Remove(sock)
+		return workerAnswer{ReadOnly: rest}
+	default:
+		_ = cmd.Wait()
+		_ = os.Remove(sock)
+		if rest == "" {
+			rest = "the session's runtime ended at once (see " + LogPath() + ")"
+		}
+		return workerAnswer{Error: rest}
+	}
+	w := &worker{cmd: cmd, done: make(chan struct{}), info: Worker{Session: rest, Socket: sock, PID: cmd.Process.Pid, Cwd: h.Cwd, Started: time.Now()}}
+	d.mu.Lock()
+	d.workers[w.info.Session] = w
+	d.idle.Stop()
+	d.mu.Unlock()
+	go func() {
+		defer close(w.done)
+		_ = cmd.Wait()
+		_ = os.Remove(sock)
+		d.mu.Lock()
+		if d.workers[w.info.Session] == w {
+			delete(d.workers, w.info.Session)
+		}
+		if len(d.panes) == 0 && len(d.workers) == 0 {
+			d.idle.Reset(d.idleAfter)
+		}
+		d.mu.Unlock()
+	}()
+	return workerAnswer{Worker: w.info}
+}
+
+func (d *daemon) workerList() []Worker {
+	d.mu.Lock()
+	var out []Worker
+	for _, w := range d.workers {
+		out = append(out, w.info)
+	}
+	d.mu.Unlock()
+	for i := range out {
+		nc, err := DialWorker(out[i])
+		if err != nil {
+			continue
+		}
+		c := server.NewClient(nc)
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		var state Worker
+		err = c.Call(ctx, "worker/state", map[string]any{"threadId": out[i].Session}, &state)
+		cancel()
+		c.Close()
+		if err == nil {
+			out[i].ID, out[i].Version, out[i].Clients, out[i].Busy = state.ID, state.Version, state.Clients, state.Busy
+		}
+	}
+	slices.SortFunc(out, func(a, b Worker) int { return a.Started.Compare(b.Started) })
+	return out
+}
+
+// stopWorkers ends every worker (daemon stop -force): their sessions
+// close as on exit.
+func (d *daemon) stopWorkers() {
+	d.wmu.Lock()
+	defer d.wmu.Unlock()
+	d.mu.Lock()
+	d.stopping = true
+	var workers []*worker
+	for _, w := range d.workers {
+		workers = append(workers, w)
+	}
+	d.mu.Unlock()
+	for _, w := range workers {
+		_ = w.cmd.Process.Signal(syscall.SIGTERM)
+	}
+	deadline := time.After(5 * time.Second)
+	for _, w := range workers {
+		select {
+		case <-w.done:
+		case <-deadline:
+			for _, w := range workers {
+				_ = w.cmd.Process.Kill()
+			}
+			return
+		}
+	}
+}
+
+// workerSocket is a new socket path beside the daemon's, or in the
+// private temp directory when that is too long for a socket.
+func workerSocket() (string, error) {
+	b := make([]byte, 6)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	name := "w-" + hex.EncodeToString(b) + ".sock"
+	dir, prefix := workerSocketLocation()
+	p := filepath.Join(dir, prefix+name)
+	if len(p) > maxSocketPath {
+		h := sha256.Sum256([]byte(config.Dir()))
+		p = filepath.Join("/tmp", fmt.Sprintf("atto-%d", os.Getuid()), fmt.Sprintf("%x-%s", h[:4], name))
+	}
+	if err := privateDir(filepath.Dir(p)); err != nil {
+		return "", err
+	}
+	return p, nil
+}
+
+// workerSocketLocation separates each ATTO_DIR's sockets even when a deep
+// directory makes them share the private temporary socket directory.
+func workerSocketLocation() (string, string) {
+	dir := filepath.Dir(SocketPath())
+	if dir == RunDir() {
+		return dir, ""
+	}
+	h := sha256.Sum256([]byte(config.Dir()))
+	return dir, fmt.Sprintf("%x-", h[:4])
+}
+
+func cleanWorkerSockets() {
+	dir, prefix := workerSocketLocation()
+	paths, _ := filepath.Glob(filepath.Join(dir, prefix+"w-*.sock"))
+	for _, path := range paths {
+		st, err := os.Lstat(path)
+		if err != nil || st.Mode()&os.ModeSocket == 0 {
+			continue
+		}
+		c, err := trustedDial(path)
+		if err == nil {
+			c.Close()
+			continue
+		}
+		if errors.Is(err, syscall.ECONNREFUSED) || errors.Is(err, os.ErrNotExist) {
+			_ = os.Remove(path)
+		}
+	}
+}
+
+// StartWorker asks the daemon (started if need be) for the worker of
+// session id ("" starts a new session in cwd; args may carry -model and
+// -effort). A session another process writes comes back as readOnly (no
+// worker).
+func StartWorker(id, cwd string, args []string) (w Worker, readOnly string, err error) {
+	c, typ, b, err := request(Hello{Op: "worker", Target: id, Cwd: cwd, Env: os.Environ(), Args: args}, true)
+	if err != nil {
+		return Worker{}, "", err
+	}
+	defer c.Close()
+	var a workerAnswer
+	if typ != fWorker || json.Unmarshal(b, &a) != nil {
+		return Worker{}, "", errors.New("daemon: unexpected answer")
+	}
+	if a.Error != "" {
+		return Worker{}, "", errors.New(a.Error)
+	}
+	return a.Worker, a.ReadOnly, nil
+}
+
+// Workers lists the daemon's session workers; none when no daemon runs.
+func Workers() ([]Worker, error) {
+	c, typ, b, err := request(Hello{Op: "workers"}, false)
+	if errors.Is(err, ErrUnavailable) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer c.Close()
+	var out []Worker
+	if typ != fWorker || json.Unmarshal(b, &out) != nil {
+		return nil, errors.New("daemon: unexpected answer")
+	}
+	return out, nil
+}
+
+// DialWorker connects to a worker's socket, checking it runs as this user.
+func DialWorker(w Worker) (net.Conn, error) { return trustedDial(w.Socket) }
+
+// --- the worker process ---
+
+// RunWorker is "atto _session-server": the runtime of one session behind
+// a Unix socket. It says "ready <session>" on stdout once it holds the
+// session ("readonly <why>" or "error <why>" and exits otherwise), serves
+// clients until the session closes, and exits then.
+func RunWorker(version string, args []string) error {
+	fs := flag.NewFlagSet("_session-server", flag.ContinueOnError)
+	sock := fs.String("socket", "", "the socket to listen on")
+	id := fs.String("session", "", "the session to resume (none: a new one)")
+	model := fs.String("model", "", "the model of a new session")
+	effort := fs.String("effort", "", "the effort of a new session")
+	deferStart := fs.Bool("defer-start", false, "wait for the terminal project trust decision")
+	retention := fs.Duration("retention", server.DefaultSessionRetention, "unattended idle grace period")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if *sock == "" {
+		return errors.New("-socket is required")
+	}
+	if *retention < 0 {
+		return errors.New("retention must not be negative")
+	}
+	if err := privateDir(filepath.Dir(*sock)); err != nil {
+		return err
+	}
+	if c, err := trustedDial(*sock); err == nil {
+		c.Close()
+		return errors.New("the worker socket is already in use")
+	} else if errors.Is(err, errPeer) {
+		return err
+	}
+	defer os.Remove(*sock)
+	fail := func(verb string, err error) error {
+		fmt.Printf("%s %s\n", verb, strings.ReplaceAll(err.Error(), "\n", " "))
+		return err
+	}
+	cwd, err := os.Getwd()
+	if err != nil {
+		return fail("error", err)
+	}
+	if err := config.Ensure(); err != nil {
+		return fail("error", err)
+	}
+	srv := server.New(version, cwd)
+	srv.LockKind = session.KindTUI
+	srv.Retire, srv.Retention = true, *retention
+	closed := make(chan struct{})
+	var once sync.Once
+	srv.OnThreadClosed = func(string) { once.Do(func() { close(closed) }) }
+	ctx := context.Background()
+
+	var info server.ThreadInfo
+	method, params := "thread/start", map[string]any{"cwd": cwd, "model": *model, "effort": *effort, "deferStart": *deferStart}
+	if *id != "" {
+		method, params = "thread/resume", map[string]any{"threadId": *id, "cwd": cwd, "deferStart": *deferStart}
+	}
+	if err := callServer(ctx, srv, method, params, &info); err != nil {
+		srv.Close()
+		return fail("error", err)
+	}
+	if info.ReadOnly != "" || info.Offline {
+		srv.Close()
+		return fail("readonly", errors.New(info.ReadOnly))
+	}
+	_ = os.Remove(*sock)
+	ln, err := net.Listen("unix", *sock)
+	if err != nil {
+		srv.Close()
+		return fail("error", err)
+	}
+	if err := os.Chmod(*sock, 0o600); err != nil {
+		ln.Close()
+		srv.Close()
+		return fail("error", err)
+	}
+	fmt.Printf("ready %s\n", info.ID)
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			if checkPeer(c.(*net.UnixConn)) != nil {
+				c.Close()
+				continue
+			}
+			go func() { _ = srv.ServeConn(ctx, c) }()
+		}
+	}()
+	sigs := make(chan os.Signal, 1)
+	signal.Notify(sigs, syscall.SIGTERM, syscall.SIGINT, syscall.SIGHUP)
+	defer signal.Stop(sigs)
+	select {
+	case <-closed:
+	case <-sigs:
+	}
+	ln.Close()
+	srv.CloseWith("other")
+	return nil
+}
+
+// callServer makes one request of srv from inside the worker (no client).
+func callServer(ctx context.Context, srv *server.Server, method string, params, result any) error {
+	c := server.Connect(ctx, srv)
+	defer c.Close()
+	return c.Call(ctx, method, params, result)
+}

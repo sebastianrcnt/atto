@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"maps"
+	"os"
 	"strings"
 	"time"
 
@@ -43,6 +44,9 @@ func (s *Server) threadCall(ctx context.Context, client, method string, p thread
 
 // threadMethods are the requests on a thread; they run on its lane.
 var threadMethods = map[string]func(t *thread, client string, p threadParams) (any, error){
+	"worker/state": func(t *thread, client string, p threadParams) (any, error) {
+		return map[string]any{"id": t.s.instance, "session": t.id, "cwd": t.cwd, "clients": len(t.attached), "busy": t.turns.Busy || t.shell != nil, "version": t.s.Version, "pid": os.Getpid()}, nil
+	},
 	"mcp/list": func(t *thread, client string, p threadParams) (any, error) {
 		if t.mcp == nil {
 			return map[string]any{"servers": []any{}}, nil

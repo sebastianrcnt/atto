@@ -33,6 +33,7 @@ import (
 
 // listPanes lists the daemon's panes; tests replace it.
 var listPanes = daemon.List
+var listWorkers = daemon.Workers
 
 // listSaved lists saved sessions, newest first; tests replace it.
 var listSaved = func() []session.Summary {
@@ -144,6 +145,17 @@ func (a *App) openAgents(tab int) {
 			a.ui.Emit(daemon.MarkerSeq("switch", strconv.Itoa(id)))
 			return
 		}
+		if a.workers() {
+			if panes, err := listPanes(); err == nil {
+				for _, p := range panes {
+					if p.ID == id && p.Session != "" {
+						a.closeModal()
+						a.resumeID(p.Session)
+						return
+					}
+				}
+			}
+		}
 		a.notice("This atto runs outside the daemon: show that session from a shell with atto attach %d.", id)
 	}
 	c.onOpen = func(id, cwd string) {
@@ -170,9 +182,10 @@ func (a *App) openAgents(tab int) {
 }
 
 type centerSnapshot struct {
-	panes  []daemon.Pane
-	saved  []session.Summary
-	agents []centerAgent
+	panes   []daemon.Pane
+	workers []daemon.Worker
+	saved   []session.Summary
+	agents  []centerAgent
 }
 
 type centerAgent struct {
@@ -182,7 +195,8 @@ type centerAgent struct {
 
 func scanCenter() centerSnapshot {
 	panes, _ := listPanes()
-	snapshot := centerSnapshot{panes: panes, saved: listSaved()}
+	workers, _ := listWorkers()
+	snapshot := centerSnapshot{panes: panes, workers: workers, saved: listSaved()}
 	for _, s := range agentstate.ListAll() {
 		snapshot.agents = append(snapshot.agents, centerAgent{s, s.Latest()})
 	}
@@ -283,6 +297,26 @@ func (c *agentCenter) apply(snapshot centerSnapshot) {
 		}
 		items = append(items, it)
 		seen[it.id] = true
+	}
+	for _, w := range snapshot.workers {
+		if seen[w.Session] {
+			for i := range items {
+				if items[i].id == w.Session {
+					if w.Busy {
+						items[i].tab = tabWorking
+					} else if items[i].tab == tabWorking {
+						items[i].tab = tabReady
+					}
+				}
+			}
+			continue
+		}
+		state := tabReady
+		if w.Busy {
+			state = tabWorking
+		}
+		items = append(items, centerItem{id: w.Session, cwd: w.Cwd, updated: w.Started, tab: state, current: c.a != nil && c.a.threadID == w.Session})
+		seen[w.Session] = true
 	}
 	if a := c.a; a != nil && !seen[a.threadID] {
 		it := centerItem{id: a.threadID, title: a.sessName, cwd: a.cwd, current: true, updated: time.Now(), tab: tabReady}

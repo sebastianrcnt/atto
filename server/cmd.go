@@ -16,7 +16,15 @@ import (
 )
 
 // RunStdio implements "atto app-server": JSON-RPC over stdin/stdout.
-func RunStdio(version string) error {
+func RunStdio(version string) error { return RunStdioWith(version, nil, nil) }
+
+// RunStdioWith accepts app-server flags and optional worker routing.
+func RunStdioWith(version string, args []string, routes *WorkerRoutes) error {
+	fs := flag.NewFlagSet("app-server", flag.ContinueOnError)
+	inProcess := fs.Bool("in-process", false, "run session runtimes in this process")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
 	if err := config.Ensure(); err != nil {
 		return err
 	}
@@ -27,6 +35,9 @@ func RunStdio(version string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
 	runtime := New(version, cwd)
+	if !*inProcess {
+		runtime.Workers = routes
+	}
 	defer runtime.Close()
 	return runtime.ServeStdio(ctx, os.Stdin, os.Stdout)
 }
@@ -51,7 +62,13 @@ func WebLinks(addr, token string) []string {
 // RunHTTP implements "atto serve": the protocol over HTTP + SSE plus the
 // web client.
 func RunHTTP(version string, args []string, out io.Writer) error {
+	return RunHTTPWith(version, args, out, nil)
+}
+
+// RunHTTPWith accepts optional daemon worker routing.
+func RunHTTPWith(version string, args []string, out io.Writer, routes *WorkerRoutes) error {
 	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
+	inProcess := fs.Bool("in-process", false, "run session runtimes in this process")
 	listen := fs.String("listen", "127.0.0.1:7878", "address to listen on")
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -72,6 +89,9 @@ func RunHTTP(version string, args []string, out io.Writer) error {
 		return err
 	}
 	runtime := New(version, cwd)
+	if !*inProcess {
+		runtime.Workers = routes
+	}
 	defer runtime.Close()
 	srv := &http.Server{Handler: runtime.HTTPHandler(token), ReadHeaderTimeout: 10 * time.Second}
 

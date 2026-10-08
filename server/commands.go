@@ -62,9 +62,11 @@ var Builtins = []CommandInfo{
 	{Name: "tui", Args: "[auto|fullscreen|inline]", Desc: "Choose the renderer (fullscreen or inline)", Local: true},
 	{Name: "remote", Args: "[on [port]|off]", Desc: "Control this session from a phone or browser (QR code)", Local: true},
 	{Name: "clear", Desc: "Start a new conversation", Local: true},
+	{Name: "new", Desc: "Start a new conversation", Local: true},
 	{Name: "agents", Desc: "Every atto session, its goal and subagents (also ← on an empty prompt)", Local: true},
 	{Name: "detach", Desc: "Leave atto running in the daemon (atto attach returns)", Local: true},
-	{Name: "quit", Desc: "Exit atto", Local: true},
+	{Name: "close", Desc: "Stop this session and its work, then exit", Local: true},
+	{Name: "quit", Desc: "Leave this client (daemon sessions keep running)", Local: true},
 	{Name: "exit", Desc: "Exit atto", Local: true},
 }
 

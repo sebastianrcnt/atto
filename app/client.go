@@ -22,8 +22,8 @@ import (
 // become blocks, and the state the footer shows (busy, pending input, the
 // goal, usage) is a mirror of the thread's. Without the daemon the
 // runtime runs in this process (server.Connect: the same JSON, dispatcher
-// and event hub as any client). Daemon panes also keep this in-process
-// runtime until session workers are introduced in phase 3.
+// and event hub as any client). With the daemon, clients use the socket
+// of their session worker.
 
 // conn is the TUI's connection to its runtime.
 type conn struct {
@@ -44,11 +44,12 @@ type rpcCall struct {
 	done   func(json.RawMessage, error) // on the UI goroutine; may be nil
 }
 
-// connect starts the TUI's connection: requests go out one at a time, in
-// order, from a goroutine of their own (the UI never waits for the
-// runtime), and notifications are applied on the UI goroutine.
-func (a *App) connect(c *server.Client, own *server.Server) error {
-	a.conn = &conn{c: c, own: own, wake: make(chan struct{}, 1)}
+var errWorkerProtocol = errors.New("incompatible session worker protocol")
+
+// dialConn initializes a connection to a runtime on c. A runtime that
+// speaks no protocol revision this terminal does is refused here.
+func dialConn(c *server.Client, own *server.Server) (*conn, error) {
+	cn := &conn{c: c, own: own, wake: make(chan struct{}, 1)}
 	var init struct {
 		ClientID string `json:"clientId"`
 		Version  int    `json:"protocolVersion"`
@@ -59,18 +60,50 @@ func (a *App) connect(c *server.Client, own *server.Server) error {
 		"capabilities":     map[string]bool{"interactive": true, "images": true},
 	}, &init)
 	if err != nil {
-		return err
+		c.Close()
+		var re *server.RPCError
+		if errors.As(err, &re) && re.Data != nil && re.Data.Reason == server.ReasonUnsupportedProtocol {
+			return nil, fmt.Errorf("%w: the session runs in an atto of another version (%s): close it there (/close, or atto daemon stop -force), then open it again", errWorkerProtocol, re.Message)
+		}
+		return nil, err
 	}
 	if init.Version != server.ProtocolVersion {
-		return fmt.Errorf("the session runtime speaks protocol %d, this terminal %d: update the older side", init.Version, server.ProtocolVersion)
+		c.Close()
+		return nil, fmt.Errorf("%w: the session runtime speaks protocol %d, this terminal %d: update the older side", errWorkerProtocol, init.Version, server.ProtocolVersion)
 	}
 	if err := c.Call(context.Background(), "initialized", nil, nil); err != nil {
+		c.Close()
+		return nil, err
+	}
+	cn.id = init.ClientID
+	return cn, nil
+}
+
+// connect makes c the terminal's connection.
+func (a *App) connect(c *server.Client, own *server.Server) error {
+	cn, err := dialConn(c, own)
+	if err != nil {
 		return err
 	}
-	a.conn.id = init.ClientID
-	go a.sendLoop()
-	go a.eventLoop()
+	a.use(cn)
 	return nil
+}
+
+// use makes cn the connection requests go to and notifications come
+// from: requests go out one at a time, in order, from a goroutine of
+// their own (the UI never waits for the runtime), and notifications are
+// applied on the UI goroutine. The connection before it, if another, is
+// the caller's to close.
+func (a *App) use(cn *conn) {
+	if a.conn == cn {
+		return
+	}
+	a.conn = cn
+	a.snapEvent, a.notifyEvent = 0, 0
+	a.snapshotEvents = nil
+	a.snapshotPending = 0
+	go a.sendLoop(cn)
+	go a.eventLoop(cn)
 }
 
 // rpc sends a request; done, when set, gets the result on the UI
@@ -133,8 +166,7 @@ func (a *App) rpcErr(method string, params map[string]any) {
 	})
 }
 
-func (a *App) sendLoop() {
-	cn := a.conn
+func (a *App) sendLoop(cn *conn) {
 	for {
 		cn.mu.Lock()
 		if len(cn.queue) == 0 {
@@ -152,7 +184,11 @@ func (a *App) sendLoop() {
 		var raw json.RawMessage
 		err := cn.c.Call(context.Background(), x.method, x.params, &raw)
 		if x.done != nil {
-			a.ui.Do(func() { x.done(raw, err) })
+			a.ui.Do(func() {
+				if a.conn == cn {
+					x.done(raw, err)
+				}
+			})
 		}
 	}
 }
@@ -168,11 +204,19 @@ func (a *App) syncRPC(timeout time.Duration) {
 	}
 }
 
-func (a *App) eventLoop() {
-	for n := range a.conn.c.Events() {
-		a.ui.Do(func() { a.onNotification(n) })
+func (a *App) eventLoop(cn *conn) {
+	for n := range cn.c.Events() {
+		a.ui.Do(func() {
+			if a.conn == cn { // a connection left behind says nothing
+				a.onNotification(n)
+			}
+		})
 	}
-	a.ui.Do(a.disconnected)
+	a.ui.Do(func() {
+		if a.conn == cn {
+			a.disconnected()
+		}
+	})
 }
 
 // disconnected is the runtime gone: a worker that crashed or exited.
@@ -180,8 +224,50 @@ func (a *App) disconnected() {
 	if a.quitting {
 		return
 	}
+	if a.conn != nil && a.conn.own == nil && a.threadID != "" && !a.closed {
+		a.notice("The session's runtime ended; reconnecting…")
+		a.reconnect(a.conn, 0)
+		return
+	}
 	a.notice("The connection to the session runtime ended. Restart atto to continue (atto resume %s).", a.threadID)
 	a.busy = false
+}
+
+// reconnectDelays are the waits before each attempt to bring a crashed
+// worker's session back.
+var reconnectDelays = []time.Duration{200 * time.Millisecond, time.Second, 3 * time.Second, 10 * time.Second}
+
+// reconnect starts the session's worker again (its file has everything
+// it had saved) and shows the session from it. dead is the connection
+// that ended; attempt counts the tries so far.
+func (a *App) reconnect(dead *conn, attempt int) {
+	id := a.threadID
+	go func() {
+		time.Sleep(reconnectDelays[attempt])
+		cn, info, err := a.dialWorker(id, nil)
+		a.ui.Do(func() {
+			if a.quitting || a.conn != dead || a.threadID != id {
+				if cn != nil {
+					cn.c.Close()
+				}
+				return // the terminal went elsewhere meanwhile
+			}
+			if err != nil {
+				if attempt+1 < len(reconnectDelays) {
+					a.reconnect(dead, attempt+1)
+					return
+				}
+				a.errorNotice(fmt.Errorf("reconnecting: %w", err))
+				a.notice("Restart atto to continue (atto resume %s).", id)
+				return
+			}
+			if cn != nil {
+				a.use(cn)
+			}
+			a.show(info)
+			a.notice("Reconnected.")
+		})
+	}()
 }
 
 // --- the mirror ---

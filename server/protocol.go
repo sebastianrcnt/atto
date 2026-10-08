@@ -7,6 +7,17 @@
 // core/transcript). Items stream as started → delta* → completed
 // notifications.
 //
+// With the daemon available, interactive clients and the app-server/serve
+// frontends attach to per-session workers. thread/start starts a worker;
+// thread/resume joins an existing one, never another writer. Transport EOF
+// and frontend shutdown detach; thread/close explicitly stops the session
+// (/close uses reason "close"). Unattended idle workers retire after one
+// minute, but turns, jobs, timers, active unheld goals and prompts retain them.
+// app-server/serve -in-process, ATTO_NO_DAEMON and Windows retain the
+// in-process runtime. A routing facade translates event cursors and client
+// provenance; its protocol revision is distinct from daemon control revision 3.
+// Worker crashes recover saved sessions, not durable in-flight inputs/promises.
+//
 // Requests:
 //
 //	initialize     {protocolVersions?, clientInfo?, capabilities?}
@@ -72,6 +83,8 @@
 //	               the thread goes on; one with retention 0 that is left
 //	               idle closes (reason: clear, resume, exit). Jobs, timers, goals
 //	               and prompts prevent retirement; worker retention defaults to 1m.
+//	worker/state   {threadId}  → {id, session, cwd, clients, busy, version, pid}
+//	               internal worker registry diagnostics; no attachment is added.
 //	thread/close   {threadId, reason?}  → {closed, stoppedJobs?, notices?}
 //	thread/read    {threadId, offline?}  (offline: from the file, not loading it)
 //	thread/setModel, thread/setEffort  {..., saveDefault?}

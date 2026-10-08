@@ -170,6 +170,7 @@ func (a *App) onNotification(n server.Notification) {
 		}
 		a.doQuit()
 	case "thread/closed":
+		a.closed = true
 		if !p.Handoff && !a.quitting {
 			a.notice("This session was closed.")
 			a.busy = false

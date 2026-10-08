@@ -150,7 +150,7 @@ func (a *App) itemUpdated(it *transcript.Item) {
 		b.args = agent.BashArgs{Description: it.Description, Command: it.Command}
 		b.timeout = it.Timeout
 		if b.pending && !it.Pending {
-			b.pending, b.start = false, time.Now()
+			b.pending, b.start = false, itemStart(it)
 		}
 	}
 }

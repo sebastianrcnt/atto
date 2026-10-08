@@ -1,7 +1,6 @@
 package app
 
 import (
-	"encoding/json"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -527,19 +526,11 @@ func (a *App) requestResume(path string) {
 // session left goes on until it is idle, then ends. Commands keep running
 // in this terminal's directory, as they always did.
 func (a *App) resumeID(id string) {
-	a.rpc("thread/resume", map[string]any{"threadId": id, "cwd": a.cwd}, func(raw json.RawMessage, err error) {
-		if err != nil {
-			a.errorNotice(err)
-			return
-		}
-		var info server.ThreadInfo
-		if json.Unmarshal(raw, &info) != nil {
-			return
-		}
+	a.openThread(id, nil, func(info server.ThreadInfo, old *conn) {
 		if info.ID == a.threadID {
 			a.show(info) // ctrl+r on a read-only session
 		} else {
-			a.switchTo(info, "resume", nil)
+			a.switchTo(info, "resume", old, nil)
 		}
 		if info.ReadOnly != "" {
 			a.notice("Opened %s read-only. ctrl+r reads it again.", info.ID)

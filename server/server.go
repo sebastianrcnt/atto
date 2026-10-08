@@ -23,6 +23,8 @@ import (
 // JSON-RPC requests. Notifications go through its event hub to every
 // transport (see hub.go); Notify, when set, observes them too (tests).
 type Server struct {
+	Workers *WorkerRoutes
+	routing workerRouting
 	Version string
 	Cwd     string // default working directory for new threads
 	Notify  func(method string, params map[string]any)
@@ -73,6 +75,9 @@ func (s *Server) Close() { s.CloseWith("other") }
 
 // CloseWith is Close with the reason SessionEnd hooks are given.
 func (s *Server) CloseWith(reason string) {
+	if s.Workers != nil {
+		s.detachRoutes("", true)
+	}
 	s.opening.Lock()
 	if s.memory != nil {
 		s.memory.Close()
@@ -224,10 +229,16 @@ func (s *Server) call(ctx context.Context, method string, raw json.RawMessage) (
 		return nil, err
 	}
 	if sc := scopeOf(ctx); sc != nil {
+		if s.Workers != nil {
+			return s.routedScope(ctx, sc, method, p)
+		}
 		if out, err, ok := s.scopedCall(ctx, sc, method, p); ok {
 			return out, err
 		}
 		p.ThreadID = sc.Thread()
+	}
+	if out, err, ok := s.routeCall(ctx, method, raw, p); ok {
+		return out, err
 	}
 	client := clientOf(ctx)
 	switch method {
@@ -598,8 +609,10 @@ func (t *thread) replayKeepNotices(branch []session.Entry) {
 	t.resetItemOrder()
 }
 
-// readOffline reads a saved session without loading it: its items,
-// read-only.
+// ReadOffline reads a saved thread without taking its writer lease.
+func ReadOffline(id string) (ThreadInfo, error) { return readOffline(id) }
+
+// readOffline reads a saved session without loading it: its items, read-only.
 func readOffline(id string) (ThreadInfo, error) {
 	path, err := session.Find(id)
 	if err != nil {
@@ -719,6 +732,9 @@ func (s *Server) detach(t *thread, client, reason string) detachResult {
 // clientGone releases what a detached client held: its gates and its
 // attachments. Nothing it started stops.
 func (s *Server) clientGone(id string) {
+	if s.Workers != nil {
+		s.detachRoutes(id, false)
+	}
 	s.mu.Lock()
 	threads := make([]*thread, 0, len(s.threads))
 	for _, t := range s.threads {

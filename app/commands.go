@@ -58,8 +58,10 @@ func localCommands() map[string]func(a *App, arg string) bool {
 		"tui":        func(a *App, arg string) bool { a.cmdTui(arg); return true },
 		"remote":     func(a *App, arg string) bool { a.cmdRemote(arg); return true },
 		"clear":      func(a *App, arg string) bool { a.cmdClear(arg); return true },
+		"new":        func(a *App, arg string) bool { a.cmdClear(arg); return true },
 		"agents":     func(a *App, arg string) bool { a.cmdAgents(arg); return true },
 		"detach":     func(a *App, arg string) bool { a.cmdDetach(arg); return true },
+		"close":      func(a *App, arg string) bool { a.closeAndQuit(); return true },
 		"quit":       func(a *App, arg string) bool { a.cmdQuit(arg); return true },
 		"exit":       func(a *App, arg string) bool { a.cmdQuit(arg); return true },
 	}
@@ -98,6 +100,11 @@ func (a *App) loadCatalog() {
 		}
 		if err == nil && json.Unmarshal(raw, &r) == nil {
 			a.catalog = r.Commands
+			for _, b := range server.Builtins {
+				if b.Local && !slices.ContainsFunc(a.catalog, func(c server.CommandInfo) bool { return c.Name == b.Name }) {
+					a.catalog = append(a.catalog, b)
+				}
+			}
 			a.cmds.gen++
 		}
 	})

@@ -135,20 +135,50 @@ atto attach                           # back to an atto left running (see below)
 
 ### Sessions keep running: the daemon
 
-Interactive atto runs the way a shell runs in tmux. The terminal you start it in only shows it: the session itself runs in a pane of the atto daemon, a background process per user that the first `atto` starts by itself and that exits when its last session ends. It is never installed as a service (no launchd, systemd or scheduled task).
+With the daemon enabled, one **session worker** owns each conversation's execution.
+The TUI is its client: closing the terminal, losing SSH, `/quit`, or Ctrl+D on an
+empty editor detaches, even during a turn. Turns, goals, jobs, timers and unanswered
+prompts keep running without a terminal. **`/close` stops the session and its work.**
+An unattended worker with no work retires after one minute; its saved conversation
+can still be resumed.
 
-So closing the terminal, losing an SSH connection or `/detach` leaves the session running, turn and goal included, and `atto attach` shows it again, from any terminal of the same user. A phone works the same way: connect with an SSH app and run `atto attach`.
+The daemon starts on demand, runs per user and is never installed as a service
+(no launchd, systemd or scheduled task). Its PTY panes remain: `atto attach` shares
+a pane's screen and keys, while `atto connect` opens an independent TUI/editor on
+the same worker. Several frontends can use one conversation without another writer.
 
 ```sh
-atto attach            # the most recent session no terminal shows
-atto attach 3          # pane 3, or a session ID (a prefix will do)
-atto attach -l         # the running sessions: pane, session, name, directory
-atto agents            # the agent command center on its own: enter attaches or opens
-atto daemon kill 3     # end one, as closing its terminal used to
-atto daemon stop       # stop the daemon (-force: even with sessions running)
+atto attach            # the most recent pane no terminal shows
+atto attach 3          # pane 3, or its session ID (a prefix will do)
+atto attach -l         # running panes and session workers
+atto connect SESSION   # an independent TUI on this worker
+atto connect           # latest saved conversation here, else a new one
+atto agents            # the agent command center, including live workers
+atto daemon kill 3     # end a pane's TUI; its worker and work continue
+atto daemon stop -force # stop panes and workers, including their work
 ```
 
-Leaving atto while a turn runs offers "Detach" instead of "Run in background". Several terminals may show one session at once; any of them can type, and the one that typed last sets the size. `"daemon": false` in `settings.json` (or `ATTO_NO_DAEMON=1` for one run) runs atto directly in the terminal, as before; on Windows it always does. The daemon's socket is in `~/.atto/run` and its log in `~/.atto/logs/daemon.log`.
+`/detach` still leaves a pane running, so `atto attach` returns to that same screen.
+`/clear`, `/new`, `/resume` and `/fork` switch only this client's conversation;
+accepted work in the previous worker continues. `/remote` controls the same worker
+from the frozen web client. `atto app-server` and `atto serve` route sessions to
+workers too; pass `-in-process` to use single-process operation. `atto -p -session`
+(or `-c`) on a live worker routes its prompt there (text/JSON; per-run overrides and
+stream-json are refused with a pointer to `atto connect`). Other print runs and
+agent CLI turns retain their existing execution path.
+
+`"daemon": false` or `ATTO_NO_DAEMON=1` keeps the in-process runtime: exit closes
+its sessions and stops their jobs, and the busy exit menu still offers “Run in
+background.” Windows always uses that mode. Normal sockets live in `~/.atto/run`
+(too-long paths use a private temporary directory); logs are in
+`~/.atto/logs/daemon.log`.
+
+The TUI reconnects after a dropped worker socket, restarting a crashed worker from
+its saved conversation when needed. A live worker retains running command clocks
+and pending prompts across client reconnects. A worker crash is different: unsaved
+input/queue state and arbitrary in-flight extension questions are not durable yet.
+After a binary upgrade, incompatible worker/daemon revisions fail clearly; idle old
+workers still retire normally, and `atto daemon stop -force` can stop an older daemon.
 
 ### Keys in the session
 
@@ -214,6 +244,7 @@ To use the terminal's own selection instead, hold the key that bypasses mouse re
 | `/clear` | start a new session |
 | `/goal [<objective>\|clear\|edit\|pause\|resume]` | set or view the goal for a long-running task, as in codex: bare `/goal` (or `status`) shows it with the time and tokens used, `help` shows the usage, `edit` opens a prompt, a new objective asks before replacing an unfinished goal. The words help and status alone never become an objective. Clearing or pausing while a turn runs is told to the model. A message sent while the goal is waiting, paused, stalled or usage limited carries a short note saying so, so the model answers instead of resuming goal work; a message sent while a goal turn runs says the goal is still active. A turn that fails for any reason a retry might fix (anything but an interrupt, a usage limit, an authentication failure or a request the provider rejected) is retried after 10s, 30s, 1m, 2m, 5m and 10m before the goal stalls (each turn has already sent a failed request up to 5 more times itself); Esc, `/goal pause` and `/goal clear` end the wait. The status shows at the right of the status line ("Pursuing goal (14m)"), Esc pauses it, and opening a session with a paused or stalled goal asks whether to resume |
 | `/agents` | the agent command center (as `←` on an empty prompt) |
+| `/close` | stop this session and its work, then exit the TUI |
 | `/detach` | leave the session running in the daemon and return to the shell; `atto attach` comes back |
 | `/remote [on [port]\|off]` | control this session from a phone or browser: serves atto's web client on port 7879 (or `"remote": {"port": N}` in `settings.json`), prints its link and a QR code, and marks messages sent from there "from remote"; `off` closes every connection and revokes the link |
 | `/jobs`, `/stop` | list or stop background jobs |
@@ -222,7 +253,7 @@ To use the terminal's own selection instead, hold the key that bypasses mouse re
 
 ## How it works
 
-**One tool.** The model works through a single shell tool: bash on macOS and Linux, PowerShell on Windows. Hosted commands wait in the foreground for 10 seconds by default; the model can set `timeout` up to 30 seconds. A command still running then becomes a background job, with its id and output so far returned to the model. Long builds and tests keep running: the model can use `atto job wait <id> -timeout 10m`, read `atto job output <id>`, or wait for the exit event. `run_in_background` starts a job immediately; `Ctrl+B` still moves the running command to a job at once. Without a shell host or session, commands cannot detach and retain the kill timeout (60 seconds by default, up to 30 minutes). Interrupting a turn (Esc, Ctrl+Enter, a remote interrupt or `atto agent interrupt`) also moves a still-running hosted model command to a job, recording the job id and output tail for the next turn. An interrupt-detached job's exit event waits for the next turn if the session is idle; requested, timed-out and Ctrl+B jobs still wake the agent as before. `/jobs` lists them and `/stop` stops them. Quitting or shutting down a session still stops its jobs; ordinary cancellation, hooks, direct runs and `atto -p` Ctrl+C do not detach commands. Everything else is a command it can run:
+**One tool.** The model works through a single shell tool: bash on macOS and Linux, PowerShell on Windows. Hosted commands wait in the foreground for 10 seconds by default; the model can set `timeout` up to 30 seconds. A command still running then becomes a background job, with its id and output so far returned to the model. Long builds and tests keep running: the model can use `atto job wait <id> -timeout 10m`, read `atto job output <id>`, or wait for the exit event. `run_in_background` starts a job immediately; `Ctrl+B` still moves the running command to a job at once. Without a shell host or session, commands cannot detach and retain the kill timeout (60 seconds by default, up to 30 minutes). Interrupting a turn (Esc, Ctrl+Enter, a remote interrupt or `atto agent interrupt`) also moves a still-running hosted model command to a job, recording the job id and output tail for the next turn. An interrupt-detached job's exit event waits for the next turn if the session is idle; requested, timed-out and Ctrl+B jobs still wake the agent as before. `/jobs` lists them and `/stop` stops them. Closing a session (or exiting in-process mode) stops its jobs; detaching a worker client does not; ordinary cancellation, hooks, direct runs and standalone `atto -p` Ctrl+C do not detach commands. Everything else is a command it can run:
 
 - `atto history grep` searches the session transcript, including turns that were compacted away.
 - `atto job start` runs a command in the background. With `-notify REGEXP` (and `-notify-limit N`, default 50) each matching output line wakes the agent while the job keeps running; matches within a second are batched.

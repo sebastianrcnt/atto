@@ -41,6 +41,7 @@ usage:
   atto resume [id]                  resume a session (no id: pick one)
   atto attach [ID] | attach -l      return to an atto running in the daemon
                                     (closed terminal, SSH drop, /detach)
+  atto connect [session]            attach an independent TUI to a session worker
   atto agents                       every atto the daemon runs, with goals and
                                     agents; enter attaches (← in atto too)
   atto daemon [status|kill|stop]    the daemon interactive atto runs in
@@ -75,7 +76,7 @@ flags:
 // changing credentials. "" is atto itself (interactive or -p). Commands
 // that work on the agent's own session (history, job, goal, reload...) or
 // only read (context, models) are allowed.
-var nestedRefused = map[string]bool{"": true, "attach": true, "agents": true, "daemon": true, "_daemon": true, "serve": true, "app-server": true, "resume": true, "login": true, "logout": true, "auth": true, "update": true, "channel": true, "_continue": true}
+var nestedRefused = map[string]bool{"": true, "attach": true, "connect": true, "_session-server": true, "agents": true, "daemon": true, "_daemon": true, "serve": true, "app-server": true, "resume": true, "login": true, "logout": true, "auth": true, "update": true, "channel": true, "_continue": true}
 
 func refuseNested(cmd string) {
 	if !config.InAgent() || !nestedRefused[cmd] {
@@ -127,18 +128,31 @@ func subcommands() map[string]func([]string, io.Writer) error {
 		"_shell":      cli.RunShellHost,
 		"_continue":   cli.RunContinue,
 		"attach":      cli.RunAttach,
-		"agents":      cli.RunAgents,
-		"daemon":      cli.RunDaemon,
-		"_daemon":     cli.RunDaemonServe,
-		"login":       cli.RunLogin,
-		"logout":      cli.RunLogout,
+		"connect":     cli.RunConnect,
+		"_session-server": func(args []string, out io.Writer) error {
+			provider.UserAgent = "github.com/sebastianrcnt/atto/" + update.Current()
+			return daemon.RunWorker(update.Current(), args)
+		},
+		"agents":  cli.RunAgents,
+		"daemon":  cli.RunDaemon,
+		"_daemon": cli.RunDaemonServe,
+		"login":   cli.RunLogin,
+		"logout":  cli.RunLogout,
 		"serve": func(args []string, out io.Writer) error {
 			provider.UserAgent = "github.com/sebastianrcnt/atto/" + update.Current()
-			return server.RunHTTP(update.Current(), args, out)
+			var routes *server.WorkerRoutes
+			if daemon.Enabled() {
+				routes = daemon.Routes()
+			}
+			return server.RunHTTPWith(update.Current(), args, out, routes)
 		},
-		"app-server": func([]string, io.Writer) error {
+		"app-server": func(args []string, out io.Writer) error {
 			provider.UserAgent = "github.com/sebastianrcnt/atto/" + update.Current()
-			return server.RunStdio(update.Current())
+			var routes *server.WorkerRoutes
+			if daemon.Enabled() {
+				routes = daemon.Routes()
+			}
+			return server.RunStdioWith(update.Current(), args, routes)
 		},
 	}
 }
