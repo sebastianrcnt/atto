@@ -5,6 +5,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 
 	"github.com/sebastianrcnt/atto/config"
@@ -18,6 +19,7 @@ func legacyDir() string { return filepath.Join(config.Dir(), "subagents") }
 // Busy old daemons/turns keep their directory until a later idle access. The
 // compatibility symlink keeps old writers and their lock inodes on the same
 // files after the rename; without symlink privileges we keep the old layout.
+// Windows also keeps the old layout: open guards prevent directory renames.
 func stateRoot() string {
 	current, old := config.AgentStateDir(), legacyDir()
 	link := filepath.Join(config.Dir(), ".agent-state-compat")
@@ -44,6 +46,9 @@ func stateRoot() string {
 			}
 			return err
 		}
+		if runtime.GOOS == "windows" {
+			return errors.New("cannot migrate agent state with open guards on Windows")
+		}
 		var held []*os.File
 		defer func() {
 			for _, f := range held {
@@ -52,7 +57,7 @@ func stateRoot() string {
 			}
 		}()
 		guard := func(path string) error {
-			f, err := openStateGuard(path)
+			f, err := os.OpenFile(path, os.O_RDWR, 0)
 			if errors.Is(err, os.ErrNotExist) {
 				return nil
 			}

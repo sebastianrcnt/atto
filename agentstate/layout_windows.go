@@ -27,19 +27,3 @@ func stateAlias(target, link string) error {
 	}
 	return nil
 }
-
-// Unlike os.OpenFile's Windows default, allow deleting/renaming the guarded
-// directory while we hold its idle lock files open through migration.
-func openStateGuard(path string) (*os.File, error) {
-	name, err := windows.UTF16PtrFromString(path)
-	if err != nil {
-		return nil, err
-	}
-	h, err := windows.CreateFile(name, windows.GENERIC_READ|windows.GENERIC_WRITE,
-		windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE|windows.FILE_SHARE_DELETE,
-		nil, windows.OPEN_EXISTING, windows.FILE_ATTRIBUTE_NORMAL, 0)
-	if err != nil {
-		return nil, &os.PathError{Op: "open", Path: path, Err: err}
-	}
-	return os.NewFile(uintptr(h), path), nil
-}

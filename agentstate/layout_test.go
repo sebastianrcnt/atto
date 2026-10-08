@@ -25,6 +25,9 @@ func installOldLayout(t *testing.T) {
 func TestOldLayoutMigration(t *testing.T) {
 	t.Setenv(config.EnvDir, t.TempDir())
 	installOldLayout(t)
+	for _, path := range []string{"p/.tree.lock", "p/a.lock", "p/slots/0"} {
+		write(t, filepath.Join(legacyDir(), path), "")
+	}
 	s, err := Load("p", "a")
 	if err != nil || s.Session != "child" {
 		t.Fatalf("old state: %+v %v", s, err)
@@ -194,24 +197,6 @@ func TestStateAliasTargetsDirectoryNotYetPresent(t *testing.T) {
 	data, err := os.ReadFile(filepath.Join(link, "record"))
 	if err != nil || string(data) != "agent state" {
 		t.Fatalf("directory alias: %q %v", data, err)
-	}
-}
-
-func TestMigrationGuardSurvivesDirectoryRename(t *testing.T) {
-	root := t.TempDir()
-	old, current := filepath.Join(root, "old"), filepath.Join(root, "current")
-	write(t, filepath.Join(old, "a.lock"), "")
-	f, err := openStateGuard(filepath.Join(old, "a.lock"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer f.Close()
-	if !tryLock(f) {
-		t.Fatal("idle migration guard not acquired")
-	}
-	defer unlock(f)
-	if err := os.Rename(old, current); err != nil {
-		t.Fatal("guard prevented directory rename:", err)
 	}
 }
 
