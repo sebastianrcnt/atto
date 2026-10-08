@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -166,5 +168,54 @@ func TestCredentialJSONPiShape(t *testing.T) {
 	b, _ := json.Marshal(c)
 	if string(b) != `{"type":"oauth","access":"a","refresh":"r","expires":1500000000000,"clientId":"c","other":[1]}` {
 		t.Fatalf("marshal %s", b)
+	}
+}
+
+func TestCodexLoginClosedPasteWithBusyCallback(t *testing.T) {
+	srv, _ := fakeCodexAuth(t)
+	hold := httptest.NewServer(http.NotFoundHandler())
+	defer hold.Close()
+	c := testCodex(srv, strings.TrimPrefix(hold.URL, "http://"))
+	for _, readErr := range []error{io.EOF, errors.New("input closed")} {
+		t.Run(readErr.Error(), func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+			defer cancel()
+			_, err := c.Login(ctx, UI{ReadPasted: func() (string, error) { return "", readErr }})
+			if err == nil || !strings.HasPrefix(err.Error(), "no redirect received:") || !errors.Is(err, readErr) {
+				t.Fatalf("closed paste did not fail promptly: %v", err)
+			}
+			if ctx.Err() != nil {
+				t.Fatal("login waited for cancellation")
+			}
+		})
+	}
+}
+
+func TestCodexLoginCallbackAfterPasteEOF(t *testing.T) {
+	srv, _ := fakeCodexAuth(t)
+	ln := httptest.NewServer(http.NotFoundHandler())
+	addr := strings.TrimPrefix(ln.URL, "http://")
+	ln.Close()
+	c := testCodex(srv, addr)
+	urls := make(chan string, 1)
+	closed := make(chan struct{})
+	go func() {
+		u, _ := url.Parse(<-urls)
+		<-closed
+		resp, err := http.Get("http://" + addr + "/auth/callback?code=cb&state=" + u.Query().Get("state"))
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		resp.Body.Close()
+	}()
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	cred, err := c.Login(ctx, UI{
+		ShowURL:    func(u string) { urls <- u },
+		ReadPasted: func() (string, error) { close(closed); return "", io.EOF },
+	})
+	if err != nil || cred.AccountID != "acct-1" {
+		t.Fatalf("callback must still work after paste EOF: %+v %v", cred, err)
 	}
 }

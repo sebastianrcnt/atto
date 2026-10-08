@@ -195,7 +195,8 @@ func (c *Codex) Login(ctx context.Context, ui UI) (Credential, error) {
 	codes := make(chan string, 1)
 	errs := make(chan error, 1)
 
-	if ln, err := net.Listen("tcp", c.ListenAddr); err == nil {
+	ln, listenErr := net.Listen("tcp", c.ListenAddr)
+	if listenErr == nil {
 		mux := http.NewServeMux()
 		var claimed atomic.Bool
 		mux.HandleFunc("/auth/callback", func(w http.ResponseWriter, r *http.Request) {
@@ -238,6 +239,12 @@ func (c *Codex) Login(ctx context.Context, ui UI) (Credential, error) {
 			for ctx.Err() == nil {
 				line, err := ui.ReadPasted()
 				if err != nil {
+					if listenErr != nil {
+						select {
+						case errs <- fmt.Errorf("no redirect received: %w", err):
+						default:
+						}
+					}
 					return
 				}
 				code, st := ParseAuthorizationInput(line)
