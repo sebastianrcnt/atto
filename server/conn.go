@@ -69,11 +69,20 @@ func (s *Server) ServeConn(ctx context.Context, rw io.ReadWriter) error {
 	// Subscribe before handling requests: a fast turn must not outrun its client.
 	_, ch, kick, _ := s.events.subscribe(s.events.last())
 	forwardDone := make(chan struct{})
-	go func() { defer close(forwardDone); s.forward(ctx, write, ch, kick) }()
+	go func() {
+		defer close(forwardDone)
+		s.forward(ctx, func(b []byte) error {
+			if sc := scopeOf(ctx); sc != nil && !sc.event(b) {
+				return nil
+			}
+			return write(b)
+		}, ch, kick)
+	}()
 	defer func() { cancel(); <-forwardDone }()
 
 	sc := bufio.NewScanner(rw)
-	sc.Buffer(make([]byte, 64*1024), 64<<20)
+	// Leave room for the JSON-lines delimiter at the message size limit.
+	sc.Buffer(make([]byte, 64*1024), (64<<20)+2)
 	for sc.Scan() {
 		line := strings.TrimSpace(sc.Text())
 		if line == "" {

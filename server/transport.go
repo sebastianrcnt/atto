@@ -3,7 +3,6 @@ package server
 import (
 	"context"
 	"crypto/rand"
-	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -55,34 +54,44 @@ const webCSP = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-
 // HTTPHandler serves the protocol over HTTP:
 //
 //	POST /rpc      one JSON-RPC request in the body, response in the reply
+//	GET  /ws       JSON-RPC over WebSocket (same token)
 //	GET  /events   notifications as Server-Sent Events (resumable)
 //	GET  /         the web client (server/web), and its assets
 //
 // Every request except the web client's files needs the token, as
 // "Authorization: Bearer" or ?token= (EventSource cannot set headers).
-func (s *Server) HTTPHandler(token string) http.Handler { return s.httpHandler(token, s.OnClients) }
+func (s *Server) HTTPHandler(token string) http.Handler { return s.HTTPHandlerOrigins(token, nil) }
+
+// HTTPHandlerOrigins adds explicit browser origins for the WebSocket endpoint.
+func (s *Server) HTTPHandlerOrigins(token string, origins []string) http.Handler {
+	return s.httpHandlerOrigins(token, s.OnClients, origins)
+}
 
 func (s *Server) httpHandler(token string, onClients func(int)) http.Handler {
+	return s.httpHandlerOrigins(token, onClients, nil)
+}
+
+func (s *Server) httpHandlerOrigins(token string, onClients func(int), origins []string) http.Handler {
 	b := s.events
 	// Legacy HTTP clients share an anonymous transport identity; they need
 	// not echo a new field to keep working. JSON-lines connections have
 	// independent identities.
 	c := &clientConn{id: fmt.Sprintf("h%d", clientSeq.Add(1))}
-	var streams atomic.Int64 // this handler's streams share one client identity
+	var streams, sockets atomic.Int64 // this handler's streams share one client identity
 	clients := func() {
 		s.routeInteractive(c.id, streams.Load() > 0)
 		if onClients != nil {
-			onClients(int(streams.Load())) // outside the broker's lock: the hook may wait for a UI
+			onClients(int(streams.Load() + sockets.Load())) // outside the broker's lock: the hook may wait for a UI
 		}
 	}
-	authed := func(r *http.Request) bool {
-		got := r.URL.Query().Get("token")
-		if h := r.Header.Get("Authorization"); strings.HasPrefix(h, "Bearer ") {
-			got = strings.TrimPrefix(h, "Bearer ")
-		}
-		return subtle.ConstantTimeCompare([]byte(got), []byte(token)) == 1
-	}
+	authed := func(r *http.Request) bool { return bearerOK(r, token) }
 	mux := http.NewServeMux()
+	mux.Handle("GET /ws", s.webSocketHandler(token, origins, func(delta int) {
+		sockets.Add(int64(delta))
+		if onClients != nil {
+			onClients(int(streams.Load() + sockets.Load()))
+		}
+	}))
 	files := http.FileServerFS(web.FS())
 	mux.HandleFunc("GET /", func(w http.ResponseWriter, r *http.Request) {
 		// Revalidate: the files change with the binary, and the asset URLs

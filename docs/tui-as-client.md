@@ -995,4 +995,56 @@ promises/questions are not durable runtime checkpoints; they cannot safely be
 recreated merely from a prompt's display DTO. A surviving worker retains them
 across detach, but a killed worker cannot promise that recovery. Durable accepted-
 input journaling, request dedupe and runtime/prompt checkpointing remain follow-up
-work, together with the complete Codex-dialect adapter and WebSocket transport.
+work, together with the complete Codex-dialect adapter. WebSocket transport was added in phase 4 below.
+
+
+### Phase 4 — transports and client-author surface
+
+`atto app-server --listen` now selects `stdio://` (the default),
+`unix:///absolute/path.sock` (JSON lines, 0600, removed on exit) or
+`ws://IP:PORT` (RFC 6455 JSON text messages). A small dependency-free framing
+implementation handles masked input, fragmentation, control frames, UTF-8,
+canonical length encodings and a 64 MiB aggregate message cap. All sockets use
+ServeConn identities, hub ordering and detach semantics, with exactly the same
+worker facade routing as stdio. `--in-process` remains available.
+
+Non-loopback app-server WS listeners use the persistent server bearer token,
+print it on stderr and warn about TLS. HTTP Authorization and query tokens are
+accepted. Browser Origin must be HTTP(S) same-host/loopback or explicitly listed
+with repeatable `--allow-origin`. `atto serve` and scoped `/remote` HTTP handlers
+also expose `/ws` alongside existing RPC/SSE and frozen web assets. WS respects
+Scope event filtering and thread restrictions. Upgraded sockets close on context
+cancellation or server shutdown, including HTTP shutdown and `/remote off`; scoped client counts include WS
+connections as well as SSE streams. Socket detach never
+stops a worker. Listener diagnostics stay out of protocol stdout.
+
+[docs/protocol.md](protocol.md) is the native client-author reference: transports,
+revision handshake, all dispatcher methods and emitted notifications, examples
+from a scripted-provider test, DTOs, errors, prompts, replay, workers and Codex
+shape differences. An AST/registry test checks methods and notifications against
+the document and validates every JSON example. The Python stdio example starts
+a thread, streams text and answers prompts; its binary integration test uses a
+scripted model and a real extension input prompt (skips if python3 is absent).
+The single-file browser example renders WS items and sends/steers/interrupts;
+its README describes exact launch/origin/token commands and intentional limits.
+
+Coverage adds an independent Go WS test client: handshake/security, malformed
+frames, extended lengths, ping/pong during fragmentation, invalid UTF-8, aggregate
+size limits, close, cancellation, worker detach/resume and snapshot hydration.
+CLI end-to-end tests now run app-server over stdio, Unix and WS plus HTTP serve;
+Unix tests check permissions, cleanup and refusal to replace an existing socket.
+
+The macOS foreground shell-host failure was a real late-fork survivor: CI's `ps`
+showed a living `S< sleep 30`, not merely a zombie awaiting reaping. A group kill
+can race the shell's fork. After reaping the shell, a killed host now sweeps its
+process group again before draining output/reporting exit. Tests cover termination
+at startup, at the fork boundary and after a background child is established;
+there is no increased timeout or relaxed survivor check.
+
+Intentional differences: native Unix transport is raw JSON lines, not Codex's
+WS-over-UDS; WS follows revision-2's permissive legacy initialize acknowledgment,
+not a new strict handshake gate; loopback app-server WS is tokenless while serve
+always uses its existing token. Socket reconnect uses fresh snapshots, not a new
+arbitrary replay API. No full Codex adapter, durable input journal, `atto agent`
+execution change or frozen web-client change was made. Examples intentionally
+omit production reconnect/backoff and complete extension/image rendering.

@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"net/http"
@@ -27,6 +28,7 @@ const defaultRemotePort = 7879
 
 // remote is a running /remote gateway.
 type remote struct {
+	cancel  context.CancelFunc
 	srv     *http.Server
 	addr    string // what it listens on
 	token   string
@@ -136,7 +138,9 @@ func (a *App) startRemote(port int) {
 			return done
 		},
 	}
-	r.srv = &http.Server{Handler: srv.ScopedHandler(token, scope), ReadHeaderTimeout: 10 * time.Second}
+	ctx, cancel := context.WithCancel(context.Background())
+	r.cancel = cancel
+	r.srv = &http.Server{BaseContext: func(net.Listener) context.Context { return ctx }, Handler: srv.ScopedHandler(token, scope), ReadHeaderTimeout: 10 * time.Second}
 	r.links = server.WebLinks(r.addr, token)
 	if len(r.links) == 0 { // no network beyond this machine
 		r.links = []string{"http://" + r.addr + "/#token=" + token}
@@ -156,6 +160,9 @@ func (a *App) stopRemote() {
 		return
 	}
 	a.remote = nil
+	if r.cancel != nil {
+		r.cancel()
+	} // http.Server.Close does not close hijacked WebSockets
 	_ = r.srv.Close()
 	if r.proxy != nil {
 		r.proxy.Close()

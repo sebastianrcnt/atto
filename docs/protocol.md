@@ -1,0 +1,447 @@
+# atto native protocol: a client author's reference
+
+Protocol revision **2** (revision 1 remains accepted). This is atto's native
+JSON-RPC API, inspired by Codex app-server, **not a Codex wire adapter**. See
+[the detailed Codex v2 comparison](codex-app-server-compat.md) and
+[implementation status](tui-as-client.md#8-implementation-status-on-main).
+The Go DTOs and specification are in `server/protocol.go`; `server.Client` and
+`server.ThreadView` are a reference client and snapshot/event reducer.
+
+## Transports and security
+
+```sh
+atto app-server                              # default: JSON lines on stdio
+atto app-server --listen stdio://             # explicit default
+atto app-server --listen unix:///tmp/atto.sock
+atto app-server --listen ws://127.0.0.1:7878
+atto app-server --listen ws://0.0.0.0:7878 --allow-origin https://client.example
+atto serve --listen 127.0.0.1:7878             # HTTP/SSE, web UI, and /ws
+```
+
+- **stdio:** start a subprocess; write one JSON message per line to stdin and
+  read replies and notifications from stdout. Diagnostics go to stderr.
+- **Unix socket:** connect to the absolute path and speak JSON lines. Socket
+  mode is 0600; it is removed on normal exit. An existing path is never unlinked
+  at startup: remove a stale socket yourself after checking its owner is gone.
+  This is **raw JSON lines**, not Codex's WebSocket-over-UDS. Unix listeners are
+  unavailable on Windows versions without Unix-socket support.
+- **WebSocket:** HTTP upgrade at `/` for app-server, `/ws` for serve and scoped
+  `/remote` handlers. One JSON-RPC message per text message, no trailing newline
+  required. RFC 6455 masking, fragmentation, ping/pong and close are supported;
+  binary messages are refused. Max message size is 64 MiB (aggregate fragments).
+  Server frames are unmasked. No compression or subprotocol is negotiated.
+  Slow writes have a 10-second deadline. Framing errors close with 1002;
+  binary messages with 1003, invalid UTF-8 with 1007, oversize with 1009.
+- **HTTP:** `POST /rpc` with a JSON request body → a JSON reply (204 for a
+  notification). `GET /events` streams SSE notifications. Existing web clients
+  continue using these endpoints, unchanged.
+
+`serve` always requires its bearer token for RPC, SSE and WS. app-server WS
+requires it when bound beyond loopback, but not when bound only to loopback.
+The persistent token is generated in `~/.atto/server-token` (or
+`$ATTO_DIR/server-token`, 0600); app-server prints the token and file on stderr
+for non-loopback listeners. Supply `Authorization: Bearer <token>` or
+`?token=<token>` (browser WebSocket/EventSource cannot set headers). Do not log
+query tokens. Non-loopback listeners print a no-TLS warning: use a trusted
+private network such as Tailscale or a TLS reverse proxy. There is no built-in
+TLS termination, sandbox or per-command approval policy.
+
+Browser WS Origin is checked: HTTP(S) same-host (including port) and loopback
+origins are allowed; other origins need a repeatable exact `--allow-origin`
+flag. Missing Origin is allowed for non-browser clients; `null`/`file://` is
+refused unless an HTTP(S) origin is used instead. Origin permission is not
+a substitute for the bearer token. Tokens are transport auth, not provider keys.
+
+Each stream/socket is an independent equal client with a `clientId`. HTTP/SSE
+retains its legacy shared anonymous identity per handler. All transports use
+the same dispatcher, event hub and worker routing. There is no hidden TUI owner.
+
+## Envelope and handshake
+
+Send `{id, method, params?}`; `jsonrpc: "2.0"` is accepted but not required
+(Codex-style envelopes work). Replies include `{jsonrpc, id, result}` or
+`{jsonrpc, id, error}`. Notifications omit `id`. Match replies by ID, not arrival
+order: notifications may appear before a response. Use distinct integer or
+string IDs. Requests on a connection are handled in order; `ping` is a fence.
+
+```json
+{"id":1,"method":"initialize","params":{"protocolVersions":[1,2],"clientInfo":{"name":"my-client","title":"My client","version":"1"},"capabilities":{"interactive":true,"images":true}}}
+```
+
+```json
+{"jsonrpc":"2.0","id":1,"result":{"clientId":"c1","eventId":0,"name":"atto","protocolVersion":2,"serverInstanceId":"7e07d7f89fa33b3c","settings":{"toolGroups":true},"version":"test"}}
+```
+
+```json
+{"method":"initialized"}
+```
+
+The newest shared revision is selected; no version list selects today's
+revision for legacy clients. No overlap returns `unsupportedProtocol`.
+`clientInfo` uses Codex's name/title/version shape; capabilities currently use
+`interactive` (can answer prompts) and `images`. Unknown capability fields,
+such as Codex's `experimentalApi`, are tolerated, not a promise to implement
+that feature. `settings.toolGroups` is a display preference. Send `initialized`
+after the result; it is an acknowledgment, **not a mandatory gate**, to keep
+legacy clients working. Repeated initialize is also tolerated.
+
+## Thread → turn → item lifecycle
+
+1. `thread/start` creates a session (optionally cwd/model/effort); `thread/resume`
+   opens an existing ID or path; `thread/attach` joins a loaded session.
+2. Hydrate a `ThreadInfo` snapshot (see below). Follow notifications immediately;
+   retain those newer than the snapshot cursor.
+3. `turn/start` starts an idle turn. `turn/steer` adds text at a model step
+   boundary, not instantly. `input/submit` gives Enter/queue/replace semantics.
+4. Render `item/started`, append `item/delta`, replace on `item/updated` and
+   `item/completed`. A user item can complete before `turn/started`; notices
+   and user shells may have an empty turn ID. Don't assume all items are text.
+5. `turn/completed` reports completed/failed/interrupted and usage. It is a turn
+   boundary, not a promise of permanent idleness: queued input, goals or inbox
+   events can immediately start another turn.
+
+The following messages are from `go test ./server -run TestProtocolExampleTrace
+-v`, using `providertest` ("Hello" in two chunks). IDs, times and usage here are
+from that run, not constants. Loaded notices and other status events are omitted;
+therefore the event IDs need not be consecutive. The Go client decodes away
+the redundant `jsonrpc` field on notifications.
+
+```json
+{"id":3,"method":"turn/start","params":{"threadId":"ff2a29c3","input":"Say hello"}}
+```
+
+```json
+{"id":3,"jsonrpc":"2.0","result":{"inputId":"ff2a29c3-in1","turnId":"ff2a29c3-t1"}}
+```
+
+```json
+{"method":"item/started","params":{"item":{"id":"ff2a29c3-i1","type":"userMessage","text":"Say hello","status":"completed","clientId":"c1","inputId":"ff2a29c3-in1"},"threadId":"ff2a29c3","turnId":""},"eventId":2}
+```
+
+```json
+{"method":"turn/started","params":{"activity":"Thinking","runKind":"turn","startedAt":1791498055048,"threadId":"ff2a29c3","turnId":"ff2a29c3-t1"},"eventId":4}
+```
+
+```json
+{"method":"item/started","params":{"item":{"id":"ff2a29c3-i2","type":"agentMessage","status":"inProgress"},"threadId":"ff2a29c3","turnId":"ff2a29c3-t1"},"eventId":5}
+```
+
+```json
+{"method":"item/delta","params":{"delta":"He","itemId":"ff2a29c3-i2","threadId":"ff2a29c3","turnId":"ff2a29c3-t1"},"eventId":6}
+```
+
+```json
+{"method":"item/delta","params":{"delta":"llo","itemId":"ff2a29c3-i2","threadId":"ff2a29c3","turnId":"ff2a29c3-t1"},"eventId":7}
+```
+
+```json
+{"method":"item/completed","params":{"item":{"id":"ff2a29c3-i2","type":"agentMessage","text":"Hello","status":"completed","blockId":"ff2a29c3.f1fd4575f8eefa05:text","entryId":"f1fd4575f8eefa05"},"threadId":"ff2a29c3","turnId":"ff2a29c3-t1"},"eventId":8}
+```
+
+```json
+{"method":"turn/completed","params":{"contextTokens":3,"durationMs":11,"runKind":"turn","status":"completed","threadId":"ff2a29c3","turnId":"ff2a29c3-t1","usage":{"cachedInputTokens":0,"inputTokens":0,"outputTokens":0}},"eventId":10}
+```
+
+### Snapshot and data types
+
+`ThreadInfo` is flat (no `{thread: ...}` wrapper): required `threadId`, `cwd`,
+`model` (`provider/id`), `effort`, `contextTokens`, `busy`; optional `name`,
+`efforts`, `contextWindow`, `modelName`, `autoCompactLimit`, `autoCompactCap`,
+`priced`, `subscription`, `turnId`, `items`, `usage`, `turn`, `pending`, `context`,
+`eventId`, `serverInstanceId`, `prompt`, `goal`, `extensionUi`, `runKind`,
+`activity`, `jobs`, `timers`, `readOnly`, `offline`, `sessionPath`, `longContext`,
+`live`. `context` is the loaded AGENTS/skills/hooks/extensions/MCP/config report.
+A read-only/offline snapshot is not an execution owner. Use resume before writes.
+
+- **Item:** `id`, `type`, optional `status` (inProgress/completed/failed), `text`.
+  Types: userMessage, reasoning, agentMessage, commandExecution, compaction,
+  branchSummary, event, goal, hook, notice, goalStatus, extText.
+  Common provenance: `entryId`, `callId`, `clientId`, `inputId`, `steerGroup`.
+  Command: `description`, `command`, `output`, `exitCode`, `durationMs`,
+  `timeoutMs`, `timedOut`, `pending`, `startedMs`, `job`, `background`, `images`,
+  `dropped`, `canceled`, `error`, `resultText`, `reason`, `cap`.
+  User shell: `shell`, `excluded`, `truncated`, `fullOutput`, `contextPending`.
+  Compaction: `auto`, `tokensBefore`, `tokensAfter`. Hook: `hookEvent`, `blocked`.
+  Display: `blockId`, `display:{statuses:[{ext,text}],ext?,text?}`. extText:
+  `title`, `ext`, `lang`, `preview`. Notice: `level`, `title`, `loaded`,
+  `reloaded`, `changes`, `note`. Goal: `goalStatus`, `goalState`.
+  Omitted fields aren't default display text. Display replacements never change
+  the model's original text. Completed items may later get block/entry IDs.
+- **Usage:** `inputTokens`, `cachedInputTokens`, `outputTokens`, optional
+  `cacheWriteTokens`, `cost`, `last`, `lastCost`, `lastInputTokens`,
+  `lastCachedInputTokens`. Input totals include cache reads/writes; cost is USD.
+- **TurnInfo:** `startedAt`, optional `verb`, `inputTokens`, `outputTokens`.
+  **Activity:** `phase`, `runKind`, `startedAt`, `toolsRunning`.
+- **PendingInput:** `steers` (strings), `queued?` (strings),
+  `items?:[{id,kind:steer|queued,text,clientId?,images?}]`, `paused?`.
+- **ImageInput:** `{mimeType,data}` (base64 or data URL); PNG/JPEG/GIF/WebP,
+  ≤10 images, each ≤10 MB, and a model accepting images. `input/submit` also
+  accepts `{file,mimeType,width,height,name?}` for files already in the local
+  image store. Output **ItemImage**: `{name?,width?,height?,file?,mimeType?}`.
+- **Prompt:** `{id,kind:select|input,title,selected,options?:[{label,description?}],
+  text?,placeholder?,subtitle?,filterable?,total?,note?,origin?,confirm?,
+  clientId?,requestId?}`.
+- **GoalInfo:** `{objective,status,statusLabel,indicator,summary,tokens,tokensUsed,
+  elapsed,seconds,note?,held?,state?,turnStartedAt?}`; state is the persisted goal.
+- **ExtensionUI:** `{status:[{key,text}],widgets:[{key,lines}]}`. Display text,
+  never code/HTML to execute.
+- **Job:** `{id,label,kind,command,status,started,runtimeMs,exitCode?,error?,
+  resultText?,reason?,cap?}`. **Timer:** `{id,due,message,schedule?}`.
+- **Agent:** `{name,preset,model,effort?,threadId,task,prompt,turn,status,
+  durationMs?,error?,inputTokens?,cachedInputTokens?,outputTokens?,cost?,created}`.
+  Agent read is observational; this API does not move `atto agent` execution.
+- **CommandInfo:** `{name,args?,description,local?,origin,extension?}`. A local
+  command needs a client renderer/picker; don't silently execute a substitute.
+- **ContextInfo:** `{loaded,contextTokens,contextWindow?,compactLimit?,cap?,
+  priceCap?,longContext?,breakdown?,systemPrompt?,usage,busy}`. `breakdown` is
+  unavailable while busy.
+
+**ServerInfo** (MCP): `{name,scope,transport,target,path,status,tools,error?,invalid?,hash?}`.
+**SentRequest** (diagnostics): `{Time,URL,Body}`; Time is RFC3339, Body is base64
+bytes. thread/list `updatedAt` is also a JSON-encoded RFC3339 time.
+
+All time fields (`startedAt`, `startedMs`, `due`, `created`, retry `at`) are Unix
+milliseconds; duration fields are milliseconds. Unknown fields/types should be
+handled conservatively and ignored or shown generically for forward compatibility.
+
+## Methods
+
+Every method uses an object for params; optional fields have `?`. Below, **T**
+means the required `{threadId}` plus the listed fields. **Snapshot** means
+ThreadInfo; **{}** means empty success. Tables are checked against the dispatcher
+by `TestProtocolReferenceMethods`; adding a method without documenting it fails.
+
+### Connection, models and workers
+
+| Method | Params | Result / semantics |
+| --- | --- | --- |
+| `initialize` | `{protocolVersions?,clientInfo?,capabilities?}` | `{name,version,protocolVersion,serverInstanceId,clientId?,eventId,settings,live?,threadId?}` |
+| `initialized` | `{}` (normally notification) | `{}`; handshake acknowledgment |
+| `ping` | `{}` | `{}`; ordering fence on the same connection |
+| `models/list` | `{}` | `{models:[{id,name,contextWindow,efforts,hasKey,images}]}` |
+| `models/reload` | T | `{}`; reload configured models |
+| `worker/state` | T | `{id,session,cwd,clients,busy,version,pid}`; diagnostics, no attachment added |
+
+### Threads and navigation
+
+| Method | Params | Result / semantics |
+| --- | --- | --- |
+| `thread/start` | `{cwd?,model?,effort?,deferStart?}` | Snapshot + loaded context; starts/attaches a worker when available |
+| `thread/resume` | T + `cwd?,deferStart?` | Snapshot + context, items; joins owner, ID/path/prefix resolution |
+| `thread/attach` | T | Snapshot + items; follows a loaded thread |
+| `thread/read` | T + `offline?` | Snapshot + items, cursor; offline reads file without loading |
+| `thread/list` | `{cwd?,archived?}` | `{threads:[{threadId,name?,preview?,cwd?,updatedAt?,messages?,loaded?,live?,busy?,clients?,version?,pid?}]}`; includes active workers |
+| `thread/detach` | T + `reason?` | `{closed,stoppedJobs?,notices?}`; releases client, not work |
+| `thread/close` | T + `reason?` | `{closed,stoppedJobs?,notices?}`; explicit session end, stops jobs/turns |
+| `thread/setModel` | T + `model,saveDefault?` | Snapshot; provider/model selection |
+| `thread/setEffort` | T + `effort,saveDefault?` | Snapshot; one of model's efforts |
+| `thread/setContextMode` | T + `contextMode:normal|long` | Snapshot |
+| `thread/setName` | T + `name` | Snapshot |
+| `thread/setLabel` | T + `entryId,label` | `{}`; label session tree entry |
+| `thread/compact` | T | `{turnId}`; idle only, asynchronous compaction |
+| `thread/rollback` | T + `numTurns?` | Snapshot + `{input}`; idle only, default 1 user message |
+| `thread/tree` | T + `offline?` | `{entries,leaf}`; all saved branches, entry IDs and labels |
+| `thread/navigate` | T + `entryId,summary?:{mode:none|auto|custom,instructions?}` | `{}`; branch movement, optional async summary; follow branchChanged |
+| `thread/fork` | T + `entryId` | `{path,input,images}`; new saved branch, resume it explicitly |
+| `thread/context` | T + `view?:system` | ContextInfo; system includes systemPrompt |
+| `thread/reload` | T | `{}`; reload at safe boundary; follow thread/reloaded |
+| `thread/sessionStart` | T | `{}`; release deferStart after client project-trust decision |
+| `thread/debugRequest` | T | `{request}` or `{}`; last provider request body |
+| `thread/debugRequests` | T | `{sets:{recent:[SentRequest],...pinned}}`; recent/pinned provider request bodies |
+| `thread/handoff` | T | `{}`; legacy background continuation; worker clients normally detach instead |
+
+### Input, turns, queue and user shell
+
+| Method | Params | Result / semantics |
+| --- | --- | --- |
+| `turn/start` | T + `input,images?` | `{turnId,inputId}`; explicit idle start, busy refused |
+| `turn/steer` | T + `input` | `{inputId}`; active model turn only; boundary delivery |
+| `turn/interrupt` | T + `mode?:cancel|sendPending` | `{interrupted}`; default sendPending (Esc), cancel returns steers (Ctrl+C) |
+| `turn/background` | T | `{accepted:true}`; running hosted command becomes a job |
+| `turn/unsteer` | T + `inputId?` or legacy `input,queued?` | `{inputId,text,images,clientId}`; most recent if no ID; committed input refused |
+| `input/submit` | T + `input,images?,intent?:auto|queue|replace|steer` | `{inputId?,status:started|steered|queued|done,turnId?}`; typed input, slash commands and !shell; empty resumes queue/held goal |
+| `queue/resume` | T | `{}`; unpause and run queued input |
+| `shell/start` | T + `command,exclude?` | `{}`; user shell (!, or !! excluded from model) |
+| `shell/interrupt` | T | `{interrupted}`; stop user shell |
+
+User-interrupt preserves hosted running commands as quiet background jobs when
+supported, rather than destroying them. Interrupt is not transport detach. A
+failed turn pauses queued work; `input/recovered` returns input to its originating
+client, not every client's editor.
+
+### Prompts, commands, goals and client UI
+
+| Method | Params | Result / semantics |
+| --- | --- | --- |
+| `prompt/answer` | T + `id,index?` or `text?` or `cancel?` | `{}`; first valid answer wins |
+| `prompt/clientOpen` | T + `prompt` | Prompt; mirror a local client picker, requestId required |
+| `prompt/clientClose` | T + `id` | `{}`; id is owner's requestId, withdraw without answering |
+| `client/gate` | T + `open` | `{}`; balanced gate for local picker, automatic work waits; detach releases gates |
+| `commands/list` | T | `{commands:[CommandInfo]}`; builtin, extensions, skills |
+| `commands/run` | T + `name,args?` | `{inputId?,status,turnId?}` (input/submit result); local-only commands aren't server renderer actions |
+| `goal/read` | T | `{goal:GoalInfo|null}` |
+| `goal/set` | T + `input` | `{goal:GoalInfo|null}`; objective, may ask confirmation |
+| `goal/edit` | T + `input` | `{goal:GoalInfo|null}`; change objective |
+| `goal/pause` | T | `{goal:GoalInfo|null}`; pause automatic work |
+| `goal/resume` | T | `{goal:GoalInfo|null}`; resume saved objective |
+| `goal/clear` | T | `{}`; clear objective |
+
+### Jobs, timers and agents (observational agent API)
+
+| Method | Params | Result / semantics |
+| --- | --- | --- |
+| `job/list` | T | `{jobs:[Job]}` |
+| `job/output` | T + `job,lines?` | `{output}`; default 200 lines, at most 2000 |
+| `job/stop` | T + `job` | `{job:Job}` |
+| `job/stopAll` | T | `{stopped}` |
+| `timer/list` | T | `{timers:[Timer]}` |
+| `timer/create` | T + `when,message` | `{timer:Timer}`; e.g. when "10m", "15:30" |
+| `timer/cancel` | T + `id` | `{}` |
+| `agent/list` | T | `{agents:[Agent]}` |
+| `agent/read` | T + `name` | `{agent:Agent,message,items:[Item]}`; read-only transcript/report |
+| `subagent/list` | T | `{agents,subagents}`; frozen web alias |
+| `subagent/read` | T + `name` | `{agent,subagent,message,items}`; frozen web alias |
+| `mcp/list` | T | `{servers:[ServerInfo]}`; configured MCP servers/status/tool counts |
+
+## Notifications (server → client)
+
+All normal notifications have `{jsonrpc:"2.0",method,params,eventId}`. **T** in
+this table means `params.threadId` plus fields shown. Filter by threadId;
+connection hubs may expose events of other threads. Recovery/answers also need
+clientId filtering. `events/reset` may be global or worker-scoped.
+
+### Execution and transcript
+
+| Method | Params / meaning |
+| --- | --- |
+| `turn/started` | T + `{turnId,startedAt,runKind,activity,verb?}`; activity here is phase text |
+| `turn/activity` | T + `{turnId,activity:Activity}` |
+| `turn/pending` | T + `{pending:PendingInput|null}` |
+| `turn/completed` | T + `{turnId,status,error?,usage,contextTokens,runKind,durationMs}` |
+| `item/started` | T + `{turnId,item:Item}` |
+| `item/delta` | T + `{turnId,itemId,delta}`; command output or message/reasoning text |
+| `item/updated` | T + `{turnId?,item:Item}`; replace whole item, including late block/entry IDs |
+| `item/completed` | T + `{turnId,item:Item}` |
+| `item/display` | T + `{itemId,blockId,display}`; display-only overlay |
+| `input/recovered` | T + `{clientId,text,images,ifEmpty}`; draft recovery for the named client |
+| `hook` | T + `{turnId?,event,message,blocked?}`; hook result |
+| `event` | T + `{title,source}`; inbox/job/timer notice |
+
+### Thread state, reconnect and extension UI
+
+| Method | Params / meaning |
+| --- | --- |
+| `thread/updated` | T + `{thread:ThreadInfo}`; changed model/name/busy/settings |
+| `thread/usage` | T + `{usage:Usage,step:Usage,contextTokens}` |
+| `thread/status` | T + `{jobs,timers}` |
+| `thread/branchChanged` | T; reread snapshot after branch movement |
+| `thread/reloaded` | T + `{context,changes,promptChanged,note}` or `{error}` |
+| `thread/closed` | T + `{reason,handoff}`; explicit close/idle retirement |
+| `thread/handedOff` | T + `{line?}` or `{finished:true}` |
+| `thread/handoffFailed` | T + `{error}` |
+| `thread/switched` | `{threadId,previousThreadId}`; scoped /remote changed session |
+| `events/reset` | `{eventId,serverInstanceId,threadId?}`; replace snapshot, don't append replay twice |
+| `commands/changed` | T; refresh commands/list |
+| `extension/notify` | T + `{extension,message,level}` |
+| `extension/ui` | T + `{ui:ExtensionUI}` |
+
+### Goals and questions
+
+| Method | Params / meaning |
+| --- | --- |
+| `goal/updated` | T + `{goal:GoalInfo|null}` |
+| `goal/retry` | T + `{at}`; transient retry deadline |
+| `prompt/open` | T + `{prompt:Prompt}`; server-owned question |
+| `prompt/closed` | T + `{id,how,by}`; answered/canceled/withdrawn; by is answering client ID |
+| `prompt/clientAnswered` | T + `{clientId,requestId,answer:{index?|text?|cancel?}}`; owner applies local picker answer |
+
+## Server-to-client questions and approvals
+
+Questions are server objects, represented by `prompt/open` notifications, **not
+Codex-style JSON-RPC requests with a server-chosen envelope ID**. Reply by calling
+`prompt/answer` with the prompt's ID. Every attached client sees the same question;
+the first valid answer wins. A late answer gets `stalePrompt`. An interactive
+client should display questions explicitly and never auto-approve by default.
+
+```json
+{"id":8,"method":"prompt/answer","params":{"threadId":"ff2a29c3","id":"prompt-1","index":0}}
+```
+
+Select uses a zero-based index; input uses text; cancellation uses `cancel:true`.
+Prompts cover extension dialogs, MCP approvals and goal confirmations. No attached
+clients means execution questions wait, not auto-answer. A fresh thread/read or
+resume snapshot includes the current prompt. Owner-local pickers are mirrored
+with clientOpen/clientClose; owner detach withdraws those without supplying an
+answer. It does not withdraw execution prompts. Gate counts are client-scoped
+and released on detach. Startup project trust remains a client's decision via
+`deferStart`/sessionStart or prior CLI trust approval; don't mistake a capability
+flag for blanket approval of executable repository content.
+
+## Errors
+
+```json
+{"jsonrpc":"2.0","id":9,"error":{"code":-32000,"message":"a turn is already running; use turn/steer or turn/interrupt","data":{"reason":"busy"}}}
+```
+
+`error.data.reason` is stable; messages are for people. `retryable?` and
+`currentRevision?` may provide more detail. Codes: parse -32700, invalid request
+-32600, method not found -32601, invalid params -32602, server error -32000.
+Reasons: `parseError`, `invalidRequest`, `invalidParams`, `methodNotFound`,
+`internalError`, `busy`, `noModel`, `readOnly`, `stalePrompt`, `alreadyCommitted`,
+`revisionConflict`, `ownedByLegacyWriter`, `unsupportedCapability`,
+`unsupportedProtocol`, `notFound`. Don't automatically resend accepted inputs
+after reconnect: a lost reply doesn't prove the server didn't accept the input.
+
+## Cursors, replay and snapshots
+
+Every hub notification carries an increasing `eventId`; IDs need not be
+consecutive for any one thread. `serverInstanceId` changes when the hub restarts.
+A snapshot's `{serverInstanceId,eventId}` is its cursor: replace local state and
+apply only later notifications. Subscribe before taking the snapshot, buffer
+concurrent events, then discard those at or below the cursor. This prevents
+missed or doubled text during attach. Never reuse an old cursor after instance
+change. `server.ThreadView` implements this rule for Go clients.
+
+SSE reconnects with `Last-Event-ID` or `?lastEventId=` (header wins), replaying
+available recent events. The ring retains up to 10,000 events, bounded by 2 MiB;
+when the cursor is too old/from another run, it emits `events/reset`. Socket /
+stdio / WS connections get events from connection time, **not arbitrary cursor
+replay**; on reconnect read/resume a fresh snapshot. A lagging socket subscriber
+gets events/reset and continues from the newest subscription; lagging SSE is
+closed so it reconnects. Treat a reset as a snapshot boundary. Facades translate
+worker event cursors into their own hub sequence, including worker restarts.
+
+## Detach, close, workers and scoped /remote
+
+EOF, WebSocket close and `thread/detach` release only that client's attachment
+and gates. With daemon workers, turns, goals, jobs, timers and prompts continue.
+`thread/close` explicitly ends the session and stops jobs. Unattended idle workers
+unload after ~60 seconds; active work, queues, timers, jobs, retries, unheld goals
+and unanswered prompts prevent retirement. All frontends join the same worker
+and writer lease; `thread/resume` never creates a second execution owner.
+
+`--in-process`, `ATTO_NO_DAEMON=1`, disabled daemon and Windows keep execution
+in the app-server/serve process. Disconnecting one client still doesn't stop its
+thread, but ending that **server process** closes its runtimes. Closing a worker
+facade detaches; stopping the daemon ends its workers. A worker crash restores
+saved session state, not unsaved accepted inputs, in-flight requests, prompts or
+extension promises. Durable input journaling/deduplication is not implemented.
+
+A `/remote` scoped gateway follows one selected thread: initialize returns
+`live:true,threadId`; thread/list exposes only it; naming another thread is
+refused. thread/start is refused (use the owning TUI's /clear); turn/start and
+turn/steer use typed input semantics instead of strict start/steer. thread/switched
+means reread. Closing the gateway stops no worker. WS also respects this scope.
+
+## Differences from Codex app-server v2
+
+Shared concepts and method names do not imply compatible DTOs. atto snapshots
+are flat, text turn input is a string, item/delta is generic, usage/settings/goals
+have native shapes, and initialization negotiates revisions but has no required
+handshake gate. Prompt questions use notifications plus prompt/answer, not
+bidirectional RPC envelopes. Native SSE replay, event cursors, input/submit,
+queue/gate controls, jobs, extension UI and subagent aliases are additional API.
+Unix sockets use JSON lines rather than Codex WS-over-UDS. Browser origins and
+query tokens are supported intentionally. There is no Codex account/config/
+sandbox/approval-policy adapter. See [the full compatibility research](codex-app-server-compat.md)
+for details, and [working example clients](../examples/clients/README.md).

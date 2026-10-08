@@ -66,7 +66,7 @@ usage:
   atto update [-check]              install the latest release
   atto channel [stable|edge]        show or switch the release channel this build follows
   atto serve [-listen addr]         JSON-RPC over HTTP + SSE, with a web client
-  atto app-server                   JSON-RPC over stdio (JSON lines)
+  atto app-server [--listen URL]    JSON-RPC: stdio://, unix://, ws://
 
 flags:
 `

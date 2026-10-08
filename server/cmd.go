@@ -6,11 +6,9 @@ import (
 	"fmt"
 	"io"
 	"net"
-	"net/http"
 	"os"
 	"os/signal"
 	"strings"
-	"time"
 
 	"github.com/sebastianrcnt/atto/config"
 )
@@ -21,7 +19,10 @@ func RunStdio(version string) error { return RunStdioWith(version, nil, nil) }
 // RunStdioWith accepts app-server flags and optional worker routing.
 func RunStdioWith(version string, args []string, routes *WorkerRoutes) error {
 	fs := flag.NewFlagSet("app-server", flag.ContinueOnError)
+	var origins originFlags
+	fs.Var(&origins, "allow-origin", "additional browser origin allowed on WebSocket (repeatable)")
 	inProcess := fs.Bool("in-process", false, "run session runtimes in this process")
+	listen := fs.String("listen", "stdio://", "transport: stdio://, unix:///path.sock or ws://IP:PORT")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -39,7 +40,7 @@ func RunStdioWith(version string, args []string, routes *WorkerRoutes) error {
 		runtime.Workers = routes
 	}
 	defer runtime.Close()
-	return runtime.ServeStdio(ctx, os.Stdin, os.Stdout)
+	return runtime.ServeListen(ctx, *listen, origins, os.Stderr)
 }
 
 // TLSWarning is said when the web client is served beyond this machine.
@@ -68,6 +69,8 @@ func RunHTTP(version string, args []string, out io.Writer) error {
 // RunHTTPWith accepts optional daemon worker routing.
 func RunHTTPWith(version string, args []string, out io.Writer, routes *WorkerRoutes) error {
 	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
+	var origins originFlags
+	fs.Var(&origins, "allow-origin", "additional browser origin allowed on WebSocket (repeatable)")
 	inProcess := fs.Bool("in-process", false, "run session runtimes in this process")
 	listen := fs.String("listen", "127.0.0.1:7878", "address to listen on")
 	if err := fs.Parse(args); err != nil {
@@ -88,28 +91,19 @@ func RunHTTPWith(version string, args []string, out io.Writer, routes *WorkerRou
 	if err != nil {
 		return err
 	}
+	defer ln.Close()
 	runtime := New(version, cwd)
 	if !*inProcess {
 		runtime.Workers = routes
 	}
 	defer runtime.Close()
-	srv := &http.Server{Handler: runtime.HTTPHandler(token), ReadHeaderTimeout: 10 * time.Second}
 
 	addr := ln.Addr().String()
 	banner(out, version, cwd, addr, token)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
-	go func() {
-		<-ctx.Done()
-		sh, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		defer cancel()
-		_ = srv.Shutdown(sh)
-	}()
-	if err := srv.Serve(ln); err != http.ErrServerClosed {
-		return err
-	}
-	return nil
+	return serveHTTP(ctx, ln, runtime.HTTPHandlerOrigins(token, origins))
 }
 
 // banner says where atto serve listens: the web client's links, and
@@ -128,6 +122,7 @@ func banner(out io.Writer, version, cwd, addr, token string) {
 		fmt.Fprintln(out, label+l)
 	}
 	fmt.Fprintf(out, "  rpc:    POST http://%s/rpc   events: GET http://%s/events  (Authorization: Bearer <token>)\n", addr, addr)
+	fmt.Fprintf(out, "  ws:     ws://%s/ws  (same token)\n", addr)
 	fmt.Fprintf(out, "  token:  %s\n", TokenPath())
 	if !IsLoopback(addr) {
 		fmt.Fprintln(out, "  "+TLSWarning)

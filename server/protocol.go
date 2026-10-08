@@ -18,6 +18,17 @@
 // provenance; its protocol revision is distinct from daemon control revision 3.
 // Worker crashes recover saved sessions, not durable in-flight inputs/promises.
 //
+// Transports: atto app-server --listen stdio:// (default) and
+// unix:///absolute/path.sock use JSON lines; --listen ws://IP:PORT uses
+// one JSON-RPC message per RFC 6455 text message. All use ServeConn and
+// the same event hub and worker routing. Unix sockets are 0600 and removed
+// on exit; WS beyond loopback requires the persistent bearer token and
+// warns about TLS. HTTP Authorization and ?token= work; browser Origin is
+// same-host/loopback or explicitly --allow-origin. atto serve and /remote
+// also expose GET /ws alongside POST /rpc and GET /events. WS reconnect
+// hydrates a fresh thread snapshot, not an arbitrary cursor replay.
+// See docs/protocol.md for the client-author reference and example clients.
+//
 // Requests:
 //
 //	initialize     {protocolVersions?, clientInfo?, capabilities?}
