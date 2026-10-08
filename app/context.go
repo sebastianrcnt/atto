@@ -119,6 +119,14 @@ func (a *App) cmdContext(arg string) {
 		}
 	}
 
+	if m.Model.Cost.ContextPriceBoundary() == 0 {
+		reason := "no tier data known for this model"
+		if m.Model.Cost != nil && len(m.Model.Cost.Tiers) > 0 {
+			reason = "known tiers do not increase the input price"
+		}
+		lines = append(lines, tui.Dim("No tier cap: "+reason+"."))
+	}
+
 	if a.busy {
 		lines = append(lines, tui.Dim("Breakdown is available when the turn finishes."))
 	} else {
@@ -180,4 +188,11 @@ func (a *App) cmdRequest(string) {
 	_ = json.Unmarshal(body, &req)
 	a.notice("Saved the last request (%d messages, %d tools, %s) to %s",
 		len(req.Messages), len(req.Tools), fmtBytes(int64(len(body))), shortPath(path))
+}
+
+// priceTierNotice is shown on model selection, not on every turn or status update.
+func (a *App) priceTierNotice() {
+	if notice := config.PriceTierNotice(a.model()); notice != "" {
+		a.notice("%s", notice)
+	}
 }

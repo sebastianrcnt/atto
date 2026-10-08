@@ -1,6 +1,7 @@
 package app
 
 import (
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -129,5 +130,47 @@ func TestStatusShowsTierTrigger(t *testing.T) {
 	a.agent.SetLongContext(true)
 	if strings.Contains(row(), "⇥") {
 		t.Fatal("long context has no tier trigger", row())
+	}
+}
+
+func TestContextWithoutTierData(t *testing.T) {
+	for _, cost := range []*ai.ModelCost{nil, {Input: 1}} {
+		a := treeApp(t)
+		m := a.model()
+		m.Model.Cost = cost
+		m.Model.ContextWindow = 100000
+		a.agent.SetModel(m)
+		a.cmdContext("")
+		got := tui.StripEscapes(strings.Join(a.ui.Body.Render(200), "\n"))
+		if !strings.Contains(got, "No tier cap: no tier data known for this model.") || !strings.Contains(got, "Auto-compacts at") {
+			t.Fatal(got)
+		}
+	}
+}
+
+func TestPriceTierSelectionNotices(t *testing.T) {
+	a := loadedApp(t)
+	writeTestFile(t, config.ModelsPath(), `{"providers":{"t":{"baseUrl":"http://127.0.0.1:9/v1","models":[{"id":"m","contextWindow":100000,"cost":{"input":1}}]}}}`)
+	models, err := config.LoadModels()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ref, _ := models.Find("t", "m")
+	a.agent.SetModel(ref)
+	a.models = models
+	a.showLoaded() // startup/resume
+	a.cmdModel("t/m")
+	a.reloadNow(false)
+	got := tui.StripEscapes(strings.Join(a.ui.Body.Render(300), "\n"))
+	if n := strings.Count(got, "No price-tier cap for t/m:"); n != 3 {
+		t.Fatalf("%d notices: %s", n, got)
+	}
+	// Finding the selected model, even without tiers, silences notices.
+	writeTestFile(t, filepath.Join(config.Dir(), "cache", "catalog.json"), `{"t":{"models":{"m":{}}}}`)
+	a.cmdModel("t/m")
+	a.reloadNow(false)
+	got = tui.StripEscapes(strings.Join(a.ui.Body.Render(300), "\n"))
+	if n := strings.Count(got, "No price-tier cap for t/m:"); n != 3 {
+		t.Fatalf("flat catalog model got a warning: %s", got)
 	}
 }

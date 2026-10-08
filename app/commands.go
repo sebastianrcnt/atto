@@ -309,6 +309,7 @@ func (a *App) setModel(ref config.ModelRef) {
 		a.errorNotice(err)
 	}
 	a.notice("Model set to %s (%s).", ref.Model.DisplayName(), ref.ProviderName)
+	a.priceTierNotice()
 	a.statusTrigger()
 	a.remoteUpdated()
 }

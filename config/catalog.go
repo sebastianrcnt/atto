@@ -249,6 +249,34 @@ func CatalogProviders() map[string]Provider {
 	return out
 }
 
+// PriceTierNotice reports missing price-tier information only for a priced
+// model absent from the cached catalog, or when that catalog cannot be read.
+// Catalogued flat-price models and explicit cost.tiers need no warning.
+func PriceTierNotice(m ModelRef) string {
+	c := m.Model.Cost
+	if c == nil || len(c.Tiers) > 0 || c.Input <= 0 && c.Output <= 0 && c.CacheRead <= 0 && c.CacheWrite <= 0 {
+		return ""
+	}
+	data, err := os.ReadFile(catalogPath())
+	var cached map[string]modelsDevProvider
+	reason := "the model is not in the cached models.dev catalog"
+	if err != nil || json.Unmarshal(data, &cached) != nil || cached == nil {
+		reason = "the models.dev catalog could not be loaded"
+	} else {
+		source := m.ProviderName
+		for _, cp := range catalogProviders {
+			if cp.name == source {
+				source = cp.sourceName()
+				break
+			}
+		}
+		if _, ok := cached[source].Models[m.Model.ID]; ok {
+			return ""
+		}
+	}
+	return fmt.Sprintf("No price-tier cap for %s/%s: %s; no tier data known (set cost.tiers in models.json if needed).", m.ProviderName, m.Model.ID, reason)
+}
+
 // Default output cap: models.dev lists maximums (up to 512k) that would
 // leave little room for context; most turns need far less.
 const catalogMaxTokens = 32768

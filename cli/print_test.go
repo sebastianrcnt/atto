@@ -2,11 +2,13 @@ package cli
 
 import (
 	"bytes"
+	"os"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/sebastianrcnt/atto/agent"
+	"github.com/sebastianrcnt/atto/config"
 	"github.com/sebastianrcnt/atto/provider"
 )
 
@@ -62,5 +64,32 @@ func TestPrinterText(t *testing.T) {
 	}
 	if strings.Contains(out.String(), "{") {
 		t.Fatal("text mode writes no JSON")
+	}
+}
+
+func TestRunPrintMissingTierNotice(t *testing.T) {
+	goalServer(t, 0, 0, "")
+	t.Chdir(t.TempDir())
+	data, err := os.ReadFile(config.ModelsPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	data = bytes.Replace(data, []byte(`"contextWindow":10000`), []byte(`"contextWindow":10000,"cost":{"input":1}`), 1)
+	if err := os.WriteFile(config.ModelsPath(), data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	quiet(t)
+	errOut, err := os.CreateTemp(t.TempDir(), "err")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer errOut.Close()
+	os.Stderr = errOut
+	if err := RunPrint(PrintOptions{Prompt: "hello", NoSave: true}); err != nil {
+		t.Fatal(err)
+	}
+	data, _ = os.ReadFile(errOut.Name())
+	if !strings.Contains(string(data), "No price-tier cap for fake/m:") || !strings.Contains(string(data), "catalog could not be loaded") {
+		t.Fatalf("stderr %q", data)
 	}
 }

@@ -263,6 +263,9 @@ func RunPrint(o PrintOptions) error {
 			fmt.Fprintln(os.Stderr, n)
 		}
 	}
+	if notice := config.PriceTierNotice(model); notice != "" {
+		fmt.Fprintln(os.Stderr, "atto: "+notice)
+	}
 	ag.Restore(saved.Branch())
 	ag.SetLongContext(saved.LongContext)
 	if !o.NoSave && !o.Background {

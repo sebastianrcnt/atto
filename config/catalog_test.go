@@ -183,3 +183,42 @@ func TestCatalogCost(t *testing.T) {
 		t.Fatalf("override cost: %+v %+v", c, r.Provider)
 	}
 }
+
+func TestPriceTierNotice(t *testing.T) {
+	t.Setenv("ATTO_DIR", t.TempDir())
+	if err := os.MkdirAll(filepath.Dir(catalogPath()), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	flat := &ai.ModelCost{Input: 1}
+	tiered := &ai.ModelCost{Input: 1, Tiers: []ai.ModelCostTier{{InputTokensAbove: 200000, Input: 2}}}
+	for _, tc := range []struct {
+		name, catalog, provider, id string
+		cost                        *ai.ModelCost
+		want                        string
+	}{
+		{"missing cache", "", "openai", "flat", flat, "could not be loaded"},
+		{"invalid cache", "{", "openai", "flat", flat, "could not be loaded"},
+		{"null cache", "null", "openai", "flat", flat, "could not be loaded"},
+		{"known flat", `{"openai":{"models":{"flat":{}}}}`, "openai", "flat", flat, ""},
+		{"subscription alias", `{"openai":{"models":{"flat":{}}}}`, "openai-codex", "flat", flat, ""},
+		{"unknown model", `{"openai":{"models":{"flat":{}}}}`, "openai", "new", flat, "not in the cached"},
+		{"unknown provider", `{}`, "custom", "flat", flat, "not in the cached"},
+		{"explicit tiers", "", "custom", "tiered", tiered, ""},
+		{"unpriced", "", "local", "m", nil, ""},
+		{"free", "", "local", "m", &ai.ModelCost{}, ""},
+		{"output priced", "", "custom", "m", &ai.ModelCost{Output: 1}, "could not be loaded"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.catalog == "" {
+				_ = os.Remove(catalogPath())
+			} else if err := os.WriteFile(catalogPath(), []byte(tc.catalog), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			m := ModelRef{ProviderName: tc.provider, Model: Model{ID: tc.id, Cost: tc.cost}}
+			got := PriceTierNotice(m)
+			if tc.want == "" && got != "" || !strings.Contains(got, tc.want) {
+				t.Fatalf("notice %q, want %q", got, tc.want)
+			}
+		})
+	}
+}

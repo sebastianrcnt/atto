@@ -107,6 +107,7 @@ func (a *App) collect() core.Loaded {
 func (a *App) showLoaded() {
 	a.loaded = a.collect()
 	a.add(&loadedBlock{l: a.loaded, d: &a.details})
+	a.priceTierNotice()
 }
 
 // sourceReloaded is the source of the event that tells the model what an
@@ -177,6 +178,7 @@ func (a *App) applyReload(r core.Reloaded, err error) {
 		a.sugList.Items = commandItems(a.allCommands())
 	}
 	a.add(&loadedBlock{l: r.Loaded, reloaded: true, changes: r.Changes, note: r.PromptNote(), d: &a.details})
+	a.priceTierNotice()
 	a.statusTrigger()
 	a.askMCPApprovals() // a project server the reload found
 }
