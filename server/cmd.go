@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/signal"
 	"strings"
+	"syscall"
 
 	"github.com/sebastianrcnt/atto/config"
 )
@@ -33,7 +34,7 @@ func RunStdioWith(version string, args []string, routes *WorkerRoutes) error {
 	if err != nil {
 		return err
 	}
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	runtime := New(version, cwd)
 	if !*inProcess {
@@ -101,7 +102,7 @@ func RunHTTPWith(version string, args []string, out io.Writer, routes *WorkerRou
 	addr := ln.Addr().String()
 	banner(out, version, cwd, addr, token)
 
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	return serveHTTP(ctx, ln, runtime.HTTPHandlerOrigins(token, origins))
 }
