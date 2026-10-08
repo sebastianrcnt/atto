@@ -104,7 +104,7 @@ type StreamOptions struct {
 	// Signal: cancelling Context aborts the request (pi: signal).
 	Context context.Context
 	APIKey  string
-	// HTTPClient replaces http.DefaultClient (pi: fetch).
+	// HTTPClient replaces the shared model client (pi: fetch).
 	HTTPClient *http.Client
 	Env        ProviderEnv
 	// OnPayload may inspect or replace the request params before sending;

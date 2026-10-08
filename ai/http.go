@@ -74,8 +74,10 @@ func FormatProviderError(err error, prefix string) string {
 // headers (later maps win). "Authorization: Bearer <apiKey>" is set when
 // apiKey is non-empty (atto: keyless local servers get no header).
 func postJSON(ctx context.Context, client *http.Client, url string, body []byte, apiKey string, headerSets ...map[string]string) (*http.Response, error) {
-	req, err := http.NewRequestWithContext(traceConn(ctx), "POST", url, bytes.NewReader(body))
+	rctx, cancel := context.WithCancelCause(traceConn(ctx))
+	req, err := http.NewRequestWithContext(rctx, "POST", url, bytes.NewReader(body))
 	if err != nil {
+		cancel(nil)
 		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
@@ -90,14 +92,16 @@ func postJSON(ctx context.Context, client *http.Client, url string, body []byte,
 		}
 	}
 	if client == nil {
-		client = http.DefaultClient
+		client = modelClient
 	}
 	recordRequest(url, body)
 	resp, err := client.Do(req)
 	if err != nil {
+		cancel(nil)
 		return nil, err
 	}
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		defer cancel(nil)
 		defer resp.Body.Close()
 		b, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
 		return nil, &ProviderError{
@@ -105,7 +109,45 @@ func postJSON(ctx context.Context, client *http.Client, url string, body []byte,
 			Body: string(b), Headers: resp.Header,
 		}
 	}
+	resp.Body = &idleResponseBody{ReadCloser: resp.Body, ctx: rctx, cancel: cancel, timeout: streamIdleTimeout}
 	return resp, nil
+}
+
+// Reasoning models can be silent for a while; allow two minutes without
+// response bytes before treating the stream as stalled, not a slow model.
+const defaultStreamIdleTimeout = 120 * time.Second
+
+// streamIdleTimeout is the production default; tests shorten it.
+var streamIdleTimeout = defaultStreamIdleTimeout
+
+// ErrStreamStalled means no response bytes arrived within the idle timeout.
+var ErrStreamStalled = errors.New("model stream stalled: no response bytes received")
+
+// idleResponseBody times blocked reads, not SSE events: comments and partial
+// lines keep a live stream alive. Canceling its request unblocks HTTP/1 and
+// HTTP/2 reads; closing an HTTP/1 body alone can wait on the read's mutex.
+type idleResponseBody struct {
+	io.ReadCloser
+	ctx     context.Context
+	cancel  context.CancelCauseFunc
+	timeout time.Duration
+}
+
+func (b *idleResponseBody) Read(p []byte) (int, error) {
+	timer := time.AfterFunc(b.timeout, func() {
+		b.cancel(fmt.Errorf("%w for %s", ErrStreamStalled, b.timeout))
+	})
+	n, err := b.ReadCloser.Read(p)
+	timer.Stop()
+	if cause := context.Cause(b.ctx); errors.Is(cause, ErrStreamStalled) {
+		return n, cause
+	}
+	return n, err
+}
+
+func (b *idleResponseBody) Close() error {
+	b.cancel(nil)
+	return b.ReadCloser.Close()
 }
 
 // sseEvent is one Server-Sent Event.

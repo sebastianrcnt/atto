@@ -1223,6 +1223,9 @@ func (a *Agent) loop(ctx context.Context, emit func(any), checked bool) error {
 			if ctx.Err() != nil {
 				break
 			}
+			if ai.IsConnectionError(err) {
+				ai.ResetConnections()
+			}
 			attempt++
 		}
 		var thinkMs int64
