@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/sebastianrcnt/atto/agent"
 	"github.com/sebastianrcnt/atto/ai"
 	"github.com/sebastianrcnt/atto/config"
 	"github.com/sebastianrcnt/atto/core"
@@ -91,5 +92,42 @@ func TestTierStatus(t *testing.T) {
 	a.agent.SetLongContext(false)
 	if strings.Contains(tui.StripEscapes(strings.Join(a.builtinStatus(240, 240), "\n")), " long") {
 		t.Fatal("stale context mode")
+	}
+}
+
+func TestCompactBlockReason(t *testing.T) {
+	d := &details{}
+	for _, tc := range []struct{ reason, want string }{
+		{agent.ReasonPriceTier, "price tier above 272.0k"},
+		{agent.ReasonSetting, "compaction.limits 272.0k"},
+		{"", ""},
+	} {
+		for _, running := range []bool{true, false} {
+			b := &compactBlock{d: d, auto: true, running: running, reason: tc.reason, cap: 272000}
+			text := tui.StripEscapes(strings.Join(b.Render(200), "\n"))
+			if tc.want == "" && strings.Contains(text, "272.0k") || !strings.Contains(text, tc.want) {
+				t.Errorf("%q running=%v: %s", tc.reason, running, text)
+			}
+		}
+	}
+}
+
+func TestStatusShowsTierTrigger(t *testing.T) {
+	for _, key := range []string{"ATTO_AGENT", "ATTO_SUBAGENT", "ATTO_SESSION_ID"} {
+		t.Setenv(key, "")
+	}
+	t.Setenv("ATTO_DIR", t.TempDir())
+	a := statusApp(t, &ai.ModelCost{Input: 0.1, Tiers: []ai.ModelCostTier{{InputTokensAbove: 272000, Input: 0.2}}})
+	m := a.model()
+	m.Model.ContextWindow, m.Model.MaxTokens = 1050000, 128000
+	a.agent.SetModel(m)
+	a.ctxTokens = 100000
+	row := func() string { return tui.StripEscapes(strings.Join(a.builtinStatus(240, 240), "\n")) }
+	if !strings.Contains(row(), "100.0k/1.1M ⇥244.8k") {
+		t.Fatal(row())
+	}
+	a.agent.SetLongContext(true)
+	if strings.Contains(row(), "⇥") {
+		t.Fatal("long context has no tier trigger", row())
 	}
 }

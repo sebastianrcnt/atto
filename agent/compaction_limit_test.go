@@ -51,3 +51,33 @@ func TestCompactionLimits(t *testing.T) {
 		t.Fatal(got)
 	}
 }
+
+func TestCompactionReason(t *testing.T) {
+	for _, key := range []string{"ATTO_AGENT", "ATTO_SUBAGENT", "ATTO_SESSION_ID"} {
+		t.Setenv(key, "")
+	}
+	t.Setenv("ATTO_DIR", t.TempDir())
+	m := config.Model{ID: "luna", ContextWindow: 1050000, MaxTokens: 128000,
+		Cost: &ai.ModelCost{Tiers: []ai.ModelCostTier{{InputTokensAbove: 272000}}}}
+	a := New(config.ModelRef{ProviderName: "test", Model: m}, "", t.TempDir())
+	for _, tc := range []struct {
+		name   string
+		limits map[string]int
+		long   bool
+		reason string
+		cap    int
+	}{
+		{"tier", nil, false, ReasonPriceTier, 272000},
+		{"setting", map[string]int{"test/luna": 200000}, false, ReasonSetting, 200000},
+		{"setting off", map[string]int{"test/luna": 0}, false, "", 0},
+		{"long", nil, true, "", 0},
+		// the output room already compacts earlier than the cap would
+		{"cap above output room", map[string]int{"test/luna": 1040000}, false, "", 0},
+	} {
+		a.SetCompaction(&config.Compaction{Limits: tc.limits})
+		a.SetLongContext(tc.long)
+		if _, cap, reason := a.compactionPlan(); reason != tc.reason || cap != tc.cap && tc.reason != "" {
+			t.Errorf("%s: reason %q cap %d, want %q %d", tc.name, reason, cap, tc.reason, tc.cap)
+		}
+	}
+}

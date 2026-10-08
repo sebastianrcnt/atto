@@ -114,7 +114,7 @@ func (a *App) itemStarted(it *transcript.Item) {
 		}
 		r.add(b)
 	case transcript.Compaction:
-		a.compact = &compactBlock{auto: it.Auto, running: true, d: &a.details}
+		a.compact = &compactBlock{auto: it.Auto, reason: it.Reason, cap: it.Cap, running: true, d: &a.details}
 		a.add(a.compact)
 	case transcript.BranchSummary:
 		a.summaryItem(it, true, "")

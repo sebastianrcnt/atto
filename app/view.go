@@ -609,6 +609,8 @@ type compactBlock struct {
 	expander
 	clickable
 	auto    bool
+	reason  string // agent.ReasonPriceTier or ReasonSetting, with cap
+	cap     int
 	running bool
 	notes   strings.Builder
 	before  int
@@ -620,6 +622,8 @@ type compactBlock struct {
 // compactKey is what a compaction block's lines depend on.
 type compactKey struct {
 	auto, running, expanded bool
+	reason                  string
+	cap                     int
 	notes                   string
 	before, after           int
 	elapsed                 time.Duration
@@ -634,7 +638,7 @@ func (c *compactBlock) Click(line int) bool {
 }
 
 func (c *compactBlock) Render(width int) []string {
-	key := compactKey{auto: c.auto, running: c.running, expanded: c.expanded(), notes: c.notes.String(),
+	key := compactKey{auto: c.auto, reason: c.reason, cap: c.cap, running: c.running, expanded: c.expanded(), notes: c.notes.String(),
 		before: c.before, after: c.after, elapsed: c.elapsed}
 	return c.cache.Render(width, key, func() []string { return c.render(width) })
 }
@@ -644,8 +648,15 @@ func (c *compactBlock) render(width int) []string {
 	if c.auto {
 		kind = "Context auto-compacted"
 	}
+	why := ""
+	switch c.reason {
+	case agent.ReasonPriceTier:
+		why = " · price tier above " + tui.FormatTokens(c.cap)
+	case agent.ReasonSetting:
+		why = " · compaction.limits " + tui.FormatTokens(c.cap)
+	}
 	if c.running {
-		out := []string{tui.Dim("  ◇ Compacting context · writing handoff notes…")}
+		out := []string{tui.Dim("  ◇ Compacting context" + why + " · writing handoff notes…")}
 		lines := tui.Wrap(strings.TrimSpace(tui.StripControls(c.notes.String())), max(1, width-4))
 		if len(lines) > thinkingPreviewLines {
 			lines = lines[len(lines)-thinkingPreviewLines:]
@@ -656,6 +667,7 @@ func (c *compactBlock) render(width int) []string {
 		return c.clicks(false, out, false)
 	}
 	head := tui.FG(6, "  ◇ ") + kind
+	head += tui.Dim(why)
 	if c.elapsed > 0 {
 		head += tui.Dim(" · " + tui.FormatDuration(c.elapsed))
 	}

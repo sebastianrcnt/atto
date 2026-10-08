@@ -423,16 +423,21 @@ func (a *App) buildStatus(m config.ModelRef, effort string, first, width int) []
 	if cw := m.Model.ContextWindow; cw > 0 {
 		pct := a.ctxTokens * 100 / cw
 		style := tui.Dim
-		if limit, _ := a.agent.CompactionLimit(); limit > 0 && a.ctxTokens*100/limit >= 80 {
+		limit, cap := a.agent.CompactionLimit()
+		if limit > 0 && a.ctxTokens*100/limit >= 80 {
 			style = func(s string) string { return tui.FG(3, s) } // nearing auto-compaction
 		}
 		label := fmt.Sprintf(" %d%%", pct)
 		if a.agent.LongContext() {
 			label += " long"
 		}
+		size := fmt.Sprintf("%s/%s", tui.FormatTokens(a.ctxTokens), tui.FormatTokens(cw))
+		if cap > 0 { // a price tier or a setting compacts before the window fills
+			size += " ⇥" + tui.FormatTokens(limit)
+		}
 		items = append(items,
 			statusItem{text: style(contextBar(pct, 10) + label), pre: "  "},
-			statusItem{text: style(fmt.Sprintf("%s/%s", tui.FormatTokens(a.ctxTokens), tui.FormatTokens(cw))), pre: " ", drop: dropCtxSize})
+			statusItem{text: style(size), pre: " ", drop: dropCtxSize})
 	}
 	if c := u.cacheLabel(); c != "" {
 		items = append(items, statusItem{text: tui.Dim(c), drop: dropCacheRate})

@@ -251,7 +251,7 @@ func (b *Builder) apply(ev any, at time.Time) {
 		b.add(Item{Kind: Notice, Status: Completed, Text: retryNotice(e)})
 	case agent.CompactStart:
 		b.closeText(at)
-		b.compact = b.start(Item{Kind: Compaction, Status: InProgress, Auto: e.Auto})
+		b.compact = b.start(Item{Kind: Compaction, Status: InProgress, Auto: e.Auto, Reason: e.Reason, Cap: e.Cap})
 	case agent.CompactTrimmed:
 		b.add(Item{Kind: Notice, Status: Completed, Text: fmt.Sprintf("Compaction left out the %d oldest messages: the conversation no longer fit the context window with room for the notes.", e.Messages)})
 	case agent.CompactDelta:
@@ -502,7 +502,7 @@ func (b *Builder) Replay(entries []session.Entry) {
 		switch e.Type {
 		case session.TypeCompaction:
 			b.interruptCalls()
-			b.apply(agent.CompactStart{Auto: e.Auto}, e.Time)
+			b.apply(agent.CompactStart{Auto: e.Auto, Reason: e.Reason, Cap: e.Cap}, e.Time)
 			b.apply(agent.CompactEnd{Notes: e.Notes, Before: e.TokensBefore, After: e.TokensAfter,
 				Elapsed: time.Duration(e.ElapsedMs) * time.Millisecond}, e.Time)
 		case session.TypeBranchSummary:

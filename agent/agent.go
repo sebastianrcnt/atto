@@ -197,7 +197,13 @@ type (
 		User  []bool // set by a front end that knows which steers the user sent
 	}
 	// CompactStart, CompactDelta and CompactEnd bracket a compaction.
-	CompactStart struct{ Auto bool }
+	// A cap that lowered an automatic compaction's trigger is named by
+	// Reason (ReasonPriceTier or ReasonSetting) and Cap, the token size.
+	CompactStart struct {
+		Auto   bool
+		Reason string
+		Cap    int
+	}
 	CompactDelta struct{ Text string }
 	// CompactTrimmed: the compaction request left out the oldest Messages
 	// to fit the context window (the conversation keeps them until the
@@ -713,19 +719,37 @@ func (a *Agent) LongContext() bool {
 	return a.longContext
 }
 
+// Why a cap lowers the compaction trigger.
+const (
+	ReasonPriceTier = "price-tier" // the model costs more above Cap input tokens
+	ReasonSetting   = "setting"    // settings.json compaction.limits
+)
+
 // CompactionLimit returns the trigger and the effective cap (zero: window).
 func (a *Agent) CompactionLimit() (limit, cap int) {
+	limit, cap, _ = a.compactionPlan()
+	return limit, cap
+}
+
+// compactionPlan is CompactionLimit and where the cap comes from. A cap
+// that does not lower the trigger below the window's own (the room for the
+// answer already does) is none.
+func (a *Agent) compactionPlan() (limit, cap int, reason string) {
 	a.cfgMu.Lock()
 	defer a.cfgMu.Unlock()
 	m := a.model
-	cap = m.Model.Cost.ContextPriceBoundary()
+	cap, reason = m.Model.Cost.ContextPriceBoundary(), ReasonPriceTier
 	if n, ok := a.compactLimits[m.ProviderName+"/"+m.Model.ID]; ok && n >= 0 {
-		cap = n
+		cap, reason = n, ReasonSetting
 	}
 	if a.longContext || cap >= m.Model.ContextWindow {
 		cap = 0
 	}
-	return compactLimit(m.Model, cap), cap
+	limit = compactLimit(m.Model, cap)
+	if cap <= 0 || limit >= compactLimit(m.Model, 0) {
+		cap, reason = 0, ""
+	}
+	return limit, cap, reason
 }
 
 // Reset clears the conversation.
@@ -1399,7 +1423,12 @@ func (a *Agent) compact(ctx context.Context, emit func(any), auto bool) error {
 	}
 	start := time.Now()
 	before := a.ContextTokens()
-	emit(CompactStart{Auto: auto})
+	var reason string
+	var cap int
+	if auto {
+		_, cap, reason = a.compactionPlan()
+	}
+	emit(CompactStart{Auto: auto, Reason: reason, Cap: cap})
 
 	prompt := provider.Message{Role: "user", Content: prompts.Render("compact", map[string]any{"Words": CompactNoteWords})}
 	client, req := a.request(prompt)
@@ -1483,7 +1512,7 @@ func (a *Agent) compact(ctx context.Context, emit func(any), auto bool) error {
 	after, elapsed := a.ContextTokens(), time.Since(start)
 	if a.Record != nil {
 		a.Record(session.Entry{Type: session.TypeCompaction, Replacement: replacement, Notes: notes, TokensBefore: before,
-			TokensAfter: after, ElapsedMs: elapsed.Milliseconds(), Auto: auto, Finish: res.FinishReason})
+			TokensAfter: after, ElapsedMs: elapsed.Milliseconds(), Auto: auto, Reason: reason, Cap: cap, Finish: res.FinishReason})
 	}
 	emit(CompactEnd{Notes: notes, Before: before, After: after, Elapsed: elapsed})
 	return nil

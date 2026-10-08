@@ -228,7 +228,7 @@ A model request that fails mid-turn is sent again, up to 5 times with a growing 
 
 Auto-compaction starts at 90% of the context window, or earlier to leave room for the model's maximum output. If a model's prices increase above a context size, atto also caps the trigger at 90% of the first positive price-tier boundary. This works with catalog prices and `models.json` `cost.tiers`, for every provider. For example, a 272k tier compacts at 244.8k instead of entering the long-context surcharge band.
 
-`/context` reports the trigger and its reason. `/context long` ignores the price-tier cap for this session; `/context normal` restores it. The choice survives resume and applies across model switches, but `/clear` starts in normal mode. The status line shows `long` beside the context percentage and `×2` (rounded input-price multiplier) beside cost when the last request used a surcharge tier. Context percentages always refer to the full window.
+`/context` reports the trigger and its reason. When a tier or `compaction.limits` lowered the trigger, the compaction block says so (`Context auto-compacted · price tier above 272.0k`), and the status line shows the trigger after the context size (`120.0k/1.1M ⇥244.8k`). `/context long` ignores the price-tier cap for this session; `/context normal` restores it. The choice survives resume and applies across model switches, but `/clear` starts in normal mode. The status line shows `long` beside the context percentage and `×2` (rounded input-price multiplier) beside cost when the last request used a surcharge tier. Context percentages always refer to the full window.
 
 For a persistent per-model override, add `compaction.limits` to `~/.atto/settings.json`:
 
