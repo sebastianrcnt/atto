@@ -243,10 +243,16 @@ func RunAgent(args []string, out io.Writer) error {
 		if t := st.Latest(); !t.Status.Active() {
 			return fmt.Errorf("agent %s is %s, not running", addr, t.Status)
 		}
-		if _, err := jobs.Kill(st.Parent, st.Job); err != nil {
+		if err := agentstate.RequestInterrupt(st.Parent, st.Name, st.Turns); err != nil {
 			return err
 		}
-		jobs.KillAll(st.Session) // the turn's own jobs
+		// Wait for the turn to record its stop, so an immediate task or
+		// close sees an idle agent rather than racing the cancellation.
+		for deadline := time.Now().Add(10 * time.Second); st.Latest().Status.Active(); time.Sleep(20 * time.Millisecond) {
+			if time.Now().After(deadline) {
+				return fmt.Errorf("agent %s is still stopping", addr)
+			}
+		}
 		fmt.Fprintf(out, "agent %s interrupted. Give it a new task with atto agent task %s \"...\"\n", addr, addr)
 	case "task":
 		if text == "" {
@@ -826,13 +832,20 @@ func RunAgentTurn(args []string, _ io.Writer) error {
 	t := agentstate.Turn{N: st.Turns, Status: agentstate.Queued, Queued: time.Now()}
 	_ = agentstate.SaveTurn(*parent, name, t)
 
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	sigCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	ctx, cancel := context.WithCancelCause(sigCtx)
+	defer cancel(nil)
+	go watchAgentInterrupt(ctx, st, cancel)
 	release, err := agentstate.Acquire(ctx, *parent, func() int {
 		s, _ := config.LoadSettings()
 		return s.AgentLimit()
 	})
-	stop()
 	if err != nil {
+		if errors.Is(context.Cause(ctx), agent.ErrUserInterrupt) {
+			t.Status, t.Ended = agentstate.Stopped, time.Now()
+			return agentstate.SaveTurn(*parent, name, t)
+		}
 		return err
 	}
 	defer release()
@@ -844,13 +857,15 @@ func RunAgentTurn(args []string, _ io.Writer) error {
 		Prompt: st.Prompt, Model: st.Model, Effort: st.Effort, Resume: st.Session, Format: "text", Verbose: true,
 		Worker: &agent.Worker{Name: name, Preset: st.Preset, Instructions: st.Instructions, Worktree: st.Worktree, Branch: st.Branch,
 			Path: agentstate.PathOf(st.Session), Parent: agentstate.PathOf(*parent), CanSpawn: canSpawn(st.Session)},
-		done: func(r printResult) { res = r },
+		done: func(r printResult) { res = r }, turnContext: ctx,
 	})
 	t.Ended = time.Now()
 	t.PromptTokens, t.CachedTokens, t.OutputTokens = res.Usage.InputTokens, res.Usage.CachedInputTokens, res.Usage.OutputTokens
 	t.Cost, t.Steps = res.cost, res.NumSteps
 	t.Status = agentstate.Done
 	switch {
+	case errors.Is(context.Cause(ctx), agent.ErrUserInterrupt):
+		t.Status = agentstate.Stopped
 	case res.Error != "":
 		t.Status, t.Error = agentstate.Failed, res.Error
 	case runErr != nil && !errors.Is(runErr, ErrPrintFailed):
@@ -869,6 +884,9 @@ func RunAgentTurn(args []string, _ io.Writer) error {
 	if err := agentstate.SaveTurn(*parent, name, t); err != nil {
 		return err
 	}
+	if t.Status == agentstate.Stopped {
+		return nil
+	}
 	// Tasks accepted after the final poll need a successor, not an idle inbox.
 	_, evs := events.SplitReload(core.Poll(st.Session))
 	if !events.Wakes(evs) {
@@ -882,6 +900,24 @@ func RunAgentTurn(args []string, _ io.Writer) error {
 	return nil
 }
 
+// watchAgentInterrupt handles the portable, per-turn control request while
+// a worker waits for a slot, a model response, or a running shell command.
+func watchAgentInterrupt(ctx context.Context, st agentstate.State, cancel context.CancelCauseFunc) {
+	tick := time.NewTicker(50 * time.Millisecond)
+	defer tick.Stop()
+	for {
+		if agentstate.Interrupted(st.Parent, st.Name, st.Turns) {
+			cancel(agent.ErrUserInterrupt)
+			return
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-tick.C:
+		}
+	}
+}
+
 // finalAnswerMax caps the answer a turn's end delivers; the rest is in
 // atto agent report.
 const finalAnswerMax = 8000
@@ -893,6 +929,8 @@ func turnEvent(st agentstate.State, t agentstate.Turn) events.Event {
 	what := "finished"
 	if t.Status == agentstate.Failed {
 		what = "failed"
+	} else if t.Status == agentstate.Stopped {
+		what = "stopped"
 	}
 	detail := tui.FormatDuration(t.Duration())
 	if n := t.PromptTokens + t.OutputTokens; n > 0 {

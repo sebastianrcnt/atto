@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/sebastianrcnt/atto/provider"
 	"github.com/sebastianrcnt/atto/session"
@@ -20,21 +21,29 @@ import (
 // command. Safe to call while a turn runs: it touches no conversation
 // state.
 func (a *Agent) RunUserShell(ctx context.Context, command string, exclude bool, onOutput func(string)) session.BashExec {
+	return a.RunUserShellWithBackground(ctx, command, exclude, onOutput, nil)
+}
+
+// RunUserShellWithBackground also accepts an explicit request to move the
+// command to a job. Cancellation still kills it, as for RunUserShell.
+func (a *Agent) RunUserShellWithBackground(ctx context.Context, command string, exclude bool, onOutput func(string), bg <-chan struct{}) session.BashExec {
 	a.cfgMu.Lock()
 	env := a.env
 	a.cfgMu.Unlock()
 	// No timeout of its own: the user can cancel. (At the longest a command
 	// may run, a shell host moves it to the background, noted below.)
-	res := runShell(ctx, a.Shell, a.Cwd, env, BashArgs{Command: command, Timeout: int(MaxBashTimeout.Seconds())}, onOutput, nil)
+	res := runShell(ctx, a.Shell, a.Cwd, env, BashArgs{Command: command, Timeout: int(MaxBashTimeout.Seconds()), userCommand: true}, onOutput, bg)
 	out := tidy(res.Output)
 	if res.Err != nil {
 		out = strings.TrimRight(out+"\n"+res.Err.Error(), "\n")
 	}
 	if res.TimedOut {
-		out = strings.TrimRight(out+"\n[timed out after "+MaxBashTimeout.String()+"]", "\n")
+		out = strings.TrimRight(out+"\n[timed out after "+res.WaitLimit.String()+"]", "\n")
 	}
-	if res.Job > 0 {
-		out = strings.TrimRight(out+fmt.Sprintf("\n[still running after %s; moved to the background as job %d]", MaxBashTimeout, res.Job), "\n")
+	if res.Job > 0 && res.Background == BackgroundUser {
+		out = strings.TrimRight(out+fmt.Sprintf("\n[the user moved this command to the background after %s; it is still running as job %d]", res.Duration.Round(time.Second), res.Job), "\n")
+	} else if res.Job > 0 {
+		out = strings.TrimRight(out+fmt.Sprintf("\n[still running after %s; moved to the background as job %d]", res.WaitLimit, res.Job), "\n")
 	}
 	b := session.BashExec{Command: command, ExitCode: res.ExitCode, Cancelled: res.Canceled, Exclude: exclude, DurationMs: res.Duration.Milliseconds()}
 	if body, _, path, cut := cutMiddle(out); cut {

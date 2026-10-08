@@ -260,26 +260,28 @@ func Leave(id string) int {
 			return 0
 		}
 		seen[session] = true
-		n := 0
+		// Stop worker processes before their own jobs: a pending shell
+		// detach must not create a job after that session was cleaned up.
+		n := jobs.KillAll(session)
 		for _, s := range agentstate.List(session) {
 			n += stop(s.Session)
 		}
 		_ = goal.Clear(session)
-		return n + jobs.KillAll(session)
+		return n
 	}
 	return stop(id)
 }
 
 // LeaveKeepingAgents is Leave for one turn of an agent: the turns of the
-// agents it started outlive it, as they would a
-// session that stays open.
+// agents it started, and commands detached by a user interrupt, outlive
+// it as they would a session that stays open.
 func LeaveKeepingAgents(id string) int {
 	_ = goal.Clear(id)
 	children := make(map[int]bool)
 	for _, s := range agentstate.List(id) {
 		children[s.Job] = true
 	}
-	return jobs.KillAllExcept(id, func(j jobs.Job) bool { return j.Kind() == "agent" || children[j.ID] })
+	return jobs.KillAllExcept(id, func(j jobs.Job) bool { return j.Kind() == "agent" || children[j.ID] || j.QuietExit })
 }
 
 // Poll fires the session's due timers and takes the events waiting in its

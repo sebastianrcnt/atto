@@ -47,7 +47,10 @@ func shellMode(text string) string {
 }
 
 // shellRun is the command the user is running.
-type shellRun struct{ cancel context.CancelFunc }
+type shellRun struct {
+	cancel     context.CancelFunc
+	background chan struct{}
+}
 
 // pendingShell is a finished command waiting for the run to end.
 type pendingShell struct {
@@ -67,7 +70,7 @@ func (a *App) submitShell(text, cmd string, exclude bool) {
 		a.memory.Begin()
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	run := &shellRun{cancel: cancel}
+	run := &shellRun{cancel: cancel, background: make(chan struct{}, 1)}
 	a.shell = run
 	a.tr().Event(transcript.ShellStart{Command: cmd, Exclude: exclude})
 	go func() { // keep the timer moving
@@ -83,13 +86,13 @@ func (a *App) submitShell(text, cmd string, exclude bool) {
 		}
 	}()
 	go func() {
-		x := a.agent.RunUserShell(ctx, cmd, exclude, func(s string) {
+		x := a.agent.RunUserShellWithBackground(ctx, cmd, exclude, func(s string) {
 			a.ui.Do(func() {
 				if a.shell == run {
 					a.tr().Event(transcript.ShellOutput{Chunk: s})
 				}
 			})
-		})
+		}, run.background)
 		a.ui.Do(func() {
 			if a.memory != nil {
 				defer a.memory.End()
@@ -135,6 +138,18 @@ func (a *App) flushShell() {
 	a.pendingShell = nil
 	a.ctxTokens = a.agent.ContextTokens()
 	a.statusTrigger()
+}
+
+// backgroundShell requests Ctrl+B for a user-entered command.
+func (a *App) backgroundShell() bool {
+	if a.shell == nil {
+		return false
+	}
+	select {
+	case a.shell.background <- struct{}{}:
+	default:
+	}
+	return true
 }
 
 // cancelShell stops the command being run, if any.

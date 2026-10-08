@@ -132,7 +132,7 @@ type thread struct {
 	items     []Item             // completed items
 	busy      bool
 	turnID    string
-	cancel    context.CancelFunc
+	cancel    context.CancelCauseFunc
 	turnSeq   int
 	ctxTokens int
 	usage     provider.Usage // totals for the running turn
@@ -162,17 +162,17 @@ func (s *Server) Close() {
 	}
 	var ending sync.WaitGroup
 	for _, t := range s.threads {
-		core.Leave(t.id)
 		t.mu.Lock()
 		t.closing = true
 		done := t.done
 		if t.cancel != nil {
-			t.cancel()
+			t.cancel(nil)
 		}
 		t.mu.Unlock()
 		if done != nil {
 			<-done
 		}
+		core.Leave(t.id)    // include jobs registered by a pending interrupt-detach
 		if t.hooks != nil { // threads end together, so one slow hook costs little
 			ending.Go(func() {
 				t.hooks.SessionEnd(context.Background(), "other")
@@ -422,7 +422,7 @@ func (s *Server) call(ctx context.Context, method string, raw json.RawMessage) (
 		}
 		t.mu.Lock()
 		if t.cancel != nil {
-			t.cancel()
+			t.cancel(agent.ErrUserInterrupt)
 		}
 		t.mu.Unlock()
 		return nil, nil
@@ -690,7 +690,7 @@ func (s *Server) begin(t *thread, fn func(ctx context.Context, emit func(any)) e
 	done := t.done
 	t.turnSeq++
 	turnID := fmt.Sprintf("%s-t%d", t.id, t.turnSeq)
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancelCause(context.Background())
 	t.busy, t.turnID, t.cancel, t.usage = true, turnID, cancel, provider.Usage{}
 	t.turn = TurnInfo{StartedAt: time.Now().UnixMilli()}
 	started := t.turn.StartedAt
@@ -720,7 +720,7 @@ func (s *Server) begin(t *thread, fn func(ctx context.Context, emit func(any)) e
 		t.ctxTokens = t.agent.ContextTokens()
 		usage, ctxTokens := t.usage, t.ctxTokens
 		t.mu.Unlock()
-		cancel()
+		cancel(nil)
 		status, msg := "completed", ""
 		switch {
 		case errors.Is(err, context.Canceled):

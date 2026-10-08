@@ -90,11 +90,13 @@ type App struct {
 	runKind string // "turn", "compact" or "branchSummary" while busy
 	// typed is the message the user typed that started the running turn (nil
 	// for any other run); replied is set once the model has answered it.
-	typed    *queuedInput
-	replied  bool
-	cancel   context.CancelFunc
-	runStart time.Time
-	activity string
+	typed           *queuedInput
+	replied         bool
+	cancel          context.CancelFunc
+	interruptCancel context.CancelCauseFunc
+	runDone         <-chan struct{}
+	runStart        time.Time
+	activity        string
 	// Activity line state (activity.go): the turn's verb, the setting it
 	// comes from, when the run last sent an event and how many commands
 	// run; now and verbRand are replaced by tests.
@@ -333,13 +335,18 @@ func Run(opts Options) error {
 		go a.checkUpdate()
 	}
 	<-a.quit
+	var done <-chan struct{}
 	a.ui.Do(func() {
 		if a.cancel != nil {
 			a.cancel()
 		}
+		done = a.runDone
 		a.memory.Close()
 		a.stopRemote()
 	})
+	if done != nil {
+		<-done // a pending interrupt-detach must finish before Leave kills jobs
+	}
 	a.ui.Stop()
 	a.closeSession()
 	if a.printExit() { // the run goes on in the background
@@ -585,7 +592,7 @@ func (a *App) onInput(data string) bool {
 		switch {
 		case a.cancelShell():
 		case a.busy:
-			a.cancel()
+			a.interruptTurn()
 		case a.editor.Text() != "":
 			a.editor.SetText("")
 		default:
@@ -600,7 +607,7 @@ func (a *App) onInput(data string) bool {
 	case "ctrl+b":
 		// As in Claude Code: the running command moves to the background
 		// and the turn goes on. Otherwise it is the editor's cursor-left.
-		if a.busy && a.agent.Background() {
+		if a.backgroundShell() || a.busy && a.agent.Background() {
 			return true
 		}
 	case "ctrl+l":
@@ -642,8 +649,17 @@ func (a *App) interrupt() bool {
 	if len(a.pendingSteers) > 0 {
 		a.sendSteersAfterInterrupt = true
 	}
-	a.cancel()
+	a.interruptTurn()
 	return true
+}
+
+// interruptTurn distinguishes a user interrupt from shutdown or navigation.
+func (a *App) interruptTurn() {
+	if a.interruptCancel != nil && a.runKind == "turn" {
+		a.interruptCancel(agent.ErrUserInterrupt)
+	} else if a.cancel != nil {
+		a.cancel()
+	}
 }
 
 func (a *App) submit(text string, att []tui.Attachment) {
@@ -746,8 +762,11 @@ func (a *App) start(activity string, fn func(context.Context, func(any)) error) 
 		a.memory.Begin()
 	}
 	a.typed, a.replied = nil, false
-	ctx, cancel := context.WithCancel(context.Background())
-	a.busy, a.cancel = true, cancel
+	ctx, cancel := context.WithCancelCause(context.Background())
+	a.busy, a.cancel = true, func() { cancel(nil) }
+	a.interruptCancel = cancel
+	done := make(chan struct{})
+	a.runDone = done
 	a.runStart, a.activity = a.clock(), activity
 	a.cancelGoalRetry() // whatever starts, a goal retry waiting is moot
 	a.lastEvent, a.toolsRunning = a.runStart, 0
@@ -772,6 +791,7 @@ func (a *App) start(activity string, fn func(context.Context, func(any)) error) 
 		}
 	}()
 	go func() {
+		defer close(done)
 		err := fn(ctx, func(ev any) { a.ui.Do(func() { a.onEvent(ev) }) })
 		// A reload that no step boundary reached (the turn ended first, or
 		// this was a compaction) runs now; its report for the model is
@@ -791,8 +811,13 @@ func (a *App) start(activity string, fn func(context.Context, func(any)) error) 
 			a.tr().End() // a compaction that did not finish disappears
 			a.busy = false
 			a.ctxTokens = ctxTokens
-			cancel()
-			a.cancel = nil
+			cancel(nil)
+			a.cancel, a.interruptCancel = nil, nil
+			select {
+			case <-a.quit:
+				return // quitting cannot start queued or goal work
+			default:
+			}
 			switch {
 			case errors.Is(err, context.Canceled) && a.runKind == "branchSummary":
 				a.notice("Branch summary canceled.")

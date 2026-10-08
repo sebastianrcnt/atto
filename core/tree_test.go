@@ -67,3 +67,24 @@ func TestIntermediateTurnKeepsOnlyAgentJobs(t *testing.T) {
 		t.Fatal("explicit agent job was killed")
 	}
 }
+
+func TestInterruptedJobOutlivesAgentTurnButNotSession(t *testing.T) {
+	t.Setenv("ATTO_DIR", t.TempDir())
+	treeJob(t, "worker", 1, "", "interrupted")
+	path := filepath.Join(jobs.Root("worker"), "1", "job.json")
+	j, err := jobs.Get("worker", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	j.QuietExit = true
+	b, _ := json.Marshal(j)
+	if err := os.WriteFile(path, b, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if n := LeaveKeepingAgents("worker"); n != 0 {
+		t.Fatal("interrupted job died with its worker turn")
+	}
+	if n := Leave("worker"); n != 1 {
+		t.Fatal("interrupted job survived session shutdown")
+	}
+}

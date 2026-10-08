@@ -3,8 +3,8 @@ package jobs
 // A shell host runs one call of the agent's shell tool. atto starts every
 // command under one (atto re-executed as `atto _shell`), isolated from
 // atto like a job supervisor, so that a command still running at its
-// timeout, or when the user presses Ctrl+B, can become a background job
-// without being restarted. Detaching needs no handover: the host stops
+// foreground wait, or when the user interrupts or presses Ctrl+B, can
+// become a background job without being restarted. Detaching needs no handover: the host stops
 // streaming to atto, writes the output it has captured so far to the new
 // job's output.log, keeps appending there, and from then on is the job's
 // supervisor: it records the exit and posts the [atto event], and `atto
@@ -53,9 +53,10 @@ type hostSpec struct {
 // hostControl is a request from atto: "detach" (into a job of Session,
 // named Name) or "kill".
 type hostControl struct {
-	Op      string `json:"op"`
-	Session string `json:"session,omitempty"`
-	Name    string `json:"name,omitempty"`
+	Op        string `json:"op"`
+	Session   string `json:"session,omitempty"`
+	Name      string `json:"name,omitempty"`
+	QuietExit bool   `json:"quietExit,omitempty"`
 }
 
 // HostStatus is a report from the host. Exactly one field is set.
@@ -167,8 +168,11 @@ func (h *Host) send(c hostControl) error {
 
 // Detach asks the host to turn the command into a job of session. The
 // answer arrives on Status: Job, DetachError, or Exit if it ended first.
-func (h *Host) Detach(session, name string) error {
-	return h.send(hostControl{Op: "detach", Session: session, Name: name})
+// quietExit marks an interrupt-detached job: its exit waits for the next turn
+// rather than waking an idle session.
+func (h *Host) Detach(session, name string, quietExit ...bool) error {
+	quiet := len(quietExit) > 0 && quietExit[0]
+	return h.send(hostControl{Op: "detach", Session: session, Name: name, QuietExit: quiet})
 }
 
 // Kill stops the command and everything it started, detached or not.
@@ -253,6 +257,10 @@ func (h *host) report(st HostStatus) {
 func (h *host) detach(c hostControl) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	if h.log != nil && c.QuietExit && !h.exited {
+		h.job.QuietExit = true
+		_ = save(h.dir, h.job)
+	}
 	if h.exited || h.log != nil {
 		return // atto gets the exit status instead
 	}
@@ -279,7 +287,7 @@ func (h *host) detach(c hostControl) {
 	}
 	h.mem = nil
 	j := Job{ID: id, Session: c.Session, Name: c.Name, Command: h.spec.Command, Cwd: h.spec.Cwd, Status: Running,
-		SupervisorPID: os.Getpid(), PID: h.pid, Started: h.start}
+		SupervisorPID: os.Getpid(), PID: h.pid, Started: h.start, QuietExit: c.QuietExit}
 	if err := save(dir, j); err != nil {
 		f.Close()
 		_ = os.RemoveAll(dir)

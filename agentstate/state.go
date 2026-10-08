@@ -171,6 +171,7 @@ func Remove(parent, name string) {
 		}
 		_ = os.Remove(path)
 		_ = os.Remove(filepath.Join(root, parent, name+".turn.json"))
+		_ = os.Remove(filepath.Join(root, parent, name+".turn.json.interrupt"))
 	}
 }
 

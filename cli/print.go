@@ -57,6 +57,8 @@ type PrintOptions struct {
 	Worker *agent.Worker
 	// done, if set, receives the result before RunPrint returns.
 	done func(printResult)
+	// turnContext carries the worker control request; plain -p uses signals.
+	turnContext context.Context
 }
 
 // printResult is the final JSON object for --output-format json and the
@@ -277,6 +279,9 @@ func RunPrint(o PrintOptions) error {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	if o.turnContext != nil {
+		ctx = o.turnContext
+	}
 
 	res := printResult{Type: "result", SessionID: sess.ID, Model: model.ProviderName + "/" + model.Model.ID}
 	p := &printer{format: o.Format, partial: o.Partial, verbose: o.Verbose, out: os.Stdout, errOut: os.Stderr, res: &res}

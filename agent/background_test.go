@@ -7,6 +7,7 @@ import (
 	"errors"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -15,6 +16,7 @@ import (
 	"github.com/sebastianrcnt/atto/config"
 	"github.com/sebastianrcnt/atto/events"
 	"github.com/sebastianrcnt/atto/jobs"
+	"github.com/sebastianrcnt/atto/shell"
 )
 
 // bgSession gives a test its own atto dir and session, and stops every
@@ -261,5 +263,158 @@ func TestBackgroundedCommandOutlivesAtto(t *testing.T) {
 	}
 	if evs := waitEvent(t, s); !strings.Contains(evs[0].Text, "exited with code 5") {
 		t.Fatalf("event %+v", evs)
+	}
+}
+
+func TestUserInterruptDetachesHostedCommand(t *testing.T) {
+	s, env := bgSession(t)
+	ctx, cancel := context.WithCancelCause(context.Background())
+	defer cancel(nil)
+	args := BashArgs{Description: "Interrupted", Command: "echo before; sleep 1; echo after; exit 3"}
+	res := RunBash(ctx, t.TempDir(), env, args, func(chunk string) {
+		if strings.Contains(chunk, "before") {
+			cancel(ErrUserInterrupt)
+		}
+	})
+	if res.Job != 1 || res.Background != BackgroundInterrupt || res.Canceled || res.TimedOut || res.Err != nil || res.Output != "before\n" {
+		t.Fatalf("%+v", res)
+	}
+	out := res.ForModel(args)
+	if !strings.Contains(out, "still running as job 1") || !strings.Contains(out, "exit event waits for your next turn") || !strings.HasPrefix(out, "before\n") {
+		t.Fatalf("model result %q", out)
+	}
+	j, err := jobs.Get(s, res.Job)
+	if err != nil || j.Status != jobs.Running || !j.QuietExit || groupGone(j.PID) {
+		t.Fatalf("job did not survive: %+v %v", j, err)
+	}
+	j, why, err := jobs.Wait(s, res.Job, 10*time.Second)
+	if err != nil || why != "done" || j.Status != jobs.Exited || *j.ExitCode != 3 {
+		t.Fatalf("job %+v %s %v", j, why, err)
+	}
+	if evs := waitEvent(t, s); len(evs) != 1 || events.Wakes(evs) || !strings.Contains(evs[0].Text, "after") {
+		t.Fatalf("exit must be delivered quietly: %+v", evs)
+	}
+}
+
+func TestHostedPlainCancelKillsTree(t *testing.T) {
+	s, env := bgSession(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	res := RunBash(ctx, t.TempDir(), env, BashArgs{Command: "sleep 30 & sleep 0.1; echo $$; wait"}, func(string) { cancel() })
+	if !res.Canceled || res.Job != 0 || res.Err != nil {
+		t.Fatalf("%+v", res)
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(res.Output))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for deadline := time.Now().Add(10 * time.Second); !groupGone(pid); time.Sleep(20 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("the canceled process tree survived")
+		}
+	}
+	if list := jobs.List(s); len(list) != 0 {
+		t.Fatalf("plain cancellation created jobs: %+v", list)
+	}
+}
+
+func TestAgentInterruptRecordsDetachedToolResult(t *testing.T) {
+	s, env := bgSession(t)
+	srv, seen := fakeServer(t, toolCall("echo started; sleep 30"))
+	a := newTestAgent(srv.URL)
+	a.SetSession(s, env)
+	ctx, cancel := context.WithCancelCause(context.Background())
+	defer cancel(nil)
+	var end ToolEnd
+	err := a.Run(ctx, "go", func(ev any) {
+		switch e := ev.(type) {
+		case ToolStart:
+			if e.Timeout != DefaultShellWait {
+				t.Errorf("tool wait %s, want %s", e.Timeout, DefaultShellWait)
+			}
+		case ToolOutput:
+			if strings.Contains(e.Chunk, "started") {
+				cancel(ErrUserInterrupt)
+			}
+		case ToolEnd:
+			end = e
+		}
+	})
+	if !errors.Is(err, context.Canceled) || end.Result.Job != 1 || end.Result.Background != BackgroundInterrupt {
+		t.Fatalf("tool end %+v, run error %v", end, err)
+	}
+	msgs := a.Messages()
+	last := msgs[len(msgs)-1]
+	if last.Role != "tool" || !strings.Contains(last.Content, "still running as job 1") || !strings.Contains(last.Content, "started") || strings.Contains(last.Content, "[canceled by user]") || len(seen()) != 1 {
+		t.Fatalf("interrupted tool result: %+v", last)
+	}
+	j, err := jobs.Get(s, 1)
+	if err != nil || j.Status != jobs.Running || groupGone(j.PID) {
+		t.Fatalf("job %+v %v", j, err)
+	}
+}
+
+func TestUserInterruptWithoutDetachStillKills(t *testing.T) {
+	for _, host := range []bool{false, true} {
+		old := ShellHost
+		ShellHost = host
+		ctx, cancel := context.WithCancelCause(context.Background())
+		res := RunBash(ctx, t.TempDir(), nil, BashArgs{Command: "echo started; sleep 30"}, func(string) { cancel(ErrUserInterrupt) })
+		cancel(nil)
+		ShellHost = old
+		if !res.Canceled || res.Job != 0 || res.Err != nil {
+			t.Fatalf("host %v: %+v", host, res)
+		}
+	}
+}
+
+func TestUserShellKeepsLongWaitAndCancellation(t *testing.T) {
+	s, env := bgSession(t)
+	args := BashArgs{Timeout: 120, userCommand: true}
+	if limit := args.waitLimit(s); limit != 120*time.Second {
+		t.Fatalf("user shell wait clamped to %s", limit)
+	}
+	a := newTestAgent("")
+	a.SetSession(s, env)
+	ctx, cancel := context.WithCancelCause(context.Background())
+	defer cancel(nil)
+	res := a.RunUserShell(ctx, "echo started; sleep 30", false, func(string) { cancel(ErrUserInterrupt) })
+	if !res.Cancelled || len(jobs.List(s)) != 0 {
+		t.Fatalf("user shell should die on cancellation: %+v", res)
+	}
+}
+
+func TestUserShellExplicitBackground(t *testing.T) {
+	s, env := bgSession(t)
+	a := newTestAgent("")
+	a.SetSession(s, env)
+	bg := make(chan struct{}, 1)
+	res := a.RunUserShellWithBackground(context.Background(), "echo started; sleep 30", false, func(string) { bg <- struct{}{} }, bg)
+	if res.Cancelled || !strings.Contains(res.Output, "the user moved this command to the background") || !strings.Contains(res.Output, "still running as job 1") || strings.Contains(res.Output, "30m") {
+		t.Fatalf("user shell %+v", res)
+	}
+	if j, err := jobs.Get(s, 1); err != nil || j.Status != jobs.Running || j.QuietExit {
+		t.Fatalf("job %+v %v", j, err)
+	}
+}
+
+func TestPlainCancelDuringDetachKills(t *testing.T) {
+	s, env := bgSession(t)
+	for range 5 {
+		ctx, cancel := context.WithCancel(context.Background())
+		bg := make(chan struct{}, 1)
+		res := runShell(ctx, shell.Default(), t.TempDir(), env, BashArgs{Command: "echo started; sleep 30"}, func(string) {
+			bg <- struct{}{}
+			cancel()
+		}, bg)
+		cancel()
+		if !res.Canceled || res.Job != 0 {
+			t.Fatalf("cancellation raced detach: %+v", res)
+		}
+	}
+	for _, j := range jobs.List(s) {
+		if j.Status != jobs.Killed {
+			t.Fatalf("detached job survived cancellation: %+v", j)
+		}
 	}
 }

@@ -109,7 +109,7 @@ func breakawayFlags() uint32 {
 // setting the code page, say) never reach the user's terminal, during or
 // after atto.
 func Isolate(cmd *exec.Cmd) {
-	cmd.SysProcAttr = &syscall.SysProcAttr{CreationFlags: windows.CREATE_NEW_PROCESS_GROUP | windows.CREATE_NO_WINDOW}
+	cmd.SysProcAttr = &syscall.SysProcAttr{CreationFlags: windows.CREATE_NEW_PROCESS_GROUP | windows.CREATE_NO_WINDOW | breakawayFlags()}
 }
 
 // KillGroup terminates pid. A Windows process tree is held together by

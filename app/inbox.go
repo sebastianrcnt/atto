@@ -89,6 +89,11 @@ func (a *App) deliverEvents() {
 	if a.busy && a.runKind != "turn" {
 		return
 	}
+	if !a.busy && !events.Wakes(a.pendingEvents) {
+		events.Requeue(a.sess.ID, a.pendingEvents)
+		a.pendingEvents = nil
+		return
+	}
 	evs := a.pendingEvents
 	a.pendingEvents = nil
 	for _, e := range evs {

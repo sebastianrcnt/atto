@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/sebastianrcnt/atto/agent"
 	"github.com/sebastianrcnt/atto/config"
 	"github.com/sebastianrcnt/atto/jobs"
 	"github.com/sebastianrcnt/atto/mcp"
@@ -22,6 +23,11 @@ func TestMain(m *testing.M) {
 	mcptest.ServeIfRequested()
 	if len(os.Args) >= 2 {
 		switch os.Args[1] {
+		case "_shell":
+			if jobs.ServeHost(os.Stdin, os.Stdout, os.Stderr) != nil {
+				os.Exit(1)
+			}
+			os.Exit(0)
 		case "_supervise":
 			if jobs.Supervise(os.Args[2]) != nil {
 				os.Exit(1)
@@ -34,6 +40,7 @@ func TestMain(m *testing.M) {
 			}
 			os.Exit(0)
 		case "_agent-turn":
+			agent.ShellHost = true
 			if err := RunAgentTurn(os.Args[2:], io.Discard); err != nil {
 				fmt.Fprintln(os.Stderr, err)
 				os.Exit(1)

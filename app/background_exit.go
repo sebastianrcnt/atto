@@ -147,7 +147,7 @@ func (a *App) dismissModal() {
 // cancelTask stops the running turn; an idle goal is paused.
 func (a *App) cancelTask() {
 	if a.busy {
-		a.cancel() // afterRun pauses the goal, as for esc
+		a.interruptTurn() // afterRun pauses the goal, as for esc
 		return
 	}
 	if g := a.goal.Goal; g != nil && a.goal.Active() {

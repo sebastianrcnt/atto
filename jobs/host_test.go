@@ -133,3 +133,36 @@ func TestHostStartError(t *testing.T) {
 		t.Fatalf("want StartError, got %v", err)
 	}
 }
+
+func TestInterruptDetachPostsQuietExit(t *testing.T) {
+	for _, code := range []int{0, 3} {
+		t.Run(strconv.Itoa(code), func(t *testing.T) {
+			s := setup(t)
+			t.Cleanup(func() { KillAll(s) })
+			var out syncBuf
+			h := startHost(t, "sleep 0.3; echo done; exit "+strconv.Itoa(code), &out)
+			if err := h.Detach(s, "interrupted", true); err != nil {
+				t.Fatal(err)
+			}
+			if st := <-h.Status(); st.Job != 1 {
+				t.Fatalf("detach status %+v", st)
+			}
+			h.Release()
+			j, why, err := Wait(s, 1, 10*time.Second)
+			if err != nil || why != "done" || j.ExitCode == nil || *j.ExitCode != code || !j.QuietExit {
+				t.Fatalf("job %+v %s %v", j, why, err)
+			}
+			for deadline := time.Now().Add(3 * time.Second); ; time.Sleep(20 * time.Millisecond) {
+				if evs := events.Drain(s); len(evs) > 0 {
+					if len(evs) != 1 || events.Wakes(evs) || !strings.Contains(evs[0].Text, "done") {
+						t.Fatalf("quiet exit event %+v", evs)
+					}
+					break
+				}
+				if time.Now().After(deadline) {
+					t.Fatal("quiet job exit was suppressed rather than delivered")
+				}
+			}
+		})
+	}
+}

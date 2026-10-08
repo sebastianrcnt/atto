@@ -33,14 +33,26 @@ func TestDetachedTreeHelper(t *testing.T) {
 	exe, _ := os.Executable()
 	cmd := exec.Command(exe, "-test.run=^TestDetachedTreeHelper$")
 	cmd.Env = append(os.Environ(), "ATTO_TEST_DETACH_ROLE=child")
-	Detach(cmd)
+	if os.Getenv("ATTO_TEST_ISOLATE") == "1" {
+		Isolate(cmd)
+	} else {
+		Detach(cmd)
+	}
 	if err := cmd.Start(); err != nil {
 		os.Exit(1)
 	}
 	os.Exit(0)
 }
 
-func TestDetachOutlivesTree(t *testing.T) {
+func TestDetachOutlivesTree(t *testing.T) { testOutlivesTree(t) }
+
+func TestIsolateOutlivesTree(t *testing.T) {
+	t.Setenv("ATTO_TEST_ISOLATE", "1")
+	testOutlivesTree(t)
+}
+
+func testOutlivesTree(t *testing.T) {
+	t.Helper()
 	dir := t.TempDir()
 	exe, err := os.Executable()
 	if err != nil {

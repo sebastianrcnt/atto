@@ -77,7 +77,7 @@ func (a *App) sendNowFromEditor(text string, att []tui.Attachment) {
 	}
 	a.goal.Replace()
 	a.sendSteersAfterInterrupt = len(a.pendingSteers) > 0
-	a.cancel()
+	a.interruptTurn()
 }
 
 // editLastSteer pulls the last steer back into the editor if the turn has

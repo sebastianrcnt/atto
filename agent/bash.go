@@ -84,7 +84,8 @@ type BashArgs struct {
 	// Background starts the command as a job (atto job start). Named as
 	// in Claude Code's Bash tool, like the other parameters, so models
 	// trained on it use it without being told.
-	Background bool `json:"run_in_background,omitempty"`
+	Background  bool `json:"run_in_background,omitempty"`
+	userCommand bool // ! commands keep their long wait and kill on cancellation
 }
 
 // TimeLimit is the kill timeout for a direct or session-less command.
@@ -106,7 +107,7 @@ func (a BashArgs) foregroundWait() time.Duration {
 }
 
 func (a BashArgs) waitLimit(session string) time.Duration {
-	if ShellHost && session != "" {
+	if ShellHost && session != "" && !a.userCommand {
 		return a.foregroundWait()
 	}
 	return a.timeout()
@@ -135,7 +136,12 @@ const (
 	BackgroundRequested = "requested" // run_in_background
 	BackgroundTimeout   = "timeout"   // still running at its timeout
 	BackgroundUser      = "user"      // Ctrl+B (Agent.Background)
+	BackgroundInterrupt = "interrupt" // user interrupted the turn
 )
+
+// ErrUserInterrupt marks a user interrupt of a turn, rather than shutdown
+// or another cancellation. Hosted model commands detach instead of dying.
+var ErrUserInterrupt = errors.New("turn interrupted by user")
 
 // ShellHost makes commands run under an atto shell host (jobs.StartHost),
 // which can turn a running command into a background job. It re-executes
@@ -179,8 +185,9 @@ func RunBash(ctx context.Context, cwd string, env []string, args BashArgs, onOut
 
 // RunShell executes args.Command with sh in cwd. The whole process tree
 // (process group on Unix, job object on Windows) is killed when ctx is
-// canceled. Under a shell host, a command still running after the
-// foreground wait (10 seconds by default, up to 30) becomes a job of the
+// canceled, except when its cause is ErrUserInterrupt: a hosted model
+// command with a session becomes a job instead. Under a shell host, a
+// command still running after the foreground wait (10 seconds by default, up to 30) becomes a job of the
 // session in env (ATTO_SESSION_ID). Without a host or session, the command
 // is killed at its timeout instead (60 seconds by default, up to 30 minutes).
 func RunShell(ctx context.Context, sh shell.Shell, cwd string, env []string, args BashArgs, onOutput func(string)) BashResult {
@@ -240,7 +247,7 @@ func runHosted(ctx context.Context, sh shell.Shell, cwd string, env []string, se
 		return BashResult{}, false
 	}
 	limit := args.timeout()
-	if session != "" {
+	if session != "" && !args.userCommand {
 		limit = args.foregroundWait()
 	}
 	timer := time.NewTimer(limit)
@@ -261,9 +268,12 @@ func runHosted(ctx context.Context, sh shell.Shell, cwd string, env []string, se
 		case session == "" && why == BackgroundTimeout:
 			timedOut("")
 		case session == "":
-		case h.Detach(session, args.Description) != nil:
+		case h.Detach(session, args.Description, why == BackgroundInterrupt) != nil:
 			if why == BackgroundTimeout {
 				timedOut("")
+			} else if why == BackgroundInterrupt {
+				res.Canceled = true
+				h.Kill()
 			}
 		default:
 			detaching = why
@@ -291,6 +301,9 @@ wait:
 				detaching = ""
 				if why == BackgroundTimeout {
 					timedOut(st.DetachError)
+				} else if why == BackgroundInterrupt {
+					res.Canceled = true
+					h.Kill()
 				} else if onOutput != nil {
 					// For the user, who asked; the model need not know.
 					onOutput("\n[atto: could not move to the background: " + st.DetachError + "]\n")
@@ -298,15 +311,39 @@ wait:
 			}
 		case <-done:
 			done = nil
-			res.Canceled = true
-			h.Kill()
+			if errors.Is(context.Cause(ctx), ErrUserInterrupt) && session != "" && !args.userCommand {
+				if detaching != "" {
+					// A timeout or Ctrl+B may already be moving it. Quiet that
+					// job too, before releasing the host.
+					if h.Detach(session, args.Description, true) == nil {
+						detaching = BackgroundInterrupt
+					}
+				} else {
+					detach(BackgroundInterrupt)
+				}
+			} else {
+				res.Canceled = true
+				h.Kill()
+			}
 		case <-timer.C:
 			detach(BackgroundTimeout)
 		case <-bg:
 			detach(BackgroundUser)
 		}
 	}
+	if ctx.Err() != nil && !(session != "" && !args.userCommand && errors.Is(context.Cause(ctx), ErrUserInterrupt)) {
+		// Cancellation may race the final status and channel close.
+		res.Canceled = true
+		h.Kill()
+	}
 	if res.Job > 0 && !res.Canceled {
+		// Status and cancellation can become ready together at detach.
+		// Even if status won the select, keep the interrupt's quiet exit.
+		if !args.userCommand && errors.Is(context.Cause(ctx), ErrUserInterrupt) && res.Background != BackgroundInterrupt {
+			if h.Detach(session, args.Description, true) == nil {
+				res.Background = BackgroundInterrupt
+			}
+		}
 		h.Release()
 	} else {
 		_ = h.Wait()
@@ -423,6 +460,8 @@ func (r BashResult) backgroundForModel(args BashArgs) string {
 	switch r.Background {
 	case BackgroundRequested:
 		fmt.Fprintf(&b, "[started in the background as job %d.", r.Job)
+	case BackgroundInterrupt:
+		fmt.Fprintf(&b, "[the user interrupted the turn; this command moved to the background and is still running as job %d%s.", r.Job, shown)
 	case BackgroundUser:
 		fmt.Fprintf(&b, "[the user moved this command to the background after %s; it is still running as job %d%s.", r.Duration.Round(time.Second), r.Job, shown)
 	default:
@@ -432,7 +471,12 @@ func (r BashResult) backgroundForModel(args BashArgs) string {
 		}
 		fmt.Fprintf(&b, "[still running after %s; moved to the background as job %d%s.", limit, r.Job, shown)
 	}
-	fmt.Fprintf(&b, " You will get an [atto event] when it exits. Output: atto job output %d · stop: atto job kill %d]", r.Job, r.Job)
+	if r.Background == BackgroundInterrupt {
+		b.WriteString(" Its exit event waits for your next turn when idle.")
+	} else {
+		b.WriteString(" You will get an [atto event] when it exits.")
+	}
+	fmt.Fprintf(&b, " Output: atto job output %d · stop: atto job kill %d]", r.Job, r.Job)
 	return b.String()
 }
 

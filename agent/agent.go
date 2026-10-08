@@ -1368,11 +1368,11 @@ func (a *Agent) runTool(ctx context.Context, tc provider.ToolCall, index int, dr
 		}
 		args = updated
 	}
-	emit(ToolStart{ID: tc.ID, Index: index, Args: args, Timeout: args.timeout()})
-	drafts.claim(index)
 	a.cfgMu.Lock()
 	env := a.env
 	a.cfgMu.Unlock()
+	emit(ToolStart{ID: tc.ID, Index: index, Args: args, Timeout: args.waitLimit(envValue(env, "ATTO_SESSION_ID"))})
+	drafts.claim(index)
 	// A foreground call gets a directory for atto view, whose images are
 	// attached to its result. Other commands get none (the variable is
 	// cleared, in case atto's own environment has one).

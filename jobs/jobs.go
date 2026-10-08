@@ -88,6 +88,9 @@ type Job struct {
 	// Quiet: a clean exit posts no event, for a command that tells the
 	// session how it went itself (an agent turn).
 	Quiet bool `json:"quiet,omitempty"`
+	// QuietExit delivers the exit event without waking an idle session.
+	// A user-interrupted command keeps running between agent turns.
+	QuietExit bool `json:"quietExit,omitempty"`
 }
 
 func (j Job) Kind() string {
@@ -750,5 +753,5 @@ func postEvent(j Job, detail string) {
 		text += fmt.Sprintf("\nFull output: atto job output %d", j.ID)
 		title = fmt.Sprintf("● job %d exited (%d) after %s: %s", j.ID, *j.ExitCode, j.Runtime(), j.Label())
 	}
-	_ = events.Push(j.Session, events.Event{Source: j.Kind(), Text: text, Title: title})
+	_ = events.Push(j.Session, events.Event{Source: j.Kind(), Text: text, Title: title, Quiet: j.QuietExit})
 }
