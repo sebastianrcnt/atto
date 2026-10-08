@@ -276,12 +276,33 @@ A session is open in one atto at a time: while a terminal has it, resuming it in
 
 **Hooks** use the same format as Claude Code: `PreToolUse`, `PostToolUse`, `UserPromptSubmit`, `Stop`, `PreCompact`, `SessionStart`, `SessionEnd` and `Notification`.
 
-- Put them in `~/.atto/settings.json` or in the project's `.atto/settings.json`.
+- Put them in `~/.atto/settings.json` or in the working directory's `.atto/settings.json`. User hooks are your own and need no approval; project hooks stay off until approved (see **Project code approval** below).
 - A hook that exits with code 2, or returns `{"decision": "block"}`, stops the action.
 - `Stop` runs when the agent is done answering (in the TUI, `-p` and the servers). Blocking it sends the reason to the model as a user message and the turn continues. The input has `stop_hook_active`, true once a Stop hook has already kept this turn going, so a hook can let it finish. After 8 blocks in a row atto stops anyway. An interrupted turn (Esc) runs no Stop hook. With `/goal`, the Stop hook runs at the end of every turn, before the goal decides whether to continue.
 - `SessionEnd` runs when a session ends, with `reason`: `exit` (quitting the TUI), `clear` (`/clear`), `resume` (switching to another session), or `other` (`-p` finishing, the server shutting down, a conversation archived). It cannot block and has a 5 second default timeout (set `timeout` on the hook to change it), so exiting stays quick. The matcher is tested against `reason`.
-- `Notification` runs when atto wants your attention, with `message` and `notification_type`; the matcher is tested against the type. It cannot block. The TUI sends `idle_prompt` when a turn that took 15 seconds or more is done and atto waits for your input (not when a queued message or a goal turn follows), `background_event` when a job or timer event arrives while atto is idle, and `goal_blocked` when a goal becomes blocked. There are no permission prompts, so no such notification. `-p` and the servers send none.
+- `Notification` runs when atto wants your attention, with `message` and `notification_type`; the matcher is tested against the type. It cannot block. The TUI sends `idle_prompt` when a turn that took 15 seconds or more is done and atto waits for your input (not when a queued message or a goal turn follows), `background_event` when a job or timer event arrives while atto is idle, and `goal_blocked` when a goal becomes blocked. There are no per-command permission prompts, so no such notification. `-p` and the servers send none.
 - Hook messages, such as the reason of a blocked Stop, appear in the transcript, and as `hook` events in `-p --output-format stream-json`.
+
+**Project code approval.** A repository may bring executable hooks, MCP servers or extensions. At startup, and when `/reload` finds new or changed content, the TUI asks **once**, listing all pending items together: **Allow all**, **Review one by one**, or **Deny**. Allow all approves only the content shown, not future items or changes. Review offers Allow/Deny for each item. Decisions are remembered by content hash; unchanged denials stay off without asking again. `Esc` means “not now”: content stays off and is not asked about again until the next atto run (or until it changes).
+
+Where nothing can ask (`atto -p`, `atto app-server`, `atto serve`, background workers), unapproved content stays off and a warning names each item and its approval command. Approve ahead of time from your own terminal:
+
+```
+atto trust                            # list project items and their decisions
+atto trust list -json
+atto trust approve all                # approve current content, not future changes
+atto trust approve hook <name>        # use the hook name printed by atto trust
+atto trust approve mcp github
+atto trust approve ext deploy
+atto trust revoke mcp github          # forget a decision; needs approval again
+atto trust revoke all
+```
+
+`atto trust` refuses when `ATTO_AGENT` or `ATTO_SESSION_ID` is set: the agent cannot grant itself trust. Existing `atto mcp approve <name>`, `atto extensions approve <name>` and `/extensions approve <name>` still work. Use `/reload` to apply approvals or revocations in a running session. Invalid or disabled items are listed but are not prompted for or approved by Allow all.
+
+Approvals live beside your settings: `hook-approvals.json`, `mcp-approvals.json` and `extension-approvals.json` under `~/.atto` (or `ATTO_DIR`). Hook hashes cover the event, matcher, command or HTTP configuration, headers and timeout; they do **not** hash a script invoked by the command. MCP hashes cover the entry before environment expansion; extension hashes cover the bundled code, including imports. Hook approvals are scoped to their settings file and content, so reordering identical hooks does not need approval. User hooks, user extensions and user/local MCP servers need no project trust. AGENTS.md and skills are text, not executable content, and remain listed in the Loaded block without a prompt.
+
+This is approval of repository-supplied code, not a sandbox or a per-command permission system. It does not prevent prompt injection in project instructions or stop the model from running commands.
 
 **Extensions** are TypeScript or JavaScript files, often written by the agent itself, that atto runs in an embedded engine (no Node.js needed). They can block or rewrite the agent's commands, rewrite what the model sees of their output (to redact secrets, say), add to prompts, add slash commands, and show status items, widgets and dialogs in the TUI.
 
@@ -319,7 +340,7 @@ echo '{"query": "atto"}' | atto mcp call docs search -    # arguments from stdin
 ```
 
 - **Configuration** is Claude Code's `.mcp.json` format, `{"mcpServers": {"name": {"command", "args", "env"} | {"type": "http", "url", "headers"}}}`, in three places: `~/.atto/mcp.json` (user), `<project>/.mcp.json` (shared, checked in) and a private per-project file, `~/.atto/projects/<project name>-<hash>/mcp.json` (local, written by `atto mcp add -scope local`, outside the repository). The shared, checked-in file is `.mcp.json` and needs approval; a `<project>/.atto/mcp.json` is not read at all (the Loaded block says so and where to move it), because a repository must not be able to start commands unapproved. The later wins by name (local over project over user). Strings may use `${VAR}` and `${VAR:-default}`, which is how tokens stay out of the files. A project's `.mcp.json` works as it does in Claude Code; `~/.claude.json` is not read. Transports are stdio and streamable HTTP (`"type": "http"`; `"sse"` also works). Remote servers that need OAuth are not supported; use a header token.
-- **Approval.** A server from a project's `.mcp.json` runs a command the repository brought, so it needs your approval once, as project extensions do. At session start the TUI asks for each: allow, deny, or allow all for this project. Or run `atto mcp approve <name>`. Approvals are kept in `~/.atto/mcp-approvals.json` by file and server name with a hash of the entry, so a changed entry needs approval again ("allow all" covers a file's servers whatever they say later). Unapproved servers are listed but never started. `atto mcp approve` refuses when run by the agent (`ATTO_AGENT` is set). Servers in your own user and local files need no approval.
+- **Approval.** A server from a project's `.mcp.json` needs approval, together with project hooks and extensions in the combined project-code prompt above. Or run `atto mcp approve <name>` / `atto trust approve mcp <name>`. Approvals remain in `~/.atto/mcp-approvals.json` by file and server name with a hash of the entry; a changed entry needs approval again. Unapproved servers are listed but never started. `atto mcp approve` refuses when run by the agent (`ATTO_AGENT` is set). Servers in your own user and local files need no approval. Old approvals of an entire file are still honored for compatibility; new Allow all decisions approve only current hashes, and `atto trust revoke` can remove old whole-file approvals.
 - **Servers live in the session.** They start on first use and stay until the session ends, so a stateful server is not restarted per call. `atto mcp call` and `tools` run by the agent talk to the running atto over a Unix domain socket (`~/.atto/mcp/<session id>.json` holds its path and a random token, mode 0600; it works on Windows 10+ too). Run from a normal terminal, a server is started for that one command and stopped after. `/reload` (or `atto reload`) re-reads the files, keeps servers whose entry did not change and restarts those that did.
 - **Transparency.** The Loaded block and `atto context` list every server with its scope, transport, command or URL, and status (not started, running with N tools, failed with the reason, needs approval). The calls are ordinary shell commands, so they appear as normal tool blocks and a `PreToolUse` hook with matcher `Bash` can gate them (for example by looking for `atto mcp call github`). Extensions can use the same servers: `await atto.mcp.call(server, tool, args)` and `atto.mcp.tools(server?)`.
 
@@ -393,7 +414,7 @@ The web client shows what the terminal does: commands the model ran one after an
 
 ## Safety
 
-atto has **no permission prompts**. The model's commands run with your user's permissions. The only filters are hooks you configure.
+atto has **no per-command permission prompts**. It asks before loading repository-supplied hooks, MCP servers and extensions (see Project code approval), but the model's commands still run with your user's permissions. The only command filters are hooks you configure.
 
 For untrusted repositories or long unattended runs, run atto in a VM or container.
 
@@ -407,8 +428,9 @@ Everything lives in `~/.atto`. Set `ATTO_DIR` to move it.
 | --- | --- |
 | `settings.json` | default model and effort, renderer, `mouse`, `toolGroups` (`false`: no command groups), `spinnerVerbs` (the word the activity line shows while commands run, drawn once per turn: `en`, the default, made-up English verbs; `ko`, made-up Korean words, as `글벅거리는 중…`; `ko-literary`, Korean verbs; `off`, just `Working…`), `spinnerScanner` (`true`: a sweeping `▰▱` scanner before that word), status line, hooks, `updateCheck`, `doubleEscapeAction` (`tree`, `fork` or `none`), `branchSummary.skipPrompt`, `toolOutputTokenLimit` (how much of a command's output the model gets, default 10000 tokens; the middle is cut and the full output saved to a file, as in codex), `backgroundExit` (experimental: `false` turns off the exit menu that offers "Run in background" while a turn runs), `remote.port` (`/remote`'s port, default 7879), `daemon` (`false`: run the TUI directly instead of in a daemon pane), `extensions` (`disabled` names, handler `timeout` in seconds), `skills.disabled` (built-in skills to turn off), `agents` (`enabled`, `maxDepth`, `maxConcurrent`, `model`, `effort`; the older `subagents` key works too) |
 | `agents/` | agent roles (`<name>.md`); `subagents/` holds the state of the agents each session started |
+| `hook-approvals.json` | project hook decisions, scoped to settings file and content hash |
 | `mcp.json` | MCP servers (Claude Code's `.mcp.json` format); `mcp-approvals.json` holds approved project servers, `mcp/` the endpoints of running sessions |
-| `extensions/` | your extensions; `extension-approvals.json` holds approved project extensions, `extensions.log` their logs |
+| `extensions/` | your extensions; `extension-approvals.json` holds project extension decisions, `extensions.log` their logs |
 | `models.json` | your providers and models |
 | `auth.json` | keys and logins (mode 0600) |
 | `sessions/` | saved sessions |

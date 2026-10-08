@@ -237,6 +237,9 @@ func (a *App) notifyIdle() {
 // maybeSendNextQueued starts the next queued follow-up when idle. Queued
 // slash commands that don't start a run are executed in order.
 func (a *App) maybeSendNextQueued() {
+	if a.trustActive || a.starting {
+		return
+	}
 	for !a.busy && a.modal == nil && !a.queuePaused && len(a.queued) > 0 {
 		next := a.queued[0]
 		a.queued = a.queued[1:]

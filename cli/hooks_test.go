@@ -2,6 +2,7 @@ package cli
 
 import (
 	"encoding/json"
+	"github.com/sebastianrcnt/atto/config"
 	"os"
 	"path/filepath"
 	"strings"
@@ -29,6 +30,16 @@ func TestRunPrintStopAndSessionEndHooks(t *testing.T) {
 	}
 	if err := os.WriteFile(filepath.Join(cwd, ".atto", "settings.json"), raw, 0o644); err != nil {
 		t.Fatal(err)
+	}
+
+	projectHooks, err := config.ProjectHooks(cwd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, h := range projectHooks {
+		if err := config.SetHookApproval(h, true); err != nil {
+			t.Fatal(err)
+		}
 	}
 	quiet(t)
 	if err := RunPrint(PrintOptions{Prompt: "hi"}); err != nil {

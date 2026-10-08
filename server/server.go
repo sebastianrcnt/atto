@@ -22,6 +22,7 @@ import (
 	"github.com/sebastianrcnt/atto/mcp"
 	"github.com/sebastianrcnt/atto/provider"
 	"github.com/sebastianrcnt/atto/session"
+	"github.com/sebastianrcnt/atto/trust"
 )
 
 // Server holds threads and dispatches JSON-RPC requests. Notifications
@@ -459,6 +460,7 @@ func (s *Server) listModels() (any, error) {
 // newThread wires an agent, its hooks and a session file for cwd.
 // modelFrom and effortFrom say where model and effort came from.
 func (s *Server) newThread(cwd string, model config.ModelRef, models config.ModelsFile, effort string, file *session.Writer, release func(), start time.Time, modelFrom, effortFrom core.Origin) (*thread, error) {
+	trust.WarnProject(os.Stderr, cwd)
 	ag, hk, src, err := core.NewAgentSources(cwd, model, effort)
 	if err != nil {
 		return nil, err
@@ -788,6 +790,7 @@ func (s *Server) reload(t *thread) {
 			s.notify(t, "thread/reloaded", map[string]any{"error": err.Error()})
 			return events.Format([]events.Event{{Text: "Reload failed, nothing changed: " + err.Error()}})
 		}
+		trust.WarnProject(os.Stderr, t.cwd)
 		t.mu.Lock()
 		t.loaded, t.hooks, t.hookSrc = r.Loaded, r.Hooks, r.HookSrc
 		t.mu.Unlock()

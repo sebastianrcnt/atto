@@ -22,6 +22,16 @@ func TestLoadHooksSessionEndAndNotification(t *testing.T) {
 	if err := os.WriteFile(ProjectSettingsPath(cwd), []byte(proj), 0o644); err != nil {
 		t.Fatal(err)
 	}
+
+	projectHooks, err := ProjectHooks(cwd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, h := range projectHooks {
+		if err := SetHookApproval(h, true); err != nil {
+			t.Fatal(err)
+		}
+	}
 	h, err := LoadHooks(cwd)
 	if err != nil {
 		t.Fatal(err)

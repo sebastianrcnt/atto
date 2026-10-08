@@ -58,6 +58,8 @@ usage:
                                     hooks, extensions and settings in the running session
   atto mcp list|tools|call|add|remove|approve
                                     MCP servers, used by the agent through its shell (atto mcp -h)
+  atto trust [list|approve all|approve <kind> <name>|revoke ...]
+                                    project code approvals (hooks, MCP servers, extensions)
   atto extensions [list|approve <name>|types|docs]
                                     JavaScript/TypeScript extensions (docs: atto extensions docs)
   atto update [-check]              install the latest release
@@ -117,6 +119,7 @@ func subcommands() map[string]func([]string, io.Writer) error {
 		"context":     cli.RunContext,
 		"reload":      cli.RunReload,
 		"extensions":  cli.RunExtensions,
+		"trust":       cli.RunTrust,
 		"mcp":         cli.RunMCP,
 		"update":      cli.RunUpdate,
 		"channel":     cli.RunChannel,

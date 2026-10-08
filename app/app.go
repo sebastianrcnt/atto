@@ -60,8 +60,14 @@ type App struct {
 	ext *extensions.Manager
 	mcp *mcp.Manager
 	// mcpAsked are the approval prompts shown this run (name#hash).
-	mcpAsked map[string]bool
-	extUI    extensions.UIState // touched on the UI goroutine only
+	mcpAsked     map[string]bool
+	trustAsked   map[string]bool
+	trustActive  bool
+	trustWaiting bool
+	trustDone    func()
+	starting     bool
+	startSource  string
+	extUI        extensions.UIState // touched on the UI goroutine only
 	// hookSrc are the settings files the hooks came from, loaded what the
 	// session loaded (the "Loaded" block), and modelFrom/effortFrom where
 	// the model and effort in use came from.
@@ -251,6 +257,7 @@ func Run(opts Options) error {
 		tools:      map[string]*toolBlock{},
 		cwd:        cwd,
 		quit:       make(chan struct{}),
+		starting:   true,
 
 		clipboard: images.SystemClipboardImage,
 		memory:    core.NewIdleMemory(),
@@ -303,11 +310,17 @@ func Run(opts Options) error {
 		return err
 	}
 	a.startPane()
-	if opts.Prompt != "" {
-		// As if typed: goes through submit, so a leading "/" is a command too.
-		a.ui.Do(func() { a.submit(opts.Prompt, nil) })
-	}
-	a.ui.Do(a.askMCPApprovals)
+	a.ui.Do(func() {
+		a.trustDone = func() {
+			a.starting = false
+			a.sessionStartHook(a.startSource)
+			if opts.Prompt != "" {
+				// As if typed, after the project trust decision.
+				a.submit(opts.Prompt, nil)
+			}
+		}
+		a.askProjectApprovals()
+	})
 	go a.watchInbox()
 	if a.ui.Mode == tui.Fullscreen && !a.ui.NoMouse {
 		go func() {
@@ -462,6 +475,10 @@ func (a *App) notify(kind, message string) {
 
 // sessionStartHook runs SessionStart hooks in the background.
 func (a *App) sessionStartHook(source string) {
+	if a.starting {
+		a.startSource = source
+		return
+	}
 	if a.ext != nil {
 		a.ext.SessionStart(source)
 	}

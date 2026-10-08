@@ -324,7 +324,10 @@ type HookSource struct {
 // Files that are missing or define no hooks are left out.
 func LoadHookSources(cwd string) ([]HookSource, error) {
 	var out []HookSource
-	for _, path := range []string{SettingsPath(), ProjectSettingsPath(cwd)} {
+	for i, path := range []string{SettingsPath(), ProjectSettingsPath(cwd)} {
+		if i > 0 && sameHookPath(path, SettingsPath()) {
+			continue
+		}
 		data, err := os.ReadFile(path)
 		if errors.Is(err, fs.ErrNotExist) {
 			continue
@@ -356,13 +359,13 @@ func MergeHooks(srcs []HookSource) map[string][]HookMatcher {
 }
 
 // LoadHooks merges user hooks (~/.atto/settings.json) with project hooks
-// (<cwd>/.atto/settings.json); project hooks run after user hooks.
+// (<cwd>/.atto/settings.json); approved project hooks run after user hooks.
 func LoadHooks(cwd string) (map[string][]HookMatcher, error) {
 	srcs, err := LoadHookSources(cwd)
 	if err != nil {
 		return nil, err
 	}
-	return MergeHooks(srcs), nil
+	return MergeHooks(ApprovedHookSources(srcs, cwd)), nil
 }
 
 // StatusLine configures a custom status line. The command runs with a JSON

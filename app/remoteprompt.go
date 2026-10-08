@@ -87,6 +87,8 @@ func (a *App) promptOf(m modal) *openPrompt {
 	switch m := m.(type) {
 	case *tui.SelectList:
 		return a.selectPrompt(m, withoutKeys(plainText(m.Title)), "")
+	case projectTrustPrompt:
+		return a.selectPrompt(m.list, "This project wants to run code on your machine", m.detail())
 	case goalPrompt:
 		return a.selectPrompt(m.list, m.title, m.subtitle)
 	case exitMenuModal:

@@ -111,7 +111,7 @@ func (m *Manager) Reload() {
 	for _, s := range servers {
 		e := &entry{srv: s, tools: -1}
 		e.exp, e.missing = s.Config.Expanded(m.opts.Lookup)
-		if prev := old[s.Name]; prev != nil && prev.same(e) {
+		if prev := old[s.Name]; prev != nil && prev.same(e) && ApprovalOf(s) == Approved {
 			e = prev
 			delete(old, s.Name)
 		}

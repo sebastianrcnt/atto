@@ -25,6 +25,7 @@ import (
 	"github.com/sebastianrcnt/atto/images"
 	"github.com/sebastianrcnt/atto/provider"
 	"github.com/sebastianrcnt/atto/session"
+	"github.com/sebastianrcnt/atto/trust"
 )
 
 // PrintOptions configures a non-interactive run (atto -p).
@@ -241,6 +242,7 @@ func RunPrint(o PrintOptions) error {
 		}
 	}
 
+	trust.WarnProject(os.Stderr, cwd)
 	ag, hk, hookSrc, err := core.NewAgentSources(cwd, model, effort)
 	if err != nil {
 		return err

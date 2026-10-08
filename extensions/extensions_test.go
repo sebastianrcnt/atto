@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/sebastianrcnt/atto/mcp"
 	"io"
 	"maps"
 	"net/http"
@@ -850,4 +851,45 @@ func modelServer(t *testing.T, commands []string) config.ModelRef {
 func lastRequest(t *testing.T, ag *agent.Agent) string {
 	t.Helper()
 	return string(ag.LastRequest())
+}
+
+func TestExtensionDecisionAndRevocation(t *testing.T) {
+	_, cwd := env(t)
+	path := filepath.Join(cwd, ".atto", "extensions", "guard.ts")
+	write(t, path, "export default () => {}")
+	s := Spec{Name: "guard", Path: path, Source: Project}
+	code, err := Bundle(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := hash(code)
+	if ApprovalOf(s, h) != mcp.Pending {
+		t.Fatal("new project extension is not pending")
+	}
+	if err := SetApproval(s, h, false); err != nil {
+		t.Fatal(err)
+	}
+	if ApprovalOf(s, h) != mcp.Denied || approved(path, code) {
+		t.Fatal("denied extension may run")
+	}
+	if err := SetApproval(s, h, true); err != nil {
+		t.Fatal(err)
+	}
+	if ApprovalOf(s, h) != mcp.Approved || !approved(path, code) {
+		t.Fatal("approved extension cannot run")
+	}
+	write(t, path, "export default (atto: any) => atto.log('changed')")
+	changed, err := Bundle(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ApprovalOf(s, hash(changed)) != mcp.Pending {
+		t.Fatal("approval survived a code change")
+	}
+	if err := Revoke(s); err != nil {
+		t.Fatal(err)
+	}
+	if ApprovalOf(s, h) != mcp.Pending {
+		t.Fatal("approval survived revocation")
+	}
 }

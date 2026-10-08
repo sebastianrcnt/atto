@@ -151,7 +151,7 @@ func LoadHooks(cwd string) (*hooks.Runner, []config.HookSource, error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	return hooks.New(config.MergeHooks(src), cwd), src, nil
+	return hooks.New(config.MergeHooks(config.ApprovedHookSources(src, cwd)), cwd), src, nil
 }
 
 // SetHooks makes ag run hk's hooks; nil removes them. Call it while no

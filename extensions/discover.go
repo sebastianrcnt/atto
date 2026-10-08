@@ -14,6 +14,7 @@ import (
 	"github.com/sebastianrcnt/atto/agent"
 	"github.com/sebastianrcnt/atto/config"
 	"github.com/sebastianrcnt/atto/fsutil"
+	"github.com/sebastianrcnt/atto/mcp"
 )
 
 // Where an extension was found.
@@ -117,10 +118,11 @@ func samePath(a, b string) bool {
 // for each project extension, by the entry file's absolute path.
 type approvals struct {
 	Approved map[string]string `json:"approved"`
+	Denied   map[string]string `json:"denied,omitempty"`
 }
 
 func loadApprovals() approvals {
-	a := approvals{Approved: map[string]string{}}
+	a := approvals{Approved: map[string]string{}, Denied: map[string]string{}}
 	data, err := os.ReadFile(config.ExtensionApprovalsPath())
 	if err == nil {
 		_ = json.Unmarshal(data, &a)
@@ -128,13 +130,16 @@ func loadApprovals() approvals {
 	if a.Approved == nil {
 		a.Approved = map[string]string{}
 	}
+	if a.Denied == nil {
+		a.Denied = map[string]string{}
+	}
 	return a
 }
 
 // approved reports whether the project extension at path was approved
 // with exactly this code.
 func approved(path, code string) bool {
-	return loadApprovals().Approved[absPath(path)] == hash(code)
+	return ApprovalOf(Spec{Path: path, Source: Project}, hash(code)) == mcp.Approved
 }
 
 func absPath(p string) string {
@@ -162,16 +167,89 @@ func Approve(cwd, name string) (Spec, error) {
 		if err != nil {
 			return s, err
 		}
-		a := loadApprovals()
-		a.Approved[absPath(s.Path)] = hash(code)
-		data, err := json.MarshalIndent(a, "", "  ")
-		if err != nil {
-			return s, err
-		}
-		if err := os.MkdirAll(config.Dir(), 0o755); err != nil {
-			return s, err
-		}
-		return s, fsutil.WriteAtomic(config.ExtensionApprovalsPath(), append(data, '\n'), 0o600)
+		return s, SetApproval(s, hash(code), true)
 	}
 	return Spec{}, fmt.Errorf("%w %q (see atto extensions)", ErrNotFound, name)
+}
+
+// ApprovalOf reports the decision for this project extension's bundled hash.
+// User and built-in extensions need no approval.
+func ApprovalOf(s Spec, codeHash string) mcp.Approval {
+	if s.Source != Project {
+		return mcp.Approved
+	}
+	if codeHash == "" {
+		return mcp.Pending
+	}
+	a := loadApprovals()
+	key := absPath(s.Path)
+	switch {
+	case a.Approved[key] == codeHash:
+		return mcp.Approved
+	case a.Denied[key] == codeHash:
+		return mcp.Denied
+	}
+	return mcp.Pending
+}
+
+// SetApproval records a decision for exactly the code the user reviewed.
+// A later change to its bundle needs approval again.
+func SetApproval(s Spec, codeHash string, allow bool) error {
+	if s.Source != Project {
+		return fmt.Errorf("%s is a %s extension; those need no approval", s.Name, s.Source)
+	}
+	if codeHash == "" {
+		return fmt.Errorf("%s has no bundled code to approve", s.Name)
+	}
+	return editApprovals(func(a *approvals) {
+		key := absPath(s.Path)
+		if allow {
+			a.Approved[key] = codeHash
+			delete(a.Denied, key)
+		} else {
+			a.Denied[key] = codeHash
+			delete(a.Approved, key)
+		}
+	})
+}
+
+// Revoke forgets the decision for a project extension.
+func Revoke(s Spec) error {
+	if s.Source != Project {
+		return fmt.Errorf("%s is a %s extension; those need no approval", s.Name, s.Source)
+	}
+	return editApprovals(func(a *approvals) {
+		delete(a.Approved, absPath(s.Path))
+		delete(a.Denied, absPath(s.Path))
+	})
+}
+
+func editApprovals(edit func(*approvals)) error {
+	return fsutil.WithFileLock(config.ExtensionApprovalsPath(), func() error {
+		a := loadApprovals()
+		edit(&a)
+		data, err := json.MarshalIndent(a, "", "  ")
+		if err != nil {
+			return err
+		}
+		return fsutil.WriteAtomic(config.ExtensionApprovalsPath(), append(data, '\n'), 0o600)
+	})
+}
+
+// RevokeProject forgets decisions for this project's extensions, including
+// entries that were removed from the repository since they were approved.
+func RevokeProject(cwd string) error {
+	prefix := absPath(config.ProjectExtensionsDir(agent.ProjectRoot(cwd))) + string(filepath.Separator)
+	return editApprovals(func(a *approvals) {
+		for key := range a.Approved {
+			if strings.HasPrefix(key, prefix) {
+				delete(a.Approved, key)
+			}
+		}
+		for key := range a.Denied {
+			if strings.HasPrefix(key, prefix) {
+				delete(a.Denied, key)
+			}
+		}
+	})
 }

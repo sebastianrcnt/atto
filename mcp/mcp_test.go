@@ -723,3 +723,65 @@ func TestLocalScopeLivesOutsideTheRepository(t *testing.T) {
 		t.Fatalf("servers = %+v", servers)
 	}
 }
+
+func TestRevokeProjectApproval(t *testing.T) {
+	root := env(t)
+	writeFile(t, Path(ScopeProject, root), `{"mcpServers":{"one":{"command":"one"},"two":{"command":"two"}}}`)
+	servers, _ := Load(root)
+	one, two := servers[0], servers[1]
+	if err := Approve(one); err != nil {
+		t.Fatal(err)
+	}
+	if err := Revoke(one); err != nil {
+		t.Fatal(err)
+	}
+	if ApprovalOf(one) != Pending {
+		t.Fatal("revoked approval still allows the server")
+	}
+	if err := Deny(one); err != nil {
+		t.Fatal(err)
+	}
+	if err := Revoke(one); err != nil {
+		t.Fatal(err)
+	}
+	if ApprovalOf(one) != Pending {
+		t.Fatal("revocation did not forget denial")
+	}
+	if err := ApproveAll(one); err != nil {
+		t.Fatal(err)
+	}
+	if err := Revoke(one); err != nil {
+		t.Fatal(err)
+	}
+	if ApprovalOf(one) != Pending || ApprovalOf(two) != Approved {
+		t.Fatal("revocation of a legacy wildcard must preserve other current servers")
+	}
+	two.Config.Command = "changed"
+	if ApprovalOf(two) != Pending {
+		t.Fatal("legacy wildcard was not converted to content approvals")
+	}
+}
+
+func TestReloadStopsRevokedProjectServer(t *testing.T) {
+	root := env(t)
+	writeFile(t, Path(ScopeProject, root), `{"mcpServers":{"fake":`+fakeEntry(nil)+`}}`)
+	m := manager(t, root)
+	if err := m.Approve("fake"); err != nil {
+		t.Fatal(err)
+	}
+	callText(t, m, "fake", "pid", "")
+	if infoOf(t, m, "fake").Status != Running {
+		t.Fatal("approved server did not start")
+	}
+	s, _ := m.Server("fake")
+	if err := Revoke(s); err != nil {
+		t.Fatal(err)
+	}
+	m.Reload()
+	if infoOf(t, m, "fake").Status != NeedsApproval {
+		t.Fatal("reload retained the revoked server's running connection")
+	}
+	if _, err := m.Tools(context.Background(), "fake"); err == nil {
+		t.Fatal("revoked server could still be used")
+	}
+}

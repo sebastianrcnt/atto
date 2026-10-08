@@ -79,6 +79,16 @@ func TestContinueRunsTheStoppedTurn(t *testing.T) {
 	w.Append(session.Entry{Type: session.TypeMessage, Message: &provider.Message{Role: "user", Content: "do the thing"}})
 	w.Close()
 	path = w.Path
+
+	projectHooks, err := config.ProjectHooks(cwd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, h := range projectHooks {
+		if err := config.SetHookApproval(h, true); err != nil {
+			t.Fatal(err)
+		}
+	}
 	quiet(t)
 
 	if err := RunContinue([]string{w.ID}, io.Discard); err != nil {

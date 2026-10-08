@@ -245,6 +245,11 @@ func (a *App) closeModal() {
 	a.ui.Screen = nil
 	a.modal = nil
 	a.ui.SetFocus(a.editor)
+	if !a.trustActive && (a.trustWaiting || a.trustDone != nil) {
+		// Another picker may have occupied the screen. Wait until its
+		// callback has finished before opening the project trust question.
+		go a.ui.Do(a.askProjectApprovals)
+	}
 	a.maybeSendNextQueued()
 }
 

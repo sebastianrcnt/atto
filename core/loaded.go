@@ -94,6 +94,8 @@ type Hook struct {
 	Matcher string `json:"matcher,omitempty"`
 	Type    string `json:"type"`
 	Command string `json:"command"` // the command, or the URL of an http hook
+	Status  string `json:"status,omitempty"`
+	Approve string `json:"approve,omitempty"`
 }
 
 // ConfigFile is a configuration file atto reads.
@@ -182,7 +184,16 @@ func Collect(ag *agent.Agent, hookSrc []config.HookSource, modelFrom, effortFrom
 					if typ == "http" {
 						cmd = h.URL
 					}
-					l.Hooks = append(l.Hooks, Hook{File: hs.Path, Event: ev, Matcher: m.Matcher, Type: typ, Command: cmd})
+					item := Hook{File: hs.Path, Event: ev, Matcher: m.Matcher, Type: typ, Command: cmd}
+					if config.IsProjectHookSource(hs.Path, ag.Cwd) {
+						hook := config.ProjectHook{Path: hs.Path, Event: ev, Matcher: m.Matcher, Spec: h}
+						item.Status = config.HookApprovalOf(hook)
+						item.Approve = "atto trust approve hook " + hook.Name()
+						if item.Status != config.HookApproved {
+							l.Warnings = append(l.Warnings, "project hook "+hook.Name()+" is "+item.Status+" and will not run: "+item.Approve)
+						}
+					}
+					l.Hooks = append(l.Hooks, item)
 				}
 			}
 		}
@@ -267,7 +278,7 @@ func Collect(ag *agent.Agent, hookSrc []config.HookSource, modelFrom, effortFrom
 		}
 	}
 	for _, ev := range []string{"UserPromptSubmit", "PostToolUse", "Stop"} {
-		if slices.ContainsFunc(l.Hooks, func(h Hook) bool { return h.Event == ev }) {
+		if slices.ContainsFunc(l.Hooks, func(h Hook) bool { return h.Event == ev && (h.Status == "" || h.Status == config.HookApproved) }) {
 			what := map[string]string{
 				"UserPromptSubmit": "can add to prompts", "PostToolUse": "can add to tool results",
 				"Stop": "can keep the turn going",
@@ -459,6 +470,17 @@ func (l Loaded) Summary() []Row {
 			}
 		}
 		text = fmt.Sprintf("%d: %s · from %s", len(l.Hooks), strings.Join(evs, ", "), strings.Join(from, ", "))
+		for _, status := range []string{config.HookPending, config.HookDenied} {
+			count := 0
+			for _, h := range l.Hooks {
+				if h.Status == status {
+					count++
+				}
+			}
+			if count > 0 {
+				text += fmt.Sprintf("; %d %s (off)", count, status)
+			}
+		}
 	}
 	rows = append(rows, Row{"Hooks", text})
 	if len(l.Extensions) > 0 { // most sessions have none: no row for them
@@ -617,7 +639,14 @@ func (l Loaded) Details() []Section {
 		if h.Type == "http" {
 			cmd = "POST " + cmd
 		}
-		s.Rows = append(s.Rows, Row{label, clip(oneLine(cmd), 80) + " · " + ShortPath(h.File)})
+		text := clip(oneLine(cmd), 80) + " · " + ShortPath(h.File)
+		if h.Status != "" {
+			text += " · " + h.Status
+			if h.Status != config.HookApproved {
+				text += ": " + h.Approve
+			}
+		}
+		s.Rows = append(s.Rows, Row{label, text})
 	}
 	if len(s.Rows) == 0 {
 		s.Rows = append(s.Rows, Row{"none", "configure them under \"hooks\" in " + ShortPath(config.SettingsPath())})
@@ -842,7 +871,7 @@ func Diff(prev, cur Loaded) []Change {
 			if h.Matcher != "" {
 				name += " [" + h.Matcher + "]"
 			}
-			m[name+": "+clip(oneLine(h.Command), 60)] = h.File + " " + h.Type
+			m[name+": "+clip(oneLine(h.Command), 60)] = h.File + " " + h.Type + " " + h.Status
 		}
 		return m
 	}

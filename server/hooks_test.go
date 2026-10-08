@@ -2,6 +2,7 @@ package server
 
 import (
 	"encoding/json"
+	"github.com/sebastianrcnt/atto/config"
 	"os"
 	"path/filepath"
 	"strings"
@@ -31,6 +32,15 @@ func TestServerStopAndSessionEndHooks(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	projectHooks, err := config.ProjectHooks(work)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, h := range projectHooks {
+		if err := config.SetHookApproval(h, true); err != nil {
+			t.Fatal(err)
+		}
+	}
 	s := New("test", work)
 	var mu sync.Mutex
 	var hookMsgs []string

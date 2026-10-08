@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
+	"strings"
 	"sync"
 
 	"github.com/sebastianrcnt/atto/config"
@@ -122,5 +124,54 @@ func Deny(s Server) error {
 	key := approvalKey(s.Path, s.Name)
 	a.Denied[key] = s.Config.Hash()
 	delete(a.Approved, key)
+	return a.save()
+}
+
+// Revoke forgets a project's decision for s. A legacy approval of the whole
+// file becomes approvals of its other current entries, never future ones.
+func Revoke(s Server) error {
+	approvalsMu.Lock()
+	defer approvalsMu.Unlock()
+	a := loadApprovals()
+	if a.allowsAll(s.Path) {
+		var files []string
+		for _, file := range a.All {
+			if file != absPath(s.Path) {
+				files = append(files, file)
+			}
+		}
+		a.All = files
+		servers, _ := Load(filepath.Dir(s.Path))
+		for _, other := range servers {
+			if other.Scope == ScopeProject && absPath(other.Path) == absPath(s.Path) && other.Name != s.Name {
+				a.Approved[approvalKey(other.Path, other.Name)] = other.Config.Hash()
+			}
+		}
+	}
+	key := approvalKey(s.Path, s.Name)
+	delete(a.Approved, key)
+	delete(a.Denied, key)
+	return a.save()
+}
+
+// RevokeProject forgets this project's decisions, including removed servers
+// and legacy approvals of the whole file.
+func RevokeProject(root string) error {
+	approvalsMu.Lock()
+	defer approvalsMu.Unlock()
+	a := loadApprovals()
+	file := absPath(config.ProjectMCPPath(root))
+	prefix := file + "#"
+	for key := range a.Approved {
+		if strings.HasPrefix(key, prefix) {
+			delete(a.Approved, key)
+		}
+	}
+	for key := range a.Denied {
+		if strings.HasPrefix(key, prefix) {
+			delete(a.Denied, key)
+		}
+	}
+	a.All = slices.DeleteFunc(a.All, func(path string) bool { return path == file })
 	return a.save()
 }
