@@ -1,11 +1,9 @@
 # Handoff — 2026-10-09
 
 State when this was written: `main` = `f88404a` (pushed). The locally installed `atto` (`~/go/bin/atto`) was built from it.
-Open issues: **#31** (cmd.exe quoting) and **#32** (shell yield; implemented, close it once CI is green). Two things are still
+Open issue: **#31** (cmd.exe quoting). #32 is closed: CI run 37821095567 was green on Linux, macOS and Windows. One thing is still
 running:
 
-- **Manual CI run 37821095567** on `f88404a`. This is the first real Windows run of #32: job-object breakaway in `shell.Isolate`,
-  `shell.TestIsolateOutlivesTree`, and interrupt-detach. Check it with `gh run view 37821095567`. If it is green, close #32.
 - **Agent `/root/yield`, turn 4** (external parent `261077a5`, worktree `~/.atto/worktrees/261077a5/yield`, branch
   `atto/261077a5/yield`, brief `/tmp/atto-runs/w10_full.txt`). Planned commits:
   - **0** — #32 review fixes: `atto agent interrupt` force-kills after the 10 s cooperative wait; `Host.Detach`'s variadic
