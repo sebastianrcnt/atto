@@ -2,6 +2,8 @@ package events
 
 import (
 	"fmt"
+
+	"github.com/sebastianrcnt/atto/fsutil"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -211,5 +213,48 @@ func TestConcurrentDrainClaimsEachEventOnce(t *testing.T) {
 		if len(seen) != 40 {
 			t.Fatalf("round %d: got %d events", round, len(seen))
 		}
+	}
+}
+
+func TestDrainWaitsForConsumerLock(t *testing.T) {
+	t.Setenv("ATTO_DIR", t.TempDir())
+	if err := Push("s", Event{Text: "first"}); err != nil {
+		t.Fatal(err)
+	}
+	locked, release := make(chan struct{}), make(chan struct{})
+	lockDone := make(chan error, 1)
+	go func() {
+		lockDone <- fsutil.WithFileLock(filepath.Join(Dir("s"), ".drain"), func() error {
+			close(locked)
+			<-release
+			return nil
+		})
+	}()
+	defer close(release)
+	select {
+	case <-locked:
+	case err := <-lockDone:
+		t.Fatal(err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("consumer lock not acquired")
+	}
+	drained := make(chan []Event, 1)
+	go func() { drained <- Drain("s") }()
+	select {
+	case evs := <-drained:
+		t.Fatalf("drained while locked: %+v", evs)
+	case <-time.After(50 * time.Millisecond):
+	}
+	release <- struct{}{}
+	select {
+	case evs := <-drained:
+		if len(evs) != 1 || evs[0].Text != "first" {
+			t.Fatalf("drain: %+v", evs)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("drain did not finish")
+	}
+	if err := <-lockDone; err != nil {
+		t.Fatal(err)
 	}
 }

@@ -121,6 +121,23 @@ func Push(session string, e Event) error {
 
 // Drain removes and returns pending events, oldest first.
 func Drain(session string) []Event {
+	if !validSession(session) {
+		return nil
+	}
+	if _, err := os.Stat(Dir(session)); err != nil {
+		return nil
+	}
+	var out []Event
+	// Windows renames can both succeed when concurrent callers have opened
+	// the same source file. Serialize claims across processes, not just goroutines.
+	_ = fsutil.WithFileLock(filepath.Join(Dir(session), ".drain"), func() error {
+		out = drain(session)
+		return nil
+	})
+	return out
+}
+
+func drain(session string) []Event {
 	ents, err := os.ReadDir(Dir(session))
 	if err != nil {
 		return nil
