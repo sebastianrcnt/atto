@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -220,7 +221,7 @@ func TestJobsAndAgents(t *testing.T) {
 		t.Fatalf("job/stop of an exited job: %+v", resp)
 	}
 
-	// A agent whose turn is done, with its own session.
+	// An agent whose turn is done, with its own session.
 	w := session.NewAgent(work, id)
 	w.Append(session.Entry{Type: session.TypeMessage, Message: &provider.Message{Role: "user", Content: "look"}})
 	w.Append(session.Entry{Type: session.TypeMessage, Message: &provider.Message{Role: "assistant", Content: "found it"}})
@@ -230,7 +231,7 @@ func TestJobsAndAgents(t *testing.T) {
 		t.Fatal(err)
 	}
 	agentstate.SaveTurn(id, "scout", agentstate.Turn{N: 1, Status: agentstate.Done, Started: start, Ended: end, PromptTokens: 50, OutputTokens: 9})
-	subs := call(t, s, "subagent/list", map[string]any{"threadId": id})["subagents"].([]any)
+	subs := call(t, s, "agent/list", map[string]any{"threadId": id})["agents"].([]any)
 	if len(subs) != 1 {
 		t.Fatalf("agent/list %v", subs)
 	}
@@ -239,9 +240,19 @@ func TestJobsAndAgents(t *testing.T) {
 	if sa["name"] != "scout" || sa["threadId"] != w.ID || sa["turn"].(float64) != 1 || sa["durationMs"].(float64) != 5000 || sa["outputTokens"].(float64) != 9 {
 		t.Fatalf("agent %v", sa)
 	}
-	r := call(t, s, "subagent/read", map[string]any{"threadId": id, "name": "scout"})
+	r := call(t, s, "agent/read", map[string]any{"threadId": id, "name": "scout"})
 	if r["message"] != "found it" || itemTexts(r) != "look;found it;" {
 		t.Fatalf("agent/read %v", r)
+	}
+	// The frozen web client needs subagent/* and the older envelope fields.
+	oldList := call(t, s, "subagent/list", map[string]any{"threadId": id})
+	if !reflect.DeepEqual(oldList["agents"], subs) || !reflect.DeepEqual(oldList["subagents"], subs) {
+		t.Fatalf("legacy list envelopes: %v", oldList)
+	}
+	oldRead := call(t, s, "subagent/read", map[string]any{"threadId": id, "name": "scout"})
+	if !reflect.DeepEqual(oldRead["agent"], r["agent"]) || !reflect.DeepEqual(oldRead["subagent"], r["agent"]) ||
+		!reflect.DeepEqual(oldRead["items"], r["items"]) || oldRead["message"] != r["message"] {
+		t.Fatalf("legacy read envelopes/transcript: %v", oldRead)
 	}
 }
 

@@ -179,7 +179,7 @@ mutations belong to the server. Names in the last column are detailed in §4.
 | Read-only/background sessions (`background_exit.go`, resume.go) | Partial TUI snapshots/ctrl+r; standalone resume refuses locked owner | Same-owner sessions attach as equal clients, not read-only because busy. Explicit read-only capability for legacy/foreign owner, offline history or observer, no writer/goal/inbox consumption. Refresh snapshot until legacy owner exits, then reacquire lease deliberately. |
 | Usage/activity/status (`statusline.go`, activity.go, remote.go) | Existing ThreadInfo usage, TurnInfo, thread/usage; partial activity and priced/subscription metadata | Add activity/retry/tool timing/tokens and counts, long context, git/workspace, runtime memory. Distinguish session lifetime spend from active-context usage. Run custom statusLine command once in server; publish output/error, with explicit ANSI policy and memory semantics. Width/spinner/clock/cost display stay local. |
 | Agent center, all-session tree (`agents.go`, cli/daemon.go) | Partial agent/list/read scoped to parent; thread/list omits full global live hierarchy | Daemon registry sessions/list + sessions/changed merges workers/saved/agent/external parent metadata; server parent/agent APIs. Client groups/filters/folds locally, selects target without moving another client. No pane-state proxy for execution truth. |
-| Agents, agent messages/tasks (`cli/agent.go`, agent/) | Partial list/read only; execution via _agent-turn processes/jobs and inbox files | Migrate spawn/task/send/stop/close/report/wait to agent RPC backed by workers/registry, retaining hierarchy/slots/worktrees/final answers. Attach to a busy child worker, never concurrently resume its writer. External parents remain durable tree anchors, not fake running agents. |
+| Agents, agent messages/tasks (`cli/agent.go`, agentstate/) | Partial list/read only; execution via _agent-turn processes/jobs and inbox files | Migrate spawn/task/send/stop/close/report/wait to agent RPC backed by workers/registry, retaining hierarchy/slots/worktrees/final answers. Attach to a busy child worker, never concurrently resume its writer. External parents remain durable tree anchors, not fake running agents. |
 | Exit/background continuation/update (`background_exit.go`, `cli/bgrun.go`, `pane.go`) | Partial tool-background only; today detach leaves whole TUI, non-daemon background cancels/replays turn | Separate client/detach from session/close. Keep old menu behavior during in-process parity phase; daemon mode detach leaves current request/tool/queue/goal/extensions/MCP untouched. Explicit shutdown stops tree/jobs/hooks and releases lease. Updating TUI reconnects to old worker. |
 | Ancillary UI: copy/mentions/login/update/render settings (`copy.go`, mention.go, login.go, updatecmd.go) | Not a general execution protocol | Copy/OSC52, search, editor history, selection, renderer, mouse, expansion and frontend update are local. Mentions need workspace/list when client lacks worker FS; login/logout operate server-host credentials through local privileged auth flow, never broadcast secrets in prompt/SSE. Reload model availability afterwards; preserve first-run no-model UI. |
 
@@ -635,8 +635,8 @@ the in-process architecture exit gate: the UI must stop owning execution.
    consumer retirement, slots/depth, final answer once with wait/report,
    close/spawn serialization, dirty worktree refusal, mixed legacy child leases,
    independent child client attachment and server-only shutdown propagation.
-8. Run `go test ./...`, focused `-race` suites for server/app/events/agent/
-   session/daemon, and platform CI. Add dependency checks prohibiting App imports
+8. Run `go test ./...`, focused `-race` suites for server/app/events/agentstate/
+   agent/session/daemon, and platform CI. Add dependency checks prohibiting App imports
    of agent execution/writer APIs (render value types may need extraction);
    frontend tests assert no filesystem inbox drains or background subprocesses
    started by render code.
@@ -741,4 +741,4 @@ images,cmd}.go`. Lifecycle/control: `daemon/{proto,server_unix,client_unix,strea
 tree}.go`, `cli/{print,bgrun,agent,agent_external,agent_worktree,daemon,jobs,goal,
 context,mcp}.go`, `cmd/atto/main.go`. Extension/notification/tree semantics:
 `extensions/{host,extensions,api_ui,api_events,runtime,uistate}.go`,
-`hooks/hooks.go`, `goal/goal.go`, `agent/{state,tree,turnlock,shutdown,slots*}.go`.
+`hooks/hooks.go`, `goal/goal.go`, `agentstate/{state,tree,turnlock,shutdown,slots*}.go`.

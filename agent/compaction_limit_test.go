@@ -14,7 +14,7 @@ import (
 )
 
 func TestCompactionLimits(t *testing.T) {
-	for _, key := range []string{"ATTO_AGENT", "ATTO_SUBAGENT", "ATTO_SESSION_ID"} {
+	for _, key := range []string{"ATTO_AGENT", config.EnvLegacyAgent, "ATTO_SESSION_ID"} {
 		t.Setenv(key, "")
 	}
 	t.Setenv("ATTO_DIR", t.TempDir())
@@ -58,7 +58,7 @@ func TestCompactionLimits(t *testing.T) {
 }
 
 func TestCompactionReason(t *testing.T) {
-	for _, key := range []string{"ATTO_AGENT", "ATTO_SUBAGENT", "ATTO_SESSION_ID"} {
+	for _, key := range []string{"ATTO_AGENT", config.EnvLegacyAgent, "ATTO_SESSION_ID"} {
 		t.Setenv(key, "")
 	}
 	t.Setenv("ATTO_DIR", t.TempDir())

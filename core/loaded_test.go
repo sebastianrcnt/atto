@@ -311,6 +311,7 @@ func TestReload(t *testing.T) {
 func TestLoadedAgentJSON(t *testing.T) {
 	atto, _, cwd := project(t)
 	writeFile(t, filepath.Join(atto, "settings.json"), `{"agents":{"enabled":true}}`)
+	writeFile(t, filepath.Join(atto, "agents", "Bad.md"), "invalid role name")
 	_, loaded := open(t, cwd)
 	raw, err := json.Marshal(loaded)
 	if err != nil {
@@ -322,5 +323,13 @@ func TestLoadedAgentJSON(t *testing.T) {
 	}
 	if string(fields["agents"]) != "true" || len(fields["agent_presets"]) == 0 {
 		t.Fatalf("agent context fields: %s", raw)
+	}
+	// Keep the old subagent context fields for external context -json consumers.
+	for old, current := range map[string]string{
+		"subagents": "agents", "subagent_presets": "agent_presets", "subagent_preset_warnings": "agent_preset_warnings",
+	} {
+		if len(fields[current]) == 0 || string(fields[old]) != string(fields[current]) {
+			t.Errorf("context aliases %s/%s: %s", old, current, raw)
+		}
 	}
 }

@@ -2,7 +2,7 @@
 // describe kinds of agents, the state of the agents a session
 // started, and the slots that cap how many of their turns run at once.
 //
-// A agent is a named child session working for a parent session. Each
+// An agent is a named child session working for a parent session. Each
 // of its turns runs headless in the background as a job of the parent
 // (atto _agent-turn), so atto job's wait and kill apply to it.
 package agentstate

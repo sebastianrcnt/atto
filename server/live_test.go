@@ -290,8 +290,12 @@ func TestLiveSessionProtocol(t *testing.T) {
 	if r := c.must("job/list", map[string]any{}); len(r["jobs"].([]any)) != 0 {
 		t.Fatalf("job/list %v", r)
 	}
-	if r := c.must("subagent/list", map[string]any{}); len(r["subagents"].([]any)) != 0 {
+	if r := c.must("agent/list", map[string]any{}); len(r["agents"].([]any)) != 0 {
 		t.Fatalf("agent/list %v", r)
+	}
+	// The frozen web client still polls the old method and envelope.
+	if r := c.must("subagent/list", map[string]any{}); len(r["subagents"].([]any)) != 0 || len(r["agents"].([]any)) != 0 {
+		t.Fatalf("legacy agent/list: %v", r)
 	}
 	if _, ok := init["settings"].(map[string]any)["toolGroups"]; !ok {
 		t.Fatalf("initialize without settings: %v", init)

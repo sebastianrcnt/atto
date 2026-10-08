@@ -106,6 +106,10 @@ func TestBothLayoutsPreferNewAndKeepOldOnlyIDs(t *testing.T) {
 	if len(List("p")) != 1 {
 		t.Fatal("deleted id resurrected from old layout")
 	}
+	Remove("p", "b")
+	if _, _, ok := ParentOf("old-only"); ok {
+		t.Fatal("old-only agent's new-layout reverse index survived deletion")
+	}
 }
 
 func TestConcurrentLayoutMigration(t *testing.T) {
@@ -140,5 +144,97 @@ func TestConcurrentLayoutMigration(t *testing.T) {
 	}
 	if len(List("p")) != 5 {
 		t.Fatalf("concurrent migration lost state: %+v", List("p"))
+	}
+}
+
+func TestBothLayoutsCoordinateWithOldDaemon(t *testing.T) {
+	t.Setenv(config.EnvDir, t.TempDir())
+	installOldLayout(t)
+	write(t, filepath.Join(config.AgentStateDir(), "p", "b.json"), `{"name":"b","parent":"p","session":"new"}`)
+	// Old daemons keep using locks in the legacy layout, even for parents
+	// with some new-layout records. Never create a second set of lock inodes.
+	release, err := lockFile(filepath.Join(legacyDir(), "p", "slots", "0"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+	if r, ok, err := TryAcquire("p", 1); err != nil || ok {
+		if r != nil {
+			r()
+		}
+		t.Fatalf("old daemon's slot ignored: %v %v", ok, err)
+	}
+	closeTree, err := CloseTree("p")
+	if err != nil {
+		t.Fatal(err)
+	}
+	closeTree()
+	if r, err := StartWork("child"); err == nil {
+		r()
+		t.Fatal("old-layout child ignored closed ancestor")
+	}
+	OpenTree("p")
+	if r, err := StartWork("child"); err != nil {
+		t.Fatal(err)
+	} else {
+		r()
+	}
+}
+
+func TestStateAliasTargetsDirectoryNotYetPresent(t *testing.T) {
+	root := t.TempDir()
+	link := filepath.Join(root, "alias")
+	if err := stateAlias("state", link); err != nil {
+		if runtime.GOOS == "windows" {
+			t.Skip("directory symlink needs privileges:", err)
+		}
+		t.Fatal(err)
+	}
+	write(t, filepath.Join(root, "state", "record"), "agent state")
+	data, err := os.ReadFile(filepath.Join(link, "record"))
+	if err != nil || string(data) != "agent state" {
+		t.Fatalf("directory alias: %q %v", data, err)
+	}
+}
+
+func TestMigrationGuardSurvivesDirectoryRename(t *testing.T) {
+	root := t.TempDir()
+	old, current := filepath.Join(root, "old"), filepath.Join(root, "current")
+	write(t, filepath.Join(old, "a.lock"), "")
+	f, err := openStateGuard(filepath.Join(old, "a.lock"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	if !tryLock(f) {
+		t.Fatal("idle migration guard not acquired")
+	}
+	defer unlock(f)
+	if err := os.Rename(old, current); err != nil {
+		t.Fatal("guard prevented directory rename:", err)
+	}
+}
+
+func TestLayoutRecoversInterruptedAliasInstallation(t *testing.T) {
+	t.Setenv(config.EnvDir, t.TempDir())
+	installOldLayout(t)
+	link := filepath.Join(config.Dir(), ".agent-state-compat")
+	if err := stateAlias("agent-state", link); err != nil {
+		if runtime.GOOS == "windows" {
+			t.Skip("directory symlink needs privileges:", err)
+		}
+		t.Fatal(err)
+	}
+	if err := os.Rename(legacyDir(), config.AgentStateDir()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load("p", "a"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(legacyDir(), "p", "a.json")); err != nil {
+		t.Fatal("old-path alias not recovered:", err)
+	}
+	if _, err := os.Lstat(link); !os.IsNotExist(err) {
+		t.Fatalf("temporary alias remains: %v", err)
 	}
 }

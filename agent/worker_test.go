@@ -25,7 +25,7 @@ func TestSystemPromptAgents(t *testing.T) {
 	off := a.system
 
 	// On, it names the command, the rule and the presets.
-	write(t, filepath.Join(dir, "settings.json"), `{"subagents":{"enabled":true}}`)
+	write(t, filepath.Join(dir, "settings.json"), `{"agents":{"enabled":true}}`)
 	a.SetStart(start)
 	for _, want := range []string{"only when the user explicitly asks", "atto agent spawn NAME", "atto agent send NAME", "FINAL_ANSWER", "- general: ", "- review: Reviews diffs"} {
 		if !strings.Contains(a.system, want) {

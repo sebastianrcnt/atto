@@ -4,10 +4,12 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/sebastianrcnt/atto/config"
 )
 
 func TestModelsJSONCompaction(t *testing.T) {
-	for _, key := range []string{"ATTO_AGENT", "ATTO_SUBAGENT", "ATTO_SESSION_ID"} {
+	for _, key := range []string{"ATTO_AGENT", config.EnvLegacyAgent, "ATTO_SESSION_ID"} {
 		t.Setenv(key, "")
 	}
 	dir := t.TempDir()

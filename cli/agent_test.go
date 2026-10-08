@@ -66,7 +66,7 @@ func quoteJSON(s string) string {
 
 func enableAgents(t *testing.T, extra string) {
 	t.Helper()
-	if err := os.WriteFile(config.SettingsPath(), []byte(`{"subagents":{"enabled":true`+extra+`}}`), 0o644); err != nil {
+	if err := os.WriteFile(config.SettingsPath(), []byte(`{"agents":{"enabled":true`+extra+`}}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -78,7 +78,7 @@ func runAgent(t *testing.T, args ...string) (string, error) {
 	return out.String(), err
 }
 
-func TestWorkerModel(t *testing.T) {
+func TestAgentModel(t *testing.T) {
 	agentServer(t, func(int, string) string { return "" })
 	models, err := config.LoadModels()
 	if err != nil {
@@ -185,7 +185,7 @@ func TestAgentRefusals(t *testing.T) {
 	}
 }
 
-// A agent turn takes the parent's messages from its inbox at step
+// An agent turn takes the parent's messages from its inbox at step
 // boundaries, and one that arrives as the turn ends gets a turn of its own.
 func TestWorkerTurnDeliversSteers(t *testing.T) {
 	var id string
@@ -595,7 +595,7 @@ func TestAgentTaskDuringFinalizationStartsSuccessor(t *testing.T) {
 			close(release)
 		}
 	}()
-	raw := `{"subagents":{"enabled":true},"hooks":{"SessionEnd":[{"hooks":[{"type":"http","url":"` + hook.URL + `"}]}]}}`
+	raw := `{"agents":{"enabled":true},"hooks":{"SessionEnd":[{"hooks":[{"type":"http","url":"` + hook.URL + `"}]}]}}`
 	if err := os.WriteFile(config.SettingsPath(), []byte(raw), 0o644); err != nil {
 		t.Fatal(err)
 	}

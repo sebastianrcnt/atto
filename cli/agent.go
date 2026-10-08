@@ -25,6 +25,7 @@ import (
 	"github.com/sebastianrcnt/atto/tui"
 )
 
+// agentUsage includes the older settings spelling for compatibility with old installs.
 const agentUsage = `Agents are off unless settings.json has "agents": {"enabled": true}
 (the older "subagents" key works too); spawn/task/send fail with "agents are off".
 Works from a plain shell: no running atto session or atto -p root is needed.

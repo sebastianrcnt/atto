@@ -84,7 +84,7 @@ func TestIdleMemoryRequestsAndClose(t *testing.T) {
 	t.Setenv("ATTO_DIR", t.TempDir())
 	m := &memoryCalls{}
 	s := &Server{memory: m, threads: map[string]*thread{}, stop: make(chan struct{})}
-	for _, method := range []string{"initialize", "thread/read", "job/list", "job/output", "subagent/list"} {
+	for _, method := range []string{"initialize", "thread/read", "job/list", "job/output", "agent/list", "agent/read"} {
 		_, _ = s.call(context.Background(), method, nil)
 	}
 	if _, begins, _ := m.state(); begins != 0 {

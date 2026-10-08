@@ -146,12 +146,6 @@ func Create(s State) error {
 	if err := os.MkdirAll(filepath.Dir(statePath(s.Parent, s.Name)), 0o755); err != nil {
 		return err
 	}
-	if _, err := Load(s.Parent, s.Name); !errors.Is(err, ErrNotFound) {
-		if err != nil {
-			return err
-		}
-		return fmt.Errorf("an agent named %q exists: give it a follow-up with atto agent next %s, or pick another name", s.Name, s.Name)
-	}
 	f, err := os.OpenFile(statePath(s.Parent, s.Name), os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
 	if errors.Is(err, os.ErrExist) {
 		return fmt.Errorf("an agent named %q exists: give it a follow-up with atto agent next %s, or pick another name", s.Name, s.Name)
@@ -165,12 +159,15 @@ func Create(s State) error {
 
 // Remove deletes the agent's state (its session stays).
 func Remove(parent, name string) {
-	for _, root := range stateRoots() {
+	roots := stateRoots()
+	for _, root := range roots {
 		path := filepath.Join(root, parent, name+".json")
 		data, _ := os.ReadFile(path)
 		var s State
 		if json.Unmarshal(data, &s) == nil && s.Session != "" {
-			_ = os.Remove(filepath.Join(root, "_up", s.Session+".json"))
+			for _, indexRoot := range roots {
+				_ = os.Remove(filepath.Join(indexRoot, "_up", s.Session+".json"))
+			}
 		}
 		_ = os.Remove(path)
 		_ = os.Remove(filepath.Join(root, parent, name+".turn.json"))

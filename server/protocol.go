@@ -41,8 +41,9 @@
 //	agent/read     {threadId, name}                → {agent, message, items}
 //	               an agent's transcript (its own session), read only,
 //	               and its last message
-//	               subagent/list and subagent/read remain aliases for the
-//	               frozen web client, returning old and new envelope fields
+//	               Compatibility for the frozen web client:
+//	               subagent/list → {agents, subagents}
+//	               subagent/read → {agent, subagent, message, items}
 //
 // Notifications (all carry threadId):
 //

@@ -20,14 +20,28 @@ func legacyDir() string { return filepath.Join(config.Dir(), "subagents") }
 // files after the rename; without symlink privileges we keep the old layout.
 func stateRoot() string {
 	current, old := config.AgentStateDir(), legacyDir()
+	link := filepath.Join(config.Dir(), ".agent-state-compat")
 	if _, err := os.Stat(current); !errors.Is(err, os.ErrNotExist) {
-		return current
+		// The temporary alias marks the rename/install window. New processes
+		// must wait for it to finish before choosing coordination lock paths.
+		if _, err := os.Lstat(link); errors.Is(err, os.ErrNotExist) {
+			return current
+		}
 	}
 	if _, err := os.Stat(old); errors.Is(err, os.ErrNotExist) {
-		return current
+		if _, err := os.Lstat(link); errors.Is(err, os.ErrNotExist) {
+			return current
+		}
 	}
 	_ = fsutil.WithFileLock(filepath.Join(config.Dir(), ".agent-state-migration"), func() error {
 		if _, err := os.Stat(current); !errors.Is(err, os.ErrNotExist) {
+			if err == nil {
+				// Recover a crash after rename but before alias installation.
+				if _, err := os.Lstat(old); errors.Is(err, os.ErrNotExist) {
+					_ = os.Rename(link, old)
+				}
+				_ = os.Remove(link)
+			}
 			return err
 		}
 		var held []*os.File
@@ -38,7 +52,7 @@ func stateRoot() string {
 			}
 		}()
 		guard := func(path string) error {
-			f, err := os.OpenFile(path, os.O_RDWR, 0)
+			f, err := openStateGuard(path)
 			if errors.Is(err, os.ErrNotExist) {
 				return nil
 			}
@@ -66,9 +80,8 @@ func stateRoot() string {
 		}); err != nil {
 			return err
 		}
-		link := filepath.Join(config.Dir(), ".agent-state-compat")
 		_ = os.Remove(link) // a prior interrupted migration's temporary link
-		if err := os.Symlink("agent-state", link); err != nil {
+		if err := stateAlias("agent-state", link); err != nil {
 			return err
 		}
 		defer os.Remove(link)

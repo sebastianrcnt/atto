@@ -12,7 +12,7 @@ import (
 	"github.com/sebastianrcnt/atto/config"
 )
 
-// A agent started with -worktree works in a git worktree of its own,
+// An agent started with -worktree works in a git worktree of its own,
 // on a new branch made from the parent's HEAD, so agents editing files
 // at the same time don't clobber each other or the parent's checkout.
 //

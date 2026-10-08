@@ -13,7 +13,7 @@ import (
 )
 
 func TestContextModeResume(t *testing.T) {
-	for _, key := range []string{"ATTO_AGENT", "ATTO_SUBAGENT", "ATTO_SESSION_ID"} {
+	for _, key := range []string{"ATTO_AGENT", config.EnvLegacyAgent, "ATTO_SESSION_ID"} {
 		t.Setenv(key, "")
 	}
 	a := treeApp(t)
@@ -59,7 +59,7 @@ func TestContextModeResume(t *testing.T) {
 }
 
 func TestTierStatus(t *testing.T) {
-	for _, key := range []string{"ATTO_AGENT", "ATTO_SUBAGENT", "ATTO_SESSION_ID"} {
+	for _, key := range []string{"ATTO_AGENT", config.EnvLegacyAgent, "ATTO_SESSION_ID"} {
 		t.Setenv(key, "")
 	}
 	t.Setenv("ATTO_DIR", t.TempDir())
@@ -114,7 +114,7 @@ func TestCompactBlockReason(t *testing.T) {
 }
 
 func TestStatusShowsTierTrigger(t *testing.T) {
-	for _, key := range []string{"ATTO_AGENT", "ATTO_SUBAGENT", "ATTO_SESSION_ID"} {
+	for _, key := range []string{"ATTO_AGENT", config.EnvLegacyAgent, "ATTO_SESSION_ID"} {
 		t.Setenv(key, "")
 	}
 	t.Setenv("ATTO_DIR", t.TempDir())
