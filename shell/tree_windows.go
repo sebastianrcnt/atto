@@ -21,7 +21,7 @@ type Tree struct {
 
 func NewTree(cmd *exec.Cmd) *Tree {
 	t := &Tree{cmd: cmd}
-	cmd.SysProcAttr = &syscall.SysProcAttr{CreationFlags: windows.CREATE_NEW_PROCESS_GROUP | consoleFlags()}
+	procAttrs(cmd).CreationFlags |= windows.CREATE_NEW_PROCESS_GROUP | consoleFlags()
 	if job, err := windows.CreateJobObject(nil, nil); err == nil {
 		info := windows.JOBOBJECT_EXTENDED_LIMIT_INFORMATION{}
 		info.BasicLimitInformation.LimitFlags = windows.JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE | windows.JOB_OBJECT_LIMIT_BREAKAWAY_OK
@@ -74,10 +74,22 @@ func (t *Tree) Kill() {
 // ownConsole gives cmd a hidden console of its own unless this process's
 // console is already private.
 func ownConsole(cmd *exec.Cmd) {
+	procAttrs(cmd).CreationFlags |= consoleFlags()
+}
+
+func procAttrs(cmd *exec.Cmd) *syscall.SysProcAttr {
 	if cmd.SysProcAttr == nil {
 		cmd.SysProcAttr = &syscall.SysProcAttr{}
 	}
-	cmd.SysProcAttr.CreationFlags |= consoleFlags()
+	return cmd.SysProcAttr
+}
+
+// cmd strips the outer pair of quotes after /s /c and runs the script
+// verbatim. Go's argv escaping instead leaves backslashes before its quotes.
+func setCmdLine(cmd *exec.Cmd, kind Kind, script string) {
+	if kind == Cmd {
+		procAttrs(cmd).CmdLine = `"` + cmd.Path + `" /d /s /c "` + script + `"`
+	}
 }
 
 func consoleFlags() uint32 {
@@ -89,7 +101,7 @@ func consoleFlags() uint32 {
 
 // Detach makes cmd outlive its parent console.
 func Detach(cmd *exec.Cmd) {
-	cmd.SysProcAttr = &syscall.SysProcAttr{CreationFlags: windows.CREATE_NEW_PROCESS_GROUP | windows.DETACHED_PROCESS | breakawayFlags()}
+	procAttrs(cmd).CreationFlags = windows.CREATE_NEW_PROCESS_GROUP | windows.DETACHED_PROCESS | breakawayFlags()
 }
 
 // Escape our kill-on-close tree when explicitly detaching. An enclosing job
@@ -109,7 +121,7 @@ func breakawayFlags() uint32 {
 // setting the code page, say) never reach the user's terminal, during or
 // after atto.
 func Isolate(cmd *exec.Cmd) {
-	cmd.SysProcAttr = &syscall.SysProcAttr{CreationFlags: windows.CREATE_NEW_PROCESS_GROUP | windows.CREATE_NO_WINDOW | breakawayFlags()}
+	procAttrs(cmd).CreationFlags = windows.CREATE_NEW_PROCESS_GROUP | windows.CREATE_NO_WINDOW | breakawayFlags()
 }
 
 // KillGroup terminates pid. A Windows process tree is held together by

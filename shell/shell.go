@@ -114,7 +114,8 @@ func (s Shell) ToolName() string {
 // garbling output and any JSON a hook reads from stdin.
 const utf8Prelude = "[Console]::InputEncoding = [System.Text.Encoding]::UTF8; [Console]::OutputEncoding = [System.Text.Encoding]::UTF8; $OutputEncoding = [System.Text.Encoding]::UTF8; "
 
-// Args returns the argv that runs script with this shell.
+// Args returns the argv that runs script with this shell. On Windows, cmd
+// scripts must use Command, which also sets their raw command line.
 func (s Shell) Args(script string) []string {
 	switch s.Kind {
 	case PowerShell:
@@ -131,6 +132,7 @@ func (s Shell) Command(ctx context.Context, script string) *exec.Cmd {
 	argv := s.Args(script)
 	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
 	ownConsole(cmd)
+	setCmdLine(cmd, s.Kind, script)
 	return cmd
 }
 

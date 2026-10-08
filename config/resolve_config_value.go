@@ -10,14 +10,16 @@ package config
 //     is a literal "$" and "$!" a literal "!"; everything else is literal
 
 import (
+	"context"
 	"os"
-	"os/exec"
 	"regexp"
 	"runtime"
 	"slices"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/sebastianrcnt/atto/shell"
 )
 
 var (
@@ -166,12 +168,11 @@ func executeCommand(config string, cached bool) (string, bool) {
 		commandCacheMu.Unlock()
 	}
 	command := config[1:]
-	var cmd *exec.Cmd
+	sh := shell.Shell{Kind: shell.Sh, Path: "sh"}
 	if runtime.GOOS == "windows" {
-		cmd = exec.Command("cmd", "/C", command)
-	} else {
-		cmd = exec.Command("sh", "-c", command)
+		sh = shell.Shell{Kind: shell.Cmd, Path: "cmd.exe"}
 	}
+	cmd := sh.Command(context.Background(), command)
 	var out []byte
 	done := make(chan error, 1)
 	go func() {
