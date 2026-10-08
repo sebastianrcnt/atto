@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -15,6 +16,7 @@ import (
 	"github.com/sebastianrcnt/atto/config"
 	"github.com/sebastianrcnt/atto/images"
 	"github.com/sebastianrcnt/atto/session"
+	"github.com/sebastianrcnt/atto/shell"
 )
 
 func runView(args ...string) (string, error) {
@@ -104,7 +106,7 @@ func viewServer(t *testing.T, input string) func() []string {
 		mu.Unlock()
 		if n == 1 {
 			args := `{\"description\":\"look\",\"command\":\"atto view shot.png\"}`
-			fmt.Fprintf(w, "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"c1\",\"type\":\"function\",\"function\":{\"name\":\"bash\",\"arguments\":\"%s\"}}]},\"finish_reason\":\"tool_calls\"}]}\n\n", args)
+			fmt.Fprintf(w, "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"c1\",\"type\":\"function\",\"function\":{\"name\":\"%s\",\"arguments\":\"%s\"}}]},\"finish_reason\":\"tool_calls\"}]}\n\n", shell.Default().ToolName(), args)
 		} else {
 			io.WriteString(w, "data: {\"choices\":[{\"delta\":{\"content\":\"a gray square\"},\"finish_reason\":\"stop\"}]}\n\n")
 		}
@@ -120,8 +122,16 @@ func viewServer(t *testing.T, input string) func() []string {
 	// "atto" on PATH is this test binary (TestMain runs view).
 	bin := t.TempDir()
 	exe, _ := os.Executable()
-	if err := os.Symlink(exe, filepath.Join(bin, "atto")); err != nil {
-		t.Skip("no symlinks:", err)
+	name := "atto"
+	if runtime.GOOS == "windows" {
+		name += ".exe"
+	}
+	data, err := os.ReadFile(exe)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(bin, name), data, 0o755); err != nil {
+		t.Fatal(err)
 	}
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 	t.Setenv(config.EnvView, "")
