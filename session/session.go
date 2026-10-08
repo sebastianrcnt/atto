@@ -526,13 +526,8 @@ func list(cwd string, archived, agents bool) ([]Summary, error) {
 	if err != nil && !os.IsNotExist(err) {
 		return nil, err
 	}
-	summaryCache.Lock()
-	for path := range summaryCache.paths {
-		if strings.HasPrefix(path, root+string(filepath.Separator)) && !seen[path] {
-			delete(summaryCache.paths, path)
-		}
-	}
-	summaryCache.Unlock()
+	forgetSummaries(root, seen)
+	saveDiskSummaries(false)
 	sort.Slice(out, func(i, j int) bool { return out[i].Updated.After(out[j].Updated) })
 	return out, nil
 }
@@ -549,55 +544,7 @@ func SameDir(a, b string) bool {
 }
 
 // Summarize reads one session file's summary, as List does.
-func Summarize(path string) (Summary, error) { return summarize(path) }
-
-func summarize(path string) (Summary, error) {
-	h, entries, err := Load(path)
-	if err != nil {
-		return Summary{}, err
-	}
-	s := Summary{Path: path, ID: h.ID, Cwd: h.Cwd, Created: h.Time, Updated: h.Time, Branch: h.GitBranch, AgentOf: h.AgentOf, External: h.External}
-	if st, err := os.Stat(path); err == nil {
-		s.Size = st.Size()
-	}
-	if l, ok := LockedBy(path); ok {
-		s.Running = l.PID
-	}
-	for _, e := range entries {
-		s.Updated = e.Time
-		if e.Type == TypeName {
-			s.Name = e.Name
-		}
-		if e.Type == TypeModel {
-			s.Model = e.Provider + "/" + e.Model
-		}
-		// A preview from any branch keeps a session that went back to its
-		// start listed; the active branch's first message replaces it.
-		if e.Type == TypeMessage && e.Message != nil && e.Message.Role == "user" && s.Preview == "" {
-			s.Preview = e.Message.Content
-		}
-	}
-	first := true
-	for _, e := range Active(entries) { // the conversation on the active branch
-		if e.Type != TypeMessage || e.Message == nil {
-			continue
-		}
-		switch e.Message.Role {
-		case "user":
-			s.Messages++
-			if first {
-				s.Preview, first = e.Message.Content, false
-			}
-		case "assistant":
-			s.Messages++
-			if text := strings.TrimSpace(e.Message.Content); text != "" {
-				r := []rune(text)
-				s.LastMessage = string(r[:min(len(r), 4096)])
-			}
-		}
-	}
-	return s, nil
-}
+func Summarize(path string) (Summary, error) { return listSummaryMode(path, true) }
 
 // Rename gives the session at path a name, as a "name" entry.
 func Rename(path, name string) error {
