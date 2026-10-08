@@ -395,6 +395,16 @@ func ServeHost(in io.Reader, out, status *os.File) error {
 	}()
 
 	werr := cmd.Wait()
+	// A process-group signal can race the shell's fork on macOS: the
+	// shell dies but a newly forked child misses that signal. Once Wait
+	// has reaped the shell it cannot add another child; sweep the group
+	// again before reporting exit or letting its output pipe drain.
+	h.mu.Lock()
+	killed := h.killed
+	h.mu.Unlock()
+	if killed {
+		h.tree.Kill()
+	}
 	code, detail := 0, ""
 	var ee *exec.ExitError
 	switch {

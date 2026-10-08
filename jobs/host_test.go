@@ -86,28 +86,46 @@ func TestHostDetachSurvivesAtto(t *testing.T) {
 // A command still in the foreground dies with atto.
 func TestHostForegroundDiesWithAtto(t *testing.T) {
 	setup(t)
-	var out syncBuf
-	h := startHost(t, "sleep 30 & sleep 30", &out)
-	_ = h.ctl.Close()
-	st := <-h.Status()
-	if st.Exit == nil {
-		t.Fatalf("status %+v", st)
-	}
-	_ = h.Wait()
-	// Killed descendants keep the group present until the OS reaps them;
-	// loaded runners may need longer. Stay below the command's 30s sleep
-	// so a surviving command cannot pass by finishing normally.
-	for deadline := time.Now().Add(10 * time.Second); !gone(h.PID); time.Sleep(20 * time.Millisecond) {
-		if time.Now().After(deadline) {
-			processes, err := exec.Command("ps", "-axo", "pid,ppid,pgid,state,command").CombinedOutput()
-			var group []string
-			for line := range strings.SplitSeq(string(processes), "\n") {
-				if fields := strings.Fields(line); len(fields) >= 3 && fields[2] == strconv.Itoa(h.PID) {
-					group = append(group, line)
+	for _, phase := range []string{"starting", "forking", "running"} {
+		t.Run(phase, func(t *testing.T) {
+			var out syncBuf
+			command := "sleep 30 & sleep 30"
+			if phase == "forking" {
+				command = "echo ready; " + command
+			}
+			if phase == "running" {
+				command = "sleep 30 & echo ready; sleep 30"
+			}
+			h := startHost(t, command, &out)
+			if phase != "starting" {
+				for deadline := time.Now().Add(3 * time.Second); out.String() == ""; time.Sleep(time.Millisecond) {
+					if time.Now().After(deadline) {
+						t.Fatal("shell did not reach fork boundary")
+					}
 				}
 			}
-			t.Fatalf("the command outlived atto (process group %d, ps error %v):\n%s", h.PID, err, strings.Join(group, "\n"))
-		}
+			_ = h.ctl.Close()
+			st := <-h.Status()
+			if st.Exit == nil {
+				t.Fatalf("status %+v", st)
+			}
+			_ = h.Wait()
+			// Killed descendants keep the group present until the OS reaps them;
+			// loaded runners may need longer. Stay below the command's 30s sleep
+			// so a surviving command cannot pass by finishing normally.
+			for deadline := time.Now().Add(10 * time.Second); !gone(h.PID); time.Sleep(20 * time.Millisecond) {
+				if time.Now().After(deadline) {
+					processes, err := exec.Command("ps", "-axo", "pid,ppid,pgid,state,command").CombinedOutput()
+					var group []string
+					for line := range strings.SplitSeq(string(processes), "\n") {
+						if fields := strings.Fields(line); len(fields) >= 3 && fields[2] == strconv.Itoa(h.PID) {
+							group = append(group, line)
+						}
+					}
+					t.Fatalf("the command outlived atto (process group %d, ps error %v):\n%s", h.PID, err, strings.Join(group, "\n"))
+				}
+			}
+		})
 	}
 }
 
