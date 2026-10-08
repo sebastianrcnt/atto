@@ -878,7 +878,8 @@ blocks; `ThreadView` and snapshots keep branch changes and replay consistent.
 Snapshots buffer concurrent notifications and deduplicate transcript events,
 while addressed one-shot notifications (recovered images/drafts, accepted local
 picker answers and handoff completion) are not discarded by the snapshot cursor.
-Running command start times survive redraws. Status/cost/cache/token/goal figures,
+Running command start times survive redraws. Send-now and takeback use the
+ordered runtime even when busy/pending notifications lag behind rapid keys. Status/cost/cache/token/goal figures,
 extension status/widgets/display overrides and notifications come from runtime
 state. `/debug` and `/request` fetch runtime request histories; heap profiles are
 still for the process running the terminal.

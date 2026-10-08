@@ -42,7 +42,7 @@ func (a *App) queueFromEditor() {
 // interrupts it and goes out as a new turn, after the steers the turn has
 // not taken. Otherwise it is Enter.
 func (a *App) sendNowFromEditor(text string, att []tui.Attachment) {
-	if !a.busy || a.runKind != "turn" || strings.HasPrefix(text, "/") {
+	if strings.HasPrefix(text, "/") {
 		a.submit(text, att)
 		return
 	}
@@ -56,7 +56,7 @@ func (a *App) sendNowFromEditor(text string, att []tui.Attachment) {
 // takeBackLast is Shift+Left: the last steer the turn has not taken, else
 // the last queued message, back into the editor in front of the draft.
 func (a *App) takeBackLast() bool {
-	if len(a.pending.Items) == 0 && len(a.pending.Steers) == 0 && len(a.pending.Queued) == 0 {
+	if a.conn == nil {
 		return false
 	}
 	a.rpc("turn/unsteer", nil, func(raw json.RawMessage, err error) {

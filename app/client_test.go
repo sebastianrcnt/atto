@@ -386,3 +386,40 @@ func TestRequestAndDebugClientCommands(t *testing.T) {
 		t.Fatal("debug report omitted runtime's request")
 	}
 }
+
+// Protocol delivery is asynchronous: a key may precede turn/started or
+// turn/pending on the UI goroutine. The ordered runtime chooses the action.
+func TestSendNowWithLaggingBusyMirror(t *testing.T) {
+	gate := make(chan struct{})
+	defer close(gate)
+	a, model := liveApp(t, providertest.Reply{Text: "old", Gate: gate}, providertest.Reply{Text: "replacement"})
+	typeLine(a, "original")
+	model.Started(5 * time.Second)
+	a.ui.Do(func() {
+		a.busy, a.runKind = false, ""
+		a.sendNowFromEditor("send now", nil)
+	})
+	within(t, a, "runtime send-now despite lagging mirror", func() bool { return strings.Contains(bodyText(a), "replacement") })
+	waitIdle(t, a)
+	if users(a) != "original,send now" || !strings.Contains(shown(a), "Interrupted.") {
+		t.Fatalf("replacement transcript:\n%s", shown(a))
+	}
+}
+
+func TestTakebackBeforePendingNotification(t *testing.T) {
+	gate := make(chan struct{})
+	defer close(gate)
+	a, model := liveApp(t, providertest.Reply{Text: "old", Gate: gate})
+	typeLine(a, "original")
+	model.Started(5 * time.Second)
+	a.ui.Do(func() {
+		a.submit("take this back", nil)
+		// The event goroutine cannot apply turn/pending until this UI handler
+		// returns; the request goroutine still sends these two calls in order.
+		a.pending = server.PendingInput{}
+		if !a.takeBackLast() {
+			t.Fatal("takeback relied on the UI mirror")
+		}
+	})
+	within(t, a, "ordered takeback", func() bool { return a.editor.Text() == "take this back" && len(a.pending.Steers) == 0 })
+}
