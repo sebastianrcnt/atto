@@ -128,9 +128,11 @@ func TestSlotsQueue(t *testing.T) {
 	if _, ok, _ := TryAcquire("p", 2); ok {
 		t.Fatal("a third turn must wait")
 	}
-	if _, ok, _ := TryAcquire("other", 2); !ok {
-		t.Fatal("another session has slots of its own")
+	other, ok, err := TryAcquire("other", 2)
+	if err != nil || !ok {
+		t.Fatal("another session has slots of its own:", err)
 	}
+	defer other()
 	slotPoll = 10 * time.Millisecond
 	got := make(chan func(), 1)
 	go func() {
