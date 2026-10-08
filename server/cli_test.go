@@ -322,7 +322,7 @@ func TestPythonExample(t *testing.T) {
 	if err := cmd.Run(); err != nil {
 		t.Fatalf("Python: %v\nstdout: %s\nstderr: %s", err, &out, &diagnostics)
 	}
-	if out.String() != "Python streamed answer\n" || !strings.Contains(diagnostics.String(), "Example prompt") || len(model.Requests()) != 1 || !strings.Contains(model.Requests()[0], "Python prompt answer") {
+	if strings.ReplaceAll(out.String(), "\r\n", "\n") != "Python streamed answer\n" || !strings.Contains(diagnostics.String(), "Example prompt") || len(model.Requests()) != 1 || !strings.Contains(model.Requests()[0], "Python prompt answer") {
 		t.Fatalf("stdout: %s\nstderr: %s\nrequests: %d", &out, &diagnostics, len(model.Requests()))
 	}
 }
