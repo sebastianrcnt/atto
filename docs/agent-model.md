@@ -176,10 +176,11 @@ personal tool on a few machines; `atto backup`/`atto restore` exist. Migration:
    `atto restore <backup>`; no automatic partial rollback. Re-running after a
    restore is safe.
 
-Old binaries are not supported after the marker: they refuse to run agent
-commands when the marker is present (add that check to the release before
-the migration release is not possible retroactively; document "upgrade every
-machine; old binaries must not run agents on migrated data").
+Old binaries are not supported after the marker. Binaries released before the
+migration cannot be taught to check it, so the README says: upgrade every
+machine that shares the data, and do not run old binaries' agent commands on
+migrated data. Releases from the migration release on refuse agent commands on
+data whose marker is newer than they understand.
 
 ## 5. User, model and protocol surface
 
