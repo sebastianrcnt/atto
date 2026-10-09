@@ -1,5 +1,7 @@
 # Segmented live sessions (proposal; no implementation)
 
+**Status (2026-10-09): on hold.** The memory/paging work already made large sessions cheap to open and attach (a 62 MB session: worker 653 → 45 MB, TUI 295 → 27 MB). What segmentation would still add is disk space and the cost of scanning the whole file when opening. Revisit when several live sessions are large, opening one becomes slow, or disk use matters; then start with a manual `atto sessions split <id>` and `atto sessions join <id>` (no automatic cuts).
+
 ## Recommendation and scope
 
 Keep the session's public `.jsonl` path, ID and writer lease; put cold history in
