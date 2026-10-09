@@ -3,6 +3,7 @@ package app
 import (
 	"bufio"
 	"context"
+	"io"
 	"net"
 	"net/http"
 	"strings"
@@ -41,8 +42,12 @@ func TestRemoteOffClosesWebSocketNotRuntime(t *testing.T) {
 	}
 	within(t, a, "WS client counted", func() bool { return a.remote.clients == 1 })
 	a.ui.Do(a.stopRemote)
-	if _, err := reader.ReadByte(); err == nil {
-		t.Fatal("/remote off left WebSocket open")
+	// A close frame or a notification may still come first; the
+	// connection must then end before the deadline.
+	if _, err := io.Copy(io.Discard, reader); err != nil {
+		if ne, ok := err.(net.Error); ok && ne.Timeout() {
+			t.Fatal("/remote off left WebSocket open")
+		}
 	}
 	var snapshot server.ThreadInfo
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

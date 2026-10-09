@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -107,7 +108,11 @@ func (s *Server) routeCall(ctx context.Context, method string, raw json.RawMessa
 	}
 	var out map[string]any
 	if err := r.c.Call(ctx, method, params, &out); err != nil {
-		return nil, err, true
+		// A worker ends with its session: losing it while closing is
+		// the close having happened.
+		if method != "thread/close" || !errors.Is(err, ErrClosed) {
+			return nil, err, true
+		}
 	}
 	if method == "thread/detach" || method == "thread/close" {
 		s.forgetRoute(clientOf(ctx), r)

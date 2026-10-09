@@ -417,6 +417,9 @@ func RunWorker(version string, args []string) error {
 	defer signal.Stop(sigs)
 	select {
 	case <-closed:
+		// The session closed while answering thread/close: let that
+		// answer reach the client before the connections go.
+		time.Sleep(250 * time.Millisecond)
 	case <-sigs:
 	}
 	ln.Close()
