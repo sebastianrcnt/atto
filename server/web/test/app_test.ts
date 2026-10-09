@@ -35,10 +35,24 @@ function find(text: string) {
     'responsive pane site',
   );
   find('All').click();
+  (globalThis as any).flush();
   const prompt = document.getElementById('prompt') as HTMLTextAreaElement;
   prompt.value = 'hello';
   prompt.oninput!({} as any);
-  prompt.onkeydown!({
+  (globalThis as any).flush();
+  assert(document.getElementById('prompt') === prompt, 'typing repaints nothing');
+  prompt.oncompositionstart!({} as any);
+  find('Active').click();
+  (globalThis as any).flush();
+  assert(document.getElementById('prompt') === prompt, 'no repaint while composing');
+  prompt.oncompositionend!({} as any);
+  (globalThis as any).flush();
+  assert(document.getElementById('prompt') !== prompt, 'held repaint after composing');
+  find('All').click();
+  (globalThis as any).flush();
+  const typed = document.getElementById('prompt') as HTMLTextAreaElement;
+  assert(typed.value === 'hello', 'draft kept');
+  typed.onkeydown!({
     key: 'Enter',
     shiftKey: false,
     ctrlKey: true,

@@ -68,12 +68,25 @@ async function run(fn: () => Promise<any>) {
     return null;
   }
 }
+// While an IME composes (Korean, Japanese, …) the prompt must not be
+// replaced, or the half-typed syllable is lost: paints wait for its end.
+let composing = false;
 function schedule() {
   if (!frame)
     frame = requestAnimationFrame(() => {
       frame = 0;
-      paint();
+      if (!composing) paint();
     });
+}
+// The prompt grows with its text, up to 30% of the window.
+function growPrompt(input: HTMLTextAreaElement) {
+  input.style.height = 'auto';
+  input.style.height =
+    Math.min(Math.max(56, input.scrollHeight), innerHeight * 0.3) + 'px';
+}
+// Only the slash-command menu depends on the typed text.
+function slashMenu(text: string) {
+  return /^\/[^\s]*$/.test(text) ? text : '';
 }
 function current() {
   return views.get(active);
@@ -1336,7 +1349,7 @@ function composer(v: View, instances: Data[], above: boolean) {
   }
   area.append(pending);
   const typed = drafts.get(active) || '';
-  if (/^\/[^\s]*$/.test(typed)) {
+  if (slashMenu(typed)) {
     const menu = el('div', null, 'commands');
     for (const c of (commands.get(active) || [])
       .filter((c) => c.name.startsWith(typed.slice(1)))
@@ -1418,8 +1431,17 @@ function composer(v: View, instances: Data[], above: boolean) {
         : 'Message atto…';
   input.setAttribute('aria-label', 'Message');
   input.disabled = !writable(v);
+  // Typing repaints nothing but the slash-command menu when it changes.
   input.oninput = () => {
+    const before = slashMenu(drafts.get(active) || '');
     drafts.set(active, input.value);
+    growPrompt(input);
+    if (slashMenu(input.value) !== before) schedule();
+  };
+  input.oncompositionstart = () => (composing = true);
+  input.oncompositionend = input.onblur = () => {
+    if (!composing) return;
+    composing = false;
     schedule();
   };
   input.onkeydown = (e) => {
@@ -1831,12 +1853,7 @@ function paint() {
   }
   root.replaceChildren(layout);
   const promptInput = document.getElementById('prompt') as HTMLTextAreaElement;
-  if (promptInput) {
-    promptInput.style.height = 'auto';
-    promptInput.style.height =
-      Math.min(Math.max(56, promptInput.scrollHeight), innerHeight * 0.3) +
-      'px';
-  }
+  if (promptInput) growPrompt(promptInput);
   const newPane = root.querySelector<HTMLElement>('.pane-dock,.pane-above');
   if (newPane?.dataset.thread)
     newPane.scrollTop = paneStates.get(newPane.dataset.thread)?.scroll || 0;
