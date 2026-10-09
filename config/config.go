@@ -149,6 +149,9 @@ type Settings struct {
 	// the middle, and the full output is saved to a file the model is told
 	// about.
 	ToolOutputTokenLimit int `json:"toolOutputTokenLimit,omitempty"`
+	// ToolOutput caps the files that keep a command's full output (package
+	// outputs).
+	ToolOutput *ToolOutputSettings `json:"toolOutput,omitempty"`
 	// BackgroundExit: false turns off the exit menu that offers "Run in
 	// background" while a turn is running (experimental; default on).
 	BackgroundExit *bool `json:"backgroundExit,omitempty"`
@@ -225,6 +228,24 @@ func (s Settings) AgentLimit() int {
 		return a.MaxConcurrent
 	}
 	return DefaultMaxAgents
+}
+
+// ToolOutputSettings is settings.json's "toolOutput": how the full output of
+// commands is kept under ~/.atto/outputs (compressed with zstd) when it is
+// cut for the model. Sizes are in MiB; 0 or absent is the default.
+type ToolOutputSettings struct {
+	// FileHeadMB and FileTailMB are how much of the start and of the end of
+	// one command's output its file keeps (32 each); the middle of a longer
+	// output is replaced by a marker line.
+	FileHeadMB int `json:"fileHeadMB,omitempty"`
+	FileTailMB int `json:"fileTailMB,omitempty"`
+	// TotalMB caps all saved output (1024): above it the oldest files are
+	// deleted. Negative: no cap.
+	TotalMB int `json:"totalMB,omitempty"`
+	// MinFreeMB is the free disk space needed to save output at all
+	// (1024); with less, the model gets the cut text and is told the rest
+	// was not saved. Negative: no check.
+	MinFreeMB int `json:"minFreeMB,omitempty"`
 }
 
 // RemoteSettings is settings.json's "remote".
