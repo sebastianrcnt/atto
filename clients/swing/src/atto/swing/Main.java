@@ -23,6 +23,7 @@ public final class Main {
         System.setProperty("apple.awt.application.appearance", "system");
         System.setProperty("apple.awt.application.name", "atto");
         UIManager.setLookAndFeel(UIManager.getSystemLookAndFeelClassName());
-        SwingUtilities.invokeLater(() -> new Desktop(options).show());
+        Desktop.detectAppearance();
+        SwingUtilities.invokeLater(() -> { Desktop desktop = new Desktop(options); desktop.show(); if (!options.screenshotScript().isEmpty()) ScreenshotScript.start(desktop); });
     }
 }

@@ -14,8 +14,30 @@ public final class Tests {
         try { action.run(); throw new AssertionError("Expected rejection"); } catch (IllegalArgumentException expected) { checks++; }
     }
     public static void main(String[] args) throws Exception {
-        json(); reducer(); markdown(); protocol(); lines(); core(); preferences();
+        json(); reducer(); markdown(); protocol(); lines(); core(); preferences(); presentation();
         System.out.println("Swing core tests passed (" + checks + " assertions)");
+    }
+    static void presentation() throws Exception {
+        check(Transcript.commandOutput(map("output", "once", "resultText", "once")).equals("once"), "Tool output is not duplicated");
+        check(Transcript.commandOutput(map("resultText", "fallback")).equals("fallback"), "Unstreamed tool result fallback");
+        check(Desktop.sessionName(map("name", "Release")).equals("Release"), "Named session title");
+        check(Desktop.sessionName(map("preview", "First prompt")).equals("First prompt"), "Saved session uses first prompt");
+        check(Desktop.sessionName(map("items", List.of(item("u", "userMessage", "Live prompt")))).equals("Live prompt"), "Live session uses first prompt");
+        check(Ui.relative(java.time.Instant.now().minusSeconds(125).toString()).equals("2m ago"), "Relative session time");
+        check(Ui.cwd("/private/tmp/project/src").equals("…/project/src"), "Short remote cwd");
+        javax.swing.SwingUtilities.invokeAndWait(() -> {
+            Ui.theme(false); javax.swing.JPanel panel = Ui.rounded(Ui.surface, 12); javax.swing.JButton button = Ui.button("Send", () -> {}); panel.add(button);
+            Ui.theme(true); Ui.restyle(panel); check(panel.getBackground().equals(Ui.surface), "Existing rounded surfaces follow theme changes");
+            check(button.getUI() instanceof javax.swing.plaf.basic.BasicButtonUI && button.getForeground().equals(Ui.text), "Styled buttons survive LAF refresh");
+            Ui.theme(false);
+        });
+        check(ScreenshotScript.sampleImage().getWidth() == 440, "Image fixture dimensions");
+        check(Options.parse(new String[]{"--screenshot-script", "review.json"}).screenshotScript().equals("review.json"), "Screenshot script option");
+        javax.swing.SwingUtilities.invokeAndWait(() -> {
+            javax.swing.JButton button = Ui.button("Send", () -> {}); button.putClientProperty("primary", true); button.setEnabled(false); button.setSize(90, 34);
+            var image = new java.awt.image.BufferedImage(90, 34, java.awt.image.BufferedImage.TYPE_INT_RGB); var graphics = image.createGraphics(); button.paint(graphics); graphics.dispose();
+            check(button.getForeground().equals(Ui.muted), "Disabled primary button is visibly muted");
+        });
     }
     static void json() {
         for (String text : List.of("null", "true", "false", "0", "-42", "1.25e-4", "9223372036854775808", "\"hello\\n😀\\u0041\"", "{\"x\":[null,1,true,\"y\"]}")) {

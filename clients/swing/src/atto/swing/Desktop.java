@@ -24,7 +24,7 @@ final class Desktop {
     final Map<String, SessionPane> sessions = new LinkedHashMap<>();
     final Map<String, Action> actions = new LinkedHashMap<>();
     final JLabel connection = new JLabel("Connecting…");
-    final JTextField search = new JTextField();
+    final JTextField search = new Ui.Field("Search sessions");
     final DefaultListModel<Map<String, Object>> sessionList = new DefaultListModel<>();
     final JList<Map<String, Object>> sidebar = new JList<>(sessionList);
     final Map<String, JDialog> prompts = new HashMap<>();
@@ -40,7 +40,7 @@ final class Desktop {
         fontSize = Math.max(10, Math.min(28, settings.integer("fontSize", 14)));
         applyTheme(settings.string("theme", "system"));
         window.setDefaultCloseOperation(WindowConstants.DO_NOTHING_ON_CLOSE);
-        window.setSize(settings.integer("width", 1200), settings.integer("height", 850));
+        window.setSize(settings.integer("width", 1180), settings.integer("height", 820)); window.setMinimumSize(new Dimension(880, 620));
         window.setLocationByPlatform(true);
         window.addWindowListener(new WindowAdapter() {
             public void windowClosing(WindowEvent e) { quit(); }
@@ -62,7 +62,7 @@ final class Desktop {
         core.opened = snapshot -> edt(() -> {
             if (closing) return;
             update(snapshot); SessionPane pane = sessions.get(str(snapshot.get("threadId")));
-            tabs.setSelectedComponent(pane); pane.refreshCommands();
+            pane.refreshCommands(); refreshSessions();
             if (!yes(pane.info.get("offline"))) pane.rpc("auth/list", Map.of(), v -> {
                 Map<String, Object> login = obj(obj(v).get("login"));
                 if (!login.isEmpty()) { Map<String, Object> params = new LinkedHashMap<>(login); params.put("threadId", pane.id); notification(map("method", "auth/updated", "params", params)); }
@@ -77,30 +77,35 @@ final class Desktop {
         JPanel left = new JPanel(new BorderLayout(0, 6));
         search.putClientProperty("JTextField.placeholderText", "Search sessions");
         search.getDocument().addDocumentListener(listener(this::filterSessions));
-        left.add(search, BorderLayout.NORTH); left.add(new JScrollPane(sidebar), BorderLayout.CENTER);
-        JPanel sessionButtons = new JPanel(new FlowLayout(FlowLayout.LEFT));
+        left.setBorder(BorderFactory.createEmptyBorder(16, 12, 12, 12)); left.putClientProperty("atto.role", "surface"); left.setBackground(Ui.surface); left.add(search, BorderLayout.NORTH); JScrollPane sessionScroll = new JScrollPane(sidebar); sessionScroll.setBorder(BorderFactory.createEmptyBorder()); left.add(sessionScroll, BorderLayout.CENTER); sidebar.putClientProperty("atto.role", "surface"); sidebar.setBackground(Ui.surface); sidebar.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
+        JPanel sessionButtons = new JPanel(new FlowLayout(FlowLayout.LEFT)); sessionButtons.setOpaque(false);
         sessionButtons.add(button("New", () -> newSession())); sessionButtons.add(button("Refresh", this::refreshSessions));
         left.add(sessionButtons, BorderLayout.SOUTH);
-        sidebar.setCellRenderer(new DefaultListCellRenderer() {
-            public Component getListCellRendererComponent(JList<?> l, Object value, int index, boolean selected, boolean focus) {
-                JLabel label = (JLabel)super.getListCellRendererComponent(l, value, index, selected, focus);
-                Map<String, Object> row = obj(value);
-                String name = str(row.get("name")); if (name.isEmpty()) name = str(row.get("threadId"));
-                label.setText("<html><b>" + Markdown.escape(name) + "</b> · " + (yes(row.get("busy")) ? "Working" : "Idle")
-                    + (yes(row.get("loaded")) ? " · live" : "") + "<br><small>" + Markdown.escape(str(row.get("cwd")))
-                    + "<br>" + Markdown.escape(str(row.get("updatedAt"))) + "</small></html>");
-                label.setBorder(BorderFactory.createEmptyBorder(6, 6, 6, 6)); return label;
+        sidebar.setCellRenderer((list, value, index, selected, focus) -> {
+            Map<String, Object> session = obj(value);
+            if (yes(session.get("projectHeader"))) {
+                JLabel project = Ui.muted(str(session.get("cwd"))); project.setBorder(BorderFactory.createEmptyBorder(16, 8, 6, 8)); return project;
             }
+            JPanel row = Ui.rounded(selected ? Ui.selected : Ui.surface, 12); row.setLayout(new BorderLayout(6, 5)); row.setBorder(BorderFactory.createEmptyBorder(10, 10, 10, 10));
+            JLabel name = new JLabel("<html>" + Markdown.escape(sessionName(session)) + "</html>"); name.setFont(Ui.body(14).deriveFont(Font.BOLD)); row.add(name, BorderLayout.NORTH);
+            row.add(Ui.muted(Ui.cwd(str(session.get("cwd")))), BorderLayout.CENTER);
+            JPanel detail = new JPanel(new BorderLayout()); detail.setOpaque(false); detail.add(Ui.muted(Ui.relative(str(session.get("updatedAt")))));
+            if (yes(session.get("busy"))) { JLabel busy = Ui.muted("● Working"); busy.setForeground(Ui.accent); detail.add(busy, BorderLayout.EAST); }
+            row.add(detail, BorderLayout.SOUTH); return row;
         });
         sidebar.addMouseListener(new MouseAdapter() { public void mouseClicked(MouseEvent e) { if (e.getClickCount() == 2) resumeSelected(); } });
         bind(sidebar, "ENTER", "resume", this::resumeSelected);
         split = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT, left, tabs); split.setResizeWeight(0);
-        split.setDividerLocation(settings.integer("sidebarWidth", 250));
+        split.setDividerLocation(settings.integer("sidebarWidth", 250)); split.setDividerSize(1); split.setBorder(BorderFactory.createEmptyBorder()); tabs.setUI(new Ui.Tabs());
         window.add(split, BorderLayout.CENTER);
         JToolBar toolbar = new JToolBar(); toolbar.setFloatable(false);
-        for (String name : List.of("New session", "Model", "Effort", "Tree", "Jobs", "Agents", "Context", "Goal", "Command palette"))
-            toolbar.add(new JButton(actions.get(name)));
-        toolbar.addSeparator(); toolbar.add(connection); window.add(toolbar, BorderLayout.NORTH);
+        toolbar.setBorder(BorderFactory.createEmptyBorder(8, 16, 8, 16));
+        JLabel brand = new JLabel("atto"); brand.setFont(Ui.body(17).deriveFont(Font.BOLD)); toolbar.add(brand); toolbar.addSeparator(new Dimension(18, 1));
+        toolbar.add(Ui.icon("plus", "New session · ⌘N", this::newSession));
+        toolbar.add(Ui.icon("tree", "Session tree", () -> withPane(p -> Panels.tree(p, false))));
+        toolbar.add(Ui.icon("jobs", "Background jobs", () -> withPane(Panels::jobs)));
+        toolbar.add(Box.createHorizontalGlue()); connection.setForeground(Ui.muted); connection.setFont(Ui.body(12)); toolbar.add(connection);
+        toolbar.addSeparator(new Dimension(12, 1)); toolbar.add(Ui.icon("search", "Command palette · ⌘K", this::palette)); window.add(toolbar, BorderLayout.NORTH);
         JMenuBar menu = new JMenuBar();
         JMenu file = new JMenu("Session"), tools = new JMenu("Actions"), view = new JMenu("View");
         for (var e : actions.entrySet()) {
@@ -108,13 +113,19 @@ final class Desktop {
             target.add(new JMenuItem(e.getValue()));
         }
         menu.add(file); menu.add(tools); menu.add(view); window.setJMenuBar(menu);
+        startTimer(new javax.swing.Timer(10000, e -> {
+            if (!settings.string("theme", "system").equals("system")) return;
+            boolean before = systemDark; CompletableFuture.runAsync(Desktop::detectAppearance).thenRun(() -> edt(() -> { if (before != systemDark) { applyTheme("system"); refreshTheme(); } }));
+        }));
+        startTimer(new javax.swing.Timer(100, e -> sessions.values().forEach(p -> { if (yes(p.info.get("busy"))) p.status.repaint(); })));
         startTimer(new javax.swing.Timer(1000, e -> sessions.values().forEach(SessionPane::refreshStatus)));
         startTimer(new javax.swing.Timer(10000, e -> { if (core.protocol.ready) refreshSessions(); }));
     }
     void startTimer(javax.swing.Timer timer) { timers.add(timer); timer.start(); }
-    void show() { SwingUtilities.updateComponentTreeUI(window); window.setVisible(true); core.connect(); }
+    void show() { refreshTheme(); window.setVisible(true); core.connect(); }
+    void refreshTheme() { SwingUtilities.updateComponentTreeUI(window); Ui.restyle(window); for (Window owned : window.getOwnedWindows()) { SwingUtilities.updateComponentTreeUI(owned); Ui.restyle(owned); } sessions.values().forEach(p -> { p.transcript.rows.setBackground(Ui.canvas); p.transcript.invalidateRows(); }); }
     static void edt(Runnable task) { if (SwingUtilities.isEventDispatchThread()) task.run(); else SwingUtilities.invokeLater(task); }
-    static JButton button(String text, Runnable action) { JButton b = new JButton(text); b.addActionListener(e -> action.run()); return b; }
+    static JButton button(String text, Runnable action) { return Ui.button(text, action); }
     static DocumentListener listener(Runnable action) {
         return new DocumentListener() { public void insertUpdate(DocumentEvent e) { action.run(); } public void removeUpdate(DocumentEvent e) { action.run(); } public void changedUpdate(DocumentEvent e) { action.run(); } };
     }
@@ -143,9 +154,10 @@ final class Desktop {
         action("Fork session", KeyEvent.VK_F, InputEvent.SHIFT_DOWN_MASK, () -> withPane(p -> Panels.tree(p, true)));
         action("Jobs", KeyEvent.VK_J, 0, () -> withPane(p -> Panels.jobs(p)));
         action("Timers", KeyEvent.VK_T, InputEvent.SHIFT_DOWN_MASK, () -> withPane(p -> Panels.timers(p)));
+        action("Create timer", 0, 0, () -> withPane(p -> input("Remind me when (e.g. 10m or 15:30)", "10m", when -> input("Reminder", "", message -> p.rpc("timer/create", map("when", when, "message", message), v -> {})))));
         action("Agents", KeyEvent.VK_A, InputEvent.SHIFT_DOWN_MASK, () -> withPane(p -> Panels.agents(p)));
-        action("Context", KeyEvent.VK_I, 0, () -> withPane(p -> p.rpc("thread/context", Map.of(), v -> text("Context breakdown", Panels.pretty(v), null))));
-        action("System context", 0, 0, () -> withPane(p -> p.rpc("thread/context", map("view", "system"), v -> text("System context", Panels.pretty(v), null))));
+        action("Context", KeyEvent.VK_I, 0, () -> withPane(p -> Panels.context(p, false)));
+        action("System context", 0, 0, () -> withPane(p -> Panels.context(p, true)));
         action("Compact", 0, 0, () -> withPane(p -> p.rpc("thread/compact", Map.of(), v -> {})));
         action("Reload", KeyEvent.VK_R, 0, () -> withPane(p -> p.rpc("thread/reload", Map.of(), v -> {})));
         action("Request: save last provider request", 0, 0, () -> withPane(p -> p.rpc("thread/debugRequest", Map.of(), v -> save("request.json", str(obj(v).get("request"))))));
@@ -156,7 +168,7 @@ final class Desktop {
         }));
         action("Reconnect", 0, 0, core.protocol::reconnect);
         action("Copy last answer", KeyEvent.VK_C, InputEvent.SHIFT_DOWN_MASK, () -> withPane(this::copyLast));
-        action("Usage totals", 0, 0, () -> withPane(p -> text("Usage", Panels.pretty(p.info.get("usage")), null)));
+        action("Usage totals", 0, 0, () -> withPane(Panels::usage));
         action("Goal", KeyEvent.VK_G, 0, () -> withPane(p -> Panels.goal(p)));
         action("Interrupt", 0, 0, () -> withPane(p -> p.interrupt(false)));
         action("Hard cancel", 0, 0, () -> withPane(p -> p.interrupt(true)));
@@ -174,10 +186,9 @@ final class Desktop {
         action("Increase font", KeyEvent.VK_EQUALS, 0, () -> changeFont(1));
         action("Decrease font", KeyEvent.VK_MINUS, 0, () -> changeFont(-1));
         action("Choose theme", 0, 0, () -> pick("Theme", List.of("system", "light", "dark"), x -> x, theme -> {
-            settings.values.put("theme", theme); applyTheme(theme); SwingUtilities.updateComponentTreeUI(window);
-            sessions.values().forEach(p -> p.transcript.invalidateRows()); persist();
+            settings.values.put("theme", theme); applyTheme(theme); refreshTheme(); persist();
         }));
-        action("Authentication status", 0, 0, () -> withPane(p -> p.rpc("auth/list", Map.of(), v -> text("Authentication", Panels.pretty(v), null))));
+        action("Authentication status", 0, 0, () -> withPane(Panels::authentication));
         action("Login", 0, 0, () -> withPane(p -> Panels.login(p, "")));
         action("Logout", 0, 0, () -> withPane(p -> Panels.logout(p, "")));
         action("Cancel login", 0, 0, () -> withPane(p -> p.rpc("auth/cancel", Map.of(), v -> {})));
@@ -192,28 +203,57 @@ final class Desktop {
         input("Working directory (on server)", options.cwd(), cwd -> open("thread/start", map("cwd", cwd, "deferStart", true)));
     }
     void open(String method, Map<String, Object> params) {
-        core.hydrate(method, params).exceptionally(e -> null);
+        core.hydrate(method, params).thenAccept(snapshot -> edt(() -> { SessionPane pane = sessions.get(str(snapshot.get("threadId"))); if (pane != null) tabs.setSelectedComponent(pane); })).exceptionally(e -> null);
     }
     void trust(SessionPane pane) {
         if (!pane.writable()) return;
-        pane.rpc("thread/context", Map.of(), v -> {
-            JTextArea content = new JTextArea("Starting a session can execute trusted project hooks/extensions.\nInspect this context before allowing startup:\n\n" + Panels.pretty(v), 20, 80);
-            content.setEditable(false);
-            JDialog dialog = dialog("Project trust", new JScrollPane(content));
-            JPanel buttons = new JPanel();
-            buttons.add(button("Allow session startup", () -> { dialog.dispose(); pane.rpc("thread/sessionStart", Map.of(), x -> {}); }));
-            buttons.add(button("Detach", () -> { dialog.dispose(); detach(pane, false); }));
-            dialog.add(buttons, BorderLayout.SOUTH); dialog.pack(); dialog.setVisible(true);
+        pane.rpc("thread/context", Map.of(), value -> {
+            Map<String, Object> loaded = obj(obj(value).get("loaded")); pane.loadedContext = loaded;
+            String key = str(pane.info.get("cwd")); String signature = write(map("hooks", loaded.get("hooks"), "extensions", loaded.get("extensions"), "mcp", loaded.get("mcp")));
+            Map<String, Object> remembered = obj(settings.values.get("startupTrust"));
+            if (signature.equals(remembered.get(key))) { pane.rpc("thread/sessionStart", Map.of(), x -> {}); return; }
+            JPanel content = new JPanel(new BorderLayout(0, 16)); content.setBorder(BorderFactory.createEmptyBorder(24, 24, 20, 24));
+            JLabel heading = new JLabel("Allow atto to work in this project?"); heading.setFont(Ui.body(20).deriveFont(Font.BOLD)); content.add(heading, BorderLayout.NORTH);
+            JPanel details = new JPanel(); details.setLayout(new BoxLayout(details, BoxLayout.Y_AXIS));
+            details.add(new JLabel("<html>Session startup can run configured hooks, extensions and MCP servers.<br>Only content approved by the runtime is enabled. Review the workspace below.</html>"));
+            details.add(Box.createVerticalStrut(16)); details.add(Ui.muted(Ui.cwd(key))); details.add(Box.createVerticalStrut(12));
+            for (String kind : List.of("hooks", "extensions", "mcp")) {
+                List<Object> entries = Json.list(loaded.get(kind));
+                JLabel section = new JLabel(switch (kind) { case "hooks" -> "Hooks"; case "extensions" -> "Extensions"; default -> "MCP servers"; } + " · " + entries.size()); section.setFont(Ui.body(14).deriveFont(Font.BOLD)); details.add(section);
+                if (entries.isEmpty()) details.add(Ui.muted("None configured"));
+                for (Object entry : entries) { Map<String, Object> item = obj(entry);
+                    String name = str(item.getOrDefault("name", item.getOrDefault("event", "")));
+                    String target = str(item.getOrDefault("command", item.getOrDefault("target", item.getOrDefault("path", ""))));
+                    details.add(new JLabel("<html>• " + Markdown.escape(name) + " <span style='color:" + Transcript.color(Ui.muted) + "'>" + Markdown.escape(Ui.cwd(target)) + " · " + Markdown.escape(str(item.get("status"))) + "</span></html>"));
+                }
+                details.add(Box.createVerticalStrut(12));
+            }
+            details.add(Ui.muted("Unapproved project content stays disabled. Use atto trust to approve it.")); content.add(details);
+            JDialog dialog = dialog("Project trust", content); JPanel buttons = new JPanel(new FlowLayout(FlowLayout.RIGHT, 8, 12));
+            Runnable allow = () -> { dialog.dispose(); pane.rpc("thread/sessionStart", Map.of(), x -> {}); };
+            buttons.add(button("Detach", () -> { dialog.dispose(); detach(pane, false); })); buttons.add(button("Allow once", allow));
+            JButton remember = button("Allow", () -> { Map<String, Object> trust = new LinkedHashMap<>(obj(settings.values.get("startupTrust"))); trust.put(key, signature); settings.values.put("startupTrust", trust); persist(); allow.run(); }); remember.putClientProperty("primary", true); buttons.add(remember);
+            buttons.setBorder(BorderFactory.createEmptyBorder(0, 16, 4, 16)); dialog.add(buttons, BorderLayout.SOUTH); dialog.pack(); dialog.setLocationRelativeTo(window); dialog.setVisible(true);
         });
+    }
+    static String sessionName(Map<String, Object> session) {
+        String name = str(session.get("name")); if (!name.isEmpty()) return name; String preview = str(session.get("preview")); if (!preview.isEmpty()) return preview.length() > 32 ? preview.substring(0, 32) + "…" : preview;
+        for (Object value : Json.list(session.get("items"))) if ("userMessage".equals(obj(value).get("type"))) {
+            String prompt = str(obj(value).get("text")).replace('\n', ' '); if (!prompt.isEmpty()) return prompt.length() > 32 ? prompt.substring(0, 32) + "…" : prompt;
+        }
+        return "New conversation";
     }
     void update(Map<String, Object> snapshot) {
         if (closing) return;
         String id = str(snapshot.get("threadId")); if (id.isEmpty()) return;
         SessionPane pane = sessions.get(id);
-        if (pane == null) { pane = new SessionPane(this, id); sessions.put(id, pane); tabs.addTab(id, pane); }
+        boolean namesChanged = pane == null || !str(pane.info.get("name")).equals(str(snapshot.get("name")));
+        if (pane == null) { pane = new SessionPane(this, id); sessions.put(id, pane); tabs.addTab(id, pane); tabs.setSelectedComponent(pane); }
         pane.update(snapshot);
         int index = tabs.indexOfComponent(pane); String name = str(snapshot.get("name"));
-        tabs.setTitleAt(index, (yes(snapshot.get("busy")) ? "● " : "") + (name.isEmpty() ? id : name));
+        String title = sessionName(snapshot); tabs.setTitleAt(index, title);
+        JPanel tab = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 0)); tab.setOpaque(false); JLabel label = new JLabel((yes(snapshot.get("busy")) ? "● " : "") + title); label.setFont(Ui.body(13)); tab.add(label);
+        SessionPane current = pane; JButton close = Ui.icon("close", "Detach session", () -> detach(current, false)); close.setBorder(BorderFactory.createEmptyBorder(3, 3, 3, 3)); tab.add(close); tabs.setTabComponentAt(index, tab); if (namesChanged) refreshSessions();
     }
     void refreshSessions() {
         core.call("thread/list", "", Map.of()).whenComplete((v, e) -> edt(() -> {
@@ -222,10 +262,16 @@ final class Desktop {
         }));
     }
     void filterSessions() {
+        String active = tabs.getSelectedComponent() instanceof SessionPane selectedPane ? selectedPane.id : sidebar.getSelectedValue() == null ? "" : str(sidebar.getSelectedValue().get("threadId"));
         String query = search.getText().toLowerCase(Locale.ROOT); sessionList.clear();
-        for (Object row : allSessions) if (write(row).toLowerCase(Locale.ROOT).contains(query)) sessionList.addElement(obj(row));
+        Map<String, List<Map<String, Object>>> projects = new LinkedHashMap<>();
+        for (Object row : allSessions) if (write(row).toLowerCase(Locale.ROOT).contains(query)) projects.computeIfAbsent(str(obj(row).get("cwd")), key -> new ArrayList<>()).add(obj(row));
+        for (var project : projects.entrySet()) {
+            sessionList.addElement(map("projectHeader", true, "cwd", Ui.cwd(project.getKey())));
+            for (var saved : project.getValue()) { Map<String, Object> session = new LinkedHashMap<>(saved); SessionPane live = sessions.get(str(session.get("threadId"))); if (live != null) { session.put("busy", live.info.get("busy")); if (str(session.get("name")).isEmpty()) session.put("name", sessionName(live.info)); } sessionList.addElement(session); if (active.equals(str(session.get("threadId")))) sidebar.setSelectedIndex(sessionList.size() - 1); }
+        }
     }
-    void resumeSelected() { if (sidebar.getSelectedValue() != null) open("thread/resume", map("threadId", sidebar.getSelectedValue().get("threadId"), "deferStart", true)); }
+    void resumeSelected() { if (sidebar.getSelectedValue() != null && !yes(sidebar.getSelectedValue().get("projectHeader"))) open("thread/resume", map("threadId", sidebar.getSelectedValue().get("threadId"), "deferStart", true)); }
     void detach(SessionPane pane, boolean close) {
         if (close) {
             if (JOptionPane.showConfirmDialog(window, "End session and stop its jobs? Detach instead to leave work running.", "Close session", JOptionPane.YES_NO_OPTION) != JOptionPane.YES_OPTION) return;
@@ -256,12 +302,12 @@ final class Desktop {
                 JDialog dialog = dialog("Sign in to " + str(p.get("provider")), new JScrollPane(link));
                 JPanel buttons = new JPanel(); buttons.add(button("Open browser", () -> CompletableFuture.runAsync(() -> {
                     try { java.awt.Desktop.getDesktop().browse(java.net.URI.create(url)); } catch (Exception e) { edt(() -> error(e.getMessage())); }
-                }))); buttons.add(button("Copy URL", () -> copy(url))); dialog.add(buttons, BorderLayout.SOUTH); dialog.pack(); dialog.setVisible(true);
+                }))); buttons.add(button("Copy URL", () -> copy(url))); dialog.add(buttons, BorderLayout.SOUTH); showDialog(dialog);
             }
             if (p.containsKey("error")) error(str(p.get("error")));
         }
         if (method.equals("extension/notify")) {
-            connection.setText(str(p.get("message"))); attention(str(p.get("message")), id);
+            connection.setToolTipText(str(p.get("message"))); attention(str(p.get("message")), id);
         }
     }
     void attention(String message, String id) {
@@ -274,58 +320,64 @@ final class Desktop {
     void prompt(SessionPane pane, Map<String, Object> prompt) {
         JDialog old = prompts.get(pane.id); String promptId = str(prompt.get("id"));
         if (old != null && promptId.equals(old.getRootPane().getClientProperty("promptId"))) return;
-        if (old != null) { old.dispose(); prompts.remove(pane.id); }
-        if (promptId.isEmpty()) return;
-        JPanel body = new JPanel(new BorderLayout(6, 6));
-        body.add(new JLabel(str(prompt.get("subtitle")) + " " + str(prompt.get("note"))), BorderLayout.NORTH);
-        JTextField input = new JTextField(str(prompt.get("text")), 40);
-        List<Object> options = Json.list(prompt.get("options"));
-        JList<String> choices = new JList<>(options.stream().map(x -> str(obj(x).get("label")) + " " + str(obj(x).get("description"))).toArray(String[]::new));
-        boolean multi = "multiSelect".equals(prompt.get("kind"));
+        if (old != null) { old.dispose(); prompts.remove(pane.id); } if (promptId.isEmpty()) return;
+        JPanel body = new JPanel(new BorderLayout(0, 16)); body.setPreferredSize(new Dimension(500, yes(prompt.get("confirm")) ? 130 : 240));
+        JPanel header = new JPanel(new BorderLayout(0, 8)); JLabel title = new JLabel("<html>" + Markdown.escape(str(prompt.get("title"))) + "</html>"); title.setFont(Ui.body(18).deriveFont(Font.BOLD)); header.add(title);
+        header.add(Ui.muted(str(prompt.get("subtitle")) + " " + str(prompt.get("note"))), BorderLayout.SOUTH); body.add(header, BorderLayout.NORTH);
+        JTextField input = new Ui.Field(str(prompt.getOrDefault("placeholder", "Enter your answer…"))); input.setText(str(prompt.get("text")));
+        List<Object> options = Json.list(prompt.get("options")); JList<String> choices = new JList<>(options.stream().map(x -> str(obj(x).get("label")) + " " + str(obj(x).get("description"))).toArray(String[]::new)); choices.setFixedCellHeight(36);
+        boolean multi = "multiSelect".equals(prompt.get("kind")), select = multi || "select".equals(prompt.get("kind"));
         choices.setSelectionMode(multi ? ListSelectionModel.MULTIPLE_INTERVAL_SELECTION : ListSelectionModel.SINGLE_SELECTION); choices.setSelectedIndex((int)num(prompt.get("selected")));
-        boolean select = multi || "select".equals(prompt.get("kind"));
-        body.add(select ? new JScrollPane(choices) : input, BorderLayout.CENTER);
-        JDialog dialog = dialog(str(prompt.get("title")) + " · " + pane.id, body);
-        dialog.getRootPane().putClientProperty("promptId", promptId); prompts.put(pane.id, dialog);
-        JPanel buttons = new JPanel();
+        if (!yes(prompt.get("confirm"))) body.add(select ? new JScrollPane(choices) : input, BorderLayout.CENTER);
+        JDialog dialog = dialog("atto · " + str(prompt.get("origin")), body); dialog.getRootPane().putClientProperty("promptId", promptId); prompts.put(pane.id, dialog);
+        JPanel buttons = new JPanel(new FlowLayout(FlowLayout.RIGHT, 8, 0));
         Runnable answer = () -> {
             Map<String, Object> params = map("id", promptId);
             if (multi) params.put("indexes", Arrays.stream(choices.getSelectedIndices()).boxed().toList());
             else if (select) { if (choices.getSelectedIndex() < 0) return; params.put("index", choices.getSelectedIndex()); }
-            else params.put("text", input.getText());
-            pane.rpc("prompt/answer", params, v -> {});
+            else params.put("text", input.getText()); pane.rpc("prompt/answer", params, v -> {});
         };
-        buttons.add(button("Answer", answer)); buttons.add(button("Cancel", () -> pane.rpc("prompt/answer", map("id", promptId, "cancel", true), v -> {})));
+        if (yes(prompt.get("confirm"))) {
+            for (int i = options.size() - 1; i >= 0; i--) { int index = i; JButton choice = button(str(obj(options.get(i)).get("label")), () -> pane.rpc("prompt/answer", map("id", promptId, "index", index), v -> {})); if (i == 0) choice.putClientProperty("primary", true); buttons.add(choice); }
+        } else {
+            buttons.add(button("Cancel", () -> pane.rpc("prompt/answer", map("id", promptId, "cancel", true), v -> {}))); JButton submit = button(select ? "Choose" : "Continue", answer); submit.putClientProperty("primary", true); buttons.add(submit);
+        }
         dialog.addWindowListener(new WindowAdapter() { public void windowClosing(WindowEvent e) { pane.rpc("prompt/answer", map("id", promptId, "cancel", true), v -> {}); } });
-        bind(body, "ENTER", "answer", answer);
-        dialog.add(buttons, BorderLayout.SOUTH); dialog.pack(); dialog.setVisible(true); attention("Prompt waiting", pane.id);
+        bind(body, "ENTER", "answer", answer); body.add(buttons, BorderLayout.SOUTH); dialog.pack(); dialog.setLocationRelativeTo(window); dialog.setVisible(true); if (!select) input.requestFocusInWindow(); attention("Prompt waiting", pane.id);
     }
     JDialog dialog(String title, Component body) {
         JDialog dialog = new JDialog(window, title, false); dialog.setDefaultCloseOperation(WindowConstants.DISPOSE_ON_CLOSE);
-        dialog.add(body, BorderLayout.CENTER); dialog.pack(); dialog.setLocationRelativeTo(window); return dialog;
+        JPanel padded = new JPanel(new BorderLayout()); padded.setBorder(BorderFactory.createEmptyBorder(16, 16, 16, 16)); padded.add(body); dialog.add(padded, BorderLayout.CENTER); dialog.pack(); dialog.setLocationRelativeTo(window); Ui.restyle(dialog); return dialog;
+    }
+    void showDialog(JDialog dialog) {
+        dialog.pack(); dialog.setSize(Math.min(dialog.getWidth(), window.getWidth() - 64), Math.min(dialog.getHeight(), window.getHeight() - 80)); dialog.setLocationRelativeTo(window); dialog.setVisible(true);
     }
     void input(String title, String initial, Consumer<String> answer) {
         JTextField field = new JTextField(initial, 45); JDialog dialog = dialog(title, field);
         Runnable submit = () -> { String text = field.getText(); dialog.dispose(); answer.accept(text); };
         dialog.add(button("OK", submit), BorderLayout.SOUTH); field.addActionListener(e -> submit.run());
-        dialog.pack(); dialog.setVisible(true); field.requestFocusInWindow();
+        showDialog(dialog); field.requestFocusInWindow();
+    }
+    void notice(String title, String message) {
+        JPanel body = new JPanel(new BorderLayout(0, 16)); body.setPreferredSize(new Dimension(530, 150)); JLabel heading = new JLabel(title); heading.setFont(Ui.body(18).deriveFont(Font.BOLD)); body.add(heading, BorderLayout.NORTH);
+        body.add(new JLabel("<html>" + Markdown.escape(message).replace("\n", "<br>") + "</html>")); JDialog dialog = dialog(title, body); JPanel controls = new JPanel(new FlowLayout(FlowLayout.RIGHT)); controls.add(button("Done", dialog::dispose)); body.add(controls, BorderLayout.SOUTH); showDialog(dialog);
     }
     void text(String title, String value, Runnable extra) {
         JTextArea area = new JTextArea(value, 25, 85); area.setEditable(false); area.setFont(new Font(Font.MONOSPACED, Font.PLAIN, fontSize));
         JDialog dialog = dialog(title, new JScrollPane(area)); JPanel buttons = new JPanel();
         buttons.add(button("Copy", () -> copy(value))); buttons.add(button("Save…", () -> save("atto.txt", value)));
-        if (extra != null) buttons.add(button("Refresh", extra)); dialog.add(buttons, BorderLayout.SOUTH); dialog.pack(); dialog.setVisible(true);
+        if (extra != null) buttons.add(button("Refresh", extra)); dialog.add(buttons, BorderLayout.SOUTH); showDialog(dialog);
     }
     <T> void pick(String title, List<T> entries, java.util.function.Function<T, String> label, Consumer<T> select) {
-        JTextField query = new JTextField(); DefaultListModel<T> model = new DefaultListModel<>(); JList<T> list = new JList<>(model);
+        JTextField query = new Ui.Field("Search…"); DefaultListModel<T> model = new DefaultListModel<>(); JList<T> list = new JList<>(model);
         list.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
         list.setCellRenderer(new DefaultListCellRenderer() { public Component getListCellRendererComponent(JList<?> l, Object v, int i, boolean selected, boolean focus) {
             @SuppressWarnings("unchecked") T entry = (T)v;
-            return super.getListCellRendererComponent(l, label.apply(entry), i, selected, focus);
+            JLabel cell = (JLabel)super.getListCellRendererComponent(l, label.apply(entry), i, selected, focus); cell.setBorder(BorderFactory.createEmptyBorder(10, 12, 10, 12)); return cell;
         } });
         Runnable filter = () -> { model.clear(); for (T entry : entries) if (label.apply(entry).toLowerCase(Locale.ROOT).contains(query.getText().toLowerCase(Locale.ROOT))) model.addElement(entry); if (!model.isEmpty()) list.setSelectedIndex(0); };
         query.getDocument().addDocumentListener(listener(filter)); filter.run();
-        JPanel body = new JPanel(new BorderLayout()); body.add(query, BorderLayout.NORTH); body.add(new JScrollPane(list), BorderLayout.CENTER); body.setPreferredSize(new Dimension(700, 420));
+        JPanel body = new JPanel(new BorderLayout(0, 12)); body.add(query, BorderLayout.NORTH); body.add(new JScrollPane(list), BorderLayout.CENTER); body.setPreferredSize(new Dimension(700, 420));
         JDialog dialog = dialog(title, body);
         SessionPane owner = tabs.getSelectedComponent() instanceof SessionPane p ? p : null;
         if (owner != null && owner.writable()) {
@@ -336,7 +388,7 @@ final class Desktop {
         bind(body, "ENTER", "choose", choose); bind(body, "ESCAPE", "dismiss", dialog::dispose);
         bind(query, "DOWN", "down", () -> { list.requestFocusInWindow(); if (list.getSelectedIndex() < 0) list.setSelectedIndex(0); });
         list.addMouseListener(new MouseAdapter() { public void mouseClicked(MouseEvent e) { if (e.getClickCount() == 2) choose.run(); } });
-        dialog.add(button("Select", choose), BorderLayout.SOUTH); dialog.pack(); dialog.setVisible(true); query.requestFocusInWindow();
+        dialog.add(button("Select", choose), BorderLayout.SOUTH); showDialog(dialog); query.requestFocusInWindow();
     }
     void palette() {
         List<String> entries = new ArrayList<>(actions.keySet());
@@ -361,21 +413,14 @@ final class Desktop {
     void error(String message) { if (closing) return; connection.setText(message); text("atto: " + message, message, null); }
     void changeFont(int delta) {
         fontSize = Math.max(10, Math.min(28, fontSize + delta)); settings.values.put("fontSize", fontSize);
-        sessions.values().forEach(p -> { p.composer.setFont(new Font(Font.MONOSPACED, Font.PLAIN, fontSize)); p.transcript.invalidateRows(); }); persist();
+        sessions.values().forEach(p -> { p.composer.setFont(Ui.body(fontSize)); p.transcript.invalidateRows(); }); persist();
     }
-    void applyTheme(String theme) {
-        if (theme.equals("system")) {
-            for (String key : List.of("Panel", "Viewport", "TextArea", "TextPane", "EditorPane", "List", "TextField", "TabbedPane", "ScrollPane", "Label")) {
-                UIManager.put(key + ".background", null); UIManager.put(key + ".foreground", null);
-            }
-            try { UIManager.setLookAndFeel(UIManager.getSystemLookAndFeelClassName()); } catch (Exception e) { System.err.println(e.getMessage()); }
-            return;
-        }
-        boolean dark = theme.equals("dark"); Color bg = dark ? new Color(30, 32, 36) : Color.WHITE;
-        Color fg = dark ? new Color(225, 228, 233) : new Color(30, 32, 36);
-        for (String key : List.of("Panel", "Viewport", "TextArea", "TextPane", "EditorPane", "List", "TextField", "TabbedPane", "ScrollPane", "Label")) {
-            UIManager.put(key + ".background", bg); UIManager.put(key + ".foreground", fg);
-        }
+    void applyTheme(String theme) { Ui.theme(theme.equals("system") ? systemDark : theme.equals("dark")); }
+    static volatile boolean systemDark;
+    static void detectAppearance() {
+        if (!System.getProperty("os.name").startsWith("Mac")) { Color bg = UIManager.getColor("Panel.background"); systemDark = bg != null && bg.getRed() < 100; return; }
+        try { Process p = new ProcessBuilder("defaults", "read", "-g", "AppleInterfaceStyle").start(); systemDark = new String(p.getInputStream().readAllBytes()).trim().equalsIgnoreCase("Dark"); p.waitFor(); }
+        catch (Exception ignored) { systemDark = false; }
     }
     static String savedEndpoint(String address) {
         if (address.isEmpty() || address.startsWith("unix://")) return address.split("[?#]", 2)[0];
@@ -397,7 +442,8 @@ final class Desktop {
 final class SessionPane extends JPanel {
     final Desktop desktop; final String id;
     final Transcript transcript;
-    final JTextArea composer = new JTextArea(4, 60);
+    final JTextArea composer = new Ui.Composer();
+    JButton send; final JButton modelChip, effortChip; final JProgressBar contextMeter = new JProgressBar(0, 100);
     final JPanel pending = new JPanel(), attachments = new JPanel();
     final JLabel status = new JLabel(" "), customStatus = new JLabel(" "), extensions = new JLabel(" ");
     String statusFingerprint = "";
@@ -407,26 +453,38 @@ final class SessionPane extends JPanel {
     final JTextArea goal = new JTextArea();
     final List<Object> images = new ArrayList<>();
     final List<JButton> writeButtons = new ArrayList<>();
+    final JPopupMenu completionPopup = new JPopupMenu();
+    final DefaultListModel<String> completionEntries = new DefaultListModel<>(); final JList<String> completionList = new JList<>(completionEntries);
+    String completionToken = ""; long completionGeneration;
+    Map<String, Object> loadedContext = Map.of();
     Map<String, Object> info = Map.of(); List<Object> commands = List.of();
     boolean trustPending = true;
     SessionPane(Desktop desktop, String id) {
         super(new BorderLayout(6, 6)); this.desktop = desktop; this.id = id;
         transcript = new Transcript(this); add(transcript, BorderLayout.CENTER);
-        composer.setLineWrap(true); composer.setWrapStyleWord(true); composer.setFont(new Font(Font.MONOSPACED, Font.PLAIN, desktop.fontSize));
+        composer.setLineWrap(true); composer.setWrapStyleWord(true); composer.setFont(Ui.body(desktop.fontSize)); composer.setBorder(BorderFactory.createEmptyBorder(4, 4, 4, 4));
         pending.setLayout(new BoxLayout(pending, BoxLayout.Y_AXIS)); attachments.setLayout(new FlowLayout(FlowLayout.LEFT));
-        JPanel bottom = new JPanel(new BorderLayout(4, 4)), editor = new JPanel(new BorderLayout());
-        editor.add(new JScrollPane(composer), BorderLayout.CENTER); JPanel controls = new JPanel(new FlowLayout(FlowLayout.LEFT));
-        for (var pair : List.of(new Object[]{"Send ↵", (Runnable)() -> submit("auto")}, new Object[]{"Queue", (Runnable)() -> submit("queue")},
-                new Object[]{"Send now", (Runnable)() -> submit("replace")}, new Object[]{"Stop (Esc)", (Runnable)() -> interrupt(false)},
-                new Object[]{"Hard cancel", (Runnable)() -> interrupt(true)}, new Object[]{"Image…", (Runnable)this::chooseImages},
-                new Object[]{"Complete", (Runnable)this::complete})) {
-            JButton b = Desktop.button((String)pair[0], (Runnable)pair[1]); controls.add(b); writeButtons.add(b);
+        JPanel bottom = new JPanel(new BorderLayout(0, 8)); bottom.setBorder(BorderFactory.createEmptyBorder(8, 24, 12, 24));
+        JPanel editor = Ui.rounded(Ui.surface, 20); editor.setLayout(new BorderLayout(0, 8)); editor.setBorder(BorderFactory.createEmptyBorder(12, 14, 10, 14));
+        composer.setOpaque(false); JScrollPane inputScroll = new JScrollPane(composer); inputScroll.setBorder(BorderFactory.createEmptyBorder()); inputScroll.setOpaque(false); inputScroll.getViewport().setOpaque(false); editor.add(inputScroll);
+        JPanel controls = new JPanel(new BorderLayout()); controls.setOpaque(false); JPanel tools = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 0)); tools.setOpaque(false);
+        tools.add(Ui.icon("attach", "Attach image", this::chooseImages));
+        JButton more = Ui.icon("more", "Input actions", () -> {}); JPopupMenu choices = new JPopupMenu();
+        for (var entry : List.of(new Object[]{"Queue · Tab", (Runnable)() -> submit("queue")}, new Object[]{"Send now · ⌘↵", (Runnable)() -> submit("replace")}, new Object[]{"Hard cancel", (Runnable)() -> interrupt(true)}, new Object[]{"Complete · Ctrl+Space", (Runnable)this::complete}, new Object[]{"Paste image", (Runnable)this::pasteImage})) {
+            JMenuItem choice = new JMenuItem((String)entry[0]); choice.addActionListener(e -> ((Runnable)entry[1]).run()); choices.add(choice);
         }
-        controls.add(Desktop.button("Detach tab", () -> desktop.detach(this, false)));
-        editor.add(controls, BorderLayout.SOUTH); JPanel north = new JPanel(new BorderLayout()); north.add(pending, BorderLayout.CENTER); north.add(attachments, BorderLayout.SOUTH);
-        bottom.add(north, BorderLayout.NORTH); bottom.add(editor, BorderLayout.CENTER);
-        JPanel foot = new JPanel(new GridLayout(0, 1)); foot.add(status); foot.add(customStatus); foot.add(extensions); customStatus.setVisible(false); bottom.add(foot, BorderLayout.SOUTH); add(bottom, BorderLayout.SOUTH);
-        goal.setEditable(false); goal.setLineWrap(true); goal.setWrapStyleWord(true); goal.setRows(3); goal.setVisible(false); add(goal, BorderLayout.NORTH);
+        more.addActionListener(e -> choices.show(more, 0, more.getHeight())); tools.add(more); controls.add(tools, BorderLayout.WEST);
+        controls.add(Ui.muted("Enter to send · Shift+Enter for a new line"), BorderLayout.CENTER);
+        send = Desktop.button("Send", () -> { if (yes(info.get("busy"))) interrupt(false); else submit("auto"); }); send.setIcon(new Ui.VectorIcon("send", 16)); send.putClientProperty("primary", true); writeButtons.add(send); controls.add(send, BorderLayout.EAST); editor.add(controls, BorderLayout.SOUTH);
+        JPanel north = new JPanel(new BorderLayout()); north.add(pending); north.add(attachments, BorderLayout.SOUTH);
+        bottom.add(north, BorderLayout.NORTH); bottom.add(editor);
+        JPanel foot = new JPanel(new BorderLayout(12, 4)); JPanel chips = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 0));
+        modelChip = Desktop.button("Model", () -> Panels.models(this)); effortChip = Desktop.button("Effort", () -> Panels.effort(this)); chips.add(modelChip); chips.add(effortChip);
+        contextMeter.setPreferredSize(new Dimension(54, 5)); contextMeter.setBorderPainted(false); chips.add(contextMeter); foot.add(chips, BorderLayout.WEST);
+        status.putClientProperty("atto.role", "muted"); status.setFont(Ui.body(11)); status.setForeground(Ui.muted); foot.add(status);
+        JPanel custom = new JPanel(new GridLayout(0, 1)); custom.add(customStatus); custom.add(extensions); foot.add(custom, BorderLayout.SOUTH); customStatus.setVisible(false); extensions.setVisible(false);
+        bottom.add(foot, BorderLayout.SOUTH); add(bottom, BorderLayout.SOUTH);
+        goal.setEditable(false); goal.setLineWrap(true); goal.setWrapStyleWord(true); goal.setRows(2); goal.setFont(Ui.body(13)); goal.setForeground(Ui.muted); goal.setBorder(BorderFactory.createEmptyBorder(10, 24, 8, 24)); goal.setVisible(false); add(goal, BorderLayout.NORTH);
         composer.getInputMap().put(KeyStroke.getKeyStroke("ENTER"), "send"); composer.getActionMap().put("send", new AbstractAction() { public void actionPerformed(ActionEvent e) { submit("auto"); } });
         composer.getInputMap().put(KeyStroke.getKeyStroke("shift ENTER"), "insert-break");
         composer.getInputMap().put(KeyStroke.getKeyStroke(KeyEvent.VK_ENTER, desktop.menuMask), "now"); composer.getActionMap().put("now", new AbstractAction() { public void actionPerformed(ActionEvent e) { submit("replace"); } });
@@ -452,26 +510,34 @@ final class SessionPane extends JPanel {
         composer.getDocument().addDocumentListener(Desktop.listener(completion::restart));
     }
     void update(Map<String, Object> snapshot) {
-        info = snapshot; transcript.update(Json.list(snapshot.get("items"))); updatePending(); updateControls(); refreshStatus();
+        info = snapshot; if (!obj(snapshot.get("context")).isEmpty()) loadedContext = obj(snapshot.get("context")); transcript.update(Json.list(snapshot.get("items"))); updatePending(); updateControls(); refreshStatus();
         Map<String, Object> g = obj(info.get("goal")); goal.setVisible(!g.isEmpty());
-        goal.setText("Goal: " + str(g.get("objective")) + "\n" + str(g.get("statusLabel")) + " · " + str(g.get("summary")) + " · " + str(g.get("tokensUsed")) + " tokens\n" + str(g.get("note")));
+        goal.setText("Goal: " + str(g.get("objective")) + "\n" + str(g.get("statusLabel")) + " · " + str(g.get("tokensUsed")) + " tokens · " + str(g.get("note")));
         desktop.prompt(this, obj(info.get("prompt")));
     }
     boolean writable() { return desktop.core.protocol.ready && str(info.get("readOnly")).isEmpty() && !yes(info.get("offline")) && !yes(info.get("closed")); }
-    void updateControls() { composer.setEditable(writable()); writeButtons.forEach(b -> b.setEnabled(writable())); }
+    void updateControls() { composer.setEditable(writable()); writeButtons.forEach(b -> b.setEnabled(writable()));
+        ((Ui.Composer)composer).placeholder = writable() ? "Ask atto… / for commands, @ for files, ! for shell" : desktop.core.protocol.ready ? "Read-only session · messages cannot be sent" : "Disconnected · reconnecting…";
+        composer.repaint(); modelChip.setEnabled(writable()); effortChip.setEnabled(writable());
+        send.setText(yes(info.get("busy")) ? "Stop" : "Send"); send.setIcon(new Ui.VectorIcon(yes(info.get("busy")) ? "stop" : "send", 16));
+    }
     void refreshStatus() {
         Map<String, Object> usage = obj(info.get("usage")), activity = obj(info.get("activity"));
         long context = num(info.get("contextTokens")), window = num(info.get("contextWindow")), input = num(usage.get("inputTokens")), cached = num(usage.get("cachedInputTokens"));
         long started = num(activity.get("startedAt")); if (started == 0) started = num(obj(info.get("turn")).get("startedAt"));
         boolean shellRunning = Json.list(info.get("items")).stream().anyMatch(x -> yes(obj(x).get("shell")) && "inProgress".equals(obj(x).get("status")));
         String busy = yes(info.get("busy")) ? str(activity.getOrDefault("phase", "Working")) + " " + (started > 0 ? (System.currentTimeMillis() - started) / 1000 : 0) + "s" : shellRunning ? "Shell running" : "Idle";
-        status.setText(str(info.get("model")) + " · " + str(info.get("effort")) + " · context " + context + (window > 0 ? "/" + window + " (" + context * 100 / window + "%)" : "")
-            + " · cache " + (input > 0 ? cached * 100 / input : 0) + "% · in/out " + input + "/" + num(usage.get("outputTokens")) + " · $" + str(usage.getOrDefault("cost", 0))
-            + " · " + busy + " · jobs " + num(info.get("jobs")) + " timers " + num(info.get("timers")) + " · " + str(info.get("cwd")) + (writable() ? "" : " · READ ONLY / OFFLINE"));
+        modelChip.setText(str(info.getOrDefault("modelName", info.getOrDefault("model", "Choose model"))) + " ▾"); effortChip.setText(str(info.getOrDefault("effort", "Effort")) + " ▾");
+        effortChip.setVisible(!Json.list(info.get("efforts")).isEmpty());
+        int percent = window > 0 ? (int)Math.min(100, context * 100 / window) : 0; contextMeter.setValue(percent); contextMeter.setToolTipText(context + " / " + window + " context tokens · " + percent + "%");
+        double cost = 0; try { cost = Double.parseDouble(str(usage.getOrDefault("cost", 0))); } catch (NumberFormatException ignored) {}
+        status.setIcon(yes(info.get("busy")) ? new Ui.Spinner(13) : null);
+        status.setText((yes(info.get("busy")) ? busy + "  ·  " : "") + percent + "% context · " + (input > 0 ? cached * 100 / input : 0) + "% cache · " + compact(input) + " ↑ " + compact(num(usage.get("outputTokens"))) + " ↓ · " + String.format(Locale.ROOT, "$%.3f", cost) + " · " + Ui.cwd(str(info.get("cwd"))) + (num(info.get("jobs")) > 0 ? " · " + num(info.get("jobs")) + " jobs" : "") + (num(info.get("timers")) > 0 ? " · " + num(info.get("timers")) + " timers" : "") + (writable() ? "" : " · Read only"));
+        status.setToolTipText("Jobs: " + num(info.get("jobs")) + " · Timers: " + num(info.get("timers")) + " · " + str(info.get("cwd")));
         Map<String, Object> ui = obj(info.get("extensionUi")); List<String> lines = new ArrayList<>();
         for (Object s : Json.list(ui.get("status"))) lines.add(str(obj(s).get("text")));
         for (Object w : Json.list(ui.get("widgets"))) for (Object line : Json.list(obj(w).get("lines"))) lines.add(str(line));
-        extensions.setText("<html>" + Markdown.escape(String.join("\n", lines)).replace("\n", "<br>") + "</html>");
+        extensions.setVisible(!lines.isEmpty()); extensions.setText("<html>" + Markdown.escape(String.join("\n", lines)).replace("\n", "<br>") + "</html>");
         String fingerprint = write(map("model", info.get("model"), "effort", info.get("effort"), "usage", usage, "context", context, "busy", info.get("busy"), "name", info.get("name"), "cwd", info.get("cwd")));
         long now = System.currentTimeMillis();
         if (writable() && !statusPending && (!fingerprint.equals(statusFingerprint) || (statusRefreshInterval > 0 && now >= statusRefreshAt))) {
@@ -487,6 +553,7 @@ final class SessionPane extends JPanel {
             }));
         }
     }
+    static String compact(long n) { return n < 1000 ? Long.toString(n) : String.format(Locale.ROOT, "%.1fk", n / 1000.0); }
     void rpc(String method, Map<String, Object> params, Consumer<Object> answer) {
         desktop.core.call(method, id, yes(info.get("offline")) && (method.equals("thread/read") || method.equals("thread/tree") || method.equals("item/image") || method.equals("item/output")) ? withOffline(params) : params).whenComplete((v, e) -> Desktop.edt(() -> {
             if (desktop.closing) return;
@@ -497,6 +564,7 @@ final class SessionPane extends JPanel {
     void hydrate() { desktop.open("thread/read", map("threadId", id)); }
     void refreshCommands() { if (yes(info.get("offline"))) return; rpc("commands/list", Map.of(), v -> commands = Json.list(obj(v).get("commands"))); }
     void submit(String intent) {
+        if (completionPopup.isVisible() && intent.equals("auto")) { chooseCompletion(); return; }
         if (!writable()) return; String text = composer.getText(); List<Object> sentImages = List.copyOf(images);
         if (text.startsWith("/") && intent.equals("auto") && local(text)) { composer.setText(""); return; }
         composer.setText(""); images.clear(); updateAttachments();
@@ -523,7 +591,7 @@ final class SessionPane extends JPanel {
             case "jobs" -> Panels.jobs(this);
             case "timers" -> Panels.timers(this);
             case "agents" -> Panels.agents(this);
-            case "context" -> { if (!arg.isEmpty() && !arg.equals("system")) return false; rpc("thread/context", arg.isEmpty() ? Map.of() : map("view", "system"), v -> desktop.text("Context", Panels.pretty(v), null)); }
+            case "context" -> { if (!arg.isEmpty() && !arg.equals("system")) return false; Panels.context(this, !arg.isEmpty()); }
             case "goal" -> {
                 if (arg.isEmpty() || arg.equals("show") || arg.equals("edit")) Panels.goal(this);
                 else if (arg.startsWith("set ")) rpc("goal/set", map("input", arg.substring(4)), v -> {});
@@ -550,15 +618,15 @@ final class SessionPane extends JPanel {
         });
     }
     void updatePending() {
-        pending.removeAll(); Map<String, Object> p = obj(info.get("pending"));
+        pending.removeAll(); pending.setLayout(new FlowLayout(FlowLayout.LEFT, 6, 4)); Map<String, Object> p = obj(info.get("pending"));
         for (Object row : Json.list(p.get("items"))) {
-            Map<String, Object> item = obj(row); JPanel line = new JPanel(new FlowLayout(FlowLayout.LEFT));
-            String text = str(item.get("text")); line.add(new JLabel(str(item.get("kind")) + ": " + (text.length() > 100 ? text.substring(0, 100) + "…" : text)));
-            line.add(Desktop.button("Edit / take back", () -> takeback(str(item.get("id")))));
-            line.add(Desktop.button("Remove", () -> rpc("turn/unsteer", map("inputId", item.get("id")), v -> {}))); pending.add(line);
+            Map<String, Object> item = obj(row); JPanel chip = Ui.rounded(Ui.selected, 12); chip.setLayout(new FlowLayout(FlowLayout.LEFT, 6, 0)); chip.setBorder(BorderFactory.createEmptyBorder(4, 8, 4, 4));
+            String text = str(item.get("text")); JLabel label = new JLabel(str(item.get("kind")) + " · " + (text.length() > 55 ? text.substring(0, 55) + "…" : text)); label.setFont(Ui.body(12)); label.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+            label.setToolTipText("Click to edit / take back"); label.addMouseListener(new MouseAdapter() { public void mouseClicked(MouseEvent e) { takeback(str(item.get("id"))); } }); chip.add(label);
+            chip.add(Ui.icon("close", "Remove pending message", () -> rpc("turn/unsteer", map("inputId", item.get("id")), v -> {}))); pending.add(chip);
         }
         if (yes(p.get("paused"))) pending.add(Desktop.button("Queue paused · Resume", () -> rpc("queue/resume", Map.of(), v -> {})));
-        pending.revalidate(); pending.repaint();
+        pending.setVisible(pending.getComponentCount() > 0); pending.revalidate(); pending.repaint();
     }
     void chooseImages() {
         JFileChooser chooser = new JFileChooser(); chooser.setMultiSelectionEnabled(true);
@@ -602,15 +670,35 @@ final class SessionPane extends JPanel {
     String token() {
         String before = composer.getText().substring(0, composer.getCaretPosition()); int space = Math.max(before.lastIndexOf(' '), before.lastIndexOf('\n')); return before.substring(space + 1);
     }
-    void autoComplete() { String token = token(); if (token.equals("/") || token.equals("@")) complete(); }
+    void autoComplete() {
+        String token = token(); if (token.startsWith("/") && !composer.getText().substring(0, composer.getCaretPosition()).contains(" ") || token.startsWith("@")) complete(); else completionPopup.setVisible(false);
+    }
     void complete() {
-        String token = token();
+        String token = token(); completionToken = token; long generation = ++completionGeneration;
         if (token.startsWith("/")) {
-            List<Object> match = commands.stream().filter(c -> str(obj(c).get("name")).startsWith(token.substring(1))).toList();
-            desktop.pick("Slash commands", match, c -> "/" + str(obj(c).get("name")) + " " + str(obj(c).get("args")) + " · " + str(obj(c).get("description")), c -> insertCompletion(token, "/" + str(obj(c).get("name"))));
+            List<String> matches = commands.stream().filter(c -> str(obj(c).get("name")).startsWith(token.substring(1))).map(c -> "/" + str(obj(c).get("name")) + "  ·  " + str(obj(c).get("description"))).toList();
+            showCompletions(matches);
         } else if (token.startsWith("@")) {
-            rpc("thread/files", map("query", token.substring(1), "limit", 100), v -> desktop.pick("Workspace files", Json.list(obj(v).get("files")), c -> str(obj(c).get("path")) + (yes(obj(c).get("directory")) ? "/" : ""), c -> insertCompletion(token, "@" + str(obj(c).get("path")))));
+            rpc("thread/files", map("query", token.substring(1), "limit", 40), v -> { if (generation == completionGeneration && token.equals(token())) showCompletions(Json.list(obj(v).get("files")).stream().map(c -> "@" + str(obj(c).get("path"))).toList()); });
         } else desktop.palette();
+    }
+    void showCompletions(List<String> entries) {
+        completionEntries.clear(); entries.forEach(completionEntries::addElement); if (entries.isEmpty()) { completionPopup.setVisible(false); return; }
+        completionList.setSelectedIndex(0); completionList.setFont(Ui.body(13)); completionList.setFixedCellHeight(32);
+        if (completionPopup.getComponentCount() == 0) {
+            completionPopup.setFocusable(false); JScrollPane scroll = new JScrollPane(completionList); scroll.setBorder(BorderFactory.createEmptyBorder()); scroll.setPreferredSize(new Dimension(500, 192)); completionPopup.add(scroll);
+            completionList.addMouseListener(new MouseAdapter() { public void mouseClicked(MouseEvent e) { chooseCompletion(); } });
+            for (String direction : List.of("UP", "DOWN")) { composer.getInputMap().put(KeyStroke.getKeyStroke(direction), "complete-" + direction); composer.getActionMap().put("complete-" + direction, new AbstractAction() { public void actionPerformed(ActionEvent e) {
+                if (completionPopup.isVisible()) { int index = Math.max(0, Math.min(completionEntries.size() - 1, completionList.getSelectedIndex() + (direction.equals("DOWN") ? 1 : -1))); completionList.setSelectedIndex(index); completionList.ensureIndexIsVisible(index); }
+                else { Action original = composer.getActionMap().get(direction.equals("DOWN") ? "caret-down" : "caret-up"); if (original != null) original.actionPerformed(e); }
+            } }); }
+            composer.getInputMap().put(KeyStroke.getKeyStroke("ESCAPE"), "completion-close"); composer.getActionMap().put("completion-close", new AbstractAction() { public void actionPerformed(ActionEvent e) { if (completionPopup.isVisible()) completionPopup.setVisible(false); else interrupt(false); } });
+        }
+        Ui.restyle(completionPopup); ((JScrollPane)completionPopup.getComponent(0)).setPreferredSize(new Dimension(Math.min(500, composer.getWidth()), Math.min(192, entries.size() * 32))); completionPopup.pack();
+        if (composer.isShowing()) { completionPopup.show(composer, 0, -Math.min(200, entries.size() * 32 + 8)); composer.requestFocusInWindow(); }
+    }
+    void chooseCompletion() {
+        String chosen = completionList.getSelectedValue(); completionPopup.setVisible(false); if (chosen != null) insertCompletion(completionToken, chosen.split("  ·  ", 2)[0]);
     }
     void insertCompletion(String old, String text) {
         int caret = composer.getCaretPosition(); String content = composer.getText(); int start = Math.max(0, caret - old.length());

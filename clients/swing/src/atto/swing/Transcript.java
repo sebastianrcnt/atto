@@ -40,11 +40,11 @@ final class Transcript extends JPanel {
     Transcript(SessionPane pane) {
         super(new BorderLayout()); this.pane = pane;
         rows.setLayout(new BoxLayout(rows, BoxLayout.Y_AXIS));
-        scroll.getVerticalScrollBar().setUnitIncrement(22);
+        rows.setBackground(Ui.canvas); scroll.setBorder(BorderFactory.createEmptyBorder()); scroll.getViewport().setBackground(Ui.canvas); scroll.getVerticalScrollBar().setUnitIncrement(22);
         scroll.addMouseWheelListener(e -> { if (e.getWheelRotation() < 0) { following = false; userScrollVersion++; bottom.setVisible(true); } });
         scroll.getVerticalScrollBar().addMouseListener(new MouseAdapter() { public void mousePressed(MouseEvent e) { following = false; userScrollVersion++; bottom.setVisible(true); } });
         scroll.getVerticalScrollBar().addAdjustmentListener(e -> {
-            if (adjusting) return;
+            if (adjusting || !scroll.getVerticalScrollBar().getValueIsAdjusting()) return;
             JScrollBar bar = scroll.getVerticalScrollBar();
             following = bar.getValue() + bar.getVisibleAmount() >= bar.getMaximum() - 35;
             bottom.setVisible(!following);
@@ -56,7 +56,7 @@ final class Transcript extends JPanel {
     void update(List<Object> items) { this.items = items; dirty = true; }
     void invalidateRows() { fingerprints.clear(); dirty = true; }
     void close() { timer.stop(); }
-    void loadEarlier() { page += 200; fingerprints.clear(); dirty = true; }
+    void loadEarlier() { following = false; userScrollVersion++; page += 200; fingerprints.clear(); dirty = true; }
     void bottom() { following = true; bottom.setVisible(false); SwingUtilities.invokeLater(() -> scroll.getVerticalScrollBar().setValue(scroll.getVerticalScrollBar().getMaximum())); }
     void render() {
         dirty = false; int scrollVersion = userScrollVersion; boolean follow = following; int oldScroll = scroll.getVerticalScrollBar().getValue(); adjusting = true;
@@ -84,64 +84,82 @@ final class Transcript extends JPanel {
     }
     void fill(JPanel row, Map<String, Object> item) {
         String id = str(item.get("id")), kind = str(item.get("type")); boolean open = expanded.contains(id);
-        row.setBorder(BorderFactory.createCompoundBorder(BorderFactory.createMatteBorder(0, 0, 1, 0, UIManager.getColor("Separator.foreground")), BorderFactory.createEmptyBorder(10, 12, 12, 12)));
+        int margin = Math.max(28, (scroll.getViewport().getWidth() - 790) / 2);
+        row.setBackground(Ui.canvas); row.setBorder(BorderFactory.createEmptyBorder(8, margin, 8, margin));
         row.setAlignmentX(Component.LEFT_ALIGNMENT);
-        JPanel header = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 0));
-        String title = switch (kind) {
-            case "userMessage" -> "You"; case "agentMessage" -> "atto"; case "reasoning" -> "Reasoning";
-            case "commandExecution" -> (yes(item.get("shell")) ? "! " : "Tool · ") + str(item.get("description"));
-            case "branchSummary" -> "Branch summary"; case "compaction" -> "Compaction · " + num(item.get("tokensBefore")) + " → " + num(item.get("tokensAfter"));
-            case "goalStatus" -> "Goal · " + str(item.get("goalStatus"));
-            default -> str(item.getOrDefault("title", kind));
-        };
-        JLabel label = new JLabel(title + " · " + str(item.get("status")) + (num(item.get("durationMs")) > 0 ? " · " + num(item.get("durationMs")) / 1000.0 + "s" : ""));
-        label.setFont(label.getFont().deriveFont(Font.BOLD)); header.add(label);
-        if (kind.equals("reasoning") || kind.equals("commandExecution") || kind.equals("extText")) header.add(Desktop.button(open ? "Collapse" : "Expand", () -> { if (!expanded.remove(id)) expanded.add(id); dirty = true; }));
-        header.add(Desktop.button("Copy", () -> Desktop.copy(kind.equals("commandExecution") ? str(item.get("command")) + "\n" + str(item.get("output")) : str(item.get("text")))));
-        row.add(header, BorderLayout.NORTH); JPanel body = new JPanel(); body.setLayout(new BoxLayout(body, BoxLayout.Y_AXIS));
-        String entry = str(item.get("entryId"));
-        JPopupMenu menu = new JPopupMenu();
-        menu.add(new JMenuItem(new AbstractAction("Fork from this message") { public void actionPerformed(ActionEvent e) { if (!entry.isEmpty()) Panels.fork(pane, entry); } }));
-        menu.add(new JMenuItem(new AbstractAction("Label this entry") { public void actionPerformed(ActionEvent e) { if (!entry.isEmpty()) pane.desktop.input("Entry label", "", text -> pane.rpc("thread/setLabel", map("entryId", entry, "label", text), v -> {})); } }));
-        row.setComponentPopupMenu(menu); header.setComponentPopupMenu(menu);
-        if (kind.equals("commandExecution")) {
-            body.add(plain(str(item.get("command")), true, false));
-            String output = str(item.get("output"));
-            if (!open) {
-                String[] lines = output.split("\n", -1); if (lines.length > 12) output = String.join("\n", Arrays.copyOfRange(lines, lines.length - 12, lines.length));
+        String entry = str(item.get("entryId")), title = str(item.get("title"));
+        String text = str(obj(item.get("display")).getOrDefault("text", item.getOrDefault("text", "")));
+        String copyText = text; JPopupMenu menu = new JPopupMenu();
+        menu.add(new JMenuItem(new AbstractAction("Copy") { public void actionPerformed(ActionEvent e) { Desktop.copy("commandExecution".equals(kind) ? commandOutput(item) : copyText); } }));
+        if (!entry.isEmpty()) {
+            menu.addSeparator();
+            menu.add(new JMenuItem(new AbstractAction("Fork from this message") { public void actionPerformed(ActionEvent e) { Panels.fork(pane, entry); } }));
+            menu.add(new JMenuItem(new AbstractAction("Label this entry") { public void actionPerformed(ActionEvent e) { pane.desktop.input("Entry label", "", label -> pane.rpc("thread/setLabel", map("entryId", entry, "label", label), v -> {})); } }));
+        }
+        JPanel body = new JPanel(); body.setOpaque(false); body.setLayout(new BoxLayout(body, BoxLayout.Y_AXIS));
+        if (kind.equals("userMessage")) {
+            JPanel bubble = Ui.rounded(Ui.surface, 18); bubble.setLayout(new BorderLayout()); bubble.setBorder(BorderFactory.createEmptyBorder(12, 16, 12, 16));
+            bubble.add(plain(text, false, false));
+            JPanel align = new JPanel(new BorderLayout()); align.setOpaque(false); align.setBorder(BorderFactory.createEmptyBorder(0, Math.max(50, (scroll.getViewport().getWidth() - 2 * margin) / 5), 0, 0));
+            align.add(bubble); body.add(align);
+        } else if (kind.equals("reasoning")) {
+            String duration = seconds(num(item.get("durationMs")));
+            body.add(disclosure((open ? "▾ " : "▸ ") + ("inProgress".equals(item.get("status")) ? "Thinking…" : "Thought" + (duration.isEmpty() ? "" : " for " + duration)), id));
+            if (open) body.add(plain(text, false, false));
+        } else if (kind.equals("commandExecution")) {
+            boolean running = "inProgress".equals(item.get("status"));
+            String result = running ? "◌" : num(item.get("exitCode")) != 0 || !str(item.get("error")).isEmpty() ? "✕" : "✓";
+            JPanel head = new JPanel(new BorderLayout(10, 0)); head.setOpaque(false); head.setAlignmentX(Component.LEFT_ALIGNMENT);
+            JLabel icon = new JLabel(new Ui.VectorIcon("terminal", 16)); icon.setForeground(Ui.muted); head.add(icon, BorderLayout.WEST);
+            String command = str(item.get("command")).replace('\n', ' '); if (command.length() > 64) command = command.substring(0, 64) + "…";
+            String description = str(item.get("description")); if (description.isEmpty()) description = yes(item.get("shell")) ? "Shell" : "Run command";
+            JLabel name = new JLabel("<html><span style='color:" + color(Ui.muted) + "'>" + (open ? "▾ " : "▸ ") + Markdown.escape(description) + "</span> &nbsp; <code>" + Markdown.escape(command) + "</code></html>");
+            head.add(name); JLabel state = Ui.muted(seconds(num(item.get("durationMs"))) + "  " + (running ? "" : result)); if (running) state.setIcon(new Ui.Spinner(14)); head.add(state, BorderLayout.EAST);
+            head.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)); head.setFocusable(true); Desktop.bind(head, "ENTER", "toggle", () -> toggle(id)); Desktop.bind(head, "SPACE", "toggle-space", () -> toggle(id));
+            MouseAdapter toggle = new MouseAdapter() { public void mouseClicked(MouseEvent e) { if (SwingUtilities.isLeftMouseButton(e)) { head.requestFocusInWindow(); toggle(id); } } };
+            head.addMouseListener(toggle); name.addMouseListener(toggle); body.add(head);
+            if (open) {
+                JPanel output = Ui.rounded(Ui.surface, 12); output.setLayout(new BorderLayout(0, 8)); output.setBorder(BorderFactory.createEmptyBorder(12, 12, 12, 12));
+                output.add(plain(clip(commandOutput(item), 65536), true, false));
+                JPanel details = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0)); details.setOpaque(false);
+                String error = str(item.get("error")); if (!error.isEmpty()) details.add(Ui.muted(error));
+                if (num(item.get("exitCode")) != 0) details.add(Ui.muted("Exit " + num(item.get("exitCode"))));
+                if (num(item.get("job")) > 0) details.add(Ui.muted("Background job #" + num(item.get("job"))));
+                if (num(item.get("dropped")) > 0 || yes(item.get("truncated"))) details.add(Ui.muted("Output clipped"));
+                details.add(Desktop.button("Show full output", () -> pane.rpc("item/output", map("itemId", id), v -> pane.desktop.text("Command output", str(obj(v).get("output")), null))));
+                output.add(details, BorderLayout.SOUTH); body.add(Box.createVerticalStrut(10)); body.add(output);
             }
-            body.add(plain(clip(output, open ? 65536 : 5000), true, true));
-            List<String> details = new ArrayList<>();
-            for (String key : List.of("exitCode", "job", "background", "dropped", "error", "resultText", "reason", "cap")) if (item.containsKey(key)) details.add(key + ": " + str(item.get(key)));
-            for (String key : List.of("timedOut", "canceled", "excluded", "truncated", "pending")) if (yes(item.get(key))) details.add(key);
-            body.add(plain(String.join(" · ", details), false, false));
-            body.add(Desktop.button("Show full available output", () -> pane.rpc("item/output", map("itemId", id), v -> pane.desktop.text("Command output" + (yes(obj(v).get("truncated")) ? " (clipped by server)" : ""), str(obj(v).get("output")), null))));
-        } else if (!kind.equals("reasoning") || open) {
-            Map<String, Object> display = obj(item.get("display"));
-            String text = display.containsKey("text") ? str(display.get("text")) : str(item.get("text"));
-            if (text.isEmpty() && kind.equals("goalStatus")) text = Panels.pretty(item.get("goalState"));
-            if (text.isEmpty() && !kind.equals("agentMessage")) text = Panels.pretty(item);
+        } else if (kind.equals("notice") || kind.equals("event") || kind.equals("hook") || kind.equals("compaction")) {
+            boolean loaded = title.toLowerCase(Locale.ROOT).contains("loaded") || "loaded".equals(item.get("level"));
+            boolean details = loaded || text.contains("\n") || text.length() > 180;
+            String summary = loaded ? loadedSummary(item) : title.isEmpty() ? text.lines().findFirst().orElse("") : title;
+            if (kind.equals("compaction")) summary = "Context compacted · " + num(item.get("tokensBefore")) + " → " + num(item.get("tokensAfter")) + " tokens";
+            if (summary.length() > 150) summary = summary.substring(0, 150) + "…";
+            JComponent notice = details ? disclosure((open ? "▾ " : "▸ ") + summary, id) : Ui.muted(summary); if ("error".equals(item.get("level"))) notice.setForeground(Ui.color(0xd65a68)); else if ("warning".equals(item.get("level"))) notice.setForeground(Ui.color(0xb28035)); body.add(notice);
+            if (open && details) body.add(plain(text, false, false));
+        } else {
+            if (kind.equals("goalStatus") && text.isEmpty()) text = str(obj(item.get("goalState")).get("objective"));
+            if (!title.isEmpty() && !kind.equals("agentMessage")) body.add(Ui.muted(title));
             String shown = clip(text, 65536);
-            if (List.of("notice", "event", "goal", "hook", "goalStatus").contains(kind)) {
-                body.add(plain(shown, "loaded".equals(item.get("level")), false));
-            } else if (kind.equals("extText") && !str(item.get("lang")).isEmpty()) {
-                String[] lines = shown.split("\n", -1); int preview = (int)num(item.get("preview"));
-                if (!open && preview > 0 && lines.length > preview) shown = String.join("\n", Arrays.copyOf(lines, preview)) + "\n… expand for more";
-                body.add(plain(shown, true, "diff".equals(item.get("lang"))));
-            } else for (Markdown.Block block : Markdown.parse(shown)) {
+            if (kind.equals("extText") && !str(item.get("lang")).isEmpty()) body.add(plain(shown, true, "diff".equals(item.get("lang"))));
+            else for (Markdown.Block block : Markdown.parse(shown)) {
                 if (block.kind().equals("code")) {
-                    JPanel code = new JPanel(new BorderLayout()); code.add(plain(block.text(), true, block.language().equals("diff")), BorderLayout.CENTER);
-                    code.add(Desktop.button("Copy " + block.language(), () -> Desktop.copy(block.text())), BorderLayout.NORTH); body.add(code);
+                    JPanel code = Ui.rounded(Ui.surface, 12); code.setLayout(new BorderLayout(0, 8)); code.setBorder(BorderFactory.createEmptyBorder(10, 14, 12, 14)); code.setAlignmentX(Component.LEFT_ALIGNMENT);
+                    JPanel top = new JPanel(new BorderLayout()); top.setOpaque(false); top.add(Ui.muted(block.language()), BorderLayout.WEST);
+                    JButton copy = Ui.icon("copy", "Copy code", () -> Desktop.copy(block.text())); copy.setVisible(false); top.add(copy, BorderLayout.EAST);
+                    JPopupMenu codeMenu = new JPopupMenu(); JMenuItem copyCode = new JMenuItem("Copy code"); copyCode.addActionListener(e -> Desktop.copy(block.text())); codeMenu.add(copyCode); code.setComponentPopupMenu(codeMenu);
+                    code.add(top, BorderLayout.NORTH); code.add(plain(block.text().stripTrailing(), true, block.language().equals("diff"))); hoverCopy(code, code, copy); body.add(code); body.add(Box.createVerticalStrut(8));
                 } else {
                     String html = Markdown.inline(block.text());
                     if (block.kind().equals("heading")) html = "<h" + block.level() + ">" + html + "</h" + block.level() + ">";
-                    body.add(html(html));
+                    if (block.kind().equals("list")) html = html.replaceFirst("^[-*+] ", "• &nbsp;");
+                    if (block.kind().equals("quote")) html = "<span style='color:" + color(Ui.muted) + "'>│ &nbsp;" + html + "</span>";
+                    body.add(html(html)); if (!block.kind().equals("list")) body.add(Box.createVerticalStrut(7));
                 }
             }
-            String fullText = text;
-            if (text.length() > 65536) body.add(Desktop.button("Show all text", () -> pane.desktop.text(title, fullText, null)));
-            for (Object s : Json.list(display.get("statuses"))) body.add(plain(str(obj(s).get("ext")) + ": " + str(obj(s).get("text")), false, false));
+            if (text.length() > 65536) { String full = text; body.add(Desktop.button("Show all text", () -> pane.desktop.text("Message", full, null))); }
         }
+        for (Object status : Json.list(obj(item.get("display")).get("statuses"))) body.add(Ui.muted(str(obj(status).get("text"))));
         int index = 0;
         for (Object value : Json.list(item.get("images"))) {
             Map<String, Object> image = obj(value); String key = id + ":" + index + ":" + str(image.get("file")); int imageIndex = index++;
@@ -162,8 +180,31 @@ final class Transcript extends JPanel {
             }), BorderLayout.SOUTH); body.add(picture);
             if (!imageCache.containsKey(key) && !loadingImages.contains(key)) loadImage(key, id, imageIndex);
         }
-        row.add(body, BorderLayout.CENTER);
+        for (Component child : body.getComponents()) if (child instanceof JComponent component) { component.setAlignmentX(Component.LEFT_ALIGNMENT); component.setMaximumSize(new Dimension(Integer.MAX_VALUE, component.getPreferredSize().height)); }
+        row.add(body, BorderLayout.CENTER); installMenu(row, menu);
+
         row.setMaximumSize(new Dimension(Integer.MAX_VALUE, row.getPreferredSize().height));
+    }
+    static void hoverCopy(JComponent component, JComponent code, JButton copy) {
+        component.addMouseListener(new MouseAdapter() { public void mouseEntered(MouseEvent e) { copy.setVisible(true); } public void mouseExited(MouseEvent e) { SwingUtilities.invokeLater(() -> { if (code.getMousePosition(true) == null) copy.setVisible(false); }); } });
+        for (Component child : component.getComponents()) if (child instanceof JComponent nested) hoverCopy(nested, code, copy);
+    }
+    static String commandOutput(Map<String, Object> item) {
+        String output = str(item.get("output")); return output.isEmpty() ? str(item.get("resultText")) : output;
+    }
+    static String seconds(long ms) { return ms <= 0 ? "" : String.format(Locale.ROOT, "%.1fs", ms / 1000.0); }
+    String loadedSummary(Map<String, Object> item) {
+        Map<String, Object> context = pane.loadedContext;
+        return "Loaded · " + Json.list(context.get("skills")).size() + " skills · " + Json.list(context.get("extensions")).size() + " extensions · " + str(pane.info.getOrDefault("modelName", pane.info.get("model")));
+    }
+    void toggle(String id) { if (!expanded.remove(id)) expanded.add(id); dirty = true; }
+    JComponent disclosure(String title, String id) {
+        JLabel label = Ui.muted(title); label.setBorder(BorderFactory.createEmptyBorder(2, 0, 2, 0)); label.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+        label.setFocusable(true); Desktop.bind(label, "ENTER", "toggle", () -> toggle(id)); Desktop.bind(label, "SPACE", "toggle-space", () -> toggle(id));
+        label.addMouseListener(new MouseAdapter() { public void mouseClicked(MouseEvent e) { if (SwingUtilities.isLeftMouseButton(e)) toggle(id); } }); return label;
+    }
+    static void installMenu(JComponent c, JPopupMenu menu) {
+        if (c.getComponentPopupMenu() == null) c.setComponentPopupMenu(menu); for (Component child : c.getComponents()) if (child instanceof JComponent jc) installMenu(jc, c.getComponentPopupMenu());
     }
     static String clip(String text, int max) { return text.length() <= max ? text : text.substring(0, max) + "\n… clipped · use full-output viewer"; }
     JComponent plain(String text, boolean mono, boolean diff) {
@@ -176,13 +217,13 @@ final class Transcript extends JPanel {
             return html(html.append("</pre>").toString());
         }
         JTextArea area = new JTextArea(text); area.setEditable(false); area.setLineWrap(true); area.setWrapStyleWord(!mono);
-        area.setFont(new Font(mono ? Font.MONOSPACED : Font.SANS_SERIF, Font.PLAIN, pane.desktop.fontSize));
-        area.setBackground(UIManager.getColor("Panel.background")); area.setAlignmentX(Component.LEFT_ALIGNMENT); return area;
+        area.setFont(mono ? new Font(Font.MONOSPACED, Font.PLAIN, Math.max(12, pane.desktop.fontSize - 1)) : Ui.body(pane.desktop.fontSize));
+        area.setOpaque(false); area.setForeground(Ui.text); area.setAlignmentX(Component.LEFT_ALIGNMENT); return area;
     }
     JEditorPane html(String body) {
-        JEditorPane area = new JEditorPane("text/html", "<html><body style='font-family:sans-serif;font-size:" + pane.desktop.fontSize + "pt;color:" + color(UIManager.getColor("Label.foreground")) + "'>" + body + "</body></html>");
-        area.setEditable(false); area.setBackground(UIManager.getColor("Panel.background")); area.setAlignmentX(Component.LEFT_ALIGNMENT);
-        int width = Math.max(300, scroll.getViewport().getWidth() - 30); area.setSize(width, Short.MAX_VALUE);
+        JEditorPane area = new JEditorPane(); area.putClientProperty(JEditorPane.W3C_LENGTH_UNITS, true); area.putClientProperty(JEditorPane.HONOR_DISPLAY_PROPERTIES, true); area.setFont(Ui.body(pane.desktop.fontSize)); area.setContentType("text/html"); area.setText( "<html><head><style>body { margin:0; } h1 {font-size:22px; margin:8px 0;} h2 {font-size:19px; margin:6px 0;} h3 {font-size:16px;} code {font-family:monospace;} a {color:" + color(Ui.accent) + ";}</style></head><body style='font-family:sans-serif;font-size:" + pane.desktop.fontSize + "px;color:" + color(UIManager.getColor("Label.foreground")) + "'>" + body + "</body></html>");
+        area.setEditable(false); area.setOpaque(false); area.setForeground(Ui.text); area.setAlignmentX(Component.LEFT_ALIGNMENT);
+        int width = Math.max(260, scroll.getViewport().getWidth() - 2 * Math.max(28, (scroll.getViewport().getWidth() - 790) / 2) - 8); area.setSize(width, Short.MAX_VALUE);
         area.setPreferredSize(new Dimension(width, area.getPreferredSize().height));
         area.addHyperlinkListener(e -> {
             if (e.getEventType() == HyperlinkEvent.EventType.ACTIVATED && Markdown.safeLink(e.getDescription()))
