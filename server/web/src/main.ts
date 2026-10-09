@@ -1,8 +1,28 @@
 // New revision-3 client. Beautiful UI Chat/Thinking/Streaming Text/Tool Chips/
 // Prompt Bar adaptations; Vercel Queue/Checkpoint/Context/Agent/Terminal are
 // behavior references only. No React, remote scripts or frozen wire shapes.
-import { Data, Tree, RPC, View, catalog, consumeToken, imageResource, clean } from './core';
-import { el, button, markdown, code, Local, render, validTree } from './elements';
+import {
+  Data,
+  Tree,
+  RPC,
+  View,
+  catalog,
+  consumeToken,
+  imageResource,
+  clean,
+  plainMarkdown,
+  relativeTime,
+  sessionState,
+} from './core';
+import {
+  el,
+  button,
+  markdown,
+  code,
+  Local,
+  render,
+  validTree,
+} from './elements';
 const root = document.getElementById('app')!;
 const views = new Map<string, View>();
 const buffers = new Map<string, Data[]>();
@@ -16,7 +36,7 @@ const paneStates = new Map<string, { scroll: number; width?: number }>();
 let active = '',
   online = false,
   sidebar = false,
-  archived = false,
+  filter = 'active',
   models: Data[] = [],
   inventory: Data[] = [],
   rpc: RPC,
@@ -32,7 +52,9 @@ let focusHint = '';
 const originals = new Set<string>();
 const imageCache = new Map<string, Promise<string>>();
 let reconnectTimer: ReturnType<typeof setTimeout>;
-const token = consumeToken(location, sessionStorage, (url) => history.replaceState(null, '', url));
+const token = consumeToken(location, sessionStorage, (url) =>
+  history.replaceState(null, '', url),
+);
 function warn(e: any) {
   notice = clean(e?.message || e);
   clearTimeout(noticeTimer);
@@ -75,13 +97,14 @@ async function settings(method: string, p: Data) {
   schedule();
 }
 async function refreshInventory() {
-  const requestedArchived = archived;
+  const requestedFilter = filter;
   const r = await rpc.call('thread/list', {
-    archived: requestedArchived,
+    archived: requestedFilter === 'archived',
+    includeArchived: requestedFilter === 'all',
     includeAgents: true,
-    includeClosedAgents: archived,
+    includeClosedAgents: requestedFilter !== 'active',
   });
-  if (requestedArchived !== archived) return;
+  if (requestedFilter !== filter) return;
   inventory = r.threads || [];
   schedule();
 }
@@ -111,8 +134,12 @@ async function hydrate(id: string, method = 'thread/read', extra: Data = {}) {
     for (const key of locals.keys())
       if (
         key.startsWith(s.threadId + '\0') &&
-        !s.ui?.instances?.some((i: Data) => key === s.threadId + '\0' + i.site + '\0' + i.id) &&
-        !v.items.some((i) => key.endsWith('\0' + i.id) || key.endsWith('\0' + i.uiId))
+        !s.ui?.instances?.some(
+          (i: Data) => key === s.threadId + '\0' + i.site + '\0' + i.id,
+        ) &&
+        !v.items.some(
+          (i) => key.endsWith('\0' + i.id) || key.endsWith('\0' + i.uiId),
+        )
       )
         locals.delete(key);
     views.set(s.threadId, v);
@@ -150,8 +177,12 @@ async function open(row?: Data) {
       for (const key of locals.keys())
         if (
           key.startsWith(s.threadId + '\0') &&
-          !s.ui?.instances?.some((i: Data) => key === s.threadId + '\0' + i.site + '\0' + i.id) &&
-          !v.items.some((i) => key.endsWith('\0' + i.id) || key.endsWith('\0' + i.uiId))
+          !s.ui?.instances?.some(
+            (i: Data) => key === s.threadId + '\0' + i.site + '\0' + i.id,
+          ) &&
+          !v.items.some(
+            (i) => key.endsWith('\0' + i.id) || key.endsWith('\0' + i.uiId),
+          )
         )
           locals.delete(key);
       views.set(s.threadId, v);
@@ -173,7 +204,8 @@ async function detach(id: string) {
   } finally {
     views.delete(id);
     buffers.delete(id);
-    for (const key of locals.keys()) if (key.startsWith(id + '\0')) locals.delete(key);
+    for (const key of locals.keys())
+      if (key.startsWith(id + '\0')) locals.delete(key);
     if (active === id) active = views.keys().next().value || '';
     paneStates.delete(id);
     schedule();
@@ -192,7 +224,8 @@ function event(m: Data) {
     return;
   }
   if (m.method === 'events/reset' && !id) {
-    for (const [tid] of views) if (!buffers.has(tid)) void run(() => hydrate(tid));
+    for (const [tid] of views)
+      if (!buffers.has(tid)) void run(() => hydrate(tid));
     return;
   }
   if (buffers.has('starting')) {
@@ -223,7 +256,9 @@ function event(m: Data) {
 function connect() {
   clearTimeout(reconnectTimer);
   socket = new WebSocket(
-    (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws',
+    (location.protocol === 'https:' ? 'wss://' : 'ws://') +
+      location.host +
+      '/ws',
     ['atto.rpc.v3', ...(token ? ['atto.auth.' + token] : [])],
   );
   rpc = new RPC((s) => {
@@ -246,7 +281,12 @@ function connect() {
         capabilities: {
           interactive: true,
           images: true,
-          ui: { version: 1, surface: 'web', width: columns(), elements: catalog },
+          ui: {
+            version: 1,
+            surface: 'web',
+            width: columns(),
+            elements: catalog,
+          },
         },
       });
       clientId = init.clientId;
@@ -295,7 +335,11 @@ window.onresize = () => {
   clearTimeout(resizeTimer);
   resizeTimer = setTimeout(() => {
     if (online)
-      rpc.notify('ui/capabilities', { surface: 'web', width: columns(), elements: catalog });
+      rpc.notify('ui/capabilities', {
+        surface: 'web',
+        width: columns(),
+        elements: catalog,
+      });
     schedule();
   }, 150);
 };
@@ -344,15 +388,21 @@ function image(resource: string, img: HTMLImageElement, v: View) {
   const k = v.info.threadId + '\0' + resource;
   let pending = imageCache.get(k);
   if (!pending) {
-    pending = call('item/image', { ...ref, offline: !!v.info.offline }, v.info.threadId).then(
-      (r) => {
-        if (!['image/png', 'image/jpeg', 'image/gif', 'image/webp'].includes(r.mimeType))
-          throw Error('Unsupported image');
-        const bytes = Uint8Array.from(atob(r.data), (c) => c.charCodeAt(0));
-        if (bytes.length > 10 << 20) throw Error('Image too large');
-        return URL.createObjectURL(new Blob([bytes], { type: r.mimeType }));
-      },
-    );
+    pending = call(
+      'item/image',
+      { ...ref, offline: !!v.info.offline },
+      v.info.threadId,
+    ).then((r) => {
+      if (
+        !['image/png', 'image/jpeg', 'image/gif', 'image/webp'].includes(
+          r.mimeType,
+        )
+      )
+        throw Error('Unsupported image');
+      const bytes = Uint8Array.from(atob(r.data), (c) => c.charCodeAt(0));
+      if (bytes.length > 10 << 20) throw Error('Image too large');
+      return URL.createObjectURL(new Blob([bytes], { type: r.mimeType }));
+    });
     imageCache.set(k, pending);
     while (imageCache.size > 40) {
       const key = imageCache.keys().next().value!;
@@ -369,7 +419,9 @@ function image(resource: string, img: HTMLImageElement, v: View) {
       img.src = url;
     },
     () => {
-      img.replaceWith(el('span', '[image unavailable: ' + img.alt + ']', 'muted'));
+      img.replaceWith(
+        el('span', '[image unavailable: ' + img.alt + ']', 'muted'),
+      );
     },
   );
 }
@@ -380,7 +432,8 @@ function uiTree(v: View, i: Data, item?: Data) {
     (!item ||
       !!item.uiDisplay?.actionsEnabled ||
       (item.type === 'uiBlock' && !!item.actionsEnabled));
-  if (item && i.tree && !validTree(i.tree, i.site, i.id)) return nativeItem(v, item);
+  if (item && i.tree && !validTree(i.tree, i.site, i.id))
+    return nativeItem(v, item);
   const tree = render(i.tree, {
     site: i.site,
     id: i.id,
@@ -408,7 +461,9 @@ function uiTree(v: View, i: Data, item?: Data) {
           throw e;
         }
       }),
-    engine: item ? (n) => nativeItem(v, { ...item, ...n.props.overrides }, false) : undefined,
+    engine: item
+      ? (n) => nativeItem(v, { ...item, ...n.props.overrides }, false)
+      : undefined,
     image: (r, img) => image(r, img, v),
   });
   tree.dataset.scope = scope;
@@ -424,20 +479,25 @@ function itemSite(i: Data) {
         : 'assistantMessage';
 }
 function nativeItem(v: View, i: Data, meta = true) {
-  const e = el('article', null, 'item ' + (i.type === 'userMessage' ? 'user' : i.type));
+  const e = el(
+    'article',
+    null,
+    'item ' + (i.type === 'userMessage' ? 'user' : i.type),
+  );
   e.dataset.item = i.id;
-  if (meta) {
-    const head = el(
-      'header',
-      i.type === 'userMessage' ? 'You' : i.type === 'agentMessage' ? 'Atto' : i.type,
-    );
-    if (i.entryId) {
+  if (meta && ['userMessage', 'agentMessage'].includes(i.type)) {
+    const head = el('header', i.type === 'userMessage' ? 'You' : 'Atto');
+    if (i.type === 'userMessage' && i.entryId) {
       head.append(
         button(
           'Fork',
           () =>
             void run(async () => {
-              const r = await call('thread/fork', { entryId: i.entryId }, v.info.threadId);
+              const r = await call(
+                'thread/fork',
+                { entryId: i.entryId },
+                v.info.threadId,
+              );
               await open({ threadId: r.threadId });
               if (r.input) drafts.set(active, r.input);
               recoverImages(active, r.images || []);
@@ -447,26 +507,64 @@ function nativeItem(v: View, i: Data, meta = true) {
         ),
       );
     }
+    head.querySelector('button')?.classList.add('fork');
     e.append(head);
   }
   if (i.type === 'commandExecution') {
     const details = el('details', null, 'tool-chip');
     const key = v.info.threadId + '\0tool\0' + i.id;
     const l = siteLocal(v.info.threadId, 'native', i.id);
-    details.open = l.open.get(key) ?? i.status === 'inProgress';
-    const title = el(
-      'summary',
-      (i.status === 'inProgress' ? '◌ ' : '') +
-        (i.description || i.command || 'Command') +
-        (i.exitCode != null ? ' · exit ' + i.exitCode : '') +
-        (i.durationMs ? ' · ' + (i.durationMs / 1000).toFixed(1) + 's' : ''),
+    details.open = i.status === 'inProgress' || (l.open.get(key) ?? false);
+    const title = el('summary');
+    const label = el(
+      'span',
+      (i.description === 'user command' ? 'Shell command' : i.description) ||
+        i.command?.split('\n')[0] ||
+        'Run command',
+      'tool-title',
     );
+    title.append(
+      el(
+        'span',
+        null,
+        'state-dot ' +
+          (i.status === 'inProgress'
+            ? 'busy'
+            : i.exitCode
+              ? 'error'
+              : 'success'),
+      ),
+      label,
+    );
+    const metrics = [
+      i.exitCode != null ? 'exit ' + i.exitCode : 'Running',
+      i.durationMs != null ? (i.durationMs / 1000).toFixed(1) + 's' : '',
+    ]
+      .filter(Boolean)
+      .join(' · ');
+    title.append(el('small', metrics, 'tool-metrics'));
+    const output = i.output || '';
+    const expanded = l.open.get('output') || false;
+    const lines = output.split('\n');
+    const clipped = !expanded && (lines.length > 18 || output.length > 4000);
+    const preview = clipped ? lines.slice(-18).join('\n').slice(-4000) : output;
     details.append(
       title,
       code(i.command || '', { language: i.shell ? 'shell' : 'bash' }),
-      code(i.output || ''),
+      code(preview),
     );
-    details.ontoggle = () => l.open.set(key, details.open);
+    // Only user disclosure choices persist. Browser toggle events also fire on
+    // insertion; remembering those accidentally kept completed tools open.
+    title.onclick = () => {
+      if (i.status !== 'inProgress') l.open.set(key, !details.open);
+    };
+    if (clipped || expanded)
+      details.append(
+        button(expanded ? 'Show less' : 'Show more', () => {
+          l.open.set('output', !expanded);
+          schedule();
+        }),
+      );
     if (i.fullOutput || i.truncated || i.dropped)
       details.append(
         button(
@@ -478,7 +576,10 @@ function nativeItem(v: View, i: Data, meta = true) {
                 { itemId: i.id, offline: !!v.info.offline },
                 v.info.threadId,
               );
-              showModal('Command output', code(r.output + (r.truncated ? '\n[truncated]' : '')));
+              showModal(
+                'Command output',
+                code(r.output + (r.truncated ? '\n[truncated]' : '')),
+              );
             }),
         ),
       );
@@ -487,18 +588,27 @@ function nativeItem(v: View, i: Data, meta = true) {
     const details = el('details', null, 'thinking');
     const l = siteLocal(v.info.threadId, 'native', i.id);
     details.open = l.open.get('open') || false;
-    details.ontoggle = () => l.open.set('open', details.open);
+    details.onclick = (event) => {
+      if ((event.target as HTMLElement).closest('summary'))
+        l.open.set('open', !details.open);
+    };
     details.append(
       el(
         'summary',
-        i.status === 'inProgress' ? 'Thinking…' : 'Reasoning',
+        i.status === 'inProgress' ? 'Thinking…' : 'Thinking',
         i.status === 'inProgress' ? 'shimmer' : '',
       ),
       markdown(i.text || ''),
     );
     e.append(details);
   } else if (i.type === 'uiBlock') {
-    e.append(uiTree(v, { site: 'transcript', id: i.uiId, rev: i.rev, tree: i.tree }, i));
+    e.append(
+      uiTree(
+        v,
+        { site: 'transcript', id: i.uiId, rev: i.rev, tree: i.tree },
+        i,
+      ),
+    );
   } else if (i.loaded) {
     const details = el('details', null, 'thinking');
     details.append(
@@ -526,7 +636,8 @@ function nativeItem(v: View, i: Data, meta = true) {
             ' tokens'
           : ''),
     );
-    if (i.level === 'warning' || i.level === 'error') text.style.color = `var(--${i.level})`;
+    if (i.level === 'warning' || i.level === 'error')
+      text.style.color = `var(--${i.level})`;
     if (i.status === 'inProgress') text.classList.add('streaming');
     e.append(text);
   }
@@ -538,7 +649,7 @@ function nativeItem(v: View, i: Data, meta = true) {
   }
   return e;
 }
-function transcriptItem(v: View, i: Data) {
+function drawTranscriptItem(v: View, i: Data) {
   if (i.type === 'uiBlock' && !i.tree) return el('span');
   const key = v.info.threadId + '\0' + i.id;
   if (!i.uiDisplay?.tree || originals.has(key)) {
@@ -555,7 +666,16 @@ function transcriptItem(v: View, i: Data) {
   const e = el('article', null, 'item');
   e.dataset.item = i.id;
   e.append(
-    uiTree(v, { site: itemSite(i), id: i.id, rev: i.uiDisplay.rev, tree: i.uiDisplay.tree }, i),
+    uiTree(
+      v,
+      {
+        site: itemSite(i),
+        id: i.id,
+        rev: i.uiDisplay.rev,
+        tree: i.uiDisplay.tree,
+      },
+      i,
+    ),
     button('Show original', () => {
       originals.add(key);
       schedule();
@@ -563,7 +683,30 @@ function transcriptItem(v: View, i: Data) {
   );
   return e;
 }
-function showModal(title: string, body: HTMLElement, actions: HTMLElement[] = []) {
+// Reuse unchanged transcript DOM across stream/composer/status paints. This
+// keeps completed blocks, selections and disclosures still instead of flashing
+// the whole conversation on each token. Cache only the currently loaded pages.
+const itemDOM = new Map<string, { fingerprint: string; node: HTMLElement }>();
+function transcriptItem(v: View, i: Data) {
+  const key = v.info.threadId + '\0' + i.id;
+  const fingerprint = JSON.stringify([
+    i,
+    writable(v),
+    originals.has(key),
+    [...siteLocal(v.info.threadId, 'native', i.id).open],
+    [...siteLocal(v.info.threadId, itemSite(i), i.id).open],
+  ]);
+  const old = itemDOM.get(key);
+  if (old?.fingerprint === fingerprint) return old.node;
+  const node = drawTranscriptItem(v, i);
+  itemDOM.set(key, { fingerprint, node });
+  return node;
+}
+function showModal(
+  title: string,
+  body: HTMLElement,
+  actions: HTMLElement[] = [],
+) {
   const card = el('section', null, 'approval-card');
   card.setAttribute('role', 'dialog');
   card.setAttribute('aria-modal', 'true');
@@ -590,11 +733,18 @@ function pane(v: View, instances: Data[], above: boolean) {
   paneTab.set(v.info.threadId, picked.id);
   if (above)
     container.style.maxHeight =
-      Math.min(picked.options?.rows || 8, Math.max(2, Math.floor(innerHeight / 22 / 3))) * 22 +
+      Math.min(
+        picked.options?.rows || 8,
+        Math.max(2, Math.floor(innerHeight / 22 / 3)),
+      ) *
+        22 +
       'px';
   else
     container.style.width =
-      Math.max(32, Math.min(picked.options?.columns || 40, contentWidth() - 72)) + 'ch';
+      Math.max(
+        32,
+        Math.min(picked.options?.columns || 40, contentWidth() - 72),
+      ) + 'ch';
   for (const i of instances)
     tabs.append(
       button(i.options?.title || i.id, () => {
@@ -609,7 +759,13 @@ function pane(v: View, instances: Data[], above: boolean) {
         void run(() =>
           call(
             'ui/event',
-            { site: 'pane', id: picked.id, key: '$site', type: 'close', rev: picked.rev },
+            {
+              site: 'pane',
+              id: picked.id,
+              key: '$site',
+              type: 'close',
+              rev: picked.rev,
+            },
             v.info.threadId,
           ),
         ),
@@ -618,8 +774,13 @@ function pane(v: View, instances: Data[], above: boolean) {
   );
   if (!above && paneStates.get(v.info.threadId)?.width)
     container.style.width =
-      Math.max(256, Math.min(paneStates.get(v.info.threadId)!.width!, (contentWidth() - 72) * 8)) +
-      'px';
+      Math.max(
+        256,
+        Math.min(
+          paneStates.get(v.info.threadId)!.width!,
+          (contentWidth() - 72) * 8,
+        ),
+      ) + 'px';
   container.onscroll = () =>
     paneStates.set(v.info.threadId, {
       ...paneStates.get(v.info.threadId),
@@ -634,7 +795,13 @@ function pane(v: View, instances: Data[], above: boolean) {
         void run(() =>
           call(
             'ui/event',
-            { site: 'pane', id: picked.id, key: '$site', type: 'close', rev: picked.rev },
+            {
+              site: 'pane',
+              id: picked.id,
+              key: '$site',
+              type: 'close',
+              rev: picked.rev,
+            },
             v.info.threadId,
           ),
         );
@@ -642,35 +809,78 @@ function pane(v: View, instances: Data[], above: boolean) {
   };
   return container;
 }
-function needs(row: Data) {
-  return row.openPrompt || row.goalWaiting;
-}
-function rowState(row: Data) {
-  return row.archived
-    ? 'Archived'
-    : needs(row)
-      ? 'Needs you'
-      : row.busy
-        ? 'Working'
-        : row.loaded
-          ? 'Live · idle'
-          : row.agent?.lifecycle === 'closed'
-            ? 'Closed'
-            : 'Saved';
-}
+const agentFolds = new Map<string, boolean>();
+let rowMenu = '';
 function sortedRows() {
-  const map = new Map(inventory.map((r) => [r.threadId, r]));
+  const rows = inventory.map((row) => {
+    const v = views.get(row.threadId);
+    if (!v) return row;
+    return {
+      ...row,
+      name: v.info.name,
+      busy:
+        v.info.busy ||
+        v.items.some(
+          (i) => i.type === 'commandExecution' && i.status === 'inProgress',
+        ),
+      openPrompt: !!v.info.prompt,
+      preview:
+        v.items.find((i) => i.type === 'userMessage')?.text || row.preview,
+      lastMessage:
+        [...v.items].reverse().find((i) => i.type === 'agentMessage')?.text ||
+        row.lastMessage,
+    };
+  });
+  const map = new Map(rows.map((r) => [r.threadId, r]));
   const out: Data[] = [],
     seen = new Set<string>();
-  function visit(r: Data, depth: number) {
+  function visit(r: Data, depth: number, project: string) {
     if (seen.has(r.threadId)) return;
     seen.add(r.threadId);
-    out.push({ ...r, displayDepth: depth });
-    for (const child of inventory)
-      if (child.agent?.parentThreadId === r.threadId) visit(child, depth + 1);
+    const children = rows.filter((c) => c.agent?.parentThreadId === r.threadId);
+    // Like the command center, only all-finished subtrees fold by default.
+    // Explicit choices survive refreshes; cycle guards also cover corrupt files.
+    const allFinished = (row: Data, seen = new Set<string>()): boolean => {
+      if (seen.has(row.threadId)) return false;
+      seen.add(row.threadId);
+      return (
+        !!(row.archived || row.agent?.lifecycle === 'closed') &&
+        rows
+          .filter((c) => c.agent?.parentThreadId === row.threadId)
+          .every((c) => allFinished(c, seen))
+      );
+    };
+    if (children.length && !agentFolds.has(r.threadId))
+      agentFolds.set(
+        r.threadId,
+        children.every((c) => allFinished(c)),
+      );
+    const folded = agentFolds.get(r.threadId) || false;
+    out.push({
+      ...r,
+      displayDepth: depth,
+      project,
+      childCount: children.length,
+      folded,
+    });
+    for (const child of children) {
+      if (!folded) visit(child, depth + 1, project);
+      else hide(child);
+    }
   }
-  for (const r of inventory) if (!map.has(r.agent?.parentThreadId)) visit(r, 0);
-  for (const r of inventory) visit(r, 0);
+  function hide(r: Data) {
+    if (seen.has(r.threadId)) return;
+    seen.add(r.threadId);
+    for (const child of rows)
+      if (child.agent?.parentThreadId === r.threadId) hide(child);
+  }
+  const roots = rows.filter((r) => !map.has(r.agent?.parentThreadId));
+  const projects = [...new Set(roots.map((r) => r.cwd || 'Other sessions'))];
+  for (const project of projects)
+    for (const r of roots)
+      if ((r.cwd || 'Other sessions') === project) visit(r, 0, project);
+  for (const r of rows)
+    if (!seen.has(r.threadId)) visit(r, 0, r.cwd || 'Other sessions');
   return out;
 }
 async function mutate(row: Data, method: string) {
@@ -684,7 +894,13 @@ async function mutate(row: Data, method: string) {
     return;
   let stop = false;
   if (row.busy) {
-    if (!confirm('Stop its work and ' + (method === 'thread/delete' ? 'delete' : 'archive') + '?'))
+    if (
+      !confirm(
+        'Stop its work and ' +
+          (method === 'thread/delete' ? 'delete' : 'archive') +
+          '?',
+      )
+    )
       return;
     stop = true;
   }
@@ -696,67 +912,155 @@ async function mutate(row: Data, method: string) {
 }
 function inventoryUI() {
   const s = el('aside', null, 'sidebar' + (sidebar ? ' visible' : ''));
+  s.setAttribute('aria-label', 'Sessions');
   const header = el('header');
+  const close = button('×', () => {
+    sidebar = false;
+    schedule();
+  });
+  close.className = 'sidebar-close';
+  close.setAttribute('aria-label', 'Close sidebar');
+  const refresh = button('↻', () => void run(refreshInventory), !online);
+  refresh.setAttribute('aria-label', 'Refresh sessions');
+  refresh.title = 'Refresh sessions';
   header.append(
     el('strong', 'atto'),
-    button('New', () => void run(() => open()), !online),
-    button('Refresh', () => void run(refreshInventory), !online),
-    button('×', () => {
-      sidebar = false;
-      schedule();
-    }),
+    button('+ New', () => void run(() => open()), !online),
+    refresh,
+    close,
   );
   s.append(header);
-  const filters = el('div', null, 'toolbar');
-  filters.append(
-    button(archived ? 'Archived' : 'Active', () => {
-      archived = !archived;
+  const filters = el('div', null, 'segments');
+  filters.setAttribute('aria-label', 'Session filter');
+  for (const [value, label] of [
+    ['active', 'Active'],
+    ['all', 'All'],
+    ['archived', 'Archived'],
+  ]) {
+    const b = button(label, () => {
+      filter = value;
+      rowMenu = '';
       void run(refreshInventory);
-    }),
-    el('small', online ? 'Connected' : 'Reconnecting…', 'muted'),
-  );
+    });
+    b.setAttribute('aria-pressed', String(filter === value));
+    filters.append(b);
+  }
   s.append(filters);
   const list = el('div', null, 'inventory');
+  let project = '';
   for (const row of sortedRows()) {
-    const r = el('div');
+    if (project !== row.project) {
+      project = row.project;
+      const heading = el(
+        'div',
+        project.split('/').filter(Boolean).pop() || project,
+        'project-heading',
+      );
+      heading.title = project;
+      list.append(heading);
+    }
+    const r = el(
+      'div',
+      null,
+      'inventory-row' + (active === row.threadId ? ' active' : ''),
+    );
+    r.style.marginLeft = Math.min(row.displayDepth, 8) * 12 + 'px';
     const b = button('', () => void run(() => open(row)), !online);
-    b.className = 'session-row' + (active === row.threadId ? ' active' : '');
-    b.style.paddingLeft = 8 + Math.min(row.displayDepth, 8) * 12 + 'px';
-    b.append(
-      el(
-        'span',
-        (row.agent ? '↳ ' : '') +
-          (row.name || row.agent?.name || row.preview || row.threadId).slice(0, 90),
-      ),
-      el('small', rowState(row) + ' · ' + row.threadId),
-      el('small', row.lastMessage || row.cwd || ''),
+    b.className = 'session-row';
+    const title = plainMarkdown(
+      row.name || row.agent?.name || row.preview || 'New session',
     );
+    const heading = el('div', null, 'session-heading');
+    const dot = el('span', null, 'state-dot ' + sessionState(row));
+    dot.title = sessionState(row).replace('-', ' ');
+    dot.setAttribute('aria-label', dot.title);
+    heading.append(
+      dot,
+      el('span', title, 'session-title'),
+      el('small', relativeTime(row.updatedAt), 'session-time'),
+    );
+    const preview = el(
+      'small',
+      plainMarkdown(row.lastMessage || row.preview || 'No messages yet'),
+      'session-preview',
+    );
+    b.append(heading, preview);
+    b.title = title;
     r.append(b);
-    const bar = el('div', null, 'toolbar');
-    bar.append(
-      button(
-        row.archived ? 'Restore' : 'Archive',
-        () =>
-          void run(async () => {
-            if (row.archived) {
-              await rpc.call('thread/unarchive', { threadId: row.threadId });
-              await refreshInventory();
-            } else await mutate(row, 'thread/archive');
-          }),
-        !online,
-      ),
-      button('Delete', () => void run(() => mutate(row, 'thread/delete')), !online),
+    const menu = button(
+      '⋯',
+      () => {
+        rowMenu = rowMenu === row.threadId ? '' : row.threadId;
+        schedule();
+      },
+      !online,
     );
-    r.append(bar);
+    menu.className = 'row-menu-button';
+    menu.setAttribute('aria-label', 'Actions for ' + title);
+    menu.setAttribute('aria-expanded', String(rowMenu === row.threadId));
+    r.append(menu);
+    if (row.childCount) {
+      const fold = button(
+        (row.folded ? '▸ ' : '▾ ') + row.childCount + ' agents',
+        () => {
+          agentFolds.set(row.threadId, !row.folded);
+          schedule();
+        },
+      );
+      fold.className = 'agent-fold';
+      fold.setAttribute('aria-expanded', String(!row.folded));
+      r.append(fold);
+    }
+    if (rowMenu === row.threadId) {
+      const bar = el('div', null, 'row-menu');
+      bar.append(
+        button(
+          row.archived ? 'Restore' : 'Archive',
+          () =>
+            void run(async () => {
+              rowMenu = '';
+              if (row.archived) {
+                await rpc.call('thread/unarchive', { threadId: row.threadId });
+                await refreshInventory();
+              } else await mutate(row, 'thread/archive');
+            }),
+          !online,
+        ),
+        button(
+          'Delete',
+          () =>
+            void run(async () => {
+              rowMenu = '';
+              await mutate(row, 'thread/delete');
+            }),
+          !online,
+        ),
+      );
+      r.append(bar);
+    }
     list.append(r);
   }
-  s.append(list);
+  if (!inventory.length)
+    list.append(
+      el(
+        'p',
+        filter === 'archived'
+          ? 'No archived sessions'
+          : 'Your sessions will appear here.',
+        'inventory-empty',
+      ),
+    );
+  s.append(
+    list,
+    el('small', online ? '● Connected' : '◌ Reconnecting…', 'connection-state'),
+  );
   return s;
 }
 function recoverImages(id: string, images: Data[]) {
   const a = attachments.get(id) || [];
   for (const im of images) {
-    if (a.length < 10) a.push({ file: im.file, mimeType: im.mimeType, name: im.name });
+    if (a.length < 10)
+      a.push({ file: im.file, mimeType: im.mimeType, name: im.name });
   }
   attachments.set(id, a);
 }
@@ -776,7 +1080,9 @@ async function addImages(files: FileList | File[]) {
       break;
     }
     if (
-      !['image/png', 'image/jpeg', 'image/gif', 'image/webp'].includes(file.type) ||
+      !['image/png', 'image/jpeg', 'image/gif', 'image/webp'].includes(
+        file.type,
+      ) ||
       file.size > 10 << 20
     ) {
       warn('Use PNG/JPEG/GIF/WebP, at most 10 MiB each.');
@@ -829,7 +1135,9 @@ async function nativeCommand(v: View, text: string) {
     case 'context':
       return false;
     case 'copy': {
-      const last = [...v.items].reverse().find((i) => i.type === 'agentMessage');
+      const last = [...v.items]
+        .reverse()
+        .find((i) => i.type === 'agentMessage');
       if (last) {
         try {
           if (!navigator.clipboard) throw Error('Clipboard unavailable');
@@ -859,16 +1167,26 @@ async function nativeCommand(v: View, text: string) {
       return true;
     default:
       if (c?.local) {
-        warn('/' + name + ' is a terminal-only command; use the CLI for credentials/diagnostics.');
+        warn(
+          '/' +
+            name +
+            ' is a terminal-only command; use the CLI for credentials/diagnostics.',
+        );
         return true;
       }
   }
   return false;
 }
 async function treeDialog(v: View, fork = false) {
-  const r = await call('thread/tree', { offline: !!v.info.offline }, v.info.threadId);
+  const r = await call(
+    'thread/tree',
+    { offline: !!v.info.offline },
+    v.info.threadId,
+  );
   const body = el('div');
-  const entries = new Map<string, Data>((r.entries || []).map((e: Data) => [e.id, e]));
+  const entries = new Map<string, Data>(
+    (r.entries || []).map((e: Data) => [e.id, e]),
+  );
   for (const entry of r.entries || []) {
     const row = el('div', null, 'pending-row');
     let parent = entry.parentId,
@@ -899,7 +1217,11 @@ async function treeDialog(v: View, fork = false) {
         'Fork',
         () =>
           void run(async () => {
-            const s = await call('thread/fork', { entryId: entry.id }, v.info.threadId);
+            const s = await call(
+              'thread/fork',
+              { entryId: entry.id },
+              v.info.threadId,
+            );
             localModal = null;
             await open({ threadId: s.threadId });
             if (s.input) drafts.set(active, s.input);
@@ -950,7 +1272,12 @@ async function submit(intent = 'auto') {
       'input/submit',
       {
         input: text,
-        images: images.map(({ mimeType, data, name, file }) => ({ mimeType, data, name, file })),
+        images: images.map(({ mimeType, data, name, file }) => ({
+          mimeType,
+          data,
+          name,
+          file,
+        })),
         intent,
       },
       id,
@@ -966,16 +1293,32 @@ function composer(v: View, instances: Data[], above: boolean) {
   const area = el('div', null, 'composer-area');
   const panes = instances.filter((i) => i.site === 'pane');
   if (above && panes.length) area.append(pane(v, panes, true));
-  for (const i of instances.filter((i) => i.site === 'band')) {
+  for (const i of instances.filter(
+    (i) => i.site === 'band' && i.id !== 'atto/queue',
+  )) {
     const b = el('div', null, 'band');
     b.append(uiTree(v, i));
     area.append(b);
   }
+  const queueBand = instances.find(
+    (i) => i.site === 'band' && i.id === 'atto/queue',
+  );
   const pending = el('div', null, 'queue');
+  if (queueBand?.tree) pending.append(uiTree(v, queueBand));
+  if (v.info.pending?.items?.length)
+    pending.append(el('div', 'Next up', 'queue-title'));
   const p = v.info.pending;
   for (const i of p?.items || []) {
     const row = el('div', null, 'pending-row');
-    row.append(el('small', i.kind), el('span', ''));
+    row.append(
+      el('small', i.kind === 'steer' ? 'Steer' : 'Queued'),
+      el(
+        'span',
+        queueBand?.tree
+          ? ''
+          : plainMarkdown(i.text || i.input || i.preview || 'Pending message'),
+      ),
+    );
     row.append(
       button(
         'Edit',
@@ -984,7 +1327,8 @@ function composer(v: View, instances: Data[], above: boolean) {
             const r = await call('turn/unsteer', { inputId: i.id });
             drafts.set(
               active,
-              (r.text || '') + (drafts.get(active) ? '\n' + drafts.get(active) : ''),
+              (r.text || '') +
+                (drafts.get(active) ? '\n' + drafts.get(active) : ''),
             );
             recoverImages(active, r.images || []);
             schedule();
@@ -1022,7 +1366,12 @@ function composer(v: View, instances: Data[], above: boolean) {
           ' tokens',
       ),
       context.tree
-        ? uiTree(v, { site: 'pane', id: 'atto/context', rev: 0, tree: context.tree })
+        ? uiTree(v, {
+            site: 'pane',
+            id: 'atto/context',
+            rev: 0,
+            tree: context.tree,
+          })
         : code(JSON.stringify(context, null, 2)),
       button('Hide', () => {
         context = null;
@@ -1110,11 +1459,13 @@ function composer(v: View, instances: Data[], above: boolean) {
   bar.append(
     file,
     button(
-      'Attach',
+      '＋',
       () => file.click(),
       !writable(v) || !models.find((m) => m.id === v.info.model)?.images,
     ),
   );
+  bar.querySelector('button')!.setAttribute('aria-label', 'Attach image');
+  bar.querySelector('button')!.title = 'Attach image';
   const model = el('select');
   model.id = 'model';
   model.dataset.focusId = 'model';
@@ -1127,31 +1478,52 @@ function composer(v: View, instances: Data[], above: boolean) {
   }
   model.value = v.info.model;
   model.disabled = !writable(v);
-  model.onchange = () => void run(() => settings('thread/setModel', { model: model.value }));
+  model.onchange = () =>
+    void run(() => settings('thread/setModel', { model: model.value }));
   bar.append(model);
   const effort = el('select');
   effort.id = 'effort';
   effort.dataset.focusId = 'effort';
   effort.setAttribute('aria-label', 'Reasoning effort');
-  for (const x of v.info.efforts || models.find((m) => m.id === v.info.model)?.efforts || []) {
+  for (const x of models.find((m) => m.id === v.info.model)?.efforts ||
+    v.info.efforts ||
+    []) {
     const o = el('option', x);
     o.value = x;
     effort.append(o);
   }
   effort.value = v.info.effort;
   effort.disabled = !writable(v);
-  effort.onchange = () => void run(() => settings('thread/setEffort', { effort: effort.value }));
-  bar.append(
-    effort,
-    button('Queue', () => void run(() => submit('queue')), !writable(v)),
-    button(v.info.busy ? 'Steer' : 'Send', () => void run(() => submit()), !writable(v)),
-  );
-  if (v.info.busy)
+  effort.onchange = () =>
+    void run(() => settings('thread/setEffort', { effort: effort.value }));
+  bar.append(effort);
+  if (!effort.children.length) effort.hidden = true;
+  if (v.info.busy) {
     bar.append(
-      button('Send now', () => void run(() => submit('replace')), !writable(v)),
-      button('Interrupt', () => void run(() => call('turn/interrupt')), !writable(v)),
-      button('Background', () => void run(() => call('turn/background')), !writable(v)),
+      button('Steer', () => void run(() => submit()), !writable(v)),
+      button('Queue', () => void run(() => submit('queue')), !writable(v)),
     );
+    const more = el('details', null, 'composer-more');
+    more.append(el('summary', '⋯'));
+    more.append(
+      button('Send now', () => void run(() => submit('replace')), !writable(v)),
+      button(
+        'Background',
+        () => void run(() => call('turn/background')),
+        !writable(v),
+      ),
+    );
+    bar.append(more);
+  }
+  const send = button(
+    v.info.busy ? '■' : '↑',
+    () => void run(() => (v.info.busy ? call('turn/interrupt') : submit())),
+    !writable(v),
+  );
+  send.className = 'send';
+  send.setAttribute('aria-label', v.info.busy ? 'Stop' : 'Send');
+  send.title = v.info.busy ? 'Stop turn' : 'Send message';
+  bar.append(send);
   form.append(bar);
   area.append(form);
   const status = el('footer', null, 'status');
@@ -1168,7 +1540,9 @@ function composer(v: View, instances: Data[], above: boolean) {
   }
   status.append(
     button(
-      (v.info.contextTokens || 0) + ' tokens · $' + (v.info.usage?.cost || 0).toFixed(4),
+      (v.info.contextTokens || 0) +
+        ' tokens · $' +
+        (v.info.usage?.cost || 0).toFixed(4),
       () =>
         void run(async () => {
           context = await call('thread/context');
@@ -1192,15 +1566,20 @@ function promptDialog(v: View) {
   if (p.kind === 'input') {
     const input = el('input');
     input.type = 'text';
-    input.value = siteLocal(active, 'prompt', p.id).drafts.get('value') ?? p.text ?? '';
+    input.value =
+      siteLocal(active, 'prompt', p.id).drafts.get('value') ?? p.text ?? '';
     input.dataset.focusId = 'question';
     input.placeholder = p.placeholder || '';
-    input.oninput = () => siteLocal(active, 'prompt', p.id).drafts.set('value', input.value);
+    input.oninput = () =>
+      siteLocal(active, 'prompt', p.id).drafts.set('value', input.value);
     card.append(
       input,
       button(
         'Submit',
-        () => void run(() => call('prompt/answer', { id: p.id, text: input.value })),
+        () =>
+          void run(() =>
+            call('prompt/answer', { id: p.id, text: input.value }),
+          ),
         !writable(v),
       ),
     );
@@ -1225,7 +1604,10 @@ function promptDialog(v: View) {
     card.append(
       button(
         'Submit',
-        () => void run(() => call('prompt/answer', { id: p.id, indexes: [...selected] })),
+        () =>
+          void run(() =>
+            call('prompt/answer', { id: p.id, indexes: [...selected] }),
+          ),
         !writable(v),
       ),
     );
@@ -1248,12 +1630,21 @@ function promptDialog(v: View) {
   return card;
 }
 function paint() {
+  const loaded = new Set(
+    [...views.values()].flatMap((v) =>
+      v.items.map((i) => v.info.threadId + '\0' + i.id),
+    ),
+  );
+  for (const key of itemDOM.keys()) if (!loaded.has(key)) itemDOM.delete(key);
   const oldPane = root.querySelector<HTMLElement>('.pane-dock,.pane-above');
   if (oldPane?.dataset.thread) {
     const id = oldPane.dataset.thread;
     const state = paneStates.get(id) || { scroll: 0 };
     state.scroll = oldPane.scrollTop;
-    if (oldPane.classList.contains('pane-dock') && oldPane.style.width.endsWith('px'))
+    if (
+      oldPane.classList.contains('pane-dock') &&
+      oldPane.style.width.endsWith('px')
+    )
       state.width = parseFloat(oldPane.style.width);
     paneStates.set(id, state);
   }
@@ -1283,7 +1674,12 @@ function paint() {
   const tabs = el('div', null, 'tabs');
   for (const [id, v] of views) {
     const tab = button(
-      (v.info.busy ? '◌ ' : v.info.prompt ? '! ' : '') + (v.info.name || id),
+      (v.info.busy ? '◌ ' : v.info.prompt ? '! ' : '') +
+        plainMarkdown(
+          v.info.name ||
+            v.items.find((i) => i.type === 'userMessage')?.text ||
+            'New session',
+        ),
       () => {
         active = id;
         context = null;
@@ -1291,10 +1687,15 @@ function paint() {
       },
     );
     tab.className = 'tab' + (id === active ? ' active' : '');
-    tabs.append(
-      tab,
-      button('×', () => void run(() => detach(id)), !online),
+    const group = el(
+      'div',
+      null,
+      'tab-group' + (id === active ? ' active' : ''),
     );
+    const close = button('×', () => void run(() => detach(id)), !online);
+    close.setAttribute('aria-label', 'Close session tab');
+    group.append(tab, close);
+    tabs.append(group);
   }
   top.append(tabs);
   if (active)
@@ -1304,7 +1705,8 @@ function paint() {
         'Rename',
         () => {
           const name = prompt('Session name', current()?.info.name || '');
-          if (name != null) void run(() => settings('thread/setName', { name }));
+          if (name != null)
+            void run(() => settings('thread/setName', { name }));
         },
         !writable(current()),
       ),
@@ -1314,8 +1716,12 @@ function paint() {
   if (!v) {
     const empty = el('div', null, 'empty');
     empty.append(
-      el('h2', 'atto'),
-      el('p', 'Open a session from the sidebar, or start a new one.'),
+      el('div', '✳', 'empty-mark'),
+      el('h2', 'What would you like to build?'),
+      el(
+        'p',
+        'A little help for your next big idea. Start a session, or pick up where you left off.',
+      ),
       button('New session', () => void run(() => open()), !online),
     );
     workspace.append(empty);
@@ -1332,6 +1738,22 @@ function paint() {
     );
     if (v.info.hasMore) sc.append(more);
     for (const i of v.items) sc.append(transcriptItem(v, i));
+    if (
+      !v.items.some((i) =>
+        ['userMessage', 'agentMessage', 'commandExecution'].includes(i.type),
+      )
+    ) {
+      const welcome = el('div', null, 'conversation-empty');
+      welcome.append(
+        el('div', '✳', 'empty-mark'),
+        el('h2', 'Ready when you are'),
+        el(
+          'p',
+          'Ask a question, explore your project, or build something new.',
+        ),
+      );
+      sc.append(welcome);
+    }
     sc.onscroll = () => {
       scrolls.set(v.info.threadId, sc.scrollTop);
       if (sc.scrollTop < 40 && v.info.hasMore && !pages.has(v.info.threadId))
@@ -1339,12 +1761,18 @@ function paint() {
     };
     conversation.append(sc);
     const instances = (v.info.ui?.instances || []).filter(
-      (i: Data) => i.site !== 'toast' || !i.options?.expiresAt || i.options.expiresAt > Date.now(),
+      (i: Data) =>
+        i.site !== 'toast' ||
+        !i.options?.expiresAt ||
+        i.options.expiresAt > Date.now(),
     );
     const panes = instances.filter((i: Data) => i.site === 'pane');
-    const picked = panes.find((i: Data) => i.id === paneTab.get(active)) || panes[0];
+    const picked =
+      panes.find((i: Data) => i.id === paneTab.get(active)) || panes[0];
     const side =
-      columns() >= 120 && contentWidth() >= 120 && picked?.options?.placement !== 'abovePrompt';
+      columns() >= 120 &&
+      contentWidth() >= 120 &&
+      picked?.options?.placement !== 'abovePrompt';
     conversation.append(composer(v, instances, !side));
     content.append(conversation);
     if (side && panes.length) content.append(pane(v, panes, false));
@@ -1406,24 +1834,38 @@ function paint() {
     layout.append(backdrop);
   }
   root.replaceChildren(layout);
+  const promptInput = document.getElementById('prompt') as HTMLTextAreaElement;
+  if (promptInput) {
+    promptInput.style.height = 'auto';
+    promptInput.style.height =
+      Math.min(Math.max(56, promptInput.scrollHeight), innerHeight * 0.3) +
+      'px';
+  }
   const newPane = root.querySelector<HTMLElement>('.pane-dock,.pane-above');
   if (newPane?.dataset.thread)
     newPane.scrollTop = paneStates.get(newPane.dataset.thread)?.scroll || 0;
   const status = root.querySelector<HTMLElement>('.status');
   if (status) {
-    const rows = Array.from(status.querySelectorAll<HTMLElement>('.ui-tree')).sort(
+    const rows = Array.from(
+      status.querySelectorAll<HTMLElement>('.ui-tree'),
+    ).sort(
       (a, b) =>
         Number(a.dataset.priority) - Number(b.dataset.priority) ||
         Number(b.dataset.registration) - Number(a.dataset.registration),
     );
-    while (status.scrollWidth > status.clientWidth && rows.length > 1) rows.shift()!.remove();
+    while (status.scrollWidth > status.clientWidth && rows.length > 1)
+      rows.shift()!.remove();
   }
   const sc = document.getElementById('transcript');
   if (sc) {
     sc.scrollTop =
-      oldId === active && oldBottom ? sc.scrollHeight : (scrolls.get(active) ?? sc.scrollHeight);
+      oldId === active && oldBottom
+        ? sc.scrollHeight
+        : (scrolls.get(active) ?? sc.scrollHeight);
   }
-  const controls = Array.from(root.querySelectorAll<HTMLElement>('[data-focus-id],[data-key]'));
+  const controls = Array.from(
+    root.querySelectorAll<HTMLElement>('[data-focus-id],[data-key]'),
+  );
   const restore = controls.find((n) =>
     focusId
       ? n.dataset.focusId === focusId
@@ -1438,17 +1880,22 @@ function paint() {
     if (
       start != null &&
       end != null &&
-      (restore instanceof HTMLTextAreaElement || restore instanceof HTMLInputElement) &&
+      (restore instanceof HTMLTextAreaElement ||
+        restore instanceof HTMLInputElement) &&
       restore.type !== 'checkbox'
     )
       try {
         restore.setSelectionRange(start, end);
       } catch {}
   } else if (focusHint && !(drafts.get(active) || '')) {
-    const scope = Array.from(root.querySelectorAll<HTMLElement>('[data-scope]')).find(
-      (e) => e.dataset.scope === focusHint,
-    );
-    scope?.querySelector<HTMLElement>('[data-autofocus],button,input,select,summary')?.focus();
+    const scope = Array.from(
+      root.querySelectorAll<HTMLElement>('[data-scope]'),
+    ).find((e) => e.dataset.scope === focusHint);
+    scope
+      ?.querySelector<HTMLElement>(
+        '[data-autofocus],button,input,select,summary',
+      )
+      ?.focus();
   }
   focusHint = '';
 }
@@ -1466,9 +1913,9 @@ document.addEventListener('keydown', (e) => {
         localModal = null;
         schedule();
       } else {
-        const b = Array.from(dialog.querySelectorAll<HTMLButtonElement>('button')).find(
-          (b) => b.textContent === 'Cancel',
-        );
+        const b = Array.from(
+          dialog.querySelectorAll<HTMLButtonElement>('button'),
+        ).find((b) => b.textContent === 'Cancel');
         b?.click();
       }
     }

@@ -111,7 +111,11 @@ New browser UI (server/web, stage 4):
   sidebar and theme tokens). Adaptations are in src/main.ts, src/elements.ts and
   src/app.css. The frozen client's MIT Beautiful UI adaptations were consulted
   for Thinking and Prompt Bar, and its Beautiful UI theme tokens were adapted.
-  No frozen protocol code was restored.
+  No frozen protocol code was restored. The stage-4 polish additionally adapts
+  Tool Chips' compact title/status/metrics row and completed disclosure, Prompt
+  Bar's inset growing editor, round attach/send/stop controls and compact
+  pickers, and Chat's spacing, empty state, segmented session filters and tabs.
+  These are plain DOM/CSS implementations, not copied React components.
 - Tailwind CSS (https://tailwindcss.com, MIT): standalone CLI v4.3.3 generates
   dist/app.css, including Tailwind's base styles. The CLI is a build tool and
   is not embedded in atto. Its checksum-pinned releases are used by gen.go.
