@@ -479,6 +479,15 @@ type Worker struct {
 	Worktree, Branch string
 }
 
+// WorkerOf describes the agent state st for its system prompt.
+func WorkerOf(st agentstate.State) *Worker {
+	w := &Worker{Name: st.Name, Preset: st.Preset, Instructions: st.Instructions, ID: st.Session, Path: st.Path, Worktree: st.Worktree, Branch: st.Branch}
+	if st.Parent != "" {
+		w.Parent, w.ParentID = agentstate.PathOf(st.Parent), st.Parent
+	}
+	return w
+}
+
 // workerPart is the prompt's paragraph about agents: for an agent, what
 // it is; for any session (an agent too) that may start
 // agents, how, with the roles. It has no trailing newline.

@@ -107,6 +107,11 @@ func OpenTree(session string) {
 	if checkID(session) != nil {
 		return
 	}
+	// Opening a session that was never closed takes no lock: a worker that a
+	// spawn just started binds its session while the spawn holds the tree.
+	if _, err := os.Stat(closedPath(session)); os.IsNotExist(err) {
+		return
+	}
 	release, err := LockTree(session)
 	if err != nil {
 		return

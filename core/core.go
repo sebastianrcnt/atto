@@ -286,10 +286,18 @@ func (s Saved) Branch() []session.Entry { return session.Context(s.Entries) }
 // Leave cleans up after a session: its background jobs end with it (as in
 // codex) and its goal file goes (the session file keeps the goal's last
 // snapshot). Returns how many jobs were stopped.
-func Leave(id string) int {
-	release, err := agentstate.CloseTree(id)
-	if err == nil {
-		defer release()
+func Leave(id string) int { return leave(id, true) }
+
+// LeaveAgent is Leave for the session of an agent being closed: new work
+// below it is refused because its record says it closes, not by a marker that
+// a restart of the session would have to clear.
+func LeaveAgent(id string) int { return leave(id, false) }
+
+func leave(id string, gate bool) int {
+	if gate {
+		if release, err := agentstate.CloseTree(id); err == nil {
+			defer release()
+		}
 	}
 	seen := make(map[string]bool)
 	var stop func(string) int

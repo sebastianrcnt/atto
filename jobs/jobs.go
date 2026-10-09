@@ -92,6 +92,9 @@ type Job struct {
 	// started from a shell is a job of the agent's own session, which must
 	// not be woken by its own turn ending; wait and report tell the caller.
 	Silent bool `json:"silent,omitempty"`
+	// Control, on a turn run by a worker, is how to ask it to stop (see
+	// workerturn.go); such a job is never signalled.
+	Control *Control `json:"control,omitempty"`
 	// QuietExit delivers the exit event without waking an idle session.
 	// A user-interrupted command keeps running between agent turns.
 	QuietExit bool `json:"quietExit,omitempty"`
@@ -388,6 +391,9 @@ func Kill(session string, id int) (Job, error) {
 	j, err := Get(session, id)
 	if err != nil || !j.Active() {
 		return j, err
+	}
+	if j.Control != nil { // a turn in a worker: the worker is not ours to signal
+		return killControlled(session, j)
 	}
 	// A starting job has no supervisor PID yet: wait for it, and if it
 	// never comes, record the job killed so a late supervisor doesn't run it.
