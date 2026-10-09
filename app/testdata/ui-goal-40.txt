@@ -3,4 +3,4 @@ Status: active
 Objective: ship it
 Time used: 0s · Tokens used: 0
 ⠋ Working on goal
-[ e: Ed… [ p: Pau… [ c: Cle…
+e: Edit  p: Pause  c: Clear

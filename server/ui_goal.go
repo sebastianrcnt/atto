@@ -30,7 +30,7 @@ func goalPaneTree(info *GoalInfo) ui.Node {
 	if g.Status == goal.Active && !info.Held {
 		children = append(children, ui.Progress(ui.ProgressProps{Label: "Working on goal"}))
 	}
-	children = append(children, ui.Box(ui.BoxProps{FlexDirection: "row", Gap: 1}, ui.Button(ui.ButtonProps{Key: "edit", Label: "Edit", Hotkey: "e"}), ui.Button(ui.ButtonProps{Key: action, Disabled: g.Status == goal.Complete, Label: label, Hotkey: hotkey}), ui.Button(ui.ButtonProps{Key: "clear", Label: "Clear", Hotkey: "c"})), ui.Text(ui.TextProps{Color: ui.Muted, Text: hint, Wrap: "truncate"}))
+	children = append(children, ui.Box(ui.BoxProps{FlexDirection: "row", Gap: 1}, ui.Button(ui.ButtonProps{Key: "edit", Plain: true, Label: "Edit", Hotkey: "e"}), ui.Button(ui.ButtonProps{Key: action, Plain: true, Disabled: g.Status == goal.Complete, Label: label, Hotkey: hotkey}), ui.Button(ui.ButtonProps{Key: "clear", Plain: true, Label: "Clear", Hotkey: "c"})), ui.Text(ui.TextProps{Color: ui.Muted, Text: hint, Wrap: "truncate"}))
 	return ui.Box(ui.BoxProps{}, children...)
 }
 func (t *thread) initUIGoal() {
