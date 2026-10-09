@@ -83,6 +83,10 @@ type Builder struct {
 	IDPrefix string
 	Handler  Handler
 
+	// MaxItems bounds retained display items during streamed replay. Zero keeps
+	// every item for legacy callers. Eviction never resets the ID sequence.
+	MaxItems int
+
 	items []*Item
 	seq   int
 
@@ -128,8 +132,8 @@ func (b *Builder) Open() []Item {
 
 // Reset forgets every item and starts the IDs over.
 func (b *Builder) Reset() {
-	h, p := b.Handler, b.IDPrefix
-	*b = Builder{Handler: h, IDPrefix: p}
+	h, p, limit := b.Handler, b.IDPrefix, b.MaxItems
+	*b = Builder{Handler: h, IDPrefix: p, MaxItems: limit}
 }
 
 // Event applies an agent event (or an Input).
@@ -469,6 +473,12 @@ func (b *Builder) start(it Item) *Item {
 	it.ID = b.IDPrefix + strconv.Itoa(b.seq)
 	p := &it
 	b.items = append(b.items, p)
+	if b.MaxItems > 0 && len(b.items) > b.MaxItems {
+		cut := len(b.items) - b.MaxItems
+		copy(b.items, b.items[cut:])
+		clear(b.items[len(b.items)-cut:])
+		b.items = b.items[:len(b.items)-cut]
+	}
 	if b.Handler.Started != nil {
 		b.Handler.Started(p)
 	}
@@ -524,56 +534,65 @@ func FromEntries(idPrefix string, entries []session.Entry) []Item {
 // when it was written, applied by the same code as live ones.
 func (b *Builder) Replay(entries []session.Entry) {
 	for _, e := range entries {
-		m := e.Message
-		if e.Type == session.TypeMessage && m != nil && m.Role == "tool" {
-			b.replayResult(e)
-			continue
+		b.ReplayEntry(e)
+	}
+	b.FinishReplay()
+}
+
+// ReplayEntry applies one saved entry without interrupting pending tool calls.
+// Call FinishReplay once the stream ends.
+func (b *Builder) ReplayEntry(e session.Entry) {
+	m := e.Message
+	if e.Type == session.TypeMessage && m != nil && m.Role == "tool" {
+		b.replayResult(e)
+		return
+	}
+	switch e.Type {
+	case session.TypeCompaction:
+		b.interruptCalls()
+		b.apply(agent.CompactStart{Auto: e.Auto, Reason: e.Reason, Cap: e.Cap}, e.Time)
+		b.apply(agent.CompactEnd{Notes: e.Notes, Before: e.TokensBefore, After: e.TokensAfter,
+			Elapsed: time.Duration(e.ElapsedMs) * time.Millisecond}, e.Time)
+	case session.TypeBranchSummary:
+		b.interruptCalls()
+		b.apply(agent.BranchSummaryStart{}, e.Time)
+		b.apply(agent.BranchSummaryEnd{Summary: e.Summary, Elapsed: time.Duration(e.ElapsedMs) * time.Millisecond}, e.Time)
+	case session.TypeBlockDisplay:
+		if b.Handler.Display != nil {
+			b.Handler.Display(Display{EntryID: e.TargetID, Block: e.Block, Ext: e.Ext, Status: e.Status, Text: e.Display})
 		}
-		switch e.Type {
-		case session.TypeCompaction:
+	case session.TypeExtText:
+		// Like block_display, it leaves the calls waiting for results alone.
+		b.add(Item{Kind: ExtText, Ext: e.Ext, Title: e.Title, Text: e.Display, Lang: e.Lang, Preview: e.Preview})
+	case session.TypeBashExecution:
+		if x := e.Bash; x != nil {
 			b.interruptCalls()
-			b.apply(agent.CompactStart{Auto: e.Auto, Reason: e.Reason, Cap: e.Cap}, e.Time)
-			b.apply(agent.CompactEnd{Notes: e.Notes, Before: e.TokensBefore, After: e.TokensAfter,
-				Elapsed: time.Duration(e.ElapsedMs) * time.Millisecond}, e.Time)
-		case session.TypeBranchSummary:
-			b.interruptCalls()
-			b.apply(agent.BranchSummaryStart{}, e.Time)
-			b.apply(agent.BranchSummaryEnd{Summary: e.Summary, Elapsed: time.Duration(e.ElapsedMs) * time.Millisecond}, e.Time)
-		case session.TypeBlockDisplay:
-			if b.Handler.Display != nil {
-				b.Handler.Display(Display{EntryID: e.TargetID, Block: e.Block, Ext: e.Ext, Status: e.Status, Text: e.Display})
-			}
-		case session.TypeExtText:
-			// Like block_display, it leaves the calls waiting for results alone.
-			b.add(Item{Kind: ExtText, Ext: e.Ext, Title: e.Title, Text: e.Display, Lang: e.Lang, Preview: e.Preview})
-		case session.TypeBashExecution:
-			if x := e.Bash; x != nil {
-				b.interruptCalls()
-				b.apply(ShellStart{Command: x.Command, Exclude: x.Exclude}, e.Time)
-				b.apply(ShellOutput{Chunk: x.Output}, e.Time)
-				b.apply(ShellEnd{Exec: *x}, e.Time)
-			}
-		case session.TypeMessage:
-			if m == nil {
-				continue
-			}
-			b.interruptCalls()
-			switch m.Role {
-			case "user":
-				b.apply(Input{Text: m.Content, Images: m.Images, EntryID: e.ID}, e.Time)
-			case "assistant":
-				// Thinking ran from the first reasoning to the first text.
-				answer := e.Time.Add(time.Duration(e.ThinkingMs) * time.Millisecond)
-				b.apply(agent.ReasoningDelta{Text: m.ReasoningContent}, e.Time)
-				b.apply(agent.TextDelta{Text: m.Content}, answer)
-				b.apply(agent.MessageSaved{EntryID: e.ID}, answer)
-				b.apply(agent.StepEnd{}, answer)
-				b.calls = append(b.calls, m.ToolCalls...)
-			}
+			b.apply(ShellStart{Command: x.Command, Exclude: x.Exclude}, e.Time)
+			b.apply(ShellOutput{Chunk: x.Output}, e.Time)
+			b.apply(ShellEnd{Exec: *x}, e.Time)
+		}
+	case session.TypeMessage:
+		if m == nil {
+			return
+		}
+		b.interruptCalls()
+		switch m.Role {
+		case "user":
+			b.apply(Input{Text: m.Content, Images: m.Images, EntryID: e.ID}, e.Time)
+		case "assistant":
+			// Thinking ran from the first reasoning to the first text.
+			answer := e.Time.Add(time.Duration(e.ThinkingMs) * time.Millisecond)
+			b.apply(agent.ReasoningDelta{Text: m.ReasoningContent}, e.Time)
+			b.apply(agent.TextDelta{Text: m.Content}, answer)
+			b.apply(agent.MessageSaved{EntryID: e.ID}, answer)
+			b.apply(agent.StepEnd{}, answer)
+			b.calls = append(b.calls, m.ToolCalls...)
 		}
 	}
-	b.interruptCalls()
 }
+
+// FinishReplay ends tool calls whose results were not recorded.
+func (b *Builder) FinishReplay() { b.interruptCalls() }
 
 // replayResult runs a tool call of the last assistant message: start,
 // output and end, as the agent emitted them. Results come in call order.
