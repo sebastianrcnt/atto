@@ -18,7 +18,12 @@ func TestDetachedTreeHelper(t *testing.T) {
 	}
 	dir := os.Getenv("ATTO_TEST_DETACH_DIR")
 	if role == "child" {
-		if err := os.WriteFile(filepath.Join(dir, "pid"), []byte(strconv.Itoa(os.Getpid())), 0o600); err != nil {
+		// Written aside and renamed, so the test never reads a partial file.
+		tmp := filepath.Join(dir, "pid.tmp")
+		if err := os.WriteFile(tmp, []byte(strconv.Itoa(os.Getpid())), 0o600); err != nil {
+			os.Exit(1)
+		}
+		if err := os.Rename(tmp, filepath.Join(dir, "pid")); err != nil {
 			os.Exit(1)
 		}
 		time.Sleep(time.Minute)
