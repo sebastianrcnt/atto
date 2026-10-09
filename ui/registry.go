@@ -36,8 +36,8 @@ type Action struct {
 	Surface  string    `json:"-"`
 }
 type OpenOptions struct {
-	Site          Site   `json:"site"`
-	ID            string `json:"id"`
+	Site          Site   `json:"-"`
+	ID            string `json:"-"`
 	Title         string `json:"title,omitempty"`
 	Placement     string `json:"placement,omitempty"`
 	Columns       int    `json:"columns,omitempty"`
@@ -100,25 +100,29 @@ type live struct {
 // handler or publisher while holding its mutex. Dispatch schedules timer work on
 // the owning session lane. Publish should preserve the order of lane work.
 type Registry struct {
-	mu         sync.Mutex
-	sites      map[Match]*live
-	tombstones map[Match]int64
-	renders    []*registration
-	binds      map[Match]map[string]binding
-	seq        int
-	rev        int64
-	stopped    bool
-	Publish    func(Mutation)
-	Dispatch   func(func())
-	Log        func(owner string, site Site, id string, err error)
-	ingress    map[string][]time.Time
+	// Enqueue dispatches accepted callbacks after Route returns; worker lanes use it.
+	Enqueue         func(context.Context, Handler, Action)
+	providerRenders map[string][]time.Time
+	inputAt         map[string]time.Time
+	mu              sync.Mutex
+	sites           map[Match]*live
+	tombstones      map[Match]int64
+	renders         []*registration
+	binds           map[Match]map[string]binding
+	seq             int
+	rev             int64
+	stopped         bool
+	Publish         func(Mutation)
+	Dispatch        func(func())
+	Log             func(owner string, site Site, id string, err error)
+	ingress         map[string][]time.Time
 }
 
 func NewRegistry(publish func(Mutation), dispatch func(func())) *Registry {
 	if dispatch == nil {
 		dispatch = func(fn func()) { fn() }
 	}
-	return &Registry{sites: map[Match]*live{}, tombstones: map[Match]int64{}, binds: map[Match]map[string]binding{}, Publish: publish, Dispatch: dispatch, ingress: map[string][]time.Time{}}
+	return &Registry{rev: time.Now().UnixMilli() << 10, providerRenders: map[string][]time.Time{}, inputAt: map[string]time.Time{}, sites: map[Match]*live{}, tombstones: map[Match]int64{}, binds: map[Match]map[string]binding{}, Publish: publish, Dispatch: dispatch, ingress: map[string][]time.Time{}}
 }
 func matches(m Match, s Match) bool {
 	return (m.Site == "" || m.Site == s.Site) && (m.ID == "" || m.ID == s.ID)
@@ -142,6 +146,25 @@ func (r *Registry) Render(owner string, match Match, fn Renderer) Dispose {
 					break
 				}
 			}
+			for m, bs := range r.binds {
+				if matches(match, m) {
+					for key, b := range bs {
+						if b.owner == owner {
+							delete(bs, key)
+						}
+					}
+				}
+			}
+			for m, s := range r.sites {
+				if matches(match, m) {
+					for key, b := range s.bindings {
+						if b.owner == owner {
+							delete(s.bindings, key)
+						}
+					}
+					s.bindings = nil
+				}
+			}
 			r.mu.Unlock()
 			r.Invalidate(match)
 		})
@@ -149,6 +172,9 @@ func (r *Registry) Render(owner string, match Match, fn Renderer) Dispose {
 }
 func bindKey(key string, kind EventType) string { return key + "\x00" + string(kind) }
 func (r *Registry) Bind(owner string, match Match, key string, kind EventType, fn Handler) {
+	if owner != "atto" {
+		key = owner + "/" + key
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.binds[match] == nil {
@@ -167,7 +193,7 @@ func (r *Registry) Open(owner string, o OpenOptions) error { return r.OpenDefaul
 // OpenDefault supplies the unmodified built-in fallback and immutable render
 // props. Item defaults are engine references minted only here.
 func (r *Registry) OpenDefault(owner string, o OpenOptions, props map[string]any, fallback *Node) error {
-	if !ValidSite(o.Site) || !owned(owner, o.ID) && !IsItem(o.Site) {
+	if !ValidSite(o.Site) || !owned(owner, o.ID) && !IsItem(o.Site) || IsItem(o.Site) && (o.ID == "" || len(o.ID) > 128) {
 		return fmt.Errorf("invalid site/id/owner")
 	}
 	if o.Columns < 0 || o.Columns > 512 || o.Rows < 0 || o.Rows > 256 || o.Placement != "" && o.Placement != "auto" && o.Placement != "side" && o.Placement != "abovePrompt" || o.Align != "" && o.Align != "start" && o.Align != "end" {
@@ -195,6 +221,7 @@ func (r *Registry) OpenDefault(owner string, o OpenOptions, props map[string]any
 	}
 	if IsItem(o.Site) {
 		n := Node{Type: "engine", Props: map[string]any{"site": string(o.Site), "id": o.ID, "overrides": map[string]any{}}, engine: true}
+		sealEngine(&n)
 		fallback = &n
 	}
 	m := Match{o.Site, o.ID}
@@ -202,6 +229,18 @@ func (r *Registry) OpenDefault(owner string, o OpenOptions, props map[string]any
 	if r.stopped {
 		r.mu.Unlock()
 		return fmt.Errorf("registry stopped")
+	}
+	total := 0
+	for match, live := range r.sites {
+		if match != m {
+			b, _ := json.Marshal(live.Tree)
+			total += len(b)
+		}
+	}
+	defaultBytes, _ := json.Marshal(fallback)
+	if total+len(defaultBytes) > MaxLiveBytes {
+		r.mu.Unlock()
+		return fmt.Errorf("live tree byte budget")
 	}
 	s := r.sites[m]
 	if s == nil {
@@ -303,6 +342,32 @@ func (r *Registry) render(m Match, force bool) {
 		r.mu.Unlock()
 		return
 	}
+	// Bound provider publication rate as well as the per-site rate.
+	now := time.Now()
+	times := r.providerRenders[s.owner]
+	cut := 0
+	for cut < len(times) && now.Sub(times[cut]) >= time.Second {
+		cut++
+	}
+	times = times[cut:]
+	r.providerRenders[s.owner] = times
+	if !force && len(times) >= 60 {
+		if s.timer == nil {
+			wait := max(time.Millisecond, time.Second-now.Sub(times[0]))
+			s.timer = time.AfterFunc(wait, func() {
+				r.Dispatch(func() {
+					r.mu.Lock()
+					if r.sites[m] == s {
+						s.timer = nil
+					}
+					r.mu.Unlock()
+					r.render(m, false)
+				})
+			})
+		}
+		r.mu.Unlock()
+		return
+	}
 	s.generation++
 	gen := s.generation
 	e := Event{Site: m.Site, ID: m.ID, Surface: "shared", Props: copyMap(s.props)}
@@ -336,20 +401,26 @@ func (r *Registry) render(m Match, force bool) {
 					}
 				}
 				n.Props["overrides"] = over
+				sealEngine(n)
 				return n, nil
 			}
-			return clone(fallback), nil
+			n := clone(fallback)
+			markOwner(n, owner)
+			return n, nil
 		}
 		reg := regs[i]
 		start := time.Now()
 		n, err := safeRender(reg.fn, ev, func(next Event) (*Node, error) {
-			if next.Site != e.Site || next.ID != e.ID {
+			if next.Site != e.Site || next.ID != e.ID || next.Surface != e.Surface || !validNextProps(originalProps, next.Props, m.Site) {
 				return nil, fmt.Errorf("immutable identity")
 			}
 			return call(i+1, next)
 		})
 		if time.Since(start) > 100*time.Millisecond {
 			return nil, fmt.Errorf("render deadline exceeded")
+		}
+		if n != nil {
+			prefixKeys(n, reg.owner)
 		}
 		return n, err
 	}
@@ -366,6 +437,25 @@ func (r *Registry) render(m Match, force bool) {
 	}
 	if err != nil {
 		tree = clone(fallback)
+		// Recompute the unmodified built-in tail, not the last published tree or
+		// metadata from when the site first opened.
+		tail := len(regs)
+		for i, reg := range regs {
+			if reg.owner == "atto" {
+				tail = i
+				break
+			}
+		}
+		originalEvent := e
+		originalEvent.Props = copyMap(originalProps)
+		if defaultTree, defaultErr := call(tail, originalEvent); defaultErr == nil {
+			if m.Site == Dialog && fallback != nil {
+				defaultTree, defaultErr = expandDialog(defaultTree, m.ID, fallback)
+			}
+			if defaultErr == nil && defaultTree != nil && validate(m.Site, *defaultTree, false, m.ID, nil) == nil {
+				tree = defaultTree
+			}
+		}
 		if r.Log != nil {
 			r.Log(owner, m.Site, m.ID, err)
 		}
@@ -389,7 +479,17 @@ func (r *Registry) render(m Match, force bool) {
 	b, _ := json.Marshal(tree)
 	if size+len(b) > MaxLiveBytes {
 		tree = clone(fallback)
+		fb, _ := json.Marshal(tree)
+		if size+len(fb) > MaxLiveBytes {
+			tree = nil
+		}
 	}
+	if !force && s.bindings != nil && equalTrees(s.Tree, tree) {
+		s.last = time.Now()
+		r.mu.Unlock()
+		return
+	}
+	r.providerRenders[s.owner] = append(r.providerRenders[s.owner], time.Now())
 	s.Tree = clone(tree)
 	s.Rev = r.nextRevision()
 	s.last = time.Now()
@@ -506,6 +606,13 @@ func (r *Registry) Route(ctx context.Context, a Action) error {
 		return fail("unboundAction", "control is not rebound")
 	}
 	now := time.Now()
+	if a.Type == InputEvent {
+		key := a.ClientID + "\x00" + s.ID + "\x00" + a.Key
+		if now.Sub(r.inputAt[key]) < 100*time.Millisecond {
+			return fail("rateLimited", "input events are debounced")
+		}
+		r.inputAt[key] = now
+	}
 	times := r.ingress[a.ClientID]
 	cut := 0
 	for cut < len(times) && now.Sub(times[cut]) >= time.Second {
@@ -525,6 +632,10 @@ func (r *Registry) Route(ctx context.Context, a Action) error {
 	r.emit(Mutation{Method: "ui/render", Instance: inst})
 	if !ok {
 		return r.CloseReason(owner, a.Site, a.ID, "user")
+	}
+	if r.Enqueue != nil {
+		r.Enqueue(ctx, b.fn, a)
+		return nil
 	}
 	return b.fn(ctx, a)
 }
@@ -594,6 +705,8 @@ func clone(n *Node) *Node {
 	var out Node
 	_ = json.Unmarshal(b, &out)
 	out.engine = n.engine
+	out.owner = n.owner
+	out.seal = n.seal
 	for i := range n.Children {
 		out.Children[i] = *clone(&n.Children[i])
 	}
@@ -646,3 +759,172 @@ func expandDialog(tree *Node, id string, fallback *Node) (*Node, error) {
 	}
 	return out, nil
 }
+
+func equalTrees(a, b *Node) bool {
+	x, _ := json.Marshal(a)
+	y, _ := json.Marshal(b)
+	return string(x) == string(y)
+}
+
+// HasRenderer allows a worker to avoid creating overlays for unwrapped native items.
+func (r *Registry) HasRenderer(match Match) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, reg := range r.renders {
+		if matches(reg.match, match) {
+			return true
+		}
+	}
+	return false
+}
+
+// Forget drops completed display data without hiding its saved transcript item.
+func (r *Registry) Forget(match Match) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for m, s := range r.sites {
+		if matches(match, m) {
+			if s.timer != nil {
+				s.timer.Stop()
+			}
+			if s.expired != nil {
+				s.expired.Stop()
+			}
+			delete(r.sites, m)
+			delete(r.binds, m)
+		}
+	}
+}
+
+// ResetBindings retires current actions after branch movement. Fresh rendering
+// must explicitly bind them; saved trees are passive until then.
+func (r *Registry) ResetBindings() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.binds = map[Match]map[string]binding{}
+	for _, s := range r.sites {
+		s.bindings = nil
+		s.generation++
+		s.Rev = r.nextRevision()
+	}
+}
+func (r *Registry) Revision(site Site, id string) int64 {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if s := r.sites[Match{site, id}]; s != nil {
+		return s.Rev
+	}
+	if rev := r.tombstones[Match{site, id}]; rev != 0 {
+		return rev
+	}
+	return r.rev
+}
+
+// DrawItem is the automatic item-site lifecycle, not provider Open/Close.
+func (r *Registry) DrawItem(site Site, id string, props map[string]any) (*Node, int64, error) {
+	if !IsItem(site) || id == "" {
+		return nil, 0, fmt.Errorf("invalid item identity")
+	}
+	m := Match{site, id}
+	r.mu.Lock()
+	s := r.sites[m]
+	if s == nil {
+		if len(r.sites) >= MaxSites {
+			r.mu.Unlock()
+			return nil, 0, fmt.Errorf("live site limit")
+		}
+		n := Node{Type: "engine", Props: map[string]any{"site": string(site), "id": id, "overrides": map[string]any{}}, engine: true}
+		s = &live{owner: "atto", Site: site, ID: id, fallback: &n}
+		r.sites[m] = s
+	}
+	s.props = copyMap(props)
+	r.mu.Unlock()
+	r.render(m, false)
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	s = r.sites[m]
+	if s == nil {
+		return nil, 0, nil
+	}
+	tree := clone(s.Tree)
+	if tree != nil && tree.Type == "engine" && len(tree.Props["overrides"].(map[string]any)) == 0 {
+		tree = nil
+	}
+	return tree, s.Rev, nil
+}
+
+func markOwner(n *Node, owner string) {
+	if n == nil {
+		return
+	}
+	n.owner = owner
+	for i := range n.Children {
+		markOwner(&n.Children[i], owner)
+	}
+}
+func prefixKeys(n *Node, owner string) {
+	if n == nil || n.Type == "engine" {
+		return
+	}
+	if n.owner == "" {
+		n.owner = owner
+		if owner != "atto" && n.Key != "" {
+			n.Key = owner + "/" + n.Key
+		}
+	}
+	for i := range n.Children {
+		prefixKeys(&n.Children[i], owner)
+	}
+}
+
+func (r *Registry) Bound(site Site, id string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	s := r.sites[Match{site, id}]
+	return s != nil && len(s.bindings) > 0
+}
+
+func validNextProps(original, next map[string]any, site Site) bool {
+	allowed := map[string]bool{}
+	for _, key := range overrideFields(site) {
+		allowed[key] = true
+	}
+	a, b := map[string]any{}, map[string]any{}
+	for key, value := range original {
+		if !allowed[key] {
+			a[key] = value
+		}
+	}
+	for key, value := range next {
+		if !allowed[key] {
+			b[key] = value
+		}
+	}
+	return equalProps(a, b)
+}
+
+func (r *Registry) DetachClient(client string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	delete(r.ingress, client)
+	for key := range r.inputAt {
+		if strings.HasPrefix(key, client+"\x00") {
+			delete(r.inputAt, key)
+		}
+	}
+}
+
+// UpdateProps coalesces props changes without publishing another open.
+func (r *Registry) UpdateProps(match Match, props map[string]any) {
+	r.mu.Lock()
+	s := r.sites[match]
+	if s == nil || equalProps(s.props, props) {
+		r.mu.Unlock()
+		return
+	}
+	s.props = copyMap(props)
+	r.mu.Unlock()
+	r.render(match, false)
+}
+
+func sealEngine(n *Node) { b, _ := json.Marshal(n.Props); n.seal = string(b) }

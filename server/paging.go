@@ -14,6 +14,7 @@ import (
 	"github.com/sebastianrcnt/atto/core"
 	"github.com/sebastianrcnt/atto/core/transcript"
 	"github.com/sebastianrcnt/atto/session"
+	"github.com/sebastianrcnt/atto/ui"
 )
 
 const DefaultItemLimit = 200
@@ -211,6 +212,13 @@ func (t *thread) replayDisk() error {
 }
 
 func (t *thread) dropDisplay() {
+	if t.elements != nil {
+		t.elements.Forget(ui.Match{Site: ui.Transcript})
+		for _, site := range []ui.Site{ui.UserMessage, ui.AssistantMessage, ui.ToolCall, ui.Notice} {
+			t.elements.Forget(ui.Match{Site: site})
+		}
+	}
+	t.uiEntries = nil
 	t.items = nil
 	t.blocks = blocks{}
 	t.itemOrder = nil
@@ -268,6 +276,9 @@ func (s *Server) snapshotResult(ctx context.Context, method string, p threadPara
 }
 
 func shapeSnapshot(info ThreadInfo, requestedLimit int) (ThreadInfo, error) {
+	if info.UI == nil {
+		info.UI = &ui.Snapshot{Version: 1, Instances: []ui.Instance{}}
+	}
 	info.Paged = true
 	limit := requestedLimit
 	if (len(info.Items) > 0 || info.SessionPath == "") && (limit <= 0 || limit <= DefaultItemLimit) {

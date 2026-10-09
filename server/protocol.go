@@ -340,8 +340,9 @@ const (
 // Item is one unit of a turn's output: the protocol form of a
 // transcript.Item.
 type UIDisplay struct {
-	Rev  int64    `json:"rev"`
-	Tree *ui.Node `json:"tree"`
+	ActionsEnabled bool     `json:"actionsEnabled,omitempty"`
+	Rev            int64    `json:"rev"`
+	Tree           *ui.Node `json:"tree"`
 }
 
 type Item struct {

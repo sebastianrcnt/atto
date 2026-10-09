@@ -250,6 +250,11 @@ func (a *App) wireStarted(w server.Item) {
 	}
 	if w.Type == server.ItemNotice {
 		a.noticeItem(w)
+		if children := a.ui.Body.Children; len(children) > 0 {
+			if g, ok := children[len(children)-1].(gap); ok {
+				a.rememberNative(w, g.Component)
+			}
+		}
 		return
 	}
 	it := server.TranscriptItem(w)
@@ -264,6 +269,7 @@ func (a *App) wireStarted(w server.Item) {
 		}
 		b := &userBlock{text: it.Text, remote: remote}
 		a.add(b)
+		a.rememberNative(w, b)
 		a.steerGroup, a.steerBlock = w.SteerGroup, nil
 		if w.SteerGroup != "" {
 			a.steerBlock = b
@@ -286,6 +292,16 @@ func (a *App) wireStarted(w server.Item) {
 		it.Text, it.Output = "", ""
 	}
 	a.itemStarted(&it)
+	switch it.Kind {
+	case transcript.Assistant:
+		a.rememberNative(w, a.text)
+	case transcript.Reasoning:
+		a.rememberNative(w, a.thinking)
+	case transcript.Tool:
+		a.rememberNative(w, a.tools[w.ID])
+	case transcript.Shell:
+		a.rememberNative(w, a.shellBlk)
+	}
 	if w.BlockID != "" {
 		a.bindBlock(w)
 	}
@@ -305,6 +321,7 @@ func (a *App) wireStarted(w server.Item) {
 }
 
 func (a *App) wireDelta(id, d string) {
+	a.uiItemDelta(id, d)
 	kind, ok := a.kinds[id]
 	if !ok {
 		return
@@ -321,6 +338,7 @@ func (a *App) wireDelta(id, d string) {
 }
 
 func (a *App) wireUpdated(w server.Item) {
+	a.applyUIItem(w)
 	if w.Type == server.ItemUIBlock {
 		a.portableBlock(w)
 		return
@@ -342,6 +360,7 @@ func (a *App) wireUpdated(w server.Item) {
 }
 
 func (a *App) wireCompleted(w server.Item) {
+	defer a.applyUIItem(w)
 	if w.Type == server.ItemNotice {
 		if _, started := a.kinds[w.ID]; !started && !a.replaying {
 			a.noticeItem(w)

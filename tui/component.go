@@ -114,3 +114,21 @@ func (c *Container) Render(width int) []string {
 type Screen interface {
 	RenderScreen(width, height int) []string
 }
+
+// CellClickable adds horizontal hit testing without changing legacy components.
+type CellClickable interface{ ClickAt(column, line int) bool }
+
+func (c *Container) ClickAt(column, line int) bool {
+	for _, r := range c.ranges {
+		if line >= r.start && line < r.end {
+			if cell, ok := r.c.(CellClickable); ok {
+				return cell.ClickAt(column, line-r.start)
+			}
+			if click, ok := r.c.(Clickable); ok {
+				return click.Click(line - r.start)
+			}
+			return false
+		}
+	}
+	return false
+}

@@ -49,6 +49,11 @@ func newInstanceID() string {
 // initialize answers initialize: the server, the revision agreed and what
 // the client follows events from.
 func (s *Server) initialize(ctx context.Context, p threadParams) (any, error) {
+	if p.Capabilities != nil && p.Capabilities.UI != nil {
+		if err := p.Capabilities.UI.Validate(); err != nil {
+			return nil, invalid("%s", err)
+		}
+	}
 	v, err := negotiate(p.ProtocolVersions)
 	if err != nil {
 		return nil, err

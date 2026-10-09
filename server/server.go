@@ -819,6 +819,9 @@ func (s *Server) detach(t *thread, client, reason string) detachResult {
 	now := false
 	_ = t.call(func() error {
 		delete(t.attached, client)
+		if t.elements != nil {
+			t.elements.DetachClient(client)
+		}
 		if len(t.attached) == 0 {
 			t.dropDisplay()
 		}
@@ -856,6 +859,9 @@ func (s *Server) clientGone(id string) {
 				return
 			}
 			delete(t.attached, id)
+			if t.elements != nil {
+				t.elements.DetachClient(id)
+			}
 			if len(t.attached) == 0 {
 				t.dropDisplay()
 			}

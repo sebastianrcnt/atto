@@ -84,6 +84,11 @@ func (r *toolRun) tools() []*toolBlock {
 
 // grouped reports whether the run shows as a group.
 func (r *toolRun) grouped() bool {
+	for _, m := range r.members {
+		if _, ok := m.(*uiItemBlock); ok {
+			return false
+		}
+	}
 	if r.off != nil && *r.off {
 		return false
 	}

@@ -20,6 +20,8 @@ import (
 
 // resetItems forgets the items of a cleared transcript.
 func (a *App) resetItems() {
+	a.nativeItems = nil
+	a.itemUI = nil
 	a.thinking, a.text, a.compact, a.summaryBlk, a.shellBlk = nil, nil, nil, nil, nil
 	a.steerGroup, a.steerBlock = "", nil
 	clear(a.tools)

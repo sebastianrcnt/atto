@@ -162,7 +162,7 @@ func validate(site Site, tree Node, replay bool, id string, engineNode *Node) er
 			return fmt.Errorf("invalid type")
 		}
 		if n.Key != "" {
-			if len(n.Key) > 128 || !utf8.ValidString(n.Key) || strings.ContainsAny(n.Key, "\x00\x1b") || keys[n.Key] {
+			if n.Key == "$site" || len(n.Key) > 128 || !utf8.ValidString(n.Key) || strings.ContainsAny(n.Key, "\x00\x1b") || keys[n.Key] {
 				return fmt.Errorf("invalid/duplicate key %q", n.Key)
 			}
 			keys[n.Key] = true
@@ -190,7 +190,8 @@ func validate(site Site, tree Node, replay bool, id string, engineNode *Node) er
 			if !IsItem(site) || refs > 1 || len(n.Children) > 0 || len(n.Events) > 0 {
 				return fmt.Errorf("illegal engine reference")
 			}
-			if !replay && !n.engine {
+			b, _ := json.Marshal(n.Props)
+			if !replay && (!n.engine || n.seal != string(b)) {
 				return fmt.Errorf("unminted engine reference")
 			}
 			if n.Props["site"] != string(site) || id != "" && n.Props["id"] != id {
@@ -394,7 +395,7 @@ func validate(site Site, tree Node, replay bool, id string, engineNode *Node) er
 	return nil
 }
 
-var markdownLinks = regexp.MustCompile(`\]\(\s*([^\s)]+)|<(https?://[^>]+)>`)
+var markdownLinks = regexp.MustCompile(`\]\(([^)]*)\)|<(https?://[^>]+)>`)
 
 func validatePropsNested(p map[string]any, spec string) error {
 	if _, ok := p["color"]; ok {

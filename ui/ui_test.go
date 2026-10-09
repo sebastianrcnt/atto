@@ -126,7 +126,7 @@ func TestCoalescing(t *testing.T) {
 	time.Sleep(150 * time.Millisecond)
 	mu.Lock()
 	defer mu.Unlock()
-	if count != 2 {
+	if count != 1 {
 		t.Fatalf("got %d renders", count)
 	}
 }
@@ -221,5 +221,93 @@ func TestDialogMiddlewareRequiresDefaultOnce(t *testing.T) {
 				t.Fatal("invalid wrapper did not revert")
 			}
 		})
+	}
+}
+
+func TestProviderKeysAndPassiveBindings(t *testing.T) {
+	r := NewRegistry(nil, nil)
+	defer r.Stop()
+	m := Match{Pane, "atto/p"}
+	fallback := Button(ButtonProps{Key: "native", Label: "Native"})
+	r.Render("ext", m, func(e Event, next Next) (*Node, error) {
+		original, err := next(e)
+		if err != nil {
+			return nil, err
+		}
+		n := Box(BoxProps{}, *original, Button(ButtonProps{Key: "native", Label: "Extension"}))
+		return &n, nil
+	})
+	called := 0
+	r.Bind("ext", m, "native", Press, func(context.Context, Action) error { called++; return nil })
+	_ = r.OpenDefault("atto", OpenOptions{Site: Pane, ID: m.ID}, nil, &fallback)
+	i := r.Snapshot().Instances[0]
+	if i.Tree.Children[0].Key != "native" || i.Tree.Children[1].Key != "ext/native" {
+		t.Fatal(i.Tree)
+	}
+	if err := r.Route(context.Background(), Action{Site: Pane, ID: m.ID, Key: "native", Type: Press, Rev: i.Rev}); err == nil {
+		t.Fatal("extension bound native control")
+	}
+	if err := r.Route(context.Background(), Action{Site: Pane, ID: m.ID, Key: "ext/native", Type: Press, Rev: i.Rev}); err != nil || called != 1 {
+		t.Fatal(err, called)
+	}
+}
+
+func TestInvalidMiddlewareUsesFreshBuiltinTail(t *testing.T) {
+	r := NewRegistry(nil, nil)
+	defer r.Stop()
+	value := "initial"
+	m := Match{Pane, "atto/fallback"}
+	r.Render("atto", m, func(Event, Next) (*Node, error) { n := Text(TextProps{Text: value}); return &n, nil })
+	r.Render("bad", m, func(Event, Next) (*Node, error) { n := Text(TextProps{}); n.Props["unknown"] = true; return &n, nil })
+	_ = r.Open("atto", OpenOptions{Site: Pane, ID: m.ID})
+	if PlainText(*r.Snapshot().Instances[0].Tree) != "initial" {
+		t.Fatal("missing built-in default")
+	}
+	value = "fresh"
+	time.Sleep(110 * time.Millisecond)
+	r.Invalidate(m)
+	if PlainText(*r.Snapshot().Instances[0].Tree) != "fresh" {
+		t.Fatal("stale fallback")
+	}
+}
+
+func TestMarkdownAllowsOnlyCompleteSafeTargets(t *testing.T) {
+	for _, text := range []string{"[x](https://example.com javascript:evil)", "[x]( https://example.com)", "<http://example.com>", "[x](data:text/plain,x)"} {
+		if Validate(Pane, Markdown(MarkdownProps{Text: text})) == nil {
+			t.Fatal("unsafe Markdown accepted", text)
+		}
+	}
+}
+
+func TestModifiedEngineReferenceFallsBack(t *testing.T) {
+	r := NewRegistry(nil, nil)
+	defer r.Stop()
+	m := Match{ToolCall, "item"}
+	r.Render("ext", m, func(e Event, next Next) (*Node, error) {
+		n, err := next(e)
+		if err != nil {
+			return nil, err
+		}
+		n.Props["overrides"] = map[string]any{"output": "forged"}
+		return n, nil
+	})
+	n, _, err := r.DrawItem(m.Site, m.ID, map[string]any{"output": "original"})
+	if err != nil || n != nil {
+		t.Fatal("modified opaque ref accepted", n, err)
+	}
+}
+func TestRenderDeadlineUsesDefault(t *testing.T) {
+	r := NewRegistry(nil, nil)
+	defer r.Stop()
+	m := Match{Band, "atto/timeout"}
+	fallback := Text(TextProps{Text: "default"})
+	r.Render("slow", m, func(Event, Next) (*Node, error) {
+		time.Sleep(110 * time.Millisecond)
+		n := Text(TextProps{Text: "late"})
+		return &n, nil
+	})
+	_ = r.OpenDefault("atto", OpenOptions{Site: Band, ID: m.ID}, nil, &fallback)
+	if PlainText(*r.Snapshot().Instances[0].Tree) != "default" {
+		t.Fatal("late render published")
 	}
 }

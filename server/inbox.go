@@ -131,6 +131,9 @@ const sourceReloaded = "reloaded"
 // (a request in flight keeps the prompt it was sent with). forModel: the
 // agent asked (atto reload) and is told the result.
 func (t *thread) requestReload(forModel bool) {
+	if t.elements != nil {
+		t.elements.ResetBindings()
+	}
 	t.cancelExtensionPrompts()
 	if !t.turns.Busy {
 		t.reloadNow(forModel)
@@ -190,6 +193,9 @@ func (t *thread) applyReload(r core.Reloaded, err error) {
 	t.publish("thread/reloaded", map[string]any{"context": r.Loaded, "changes": r.Changes, "promptChanged": r.PromptChanged, "note": r.PromptNote()})
 	t.catalogChanged()
 	t.updated()
+	if t.elements != nil {
+		t.elements.Invalidate(ui.Match{})
+	}
 	t.askMCPApprovals() // a project server the reload found
 }
 

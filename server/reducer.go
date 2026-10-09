@@ -119,6 +119,11 @@ func (v *ThreadView) Apply(n Notification) bool {
 			instances = append(instances, update.Instance)
 		}
 		v.Info.UI.Instances = instances
+		if ui.IsItem(update.Site) && n.Method == "ui/render" {
+			if i, ok := v.index[update.ID]; ok {
+				v.Items[i].UIDisplay = &UIDisplay{Rev: update.Rev, Tree: update.Tree}
+			}
+		}
 
 	case "item/started", "item/updated", "item/completed":
 		if p.Item == nil {

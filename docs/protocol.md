@@ -641,3 +641,12 @@ from the transport, never action payload. Read-only sessions cannot act.
 and `ui_item_display` contain only display data, excluded from model history.
 Pages replay the active branch and apply latest overlays without running any
 historical provider code. Saved controls remain unbound until fresh rendering.
+
+Live item overlays may include `uiDisplay.actionsEnabled:true` when current
+rendering has bound callbacks. Saved/offline overlays omit that flag; clients
+show worker controls disabled, while Link/Collapse/show-original remain local.
+Engine references have exactly `{site,id,overrides}` props, are minted/sealed by
+the registry, never cross item identities, and appear at most once per tree.
+Page replay resolves their runtime item IDs from stable entry/block/call identity.
+Helper dialog references are expanded worker-side and never appear on the wire.
+Observers (`capabilities.interactive:false`) cannot send `ui/event` requests.

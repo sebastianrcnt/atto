@@ -367,6 +367,7 @@ func (t *thread) addNotice(it Item) {
 			t.items = slices.Delete(t.items, i, i+1)
 		}
 	}
+	it = t.drawUIItem(it)
 	t.publish("item/completed", map[string]any{"turnId": t.turnID, "item": it})
 }
 

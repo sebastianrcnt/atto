@@ -100,6 +100,7 @@ func (a *App) use(cn *conn) {
 		return
 	}
 	a.conn = cn
+	a.uiCapabilityWidth = 0
 	a.snapEvent, a.notifyEvent = 0, 0
 	a.snapshotEvents = nil
 	a.snapshotPending = 0

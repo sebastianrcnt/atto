@@ -37,7 +37,7 @@ func (t *thread) handler() transcript.Handler {
 			if len(t.attached) > 0 {
 				t.startedItem(it.ID)
 			}
-			w := t.wire(it)
+			w := t.drawUIItem(t.wire(it))
 			if len(t.metas) > 0 {
 				m := t.metas[0]
 				t.metas = t.metas[1:]
@@ -47,13 +47,16 @@ func (t *thread) handler() transcript.Handler {
 			t.publish("item/started", map[string]any{"turnId": t.turnID, "item": w})
 		},
 		Delta: func(it *transcript.Item, d string) {
+			t.drawUIItem(t.wire(it))
 			t.publish("item/delta", map[string]any{"turnId": t.turnID, "itemId": it.ID, "delta": d})
 		},
 		Updated: func(it *transcript.Item) {
-			t.publish("item/updated", map[string]any{"turnId": t.turnID, "item": t.wire(it)})
+			w := t.drawUIItem(t.wire(it))
+			t.publish("item/updated", map[string]any{"turnId": t.turnID, "item": w})
 		},
 		Completed: func(it *transcript.Item) {
-			w := t.blocks.attach(t.wire(it))
+			w := t.drawUIItem(t.blocks.attach(t.wire(it)))
+			t.persistUIItem(w)
 			if m, ok := t.itemMeta[it.ID]; ok {
 				w.ClientID, w.InputID, w.SteerGroup = m.client, m.input, m.group
 				delete(t.itemMeta, it.ID)
@@ -65,6 +68,13 @@ func (t *thread) handler() transcript.Handler {
 			t.publish("item/completed", map[string]any{"turnId": t.turnID, "item": w})
 		},
 		Saved: func(it *transcript.Item) {
+			w := t.drawUIItem(t.wire(it))
+			t.persistUIItem(w)
+			for i := range t.items {
+				if t.items[i].ID == it.ID {
+					t.items[i].UIDisplay = w.UIDisplay
+				}
+			}
 			if len(t.attached) == 0 {
 				if t.headlessBlocks == nil {
 					t.headlessBlocks = blocks{}

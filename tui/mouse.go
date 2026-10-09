@@ -110,6 +110,16 @@ func (t *TUI) handleScroll(data string) bool {
 }
 
 func (t *TUI) handleMouse(m mouseEvent) {
+	if t.Side != nil && t.sideLeft > 0 && m.x > t.sideLeft && (m.btn == 64 || m.btn == 65) {
+		if s, ok := t.Side.(interface{ Scroll(int) }); ok {
+			delta := 3
+			if m.btn == 64 {
+				delta = -3
+			}
+			s.Scroll(delta)
+		}
+		return
+	}
 	switch {
 	case m.btn == 64:
 		t.ScrollBy(3) // a drag in progress follows on the next frame
@@ -143,7 +153,9 @@ func (t *TUI) clock() time.Time {
 func (t *TUI) press(x, y int) {
 	row := y - 1
 	if t.Side != nil && t.sideLeft > 0 && x > t.sideLeft {
-		if c, ok := t.Side.(Clickable); ok {
+		if c, ok := t.Side.(CellClickable); ok {
+			c.ClickAt(x-1-t.sideLeft, row)
+		} else if c, ok := t.Side.(Clickable); ok {
 			c.Click(row)
 		}
 		return
@@ -151,7 +163,7 @@ func (t *TUI) press(x, y int) {
 	if row >= t.footerTop {
 		t.sel = selection{}
 		t.mouse.down = false
-		t.Footer.Click(row - t.footerTop)
+		t.Footer.ClickAt(max(0, x-1-t.PaddingX), row-t.footerTop)
 		return
 	}
 	if t.onBar(x, y) {
@@ -236,7 +248,7 @@ func (t *TUI) release(x, y int) {
 				// Clicking the pinned line scrolls back up to it.
 				t.ScrollBy(t.viewRows / 2)
 			case row >= t.viewTop && row < t.viewTop+t.viewRows:
-				t.Body.Click(ms.line)
+				t.Body.ClickAt(max(0, x-1-t.PaddingX), ms.line)
 			}
 			return
 		}

@@ -2,18 +2,33 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"github.com/sebastianrcnt/atto/core/transcript"
 	"github.com/sebastianrcnt/atto/session"
 	"github.com/sebastianrcnt/atto/ui"
 	"log"
+	"time"
 )
 
 // uiRegistry is session-owned and all publications run on the worker lane.
 func (t *thread) uiRegistry() *ui.Registry {
 	if t.elements == nil {
 		t.elements = ui.NewRegistry(t.publishUI, func(fn func()) { t.do(fn) })
+		t.elements.Enqueue = func(ctx context.Context, fn ui.Handler, a ui.Action) {
+			t.do(func() {
+				if t.closing {
+					return
+				}
+				if err := fn(ctx, a); err != nil {
+					t.errorNotice(err)
+					n := ui.Text(ui.TextProps{Color: ui.Error, Text: fmt.Sprintf("UI action failed: %.256s", err)})
+					t.uiSeq++
+					_ = t.uiRegistry().OpenDefault("atto", ui.OpenOptions{Site: ui.Toast, ID: fmt.Sprintf("atto/action-error-%d", t.uiSeq), Level: "error", ExpiresAt: time.Now().Add(4 * time.Second).UnixMilli()}, nil, &n)
+				}
+			})
+		}
 		t.elements.Log = func(owner string, site ui.Site, id string, err error) {
 			log.Printf("ui %s/%s/%s: %.256s", owner, site, id, err)
 		}
@@ -31,8 +46,20 @@ func (t *thread) publishUI(m ui.Mutation) {
 		}
 	case "ui/render":
 		p["tree"] = i.Tree
+		if ui.IsItem(i.Site) {
+			p["actionsEnabled"] = t.elements.Bound(i.Site, i.ID)
+		}
 	case "ui/close":
 		p["reason"] = m.Reason
+	}
+	if ui.IsItem(i.Site) && m.Method == "ui/render" {
+		for j := range t.items {
+			if t.items[j].ID == i.ID {
+				w := &t.items[j]
+				w.UIDisplay = &UIDisplay{Rev: i.Rev, Tree: i.Tree, ActionsEnabled: t.elements.Bound(i.Site, i.ID)}
+				t.persistUIItem(*w)
+			}
+		}
 	}
 	if i.Site == ui.Transcript {
 		t.persistUIBlock(m)
@@ -45,12 +72,19 @@ func (t *thread) routeUI(client string, p threadParams) (any, error) {
 	}
 	a := ui.Action{Site: p.Site, ID: p.ID, Key: p.Key, Type: p.EventType, Value: p.Value, Rev: p.Rev, ClientID: client, Surface: "headless"}
 	t.s.mu.Lock()
+	observer := false
 	for _, c := range t.s.clients {
+		if c.id == client && !c.interactive {
+			observer = true
+		}
 		if c.id == client && c.ui != nil {
 			a.Surface = c.ui.Surface
 		}
 	}
 	t.s.mu.Unlock()
+	if observer {
+		return nil, failure(ReasonReadOnly, "this client observes UI but cannot act")
+	}
 	err := t.uiRegistry().Route(context.Background(), a)
 	if err != nil {
 		if re, ok := errors.AsType[*ui.RouteError](err); ok {
@@ -61,14 +95,7 @@ func (t *thread) routeUI(client string, p threadParams) (any, error) {
 	}
 	return map[string]any{"accepted": true, "rev": t.uiRevision(a)}, nil
 }
-func (t *thread) uiRevision(a ui.Action) int64 {
-	for _, i := range t.uiRegistry().Snapshot().Instances {
-		if i.Site == a.Site && i.ID == a.ID {
-			return i.Rev
-		}
-	}
-	return a.Rev + 1
-}
+func (t *thread) uiRevision(a ui.Action) int64 { return t.uiRegistry().Revision(a.Site, a.ID) }
 func (t *thread) persistUIBlock(m ui.Mutation) {
 	if t.uiEntries == nil {
 		t.uiEntries = map[string]string{}
@@ -116,7 +143,7 @@ func (h threadHost) UIBlock(title string, tree ui.Node) {
 	h.do(func() {
 		t := h.t
 		t.uiSeq++
-		id := fmt.Sprintf("atto/block-%d", t.uiSeq)
+		id := fmt.Sprintf("atto/block-%d-%d", time.Now().UnixNano(), t.uiSeq)
 		_ = t.uiRegistry().OpenDefault("atto", ui.OpenOptions{Site: ui.Transcript, ID: id, Title: title}, nil, &tree)
 	})
 }
@@ -151,7 +178,27 @@ func applyUIItems(items []Item, e session.Entry) {
 				it.UITree = nil
 			}
 		} else if e.Type == session.TypeUIItemDisplay && (e.UICallID == "" || it.CallID == e.UICallID) && (e.Block == "" || e.Block == session.BlockReasoning && it.Type == ItemReasoning || e.Block == session.BlockText && it.Type == ItemAgent) {
-			it.UIDisplay = &UIDisplay{Rev: e.UIRev, Tree: e.UITree}
+			it.UIDisplay = &UIDisplay{Rev: e.UIRev, Tree: replayUITree(e.UITree, it.ID)}
 		}
 	}
+}
+
+func replayUITree(n *ui.Node, itemID string) *ui.Node {
+	if n == nil {
+		return nil
+	}
+	b, _ := json.Marshal(n)
+	var out ui.Node
+	_ = json.Unmarshal(b, &out)
+	var walk func(*ui.Node)
+	walk = func(n *ui.Node) {
+		if n.Type == "engine" {
+			n.Props["id"] = itemID
+		}
+		for i := range n.Children {
+			walk(&n.Children[i])
+		}
+	}
+	walk(&out)
+	return &out
 }

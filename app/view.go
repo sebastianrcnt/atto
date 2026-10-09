@@ -720,3 +720,13 @@ func startsWithMarker(line string) bool {
 	i := strings.IndexFunc(plain, func(r rune) bool { return r < '0' || r > '9' })
 	return i > 0 && (plain[i] == '.' || plain[i] == ')')
 }
+
+func (g gap) ClickAt(column, line int) bool {
+	if line <= 0 {
+		return false
+	}
+	if c, ok := g.Component.(tui.CellClickable); ok {
+		return c.ClickAt(column, line-1)
+	}
+	return g.Click(line)
+}

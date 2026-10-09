@@ -3,8 +3,10 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"github.com/sebastianrcnt/atto/provider/providertest"
 	"github.com/sebastianrcnt/atto/session"
 	"github.com/sebastianrcnt/atto/ui"
+	"strings"
 	"testing"
 )
 
@@ -139,5 +141,52 @@ func TestUIDialogFirstAnswerWins(t *testing.T) {
 		return nil
 	}); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestUIItemOverlayPersistsWithoutChangingTruth(t *testing.T) {
+	h := newHarness(t, providertest.Reply{Text: "original answer"})
+	th, _ := h.s.thread(h.id)
+	if err := th.call(func() error {
+		th.uiRegistry().Render("review", ui.Match{Site: ui.AssistantMessage}, func(e ui.Event, next ui.Next) (*ui.Node, error) {
+			n, err := next(e)
+			if err != nil {
+				return nil, err
+			}
+			tree := ui.Box(ui.BoxProps{}, *n, ui.Text(ui.TextProps{Text: "display-only review"}))
+			return &tree, nil
+		})
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	h.call("input/submit", map[string]any{"input": "hello"})
+	h.completed()
+	var path string
+	th.call(func() error { path = th.sess.Path; return nil })
+	_, entries, err := session.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	items := ItemsFromEntries(h.id, entries)
+	found := false
+	for _, w := range items {
+		if w.Type == ItemAgent {
+			if w.Text != "original answer" || w.UIDisplay == nil || w.UIDisplay.Tree == nil || w.UIDisplay.ActionsEnabled {
+				t.Fatalf("truth/overlay: %#v", w)
+			}
+			if err := ui.ValidateDisplay(ui.AssistantMessage, w.ID, *w.UIDisplay.Tree); err != nil {
+				t.Fatal(err)
+			}
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("missing persisted overlay")
+	}
+	for _, e := range entries {
+		if e.Type == session.TypeMessage && e.Message != nil && strings.Contains(e.Message.Content, "display-only review") {
+			t.Fatal("changed model context")
+		}
 	}
 }

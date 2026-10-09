@@ -9,6 +9,7 @@ import (
 	"github.com/sebastianrcnt/atto/ui"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -139,5 +140,26 @@ func TestPortableDialogGoldens(t *testing.T) {
 			before = l.Render(80)
 		}
 		builtinGolden(t, name+"-before", 80, before)
+	}
+}
+
+func TestUIEngineReferenceNativeAndOriginal(t *testing.T) {
+	a := testApp(t)
+	native := server.Item{ID: "answer", Type: server.ItemAgent, Status: "completed", Text: "original answer"}
+	a.wireStarted(native)
+	a.wireCompleted(native)
+	reference := ui.Node{Type: "engine", Props: map[string]any{"site": string(ui.AssistantMessage), "id": native.ID, "overrides": map[string]any{"text": "display override"}}}
+	tree := ui.Box(ui.BoxProps{}, reference, ui.Text(ui.TextProps{Text: "review footer"}))
+	native.UIDisplay = &server.UIDisplay{Rev: 1, Tree: &tree}
+	a.applyUIItem(native)
+	got := bodyText(a)
+	if !strings.Contains(got, "display override") || !strings.Contains(got, "review footer") {
+		t.Fatal(got)
+	}
+	b := a.itemUI[native.ID]
+	b.Click(b.toggleLine)
+	got = bodyText(a)
+	if !strings.Contains(got, "original answer") || strings.Contains(got, "review footer") {
+		t.Fatal(got)
 	}
 }

@@ -47,6 +47,8 @@ const (
 
 // Node is wire data. Treat returned nodes as immutable. Null trees use *Node(nil).
 type Node struct {
+	seal     string
+	owner    string
 	Type     string         `json:"type"`
 	Key      string         `json:"key,omitempty"`
 	Props    map[string]any `json:"props"`

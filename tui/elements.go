@@ -41,6 +41,10 @@ func (e *Elements) SetTree(site ui.Site, id string, rev int64, n *ui.Node) error
 			return err
 		}
 	}
+	focusedKey := ""
+	if len(e.controls) > 0 && e.focus < len(e.controls) {
+		focusedKey = e.controls[e.focus].Key
+	}
 	e.Site, e.ID, e.Rev, e.Tree = site, id, rev, n
 	if e.open == nil {
 		e.open = map[string]bool{}
@@ -67,7 +71,8 @@ func (e *Elements) SetTree(site ui.Site, id string, rev int64, n *ui.Node) error
 			if old, ok := e.values[n.Key]; !ok || old != v {
 				e.values[n.Key] = v
 				for i, o := range options(n) {
-					if !o.Disabled && (v == "" || v == o.Value) {
+					_, explicit := n.Props["value"]
+					if !o.Disabled && (!explicit || v == o.Value) {
 						e.selected[n.Key] = i
 						break
 					}
@@ -81,9 +86,14 @@ func (e *Elements) SetTree(site ui.Site, id string, rev int64, n *ui.Node) error
 		}
 		if n.Props["disabled"] != true && (n.Type == "Button" || n.Type == "Input" || n.Type == "Select" || n.Type == "Collapse") {
 			e.controls = append(e.controls, n)
+			if n.Key == focusedKey {
+				e.focus = len(e.controls) - 1
+			}
 		}
-		for _, c := range n.Children {
-			walk(c)
+		if n.Type != "Collapse" || e.open[n.Key] {
+			for _, c := range n.Children {
+				walk(c)
+			}
 		}
 	}
 	if n != nil {
@@ -212,6 +222,7 @@ func (e *Elements) HandleInput(data string) {
 func (e *Elements) activate(n ui.Node) {
 	if n.Type == "Collapse" {
 		e.open[n.Key] = !e.open[n.Key]
+		_ = e.SetTree(e.Site, e.ID, e.Rev, e.Tree)
 	} else if n.Type == "Button" {
 		e.action(n, ui.Press, nil)
 	}
@@ -224,7 +235,19 @@ func (e *Elements) ClickAt(x, y int) bool {
 				if n.Key == h.key {
 					e.focus = i
 					e.focused = true
-					e.activate(n)
+					if n.Type == "Select" {
+						index := y - h.y
+						if propString(n, "label") != "" {
+							index--
+						}
+						opts := options(n)
+						if index >= 0 && index < len(opts) && !opts[index].Disabled {
+							e.selected[n.Key] = index
+							e.action(n, ui.SelectEvent, &opts[index].Value)
+						}
+					} else {
+						e.activate(n)
+					}
 					return true
 				}
 			}
@@ -623,8 +646,15 @@ func (e *Elements) box(n ui.Node, w, x, y int, color, background ui.ThemeKey) []
 			var parts []string
 			for i, lines := range cells {
 				s := ""
-				if row < len(lines) {
-					s = lines[row]
+				offset := 0
+				align := propString(n, "align")
+				if align == "center" {
+					offset = (height - len(lines)) / 2
+				} else if align == "end" {
+					offset = height - len(lines)
+				}
+				if row-offset >= 0 && row-offset < len(lines) {
+					s = lines[row-offset]
 				}
 				s += strings.Repeat(" ", max(0, widths[i]-VisibleWidth(s)))
 				parts = append(parts, s)
@@ -664,7 +694,15 @@ func (e *Elements) box(n ui.Node, w, x, y int, color, background ui.ThemeKey) []
 		out = append(out, e.style(ui.Border, string(r[0])+strings.Repeat(horiz, max(0, w-2))+string(r[1])))
 	}
 	for _, s := range body {
-		s = strings.Repeat(" ", pad) + Truncate(s, inner, "")
+		s = Truncate(s, inner, "")
+		if align := propString(n, "align"); align == "center" || align == "end" {
+			space := max(0, inner-VisibleWidth(s))
+			if align == "center" {
+				space /= 2
+			}
+			s = strings.Repeat(" ", space) + s
+		}
+		s = strings.Repeat(" ", pad) + s
 		s += strings.Repeat(" ", max(0, w-2*edge-VisibleWidth(s)))
 		if background != "" {
 			s = e.style(background, s)
@@ -677,6 +715,9 @@ func (e *Elements) box(n ui.Node, w, x, y int, color, background ui.ThemeKey) []
 	if bordered {
 		r := []rune(bottom)
 		out = append(out, e.style(ui.Border, string(r[0])+strings.Repeat(horiz, max(0, w-2))+string(r[1])))
+	}
+	for i := range out {
+		out[i] = Truncate(out[i], w, "")
 	}
 	return out
 }
@@ -732,4 +773,25 @@ func (e *Elements) textSpans(n ui.Node, color ui.ThemeKey) string {
 		text += e.textSpans(c, color)
 	}
 	return text
+}
+
+// FocusLine lets a site's native scroll viewport keep its focused control visible.
+func (e *Elements) FocusLine() int {
+	if !e.focused || len(e.controls) == 0 {
+		return -1
+	}
+	n := e.controls[e.focus]
+	for _, h := range e.hits {
+		if h.key == n.Key {
+			line := h.y
+			if n.Type == "Select" {
+				line += e.selected[n.Key]
+				if propString(n, "label") != "" {
+					line++
+				}
+			}
+			return line
+		}
+	}
+	return -1
 }

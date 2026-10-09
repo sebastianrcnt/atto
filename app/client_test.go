@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"encoding/json"
+	"github.com/sebastianrcnt/atto/tui"
 	"os"
 	"path/filepath"
 	"strings"
@@ -97,7 +98,7 @@ func TestGoalCommandsAndReplacePrompt(t *testing.T) {
 	within(t, a, "the goal paused", func() bool { g := a.theGoal(); return g != nil && g.Status == "paused" })
 	waitIdle(t, a)
 	typeLine(a, "/goal write the docs")
-	within(t, a, "the confirmation", func() bool { _, ok := a.modal.(goalPrompt); return ok })
+	within(t, a, "the confirmation", func() bool { _, ok := a.modal.(*tui.Elements); return ok })
 	if s := screen(a); !strings.Contains(s, "Replace goal?") || !strings.Contains(s, "write the docs") {
 		t.Fatalf("prompt:\n%s", s)
 	}
@@ -106,7 +107,7 @@ func TestGoalCommandsAndReplacePrompt(t *testing.T) {
 	typeLine(a, "/goal pause")
 	waitIdle(t, a)
 	typeLine(a, "/goal")
-	within(t, a, "the summary", func() bool { return strings.Contains(bodyText(a), "Objective: write the docs") })
+	within(t, a, "the summary", func() bool { return strings.Contains(plainLines(a.renderPortable(80)), "Objective: write the docs") })
 }
 
 const dialogExtension = `

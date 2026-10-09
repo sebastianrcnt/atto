@@ -223,7 +223,7 @@ func (s *Server) workerRoute(ctx context.Context, p threadParams, start bool) (*
 	var capabilities *Capabilities
 	if cc := connOf(ctx); cc != nil {
 		s.mu.Lock()
-		capabilities = &Capabilities{Interactive: cc.interactive, Images: true}
+		capabilities = &Capabilities{Interactive: cc.interactive, Images: true, UI: cc.ui}
 		s.mu.Unlock()
 	}
 	err = c.Call(ctx, "initialize", map[string]any{"protocolVersions": []int{ProtocolVersion}, "clientInfo": ClientInfo{Name: "atto-gateway", Version: s.Version}, "capabilities": capabilities}, &init)

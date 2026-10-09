@@ -11,6 +11,7 @@ import (
 	"github.com/sebastianrcnt/atto/images"
 	"github.com/sebastianrcnt/atto/provider"
 	"github.com/sebastianrcnt/atto/session"
+	"github.com/sebastianrcnt/atto/ui"
 )
 
 // Going back, after pi. Sessions are trees: moving the active leaf to an
@@ -163,6 +164,14 @@ func entryImages(entries []session.Entry, id string) []provider.Image {
 
 // showBranchDisk restores only model context and a bounded display tail.
 func (t *thread) showBranchDisk() {
+	if t.elements != nil {
+		t.elements.ResetBindings()
+		t.elements.Forget(ui.Match{Site: ui.Transcript})
+		for _, site := range []ui.Site{ui.UserMessage, ui.AssistantMessage, ui.ToolCall, ui.Notice} {
+			t.elements.Forget(ui.Match{Site: site})
+		}
+	}
+	t.uiEntries = nil
 	loaded, err := session.ReadContext(t.sess.Path)
 	if err != nil {
 		t.errorNotice(err)

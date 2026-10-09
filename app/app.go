@@ -46,12 +46,17 @@ type modal interface {
 }
 
 type App struct {
-	elements    map[ui.Match]*tui.Elements
-	uiBlocks    map[string]*tui.Elements
-	focusedSite *tui.Elements
-	paneTab     int
-	ui          *tui.TUI
-	models      config.ModelsFile
+	uiCapabilityWidth int
+	portableHits      []portableHit
+	paneScroll        map[ui.Match]int
+	nativeItems       map[string]tui.Component
+	itemUI            map[string]*uiItemBlock
+	elements          map[ui.Match]*tui.Elements
+	uiBlocks          map[string]*tui.Elements
+	focusedSite       *tui.Elements
+	paneTab           int
+	ui                *tui.TUI
+	models            config.ModelsFile
 
 	// conn is the connection to the session runtime; threadID the thread
 	// this terminal shows and info its state as the runtime last said.
@@ -407,7 +412,7 @@ func (a *App) build() {
 
 	// The command list sits above the input, as in Claude Code, so the
 	// input and the status line keep their place as it opens and closes.
-	a.ui.Footer.Add(tui.Func(a.renderActivity), tui.Func(a.renderPending), jumpPill{a}, tui.Func(a.renderReadOnly), tui.Func(a.renderWidgets), tui.Func(a.renderPortable), tui.Func(a.renderSuggestions), tui.Func(a.renderInput), tui.Func(a.renderStatus))
+	a.ui.Footer.Add(tui.Func(a.renderActivity), tui.Func(a.renderPending), jumpPill{a}, tui.Func(a.renderReadOnly), tui.Func(a.renderWidgets), portableFooter{a}, tui.Func(a.renderSuggestions), inputFooter{a}, tui.Func(a.renderStatus))
 	a.ui.SetFocus(a.editor)
 	a.ui.OnInput = a.onInput
 	a.ui.OnCopy = a.copySelection

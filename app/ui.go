@@ -79,7 +79,23 @@ func (a *App) focusUI(e *tui.Elements) {
 	if e == nil || a.editor.Text() != "" || a.modal != nil {
 		return
 	}
+	a.activateSiteFocus(e)
+}
+func (a *App) activateSiteFocus(e *tui.Elements) {
 	a.focusedSite = e
+	for index, i := range a.liveUI(ui.Pane) {
+		if i.ID == e.ID {
+			a.paneTab = index
+			if i.Options.CloseOnEscape {
+				e.OnEscape = func() {
+					a.uiAction(ui.Action{Site: ui.Pane, ID: e.ID, Rev: e.Rev, Key: "$site", Type: ui.CloseEvent})
+					a.focusedSite = nil
+					a.ui.SetFocus(a.editor)
+				}
+			}
+			break
+		}
+	}
 	a.ui.SetFocus(e)
 }
 func (a *App) focusFirstUI() bool {
@@ -92,6 +108,20 @@ func (a *App) focusFirstUI() bool {
 	return false
 }
 func (a *App) uiNotification(n server.Notification) {
+	var item struct {
+		ui.Instance
+		ActionsEnabled bool `json:"actionsEnabled"`
+	}
+	if json.Unmarshal(n.Params, &item) == nil && ui.IsItem(item.Site) && n.Method == "ui/render" {
+		for _, w := range a.view.Items {
+			if w.ID == item.ID {
+				w.UIDisplay = &server.UIDisplay{Rev: item.Rev, Tree: item.Tree, ActionsEnabled: item.ActionsEnabled}
+				a.applyUIItem(w)
+				break
+			}
+		}
+	}
+
 	a.applyUI(a.view.Info.UI)
 	if p := a.view.Info.Prompt; p != nil && a.modal == nil {
 		a.promptOpened(*p)
@@ -106,10 +136,18 @@ func (a *App) uiNotification(n server.Notification) {
 	}
 }
 func (a *App) renderPortable(width int) []string {
+	columns, _ := a.ui.Size()
+	if a.conn != nil && columns != a.uiCapabilityWidth {
+		a.uiCapabilityWidth = columns
+		a.rpc("ui/capabilities", map[string]any{"surface": "terminal", "width": columns, "elements": ui.Catalog()}, nil)
+	}
+	a.portableHits = nil
 	var out []string
 	for _, i := range a.liveUI(ui.Band) {
 		if e := a.elements[ui.Match{Site: i.Site, ID: i.ID}]; e != nil {
-			out = append(out, e.Render(width)...)
+			lines := e.Render(width)
+			a.portableHits = append(a.portableHits, portableHit{element: e, start: len(out), end: len(out) + len(lines)})
+			out = append(out, lines...)
 		}
 	}
 	w, h := a.ui.Size()
@@ -121,7 +159,9 @@ func (a *App) renderPortable(width int) []string {
 		if index != a.paneTab {
 			continue
 		}
-		out = append(out, a.paneLines(i, width, rows)...)
+		lines := a.paneLines(i, width, rows)
+		a.portableHits = append(a.portableHits, portableHit{element: a.elements[ui.Match{Site: i.Site, ID: i.ID}], start: len(out), end: len(out) + len(lines), pane: true})
+		out = append(out, lines...)
 	}
 	for _, i := range a.liveUI(ui.Toast) {
 		if e := a.elements[ui.Match{Site: i.Site, ID: i.ID}]; e != nil {
@@ -149,10 +189,23 @@ func (a *App) paneLines(i ui.Instance, width, rows int) []string {
 	}
 	head := tui.Truncate(strings.Join(titles, tui.Dim(" │ "))+tui.Dim(" · tab focus · esc return"), width, "…")
 	lines := e.Render(width)
-	rows = max(1, rows)
-	if len(lines) > rows-1 {
-		lines = lines[:rows-1]
+	rows = max(2, rows)
+	m := ui.Match{Site: i.Site, ID: i.ID}
+	if a.paneScroll == nil {
+		a.paneScroll = map[ui.Match]int{}
 	}
+	offset := min(a.paneScroll[m], max(0, len(lines)-rows+1))
+	if a.focusedSite == e {
+		if focus := e.FocusLine(); focus >= 0 {
+			if focus < offset {
+				offset = focus
+			} else if focus >= offset+rows-1 {
+				offset = focus - rows + 2
+			}
+		}
+	}
+	a.paneScroll[m] = offset
+	lines = lines[offset:min(len(lines), offset+rows-1)]
 	return append([]string{head}, lines...)
 }
 
@@ -177,8 +230,9 @@ func (p *paneDock) Click(line int) bool {
 		return true
 	}
 	e := p.a.elements[ui.Match{Site: ui.Pane, ID: panes[min(p.a.paneTab, len(panes)-1)].ID}]
-	p.a.focusUI(e)
-	return e.Click(line - 1)
+	p.a.activateSiteFocus(e)
+	offset := p.a.paneScroll[ui.Match{Site: ui.Pane, ID: e.ID}]
+	return e.Click(line - 1 + offset)
 }
 
 // renderUIStatus is priority-aware and passive. One slot is one clipped row;
@@ -265,4 +319,76 @@ func (a *App) portableBlock(w server.Item) *tui.Elements {
 	}
 	_ = e.SetTree(ui.Transcript, w.UIID, w.UIRev, w.UITree)
 	return e
+}
+
+func (p *paneDock) Scroll(delta int) {
+	panes := p.a.liveUI(ui.Pane)
+	if len(panes) == 0 {
+		return
+	}
+	i := panes[min(p.a.paneTab, len(panes)-1)]
+	m := ui.Match{Site: i.Site, ID: i.ID}
+	if p.a.paneScroll == nil {
+		p.a.paneScroll = map[ui.Match]int{}
+	}
+	p.a.paneScroll[m] = max(0, p.a.paneScroll[m]+delta)
+}
+
+type portableHit struct {
+	element    *tui.Elements
+	start, end int
+	pane       bool
+}
+type portableFooter struct{ a *App }
+
+func (p portableFooter) Render(width int) []string { return p.a.renderPortable(width) }
+func (p portableFooter) ClickAt(column, line int) bool {
+	for _, hit := range p.a.portableHits {
+		if line >= hit.start && line < hit.end {
+			local := line - hit.start
+			if hit.pane && local == 0 {
+				panes := p.a.liveUI(ui.Pane)
+				if len(panes) > 0 {
+					p.a.paneTab = (p.a.paneTab + 1) % len(panes)
+					return true
+				}
+			}
+			p.a.activateSiteFocus(hit.element)
+			if hit.pane {
+				local--
+				local += p.a.paneScroll[ui.Match{Site: ui.Pane, ID: hit.element.ID}]
+			}
+			return hit.element.ClickAt(column, local)
+		}
+	}
+	return false
+}
+func (p *paneDock) ClickAt(column, line int) bool {
+	if line == 0 {
+		return p.Click(line)
+	}
+	panes := p.a.liveUI(ui.Pane)
+	if len(panes) == 0 {
+		return false
+	}
+	i := panes[min(p.a.paneTab, len(panes)-1)]
+	e := p.a.elements[ui.Match{Site: ui.Pane, ID: i.ID}]
+	p.a.activateSiteFocus(e)
+	return e.ClickAt(column, line-1+p.a.paneScroll[ui.Match{Site: ui.Pane, ID: i.ID}])
+}
+
+type inputFooter struct{ a *App }
+
+func (p inputFooter) Render(width int) []string { return p.a.renderInput(width) }
+func (p inputFooter) ClickAt(column, line int) bool {
+	if p.a.modal == nil || line < 1 {
+		return false
+	}
+	if c, ok := p.a.modal.(tui.CellClickable); ok {
+		return c.ClickAt(column, line-1)
+	}
+	if c, ok := p.a.modal.(tui.Clickable); ok {
+		return c.Click(line - 1)
+	}
+	return false
 }

@@ -83,3 +83,33 @@ func TestPanePlacement(t *testing.T) {
 		}
 	}
 }
+
+func TestElementNarrowSafetyAndDraft(t *testing.T) {
+	n := elementFixture()
+	e := &Elements{}
+	_ = e.SetTree(ui.Pane, "atto/p", 1, &n)
+	for w := 1; w < 40; w++ {
+		for _, l := range e.Render(w) {
+			if VisibleWidth(l) > w {
+				t.Fatalf("width %d: %q", w, l)
+			}
+		}
+	}
+	input := ui.Input(ui.InputProps{Key: "draft", Value: "é👩‍💻"})
+	_ = e.SetTree(ui.Pane, "atto/p", 2, &input)
+	e.SetFocused(true)
+	e.HandleInput("\x7f")
+	if e.drafts["draft"] != "é" {
+		t.Fatal("split grapheme", e.drafts)
+	}
+	e.HandleInput("x")
+	_ = e.SetTree(ui.Pane, "atto/p", 3, &input)
+	if e.drafts["draft"] != "éx" {
+		t.Fatal("lost draft")
+	}
+	input = ui.Input(ui.InputProps{Key: "draft", Value: "reset"})
+	_ = e.SetTree(ui.Pane, "atto/p", 4, &input)
+	if e.drafts["draft"] != "reset" {
+		t.Fatal("worker value did not reset draft")
+	}
+}
