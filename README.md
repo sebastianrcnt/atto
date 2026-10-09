@@ -266,7 +266,7 @@ To use the terminal's own selection instead, hold the key that bypasses mouse re
 | `/goal [<objective>\|clear\|edit\|pause\|resume]` | set or view the goal for a long-running task, as in codex: bare `/goal` (or `status`) shows it with the time and tokens used, `help` shows the usage, `edit` opens a prompt, a new objective asks before replacing an unfinished goal. The words help and status alone never become an objective. Clearing or pausing while a turn runs is told to the model. A message sent while the goal is waiting, paused, stalled or usage limited carries a short note saying so, so the model answers instead of resuming goal work; a message sent while a goal turn runs says the goal is still active. A turn that fails for any reason a retry might fix (anything but an interrupt, a usage limit, an authentication failure or a request the provider rejected) is retried after 10s, 30s, 1m, 2m, 5m and 10m before the goal stalls (each turn has already sent a failed request up to 5 more times itself); Esc, `/goal pause` and `/goal clear` end the wait. The status shows at the right of the status line ("Pursuing goal (14m)"), Esc pauses it, and opening a session with a paused or stalled goal asks whether to resume |
 | `/agents` | the agent command center (as `←` on an empty prompt) |
 | `/close` | stop this session and its work, then exit the TUI |
-| `/remote` | prints that the web UI is being rebuilt and that `atto app-server --listen ws://HOST:PORT` serves the protocol meanwhile |
+| `/remote [ws://HOST:PORT\|off]` | starts the browser UI for this machine (default `0.0.0.0:7879`); `off` detaches web clients without stopping work |
 | `/jobs`, `/stop` | list or stop background jobs |
 | `/timer`, `/timers` | wake the agent later, or list pending timers |
 | `/quit` | exit atto |
@@ -542,11 +542,65 @@ atto agent roles                    what -role picks from
   The body is added to the agent's system prompt; the names and descriptions are listed for the sessions that may start agents. `atto context` shows them too.
 - The old command names still work: `start` (with `NAME PRESET "<task>"` too), `next`, `steer`, `wait-any`, `stop`, `rm`, `presets`.
 
-**Front end and back end are separate.** Clients attach to the session runtime over one JSON-RPC protocol, built around threads, turns and items (revision 3 is the only one served). `atto app-server` serves it over JSON-lines stdio by default, or `--listen unix:///tmp/atto.sock` (0600, removed on exit), or `--listen ws://127.0.0.1:7878` (one JSON-RPC message per text message). Socket disconnect is detach, not stop. The terminal UI is one such client. A new web UI is planned; until then `atto serve` and `/remote` only print that it is being rebuilt, and `atto app-server` is the way to attach other clients. The [client-author protocol reference](docs/protocol.md) covers every method, notification, handshake, cursor and prompt; a [small Python client](examples/clients/README.md) shows how to attach. `server/protocol.go` contains the Go DTOs.
+**Front end and back end are separate.** Clients attach to the session runtime over one JSON-RPC protocol, built around threads, turns and items (revision 3 is the only one served). `atto app-server` serves it over JSON-lines stdio by default, or `--listen unix:///tmp/atto.sock` (0600, removed on exit), or `--listen ws://127.0.0.1:7878` (one JSON-RPC message per text message). Socket disconnect is detach, not stop. The terminal UI is one such client. The browser UI is another independent client; `atto serve` or `atto app-server --listen ws://HOST:PORT --web` serves it at `/` and the protocol at `/ws`. The [client-author protocol reference](docs/protocol.md) covers every method, notification, handshake, cursor and prompt; a [small Python client](examples/clients/README.md) shows how to attach. `server/protocol.go` contains the Go DTOs.
 
 WS listeners beyond loopback require a bearer token (printed by app-server on stderr and saved in `~/.atto/server-token`); send `Authorization: Bearer <token>` or `?token=`. Browser origins must be same-host, loopback, or explicitly added with repeatable `--allow-origin https://client.example`. There is no built-in TLS: prefer a private network or TLS proxy. All transports route sessions to daemon workers when available; `--in-process` keeps a standalone server runtime. `initialize` (listing protocol revision 3) then `initialized` starts the protocol handshake. Detaching leaves worker execution alive; `thread/close` ends it.
 
 ## Safety
+
+## Web UI
+
+```sh
+atto serve                                      # 0.0.0.0:7879, UI + /ws
+atto app-server --listen ws://127.0.0.1:7879 --web # this machine only
+atto serve --listen ws://0.0.0.0:8080             # choose another port
+```
+
+Open the **one bootstrap link printed on stdout**. For a wildcard listener,
+replace `0.0.0.0` (or `[::]`) with the machine's LAN IP, hostname or Tailscale
+address, keeping the port and `#token=…` fragment. In a running TUI, `/remote`
+starts the same listener against its runtime/workers and prints the link;
+`/remote off` stops listening, not session work. No QR dependency is added.
+
+The sidebar lists saved and live sessions, needs-you flags and agent trees;
+use **Active/Archived** to change inventory. Open several sessions as tabs,
+start/resume, rename, archive/restore or delete with explicit confirmations.
+Transcripts load the latest 100 items first; scroll up to request earlier pages.
+Enter sends (or steers while busy), Shift+Enter makes a newline, Queue defers a
+follow-up, Ctrl/Cmd+Enter sends now, and Esc interrupts. Pick model/effort beside
+the editor; attach images by file picker, paste or drop. Dialogs, extension
+panes/band/status/toasts, `/diff`, `/goal` and `/jobs` draw the same Go UI trees
+as the TUI. The context card and pending-input previews are Go trees too.
+Tree/checkpoint navigation and fork-from-message remain native local pickers.
+
+**Security:** beyond loopback, the bearer token is required, even on a trusted
+LAN. The page consumes the URL fragment once, stores it in this tab's
+`sessionStorage`, and removes it from the address bar. It authenticates `/ws`
+using the `atto.auth.<token>` WebSocket subprotocol offer, never a query token
+or cookie. The server negotiates only `atto.rpc.v3`, not the secret offer.
+Static files contain no secrets; the socket keeps the existing Origin checks.
+Treat the printed link as a shell-access credential; don't share it publicly,
+log it, or expose the listener to the Internet. Reverse proxies must preserve
+WebSocket headers and must **not log credential headers**. Use a trusted LAN,
+Tailscale, or a TLS reverse proxy; ordinary HTTP works, with no HTTPS/PWA/service
+worker requirement. Clipboard copying may require a secure context; the page
+falls back to selectable text. Credential login and repository trust approvals
+remain in the local CLI, not shared extension trees.
+
+Closing a tab/listener detaches clients. With the daemon, sessions continue in
+their workers; `thread/close` explicitly stops work. Without the daemon (or with
+`--in-process`), the runtime lives in the process: exiting that process ends
+its work, as with the TUI. Reconnect replaces snapshots and never retries an
+uncertain send or button action.
+
+**Build:** `go generate ./server/web` uses Go esbuild and a pinned,
+checksum-verified Tailwind standalone CLI (downloaded on first generation;
+`ATTO_WEBGEN_CACHE` selects its cache). The client is plain TypeScript DOM,
+which avoids needing a Preact runtime for this data-only catalog. Normal Go
+builds embed committed `server/web/dist` and require no network or Node.
+`go test ./server/web` checks staleness and runs the TypeScript protocol,
+reducer, catalog and page workflow tests through Go/esbuild/goja and a DOM shim.
+It is not a browser or screenshot test.
 
 atto has **no per-command permission prompts**. It asks before loading repository-supplied hooks, MCP servers and extensions (see Project code approval), but the model's commands still run with your user's permissions. The only command filters are hooks you configure.
 

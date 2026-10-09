@@ -1,0 +1,249 @@
+// Revision 3 only. No uncertain request is retried after a disconnect.
+export type Data = Record<string, any>;
+export type Tree = {
+  type: string;
+  key?: string;
+  props: Data;
+  children?: Tree[];
+  events?: string[];
+};
+export const catalog = [
+  'Box',
+  'Text',
+  'Markdown',
+  'Code',
+  'Diff',
+  'Link',
+  'Button',
+  'Input',
+  'Select',
+  'List',
+  'Progress',
+  'Collapse',
+  'Image',
+];
+export class RPC {
+  next = 0;
+  pending = new Map<number, { resolve: (v: any) => void; reject: (e: any) => void }>();
+  constructor(
+    public send: (s: string) => void,
+    public event: (m: Data) => void,
+  ) {}
+  call(method: string, params: Data = {}): Promise<any> {
+    const id = ++this.next;
+    return new Promise((resolve, reject) => {
+      this.pending.set(id, { resolve, reject });
+      try {
+        this.send(JSON.stringify({ id, method, params }));
+      } catch (e) {
+        this.pending.delete(id);
+        reject(e);
+      }
+    });
+  }
+  notify(method: string, params: Data = {}) {
+    this.send(JSON.stringify({ method, params }));
+  }
+  receive(raw: string) {
+    const m = JSON.parse(raw);
+    if (m.id != null) {
+      const p = this.pending.get(m.id);
+      if (!p) return;
+      this.pending.delete(m.id);
+      m.error
+        ? p.reject(Object.assign(new Error(m.error.message), { data: m.error.data }))
+        : p.resolve(m.result);
+    } else if (m.method) {
+      this.event(m);
+    }
+  }
+  close() {
+    for (const p of this.pending.values())
+      p.reject(new Error('Disconnected: request outcome unknown; not retried.'));
+    this.pending.clear();
+  }
+}
+export class View {
+  info: Data = {};
+  items: Data[] = [];
+  cursor = 0;
+  generation = 0;
+  reset = false;
+  revs = new Map<string, number>();
+  snapshot(s: Data) {
+    this.info = { ...s };
+    this.items = s.items || [];
+    this.cursor = s.eventId || 0;
+    this.reset = false;
+    this.generation++;
+    this.revs.clear();
+    for (const i of s.ui?.instances || []) this.revs.set(i.site + '\0' + i.id, i.rev);
+  }
+  prepend(p: Data, generation: number) {
+    if (generation !== this.generation || this.reset) return false;
+    const seen = new Set(this.items.map((i) => i.id));
+    this.items = [...p.items.filter((i: Data) => !seen.has(i.id)), ...this.items];
+    this.info.hasMore = p.hasMore;
+    this.info.before = p.before;
+    return true;
+  }
+  apply(m: Data) {
+    const p = m.params || {};
+    if (p.threadId && p.threadId !== this.info.threadId) return false;
+    if (
+      m.method === 'events/reset' ||
+      (m.serverInstanceId && m.serverInstanceId !== this.info.serverInstanceId)
+    ) {
+      this.reset = true;
+      this.generation++;
+      return true;
+    }
+    if (this.reset || (m.eventId && m.eventId <= this.cursor)) return false;
+    const find = () => this.items.find((i) => i.id === p.itemId);
+    switch (m.method) {
+      case 'item/started':
+      case 'item/updated':
+      case 'item/completed': {
+        const n = this.items.findIndex((i) => i.id === p.item.id);
+        if (n < 0) this.items.push(p.item);
+        else this.items[n] = p.item;
+        break;
+      }
+      case 'item/delta': {
+        const i = find();
+        if (!i) return false;
+        const k = i.type === 'commandExecution' ? 'output' : 'text';
+        i[k] = (i[k] || '') + p.delta;
+        if (k === 'output' && i[k].length > 131072) i[k] = i[k].slice(-65536);
+        break;
+      }
+      case 'thread/updated':
+        this.info = {
+          ...this.info,
+          ...p.thread,
+          ui: this.info.ui,
+          before: this.info.before,
+          hasMore: this.info.hasMore,
+        };
+        break;
+      case 'turn/started':
+        Object.assign(this.info, {
+          busy: true,
+          turnId: p.turnId,
+          runKind: p.runKind,
+          turn: { startedAt: p.startedAt, verb: p.verb },
+        });
+        break;
+      case 'turn/completed':
+        Object.assign(this.info, {
+          busy: false,
+          turnId: '',
+          activity: null,
+          turn: null,
+          contextTokens: p.contextTokens ?? this.info.contextTokens,
+        });
+        break;
+      case 'turn/activity':
+        this.info.activity = p.activity;
+        break;
+      case 'turn/pending':
+        this.info.pending = p.pending;
+        break;
+      case 'thread/usage':
+        this.info.usage = p.usage;
+        this.info.contextTokens = p.contextTokens ?? this.info.contextTokens;
+        break;
+      case 'goal/updated':
+        this.info.goal = p.goal;
+        break;
+      case 'prompt/open':
+        this.info.prompt = p.prompt;
+        break;
+      case 'prompt/closed':
+        if (this.info.prompt?.id === p.id) this.info.prompt = null;
+        break;
+      case 'thread/branchChanged':
+      case 'thread/closed':
+        this.reset = true;
+        this.generation++;
+        break;
+      case 'ui/open':
+      case 'ui/render':
+      case 'ui/close': {
+        const key = p.site + '\0' + p.id;
+        if (p.rev <= (this.revs.get(key) || 0)) return false;
+        this.revs.set(key, p.rev);
+        if (!this.info.ui) this.info.ui = { version: 1, instances: [] };
+        const a = this.info.ui.instances;
+        const n = a.findIndex((i: Data) => i.site === p.site && i.id === p.id);
+        if (m.method === 'ui/close') {
+          if (n >= 0) a.splice(n, 1);
+        } else if (n >= 0) {
+          a[n] = {
+            ...a[n],
+            rev: p.rev,
+            ...(m.method === 'ui/open' ? { options: p.options } : { tree: p.tree }),
+          };
+        } else if (
+          !['userMessage', 'assistantMessage', 'toolCall', 'notice', 'transcript'].includes(p.site)
+        ) {
+          a.push({ ...p });
+        }
+        if (m.method === 'ui/render') {
+          const block = this.items.find((i) => i.type === 'uiBlock' && i.uiId === p.id);
+          if (block) {
+            block.tree = p.tree;
+            block.rev = p.rev;
+            block.actionsEnabled = p.actionsEnabled;
+          }
+          const i = this.items.find((i) => i.id === p.id);
+          if (i) i.uiDisplay = { rev: p.rev, tree: p.tree, actionsEnabled: p.actionsEnabled };
+        }
+        break;
+      }
+      default:
+        return false;
+    }
+    if (m.eventId) this.cursor = m.eventId;
+    return true;
+  }
+}
+// Same URL allowlist as ui.SafeURL: absolute HTTPS or HTTP loopback only.
+export function safeURL(s: string) {
+  if (s.length > 2048 || /[\\\s\u0000-\u001f\u007f-\u009f]/.test(s)) return false;
+  try {
+    const u = new URL(s);
+    if (u.username || u.password || !u.hostname) return false;
+    if (u.protocol === 'https:') return true;
+    return (
+      u.protocol === 'http:' &&
+      (u.hostname === 'localhost' ||
+        u.hostname === '[::1]' ||
+        /^127\.(\d{1,3}\.){2}\d{1,3}$/.test(u.hostname))
+    );
+  } catch {
+    return false;
+  }
+}
+export function clean(s: any) {
+  return String(s ?? '')
+    .replace(/\x1b\][^\x07]*(?:\x07|\x1b\\)/g, '')
+    .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '')
+    .replace(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/g, '');
+}
+export function consumeToken(
+  location: { hash: string; pathname: string; search: string },
+  storage: { setItem: (k: string, v: string) => void; getItem: (k: string) => string | null },
+  replace: (url: string) => void,
+) {
+  const t = new URLSearchParams(location.hash.slice(1)).get('token');
+  if (t) {
+    storage.setItem('atto-token', t);
+    replace(location.pathname + location.search);
+  }
+  return t || storage.getItem('atto-token') || '';
+}
+export function imageResource(resource: string) {
+  const m = /^([A-Za-z0-9_-]+)-image-(\d+)$/.exec(resource);
+  return m ? { itemId: m[1], index: Number(m[2]) } : null;
+}

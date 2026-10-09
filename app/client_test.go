@@ -235,14 +235,18 @@ func TestReadOnlyProtocolSnapshot(t *testing.T) {
 	}
 }
 
-// /remote only says that the web UI is being rebuilt and how to attach
-// other clients meanwhile.
+// /remote starts a listener on the same runtime.
 func TestRemoteCommandPointsToAppServer(t *testing.T) {
 	a, _ := liveApp(t)
-	typeLine(a, "/remote")
+	typeLine(a, "/remote ws://127.0.0.1:0")
+	t.Cleanup(func() {
+		if a.webListener != nil {
+			a.webListener.Close()
+		}
+	})
 	within(t, a, "the pointer", func() bool {
 		text := bodyText(a)
-		return strings.Contains(text, "web UI is being rebuilt") && strings.Contains(text, "atto app-server --listen ws://HOST:PORT")
+		return strings.Contains(text, "Web UI: http://127.0.0.1:")
 	})
 }
 

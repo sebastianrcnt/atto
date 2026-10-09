@@ -56,6 +56,13 @@ func (s *Server) WebSocketHandler(token string, allowOrigins []string) http.Hand
 
 func bearerOK(r *http.Request, token string) bool {
 	got := r.URL.Query().Get("token")
+	// Browsers cannot set Authorization. Keep credentials out of URLs/logs:
+	// negotiate only the public protocol, never echo the auth offer.
+	for offer := range strings.SplitSeq(r.Header.Get("Sec-WebSocket-Protocol"), ",") {
+		if t, ok := strings.CutPrefix(strings.TrimSpace(offer), "atto.auth."); ok {
+			got = t
+		}
+	}
 	if h := r.Header.Get("Authorization"); strings.HasPrefix(h, "Bearer ") {
 		got = strings.TrimPrefix(h, "Bearer ")
 	}
@@ -114,7 +121,11 @@ func upgradeWS(w http.ResponseWriter, r *http.Request) (*wsConn, error) {
 		return nil, err
 	}
 	digest := sha1.Sum([]byte(key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"))
-	_, err = rw.WriteString("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: " + base64.StdEncoding.EncodeToString(digest[:]) + "\r\n\r\n")
+	protocol := ""
+	if headerToken(r.Header.Get("Sec-WebSocket-Protocol"), "atto.rpc.v3") {
+		protocol = "Sec-WebSocket-Protocol: atto.rpc.v3\r\n"
+	}
+	_, err = rw.WriteString("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: " + base64.StdEncoding.EncodeToString(digest[:]) + "\r\n" + protocol + "\r\n")
 	if err == nil {
 		err = rw.Flush()
 	}

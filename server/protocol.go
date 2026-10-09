@@ -729,7 +729,3 @@ type GoalInfo struct {
 	Goal          *goal.Goal `json:"state,omitempty"`
 	TurnStartedAt int64      `json:"turnStartedAt,omitempty"`
 }
-
-// WebUIMessage is what /remote and atto serve say while the web UI is
-// being rebuilt.
-const WebUIMessage = "The web UI is being rebuilt. Meanwhile, `atto app-server --listen ws://HOST:PORT` serves the protocol."

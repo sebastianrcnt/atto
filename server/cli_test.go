@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"io"
 	"net"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -36,7 +37,7 @@ func TestServerCLIEndToEnd(t *testing.T) {
 	if output, err := exec.Command("go", "build", "-o", binary, "../cmd/atto").CombinedOutput(); err != nil {
 		t.Fatalf("build: %v\n%s", err, output)
 	}
-	for _, transport := range []string{"app-server", "app-server-ws", "app-server-unix"} {
+	for _, transport := range []string{"app-server", "app-server-ws", "app-server-unix", "app-server-web", "serve"} {
 		t.Run(transport, func(t *testing.T) {
 			if transport == "app-server-unix" && runtime.GOOS == "windows" {
 				t.Skip("Unix listener")
@@ -47,6 +48,12 @@ func TestServerCLIEndToEnd(t *testing.T) {
 			model.Install(t, dir)
 			args := []string{transport}
 			socket := filepath.Join(os.TempDir(), "atto-cli-"+newInstanceID()+".sock")
+			if transport == "serve" {
+				args = []string{"serve", "--listen", "ws://127.0.0.1:0"}
+			}
+			if transport == "app-server-web" {
+				args = []string{"app-server", "--listen", "ws://127.0.0.1:0", "--web"}
+			}
 			if transport == "app-server-ws" {
 				args = []string{"app-server", "--listen", "ws://127.0.0.1:0"}
 			}
@@ -67,7 +74,7 @@ func TestServerCLIEndToEnd(t *testing.T) {
 			var stderr bytes.Buffer
 			cmd.Stderr = &stderr
 			var diagnostics io.ReadCloser
-			if transport == "app-server-ws" || transport == "app-server-unix" {
+			if transport == "app-server-ws" || transport == "app-server-unix" || transport == "app-server-web" || transport == "serve" {
 				cmd.Stderr = nil
 				diagnostics, err = cmd.StderrPipe()
 				if err != nil {
@@ -99,11 +106,19 @@ func TestServerCLIEndToEnd(t *testing.T) {
 				client = NewClient(commandConn{stdout, stdin})
 				defer client.Close()
 				invoke = func(method string, p, out any) error { return client.Call(ctx, method, p, out) }
-			} else if transport == "app-server-ws" || transport == "app-server-unix" {
+			} else if transport == "app-server-ws" || transport == "app-server-unix" || transport == "app-server-web" || transport == "serve" {
 				lines := make(chan string, 1)
 				go func() {
-					sc := bufio.NewScanner(diagnostics)
+					reader := diagnostics
+					if transport == "app-server-web" || transport == "serve" {
+						reader = stdout
+					}
+					sc := bufio.NewScanner(reader)
 					for sc.Scan() {
+						if strings.HasPrefix(sc.Text(), "http://") {
+							lines <- strings.TrimSpace(sc.Text())
+							return
+						}
 						if strings.Contains(sc.Text(), "listening on ") {
 							lines <- strings.TrimSpace(strings.SplitN(sc.Text(), "listening on ", 2)[1])
 							return
@@ -125,7 +140,21 @@ func TestServerCLIEndToEnd(t *testing.T) {
 					defer client.Close()
 					invoke = func(method string, p, out any) error { return client.Call(ctx, method, p, out) }
 				} else {
-					ws := dialWS(t, strings.Replace(address, "ws://", "http://", 1), nil, 101)
+					if transport == "app-server-web" || transport == "serve" {
+						for _, path := range []string{"", "app.js", "app.css"} {
+							resp, err := http.Get(address + path)
+							if err != nil {
+								t.Fatal(err)
+							}
+							b, _ := io.ReadAll(resp.Body)
+							resp.Body.Close()
+							if resp.StatusCode != 200 || len(b) == 0 || resp.Header.Get("Content-Security-Policy") == "" {
+								t.Fatalf("asset %s: %d", path, resp.StatusCode)
+							}
+						}
+						address += "ws"
+					}
+					ws := dialWS(t, strings.Replace(address, "ws://", "http://", 1), http.Header{"Sec-WebSocket-Protocol": {"atto.rpc.v3"}}, 101)
 					seq := 0
 					invoke = func(method string, p, out any) error {
 						seq++
@@ -231,25 +260,6 @@ func TestServerCLIEndToEnd(t *testing.T) {
 				t.Fatal(err)
 			}
 		})
-	}
-}
-
-// atto serve and /remote say the web UI is being rebuilt and where the
-// protocol is served meanwhile.
-func TestServeSaysWebUIIsBeingRebuilt(t *testing.T) {
-	binary := filepath.Join(t.TempDir(), "atto")
-	if runtime.GOOS == "windows" {
-		binary += ".exe"
-	}
-	if output, err := exec.Command("go", "build", "-o", binary, "../cmd/atto").CombinedOutput(); err != nil {
-		t.Fatalf("build: %v\n%s", err, output)
-	}
-	cmd := exec.Command(binary, "serve")
-	cmd.Dir = t.TempDir()
-	cmd.Env = append(os.Environ(), "ATTO_DIR="+t.TempDir(), config.EnvAgent+"=", "ATTO_SESSION_ID=", "HOME="+t.TempDir(), "USERPROFILE="+t.TempDir())
-	out, err := cmd.CombinedOutput()
-	if err != nil || strings.TrimSpace(string(out)) != WebUIMessage || !strings.Contains(WebUIMessage, "atto app-server --listen ws://HOST:PORT") {
-		t.Fatalf("atto serve: %v %q", err, out)
 	}
 }
 

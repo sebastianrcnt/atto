@@ -57,7 +57,7 @@ func localCommands() map[string]func(a *App, arg string) bool {
 		"jobs":       func(a *App, arg string) bool { a.cmdJobs(arg); return true },
 		"timers":     func(a *App, arg string) bool { a.cmdTimers(arg); return true },
 		"tui":        func(a *App, arg string) bool { a.cmdTui(arg); return true },
-		"remote":     func(a *App, arg string) bool { a.notice("%s", server.WebUIMessage); return true },
+		"remote":     func(a *App, arg string) bool { a.cmdRemote(arg); return true },
 		"clear":      func(a *App, arg string) bool { a.cmdClear(arg); return true },
 		"new":        func(a *App, arg string) bool { a.cmdClear(arg); return true },
 		"agents":     func(a *App, arg string) bool { a.cmdAgents(arg); return true },

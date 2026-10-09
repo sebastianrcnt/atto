@@ -100,3 +100,73 @@ DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
 THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+
+New browser UI (server/web, stage 4):
+
+- Beautiful UI (https://www.beautifului.dev, MIT): Thinking (native reasoning
+  disclosure/activity), Streaming Text (stream cursor/fade), Tool Chips (command
+  disclosure), Approval Card (dialogs), Task Rows (table/queue/inventory), Code
+  Block, Diff Table, Prompt Bar (composer/attachments), and Chat (transcript,
+  sidebar and theme tokens). Adaptations are in src/main.ts, src/elements.ts and
+  src/app.css. The frozen client's MIT Beautiful UI adaptations were consulted
+  for Thinking and Prompt Bar, and its Beautiful UI theme tokens were adapted.
+  No frozen protocol code was restored.
+- Tailwind CSS (https://tailwindcss.com, MIT): standalone CLI v4.3.3 generates
+  dist/app.css, including Tailwind's base styles. The CLI is a build tool and
+  is not embedded in atto. Its checksum-pinned releases are used by gen.go.
+- Vercel AI Elements (https://elements.ai-sdk.dev): design/behavior reference
+  only for Queue, Checkpoint, Context, Confirmation, Reasoning/Chain of Thought,
+  Tool, Plan/Task, Prompt Input/Model Selector/Attachments, Shimmer, Agent and
+  Terminal. No source copied or bundled; no license compatibility assumed.
+
+There is no Preact/React/Radix/Next.js runtime in the new plain TypeScript DOM
+bundle. esbuild/goja are existing Go dependencies (MIT), used for build/tests.
+
+Beautiful UI is distributed under the MIT License:
+
+MIT License
+
+Copyright (c) 2026 Shane Levine
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+Tailwind CSS is distributed under the MIT License:
+
+MIT License
+
+Copyright (c) Tailwind Labs, Inc.
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.

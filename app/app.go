@@ -46,6 +46,8 @@ type modal interface {
 }
 
 type App struct {
+	webListener       *server.WebListener
+	webServer         *server.Server
 	uiCapabilityWidth int
 	portableHits      []portableHit
 	paneScroll        map[ui.Match]int
@@ -358,6 +360,13 @@ func (a *App) show(info server.ThreadInfo) {
 // runtime goes with this process: its sessions end (SessionEnd, jobs
 // stop), unless one went to a background run.
 func (a *App) shutdown() error {
+	if a.webListener != nil {
+		a.webListener.Close()
+		_ = a.webListener.Wait()
+	}
+	if a.webServer != nil {
+		a.webServer.Close()
+	}
 	var threadID, bgLine string
 	a.ui.Do(func() {
 		if a.stopTicker != nil {

@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"flag"
+	"fmt"
 	"os"
 	"os/signal"
 	"syscall"
@@ -19,6 +20,7 @@ func RunStdioWith(version string, args []string, routes *WorkerRoutes) error {
 	var origins originFlags
 	fs.Var(&origins, "allow-origin", "additional browser origin allowed on WebSocket (repeatable)")
 	inProcess := fs.Bool("in-process", false, "run session runtimes in this process")
+	web := fs.Bool("web", false, "serve the browser UI at / and WebSocket protocol at /ws")
 	listen := fs.String("listen", "stdio://", "transport: stdio://, unix:///path.sock or ws://IP:PORT")
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -37,6 +39,18 @@ func RunStdioWith(version string, args []string, routes *WorkerRoutes) error {
 		runtime.Workers = routes
 	}
 	defer runtime.Close()
+	if *web {
+		l, err := runtime.ListenWeb(ctx, *listen, origins)
+		if err != nil {
+			return err
+		}
+		defer l.Close()
+		fmt.Fprintln(os.Stdout, l.URL) // one bootstrap link; fragment never sent to HTTP
+		if l.Public {
+			fmt.Fprintln(os.Stderr, TLSWarning, "Replace the wildcard host with this machine’s LAN/Tailscale address.")
+		}
+		return l.Wait()
+	}
 	return runtime.ServeListen(ctx, *listen, origins, os.Stderr)
 }
 
