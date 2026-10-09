@@ -63,6 +63,13 @@ func TestServerCLIEndToEnd(t *testing.T) {
 			cmd := exec.Command(binary, args...)
 			cmd.Dir = t.TempDir()
 			cmd.Env = append(os.Environ(), config.EnvAgent+"=", "ATTO_SESSION_ID=", "HOME="+t.TempDir(), "USERPROFILE="+t.TempDir())
+			// The app server starts the daemon, which outlives it and keeps its
+			// log open in dir; stop it once the app server is gone.
+			t.Cleanup(func() {
+				stop := exec.Command(binary, "daemon", "stop", "-force")
+				stop.Env = cmd.Env
+				_ = stop.Run()
+			})
 			stdin, err := cmd.StdinPipe()
 			if err != nil {
 				t.Fatal(err)
