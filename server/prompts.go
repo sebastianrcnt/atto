@@ -20,12 +20,13 @@ import (
 
 // openPrompt is the open prompt.
 type openPrompt struct {
-	wire   Prompt
-	choose func(i int)  // select: picks wire.Options[i]
-	submit func(string) // input
-	cancel func()       // Esc, or closed unanswered: the default answer
-	origin string       // extension, mcp or goal
-	ext    string       // the extension asking
+	wire       Prompt
+	chooseMany func([]int)  // multi-select: validated option indexes
+	choose     func(i int)  // select: picks wire.Options[i]
+	submit     func(string) // input
+	cancel     func()       // Esc, or closed unanswered: the default answer
+	origin     string       // extension, mcp or goal
+	ext        string       // the extension asking
 }
 
 // ask opens p, or queues it behind the current question.
@@ -72,6 +73,19 @@ func (t *thread) answerPrompt(client, id string, ans PromptAnswer) error {
 			t.publish("prompt/clientAnswered", map[string]any{"clientId": p.wire.ClientID, "requestId": p.wire.RequestID, "answer": PromptAnswer{Cancel: true}})
 		}
 		p.cancel()
+	case p.wire.Kind == PromptMultiSelect:
+		if ans.Indexes == nil {
+			return invalid("indexes are required for a multiSelect prompt")
+		}
+		seen := map[int]bool{}
+		for _, i := range *ans.Indexes {
+			if i < 0 || i >= len(p.wire.Options) || seen[i] {
+				return invalid("indexes must be distinct option indexes")
+			}
+			seen[i] = true
+		}
+		t.closePrompt("answered", client)
+		p.chooseMany(slices.Clone(*ans.Indexes))
 	case p.wire.Kind == PromptSelect:
 		if ans.Index == nil {
 			return invalid("index is required for a select prompt")
@@ -249,14 +263,14 @@ func (t *thread) openClientPrompt(client string, wire Prompt) (Prompt, error) {
 	if client == "" || wire.RequestID == "" {
 		return Prompt{}, invalid("client and requestId are required")
 	}
-	if wire.Kind != PromptSelect && wire.Kind != PromptInput {
-		return Prompt{}, invalid("kind is select or input")
+	if wire.Kind != PromptSelect && wire.Kind != PromptInput && wire.Kind != PromptMultiSelect {
+		return Prompt{}, invalid("kind is select, multiSelect or input")
 	}
 	wire.ID, wire.ClientID, wire.Origin = "", client, "client"
 	respond := func(ans PromptAnswer) {
 		t.publish("prompt/clientAnswered", map[string]any{"clientId": client, "requestId": wire.RequestID, "answer": ans})
 	}
-	p := &openPrompt{wire: wire, origin: "client", choose: func(i int) { respond(PromptAnswer{Index: &i}) }, submit: func(text string) { respond(PromptAnswer{Text: &text}) }, cancel: func() {}}
+	p := &openPrompt{wire: wire, origin: "client", choose: func(i int) { respond(PromptAnswer{Index: &i}) }, chooseMany: func(indexes []int) { respond(PromptAnswer{Indexes: &indexes}) }, submit: func(text string) { respond(PromptAnswer{Text: &text}) }, cancel: func() {}}
 	t.ask(p)
 	return p.wire, nil
 }

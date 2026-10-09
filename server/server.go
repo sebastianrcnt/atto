@@ -155,9 +155,16 @@ func decode[T any](raw json.RawMessage) (T, error) {
 
 type threadParams struct {
 	ThreadID   string `json:"threadId"`
+	ItemID     string `json:"itemId"`
+	Query      string `json:"query"`
+	Limit      int    `json:"limit"`
+	Preview    bool   `json:"preview"`
 	DeferStart bool   `json:"deferStart"` // TUI waits for its startup project-trust decision
 	Cwd        string `json:"cwd"`
 	Model      string `json:"model"`
+	Provider   string `json:"provider"`
+	APIKey     string `json:"apiKey"`
+	OAuth      bool   `json:"oauth"`
 	Effort     string `json:"effort"`
 	Input      string `json:"input"`
 	Archived   bool   `json:"archived"`
@@ -170,11 +177,12 @@ type threadParams struct {
 	// (Esc: they go out at once, the default).
 	Mode string `json:"mode"`
 	// prompt/answer
-	ID     string  `json:"id"`
-	Prompt *Prompt `json:"prompt"`
-	Index  *int    `json:"index"`
-	Text   *string `json:"text"`
-	Cancel bool    `json:"cancel"`
+	ID      string  `json:"id"`
+	Prompt  *Prompt `json:"prompt"`
+	Index   *int    `json:"index"`
+	Indexes *[]int  `json:"indexes"`
+	Text    *string `json:"text"`
+	Cancel  bool    `json:"cancel"`
 	// turn/unsteer: an input ID, or a queued follow-up rather than a steer
 	// (revision 1, by text)
 	InputID string `json:"inputId"`
@@ -274,6 +282,25 @@ func (s *Server) call(ctx context.Context, method string, raw json.RawMessage) (
 			reason = "other"
 		}
 		return s.closeThread(t, closeMode{reason: reason}), nil
+	case "item/image", "item/output":
+		if p.Offline {
+			info, err := readOffline(p.ThreadID)
+			if err != nil {
+				return nil, err
+			}
+			kind := "output"
+			if method == "item/image" {
+				kind = "image"
+			}
+			out, err := itemResource(info.Items, p, kind)
+			if err != nil {
+				return nil, err
+			}
+			if r, ok := out.(resourceRequest); ok {
+				return readResource(r)
+			}
+			return out, nil
+		}
 	case "thread/read":
 		if p.Offline {
 			return readOffline(p.ThreadID)
@@ -759,7 +786,7 @@ func (s *Server) clientGone(id string) {
 // retirable reports whether the thread has nothing going on and no
 // client: it may close.
 func (t *thread) retirable() bool {
-	if t.closing || len(t.attached) > 0 || t.turns.Busy || t.shell != nil || len(t.turns.Queued) > 0 || len(t.turns.PendingEvents) > 0 || t.turns.SendNow != nil {
+	if t.closing || t.login != nil || len(t.attached) > 0 || t.turns.Busy || t.shell != nil || len(t.turns.Queued) > 0 || len(t.turns.PendingEvents) > 0 || t.turns.SendNow != nil {
 		return false
 	}
 	if t.goal.Active() && !t.goal.Held() {
@@ -833,6 +860,10 @@ func (s *Server) closeThread(t *thread, m closeMode) detachResult {
 		t.cancelRetire()
 		t.cancelGoalRetry()
 		t.cancelPrompt()
+		if t.login != nil {
+			t.login.cancel()
+			t.login = nil
+		}
 		if t.shell != nil {
 			shellDone = t.shell.done
 		}

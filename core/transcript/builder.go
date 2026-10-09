@@ -19,13 +19,14 @@ import (
 const keepOutput = 64 * 1024
 
 // Input is the message a front end sends to the model, given to the
-// Builder as an event right before the run starts. The agent emits no
-// event for it, and showing it at once (before hooks and a pre-turn
+// Builder as an event right before the run starts. The agent later supplies
+// its persisted entry ID, but showing the text at once (before hooks and a pre-turn
 // compaction run) is what users expect. It becomes a user, event or goal
 // item according to its prefix.
 type Input struct {
-	Text   string
-	Images []provider.Image
+	Text    string
+	Images  []provider.Image
+	EntryID string // replay: saved user entry
 }
 
 // ShellStart, ShellOutput and ShellEnd are events a front end gives the
@@ -56,7 +57,7 @@ type Handler struct {
 	// complete from the start (messages, hooks) get Started and Completed
 	// back to back.
 	Completed func(it *Item)
-	// Saved fires for the reasoning and assistant items of a model response
+	// Saved fires for a recorded user item, or the reasoning and assistant items of a model response
 	// once it is recorded and they have their EntryID: before Completed
 	// live, and on replay too.
 	Saved func(it *Item)
@@ -92,6 +93,7 @@ type Builder struct {
 	summary                  *Item // a branch summary being written
 	shell                    *Item // a command the user is running
 	pendReasoning, pendText  string
+	inputItem                *Item   // the input shown before it is recorded
 	step                     []*Item // reasoning and text items of the response being streamed
 	thinkStart               time.Time
 	tools                    map[string]*Item // by call ID, while running
@@ -180,6 +182,9 @@ func (b *Builder) apply(ev any, at time.Time) {
 	case Input:
 		b.step = nil
 		b.input(e.Text, e.Images)
+		b.saveInput(e.EntryID)
+	case agent.UserMessageSaved:
+		b.saveInput(e.EntryID)
 	case agent.MessageSaved:
 		for _, it := range b.step {
 			it.EntryID = e.EntryID
@@ -250,6 +255,9 @@ func (b *Builder) apply(ev any, at time.Time) {
 		b.closeText(at)
 		for i, t := range e.Texts {
 			b.input(t, nil, i < len(e.User) && e.User[i])
+			if i < len(e.EntryIDs) {
+				b.saveInput(e.EntryIDs[i])
+			}
 		}
 	case agent.HookNotice:
 		b.add(Item{Kind: Hook, Status: Completed, HookEvent: e.Event, Text: e.Message, Blocked: e.Blocked})
@@ -317,6 +325,18 @@ func (b *Builder) input(text string, imgs []provider.Image, user ...bool) {
 		it.Images = append(it.Images, im)
 	}
 	b.add(it)
+	b.inputItem = b.items[len(b.items)-1]
+}
+
+func (b *Builder) saveInput(id string) {
+	if b.inputItem == nil || b.inputItem.Kind == Hook || id == "" {
+		return
+	}
+	b.inputItem.EntryID = id
+	if b.Handler.Saved != nil {
+		b.Handler.Saved(b.inputItem)
+	}
+	b.inputItem = nil
 }
 
 // stream appends text to the open item of kind, starting it once the text
@@ -540,7 +560,7 @@ func (b *Builder) Replay(entries []session.Entry) {
 			b.interruptCalls()
 			switch m.Role {
 			case "user":
-				b.apply(Input{Text: m.Content, Images: m.Images}, e.Time)
+				b.apply(Input{Text: m.Content, Images: m.Images, EntryID: e.ID}, e.Time)
 			case "assistant":
 				// Thinking ran from the first reasoning to the first text.
 				answer := e.Time.Add(time.Duration(e.ThinkingMs) * time.Millisecond)

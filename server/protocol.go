@@ -103,7 +103,13 @@
 //	thread/setName {threadId, name}; thread/setLabel {threadId, entryId, label}
 //	thread/tree    {threadId}  → {entries, leaf} (all branches, entry IDs and labels)
 //	thread/navigate {threadId, entryId, summary?: {mode: none|auto|custom, instructions?}}
-//	thread/fork    {threadId, entryId}  → {path, input, images}
+//	thread/fork    {threadId, entryId}  → {threadId, path, input, images}
+//	thread/archive {threadId} → {threadId,path}; idle, close then archive
+//	thread/statusLine {threadId} → {configured,lines,refreshInterval?,truncated?}
+//	thread/debug {threadId} → {heap,goroutines,memory}; runtime profiles
+//	thread/files {threadId, query?, limit?} → {files:[{path,directory}],truncated}
+//	item/image {threadId, itemId, index, preview?} → {mimeType,data} (stored transcript image)
+//	item/output {threadId, itemId} → {output,truncated} (stored transcript output)
 //	thread/context {threadId, view?: system}  → ContextInfo
 //	thread/reload  {threadId}; thread/debugRequest {threadId} → {request}
 //	thread/sessionStart {threadId} (releases deferStart after the TUI trust picker)
@@ -111,6 +117,9 @@
 //	thread/debugRequests {threadId} → {sets} (recent and pinned request bodies)
 //	thread/handoff {threadId}  ("Run in background" without a daemon)
 //	goal/read, goal/set {input}, goal/edit {input}, goal/pause, goal/resume, goal/clear
+//	auth/list {threadId} → {providers,stored} (status, never credentials)
+//	auth/login {threadId, provider, oauth?, apiKey?} → {status}; auth/updated and native prompts drive OAuth
+//	auth/logout {threadId, provider} → {removed}; auth/cancel {threadId} → {}
 //	commands/list  {threadId}  → {commands: [CommandInfo]}; commands/run {threadId, name, args?}
 //	client/gate    {threadId, open}  (a picker of the client is open: automatic work waits)
 //	job/stopAll, timer/list, timer/create {when, message}, timer/cancel {id}
@@ -675,8 +684,9 @@ type Agent struct {
 
 // Prompt kinds.
 const (
-	PromptSelect = "select"
-	PromptInput  = "input"
+	PromptSelect      = "select"
+	PromptInput       = "input"
+	PromptMultiSelect = "multiSelect"
 )
 
 // Prompt is a runtime-owned question (a confirmation, an extension dialog
@@ -686,7 +696,7 @@ type Prompt struct {
 	ClientID  string `json:"clientId,omitempty"`  // owner of a front-end picker
 	RequestID string `json:"requestId,omitempty"` // owner correlation token
 	ID        string `json:"id"`
-	Kind      string `json:"kind"` // select or input
+	Kind      string `json:"kind"` // select, multiSelect or input
 	Title     string `json:"title"`
 	Subtitle  string `json:"subtitle,omitempty"`
 
@@ -715,11 +725,12 @@ type PromptOption struct {
 }
 
 // PromptAnswer is a client's answer to a prompt: Index for a select,
-// Text for an input, or Cancel.
+// Indexes for multiSelect, Text for an input, or Cancel.
 type PromptAnswer struct {
-	Index  *int    `json:"index,omitempty"`
-	Text   *string `json:"text,omitempty"`
-	Cancel bool    `json:"cancel,omitempty"`
+	Index   *int    `json:"index,omitempty"`
+	Indexes *[]int  `json:"indexes,omitempty"`
+	Text    *string `json:"text,omitempty"`
+	Cancel  bool    `json:"cancel,omitempty"`
 }
 
 // GoalInfo is the live session's goal as the terminal shows it.

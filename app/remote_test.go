@@ -262,12 +262,15 @@ func TestRemoteLiveSession(t *testing.T) {
 	var got []string
 	for _, m := range seen {
 		if it := item(m); it != nil {
+			if m.Method == "item/updated" && it["type"] == "userMessage" && (it["entryId"] == nil || it["entryId"] == "") {
+				t.Fatal("saved user update has no forkable entry ID")
+			}
 			got = append(got, m.Method+" "+it["type"].(string))
 		} else if m.Method == "item/delta" {
 			got = append(got, m.Method)
 		}
 	}
-	want := "item/started userMessage,item/completed userMessage,item/started agentMessage,item/delta,item/completed agentMessage"
+	want := "item/started userMessage,item/completed userMessage,item/updated userMessage,item/started agentMessage,item/delta,item/completed agentMessage"
 	if strings.Join(got, ",") != want || done.Params["status"] != "completed" || done.Params["threadId"] != sess {
 		t.Fatalf("notifications %v (%v)", got, done.Params)
 	}

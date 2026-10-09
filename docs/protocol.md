@@ -88,7 +88,7 @@ legacy clients working. Repeated initialize is also tolerated.
 ## Thread → turn → item lifecycle
 
 1. `thread/start` creates a session (optionally cwd/model/effort); `thread/resume`
-   opens an existing ID or path; `thread/attach` joins a loaded session.
+   opens an existing ID or unique ID prefix; `thread/attach` joins a loaded session.
 2. Hydrate a `ThreadInfo` snapshot (see below). Follow notifications immediately;
    retain those newer than the snapshot cursor.
 3. `turn/start` starts an idle turn. `turn/steer` adds text at a model step
@@ -166,7 +166,9 @@ A read-only/offline snapshot is not an execution owner. Use resume before writes
   `title`, `ext`, `lang`, `preview`. Notice: `level`, `title`, `loaded`,
   `reloaded`, `changes`, `note`. Goal: `goalStatus`, `goalState`.
   Omitted fields aren't default display text. Display replacements never change
-  the model's original text. Completed items may later get block/entry IDs.
+  the model's original text. Completed items may later get block/entry IDs. User messages receive their
+  persisted `entryId` via `item/updated` after recording (also on replay), so
+  message context menus can pass it directly to `thread/fork`/`thread/navigate`.
 - **Usage:** `inputTokens`, `cachedInputTokens`, `outputTokens`, optional
   `cacheWriteTokens`, `cost`, `last`, `lastCost`, `lastInputTokens`,
   `lastCachedInputTokens`. Input totals include cache reads/writes; cost is USD.
@@ -178,7 +180,7 @@ A read-only/offline snapshot is not an execution owner. Use resume before writes
   ≤10 images, each ≤10 MB, and a model accepting images. `input/submit` also
   accepts `{file,mimeType,width,height,name?}` for files already in the local
   image store. Output **ItemImage**: `{name?,width?,height?,file?,mimeType?}`.
-- **Prompt:** `{id,kind:select|input,title,selected,options?:[{label,description?}],
+- **Prompt:** `{id,kind:select|multiSelect|input,title,selected,options?:[{label,description?}],
   text?,placeholder?,subtitle?,filterable?,total?,note?,origin?,confirm?,
   clientId?,requestId?}`.
 - **GoalInfo:** `{objective,status,statusLabel,indicator,summary,tokens,tokensUsed,
@@ -227,7 +229,7 @@ by `TestProtocolReferenceMethods`; adding a method without documenting it fails.
 | Method | Params | Result / semantics |
 | --- | --- | --- |
 | `thread/start` | `{cwd?,model?,effort?,deferStart?}` | Snapshot + loaded context; starts/attaches a worker when available |
-| `thread/resume` | T + `cwd?,deferStart?` | Snapshot + context, items; joins owner, ID/path/prefix resolution |
+| `thread/resume` | T + `cwd?,deferStart?` | Snapshot + context, items; joins owner, ID/prefix resolution |
 | `thread/attach` | T | Snapshot + items; follows a loaded thread |
 | `thread/read` | T + `offline?` | Snapshot + items, cursor; offline reads file without loading |
 | `thread/list` | `{cwd?,archived?}` | `{threads:[{threadId,name?,preview?,cwd?,updatedAt?,messages?,loaded?,live?,busy?,clients?,version?,pid?}]}`; includes active workers |
@@ -242,7 +244,13 @@ by `TestProtocolReferenceMethods`; adding a method without documenting it fails.
 | `thread/rollback` | T + `numTurns?` | Snapshot + `{input}`; idle only, default 1 user message |
 | `thread/tree` | T + `offline?` | `{entries,leaf}`; all saved branches, entry IDs and labels |
 | `thread/navigate` | T + `entryId,summary?:{mode:none|auto|custom,instructions?}` | `{}`; branch movement, optional async summary; follow branchChanged |
-| `thread/fork` | T + `entryId` | `{path,input,images}`; new saved branch, resume it explicitly |
+| `thread/fork` | T + `entryId` | `{threadId,path,input,images}`; new saved branch (even before the first message); resume using threadId, no access to the server filesystem required |
+| `thread/files` | T + `query?,limit?` | `{files:[{path,directory}],truncated}`; workspace-relative paths, case-insensitive substring filter, default 100/max 1000 matches; gitignore-aware walk capped at 50,000 entries/20 levels; cancellation supported |
+| `item/image` | T + `itemId,index,preview?,offline?` | `{mimeType,data}`; preview returns a ≤600×350 PNG for JDK-only clients; otherwise base64 stored image selected by zero-based image index of a transcript item, max 10 MiB; never accepts a client filesystem path |
+| `item/output` | T + `itemId,offline?` | `{output,truncated}`; stored full user-shell output or available tool output, capped at 10 MiB; truncated is true if full output is unavailable or exceeds cap |
+| `thread/archive` | T | `{threadId,path}`; idle only; close session/stop jobs, release writer and move saved file to archive; then start a new session explicitly |
+| `thread/statusLine` | T | `{configured,lines,refreshInterval?,truncated?}`; run configured server statusLine with snapshot input, off execution lane; 2s timeout/16 KiB output cap; no client command accepted |
+| `thread/debug` | T | `{heap,goroutines,memory}`; runtime heap profile (base64), goroutine dump and Go MemStats; diagnostic data can contain private process information; client saves files locally |
 | `thread/context` | T + `view?:system` | ContextInfo; system includes systemPrompt |
 | `thread/reload` | T | `{}`; reload at safe boundary; follow thread/reloaded |
 | `thread/sessionStart` | T | `{}`; release deferStart after client project-trust decision |
@@ -273,12 +281,16 @@ client, not every client's editor.
 
 | Method | Params | Result / semantics |
 | --- | --- | --- |
-| `prompt/answer` | T + `id,index?` or `text?` or `cancel?` | `{}`; first valid answer wins |
+| `prompt/answer` | T + `id,index?` or `indexes?` or `text?` or `cancel?` | `{}`; first valid answer wins |
 | `prompt/clientOpen` | T + `prompt` | Prompt; mirror a local client picker, requestId required |
 | `prompt/clientClose` | T + `id` | `{}`; id is owner's requestId, withdraw without answering |
 | `client/gate` | T + `open` | `{}`; balanced gate for local picker, automatic work waits; detach releases gates |
 | `commands/list` | T | `{commands:[CommandInfo]}`; builtin, extensions, skills |
 | `commands/run` | T + `name,args?` | `{inputId?,status,turnId?}` (input/submit result); local-only commands aren't server renderer actions |
+| `auth/list` | T | `{providers:[{id,name,oauth,status}],stored:[providerId],login?:{provider,status,url?,note?}}`; current pending login survives client reconnect; authentication status only, never credentials |
+| `auth/login` | T + `provider,oauth?,apiKey?` | `{status:pending|completed}`; API key stored on the server, or asynchronous browser OAuth; follow auth/updated and answer redirect prompt; idle only |
+| `auth/logout` | T + `provider` | `{removed}`; remove stored credentials, reload this thread's models; environment/models.json keys are unchanged |
+| `auth/cancel` | T | `{}`; cancel the runtime's pending OAuth flow; detach does not cancel it |
 | `goal/read` | T | `{goal:GoalInfo|null}` |
 | `goal/set` | T + `input` | `{goal:GoalInfo|null}`; objective, may ask confirmation |
 | `goal/edit` | T + `input` | `{goal:GoalInfo|null}`; change objective |
@@ -349,11 +361,12 @@ clientId filtering. `events/reset` may be global or worker-scoped.
 
 | Method | Params / meaning |
 | --- | --- |
+| `auth/updated` | T + `{provider,status:pending|completed|failed|cancelled,url?,note?,error?}`; URL opens in the **client** browser, never the server; credentials are never included |
 | `goal/updated` | T + `{goal:GoalInfo|null}` |
 | `goal/retry` | T + `{at}`; transient retry deadline |
 | `prompt/open` | T + `{prompt:Prompt}`; server-owned question |
 | `prompt/closed` | T + `{id,how,by}`; answered/canceled/withdrawn; by is answering client ID |
-| `prompt/clientAnswered` | T + `{clientId,requestId,answer:{index?|text?|cancel?}}`; owner applies local picker answer |
+| `prompt/clientAnswered` | T + `{clientId,requestId,answer:{index?|indexes?|text?|cancel?}}`; owner applies local picker answer |
 
 ## Server-to-client questions and approvals
 
@@ -367,7 +380,8 @@ client should display questions explicitly and never auto-approve by default.
 {"id":8,"method":"prompt/answer","params":{"threadId":"ff2a29c3","id":"prompt-1","index":0}}
 ```
 
-Select uses a zero-based index; input uses text; cancellation uses `cancel:true`.
+Select uses a zero-based index; multiSelect uses an array of distinct zero-based
+indexes (an empty array is valid); input uses text; cancellation uses `cancel:true`.
 Prompts cover extension dialogs, MCP approvals and goal confirmations. No attached
 clients means execution questions wait, not auto-answer. A fresh thread/read or
 resume snapshot includes the current prompt. Owner-local pickers are mirrored
@@ -445,3 +459,30 @@ Unix sockets use JSON lines rather than Codex WS-over-UDS. Browser origins and
 query tokens are supported intentionally. There is no Codex account/config/
 sandbox/approval-policy adapter. See [the full compatibility research](codex-app-server-compat.md)
 for details, and [working example clients](../examples/clients/README.md).
+
+### Desktop resource and status methods
+
+`thread/files`, `item/image` and `item/output` are native client resources, not
+an unrestricted filesystem API. Reads are resolved from the current thread's
+cwd/transcript on its lane, then performed off the execution lane. Set `offline:true` to resolve resources from a saved read-only session without
+loading or acquiring a writer. Item output
+can only return bytes still retained by the runtime/file; it cannot reconstruct
+output that the engine discarded. JDK-only clients request `item/image` with `preview:true` to render PNG
+previews of every native format, including WebP. Omitting preview returns the
+original bytes.
+
+`thread/statusLine` uses the same configuration as the TUI. Input includes
+`hook_event_name`, `session_id`, `session_name`, `transcript_path`, `cwd`,
+`version`, `effort`, `busy`, `model`, `workspace`, `context_window`, `git_branch`
+and `cache` with the TUI's snake_case fields. `memory.heap_bytes` describes the
+runtime heap, not frontend RSS (the TUI's `memory.rss_bytes` is frontend-local).
+ANSI sequences are display text, not commands. Clients debounce on changed
+inputs and respect `refreshInterval` for forced refresh. A status command and
+its descendants are killed after completion/timeout. This read is opt-in,
+so headless clients that do not display status lines do not execute it.
+
+`auth/login` stores provider credentials **on the server**; do not send keys
+over an untrusted plain-WS network. Keys must not appear in client settings,
+transcripts, notifications or diagnostic logging. OAuth URLs open on the client.
+The native protocol exposes select, multiSelect and input prompts; confirms
+are single-select Yes/No prompts, not separate bidirectional JSON-RPC requests.

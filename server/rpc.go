@@ -18,7 +18,8 @@ import (
 )
 
 // threadCall serves the requests that act on one thread; ok is false for
-// a method it does not know. Each runs on the thread's lane.
+// a method it does not know. State is resolved on the thread's lane;
+// resource I/O, status commands, profiles and archive cleanup run off it.
 func (s *Server) threadCall(ctx context.Context, client, method string, p threadParams) (out any, ok bool, err error) {
 	t, err := s.thread(p.ThreadID)
 	if err != nil {
@@ -39,11 +40,79 @@ func (s *Server) threadCall(ctx context.Context, client, method string, p thread
 		out, e = h(t, client, p)
 		return e
 	})
+	if err == nil {
+		if method == "thread/files" {
+			out, err = threadFiles(ctx, out.(string), p.Query, p.Limit)
+		} else if r, ok := out.(archiveRequest); ok {
+			s.closeThread(t, closeMode{reason: "archive"})
+			path, e := session.Archive(r.path)
+			out, err = map[string]any{"threadId": t.id, "path": path}, e
+		} else if r, ok := out.(statusLineRequest); ok {
+			out, err = runStatusLine(ctx, r)
+		} else if method == "thread/debug" {
+			out = debugProfiles()
+		} else if r, ok := out.(resourceRequest); ok {
+			out, err = readResource(r)
+		}
+	}
 	return out, true, err
 }
 
 // threadMethods are the requests on a thread; they run on its lane.
 var threadMethods = map[string]func(t *thread, client string, p threadParams) (any, error){
+	"thread/archive": func(t *thread, client string, p threadParams) (any, error) {
+		if t.readOnly != "" {
+			return nil, failure(ReasonReadOnly, "%s", t.readOnly)
+		}
+		if t.turns.Busy || t.shell != nil {
+			return nil, failure(ReasonBusy, "interrupt before archiving")
+		}
+		if t.sess.Leaf() == "" {
+			t.sess.Branch("")
+		}
+		return archiveRequest{path: t.sess.Path}, t.sess.Err()
+	},
+	"thread/statusLine": func(t *thread, client string, p threadParams) (any, error) {
+		return t.statusLine()
+	},
+	"thread/debug": func(t *thread, client string, p threadParams) (any, error) {
+		return nil, nil
+	},
+	"auth/list": func(t *thread, client string, p threadParams) (any, error) {
+		return t.authList(), nil
+	},
+	"auth/login": func(t *thread, client string, p threadParams) (any, error) {
+		return t.authLogin(p)
+	},
+	"auth/logout": func(t *thread, client string, p threadParams) (any, error) {
+		if t.readOnly != "" {
+			return nil, failure(ReasonReadOnly, "%s", t.readOnly)
+		}
+		if t.login != nil {
+			return nil, failure(ReasonBusy, "cancel the pending login first")
+		}
+		removed, err := config.RemoveAuth(p.Provider)
+		if err != nil {
+			return nil, err
+		}
+		err = t.reloadModels()
+		return map[string]any{"removed": removed}, err
+	},
+	"auth/cancel": func(t *thread, client string, p threadParams) (any, error) {
+		if t.login != nil {
+			t.login.cancel()
+		}
+		return nil, nil
+	},
+	"thread/files": func(t *thread, client string, p threadParams) (any, error) {
+		return t.cwd, nil
+	},
+	"item/image": func(t *thread, client string, p threadParams) (any, error) {
+		return t.itemResource(p, "image")
+	},
+	"item/output": func(t *thread, client string, p threadParams) (any, error) {
+		return t.itemResource(p, "output")
+	},
 	"worker/state": func(t *thread, client string, p threadParams) (any, error) {
 		return map[string]any{"id": t.s.instance, "session": t.id, "cwd": t.cwd, "clients": len(t.attached), "busy": t.turns.Busy || t.shell != nil, "version": t.s.Version, "pid": os.Getpid()}, nil
 	},
@@ -177,18 +246,7 @@ var threadMethods = map[string]func(t *thread, client string, p threadParams) (a
 		return t.info(), nil
 	},
 	"models/reload": func(t *thread, client string, p threadParams) (any, error) {
-		_, models, err := core.Load()
-		if err != nil {
-			return nil, err
-		}
-		t.models = models
-		if m := t.model(); m.Model.ID != "" {
-			if ref, ok := models.Find(m.ProviderName, m.Model.ID); ok {
-				t.agent.SetModel(ref)
-			}
-		}
-		t.updated()
-		return nil, nil
+		return nil, t.reloadModels()
 	},
 
 	"thread/setEffort": func(t *thread, client string, p threadParams) (any, error) {
@@ -247,11 +305,11 @@ var threadMethods = map[string]func(t *thread, client string, p threadParams) (a
 		if t.turns.Busy {
 			return nil, failure(ReasonBusy, "Still working — press esc to interrupt first.")
 		}
-		path, text, imgs, err := t.fork(p.EntryID)
+		path, id, text, imgs, err := t.fork(p.EntryID)
 		if err != nil {
 			return nil, err
 		}
-		return map[string]any{"path": path, "input": text, "images": wireImages(imgs)}, nil
+		return map[string]any{"path": path, "threadId": id, "input": text, "images": wireImages(imgs)}, nil
 	},
 	"thread/tree": func(t *thread, client string, p threadParams) (any, error) {
 		entries := t.loadEntries()
@@ -329,10 +387,10 @@ var threadMethods = map[string]func(t *thread, client string, p threadParams) (a
 		if p.ID == "" {
 			return nil, invalid("id is required")
 		}
-		if !p.Cancel && p.Index == nil && p.Text == nil {
-			return nil, invalid("index, text or cancel is required")
+		if !p.Cancel && p.Index == nil && p.Indexes == nil && p.Text == nil {
+			return nil, invalid("index, indexes, text or cancel is required")
 		}
-		return nil, t.answerPrompt(client, p.ID, PromptAnswer{Index: p.Index, Text: p.Text, Cancel: p.Cancel})
+		return nil, t.answerPrompt(client, p.ID, PromptAnswer{Index: p.Index, Indexes: p.Indexes, Text: p.Text, Cancel: p.Cancel})
 	},
 	"client/gate": func(t *thread, client string, p threadParams) (any, error) {
 		if p.Open {
@@ -456,4 +514,19 @@ func (t *thread) rollback(client string, n int) (any, error) {
 		ThreadInfo
 		Input string `json:"input"`
 	}{info, text}, nil
+}
+
+func (t *thread) reloadModels() error {
+	_, models, err := core.Load()
+	if err != nil {
+		return err
+	}
+	t.models = models
+	if m := t.model(); m.Model.ID != "" {
+		if ref, ok := models.Find(m.ProviderName, m.Model.ID); ok {
+			t.agent.SetModel(ref)
+		}
+	}
+	t.updated()
+	return nil
 }

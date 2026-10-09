@@ -109,6 +109,7 @@ type thread struct {
 	pendingSummary *summaryRequest
 	summary        *summaryRun
 
+	login     *loginRun
 	prompt    *openPrompt
 	prompts   []*openPrompt
 	promptSeq int
@@ -394,7 +395,7 @@ func (t *thread) pendingChanged() {
 // client has a picker open (the terminal held events, the queue and goal
 // turns while one was).
 func (t *thread) gated() bool {
-	if t.prompt != nil || t.startSource != "" {
+	if t.prompt != nil || t.login != nil || t.startSource != "" {
 		return true
 	}
 	for _, n := range t.gates {

@@ -399,3 +399,22 @@ func TestRunningCommandStartTime(t *testing.T) {
 		}
 	}
 }
+
+func TestSavedInputEntryIDs(t *testing.T) {
+	var saved []string
+	b := Builder{Handler: Handler{Saved: func(it *Item) { saved = append(saved, it.EntryID) }}}
+	b.Event(Input{Text: "first"})
+	b.Event(agent.UserMessageSaved{EntryID: "u1"})
+	b.Event(agent.SteerCommitted{Texts: []string{"steer one", "steer two"}, EntryIDs: []string{"u2", "u3"}})
+	items := b.Items()
+	for i, want := range []string{"u1", "u2", "u3"} {
+		if items[i].EntryID != want || saved[i] != want {
+			t.Fatalf("saved input %d: %+v / %v", i, items[i], saved)
+		}
+	}
+	b.Reset()
+	b.Replay([]session.Entry{{Type: session.TypeMessage, ID: "replayed", Message: &provider.Message{Role: "user", Content: "first"}}})
+	if got := b.Items()[0].EntryID; got != "replayed" {
+		t.Fatalf("replayed entry ID: %q", got)
+	}
+}

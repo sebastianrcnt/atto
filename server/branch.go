@@ -214,16 +214,21 @@ func (t *thread) afterBranchSummary(err error) bool {
 
 // fork writes a new session holding the path to just before user message
 // id, and returns it with the message's text and images.
-func (t *thread) fork(id string) (path, text string, imgs []provider.Image, err error) {
+func (t *thread) fork(id string) (path, threadID, text string, imgs []provider.Image, err error) {
 	entries := t.loadEntries()
 	leaf, text, ok := session.BranchPoint(entries, id)
 	if !ok {
-		return "", "", nil, errors.New("that entry is no longer in the session")
+		return "", "", "", nil, errors.New("that entry is no longer in the session")
 	}
 	w := session.Fork(t.sess.Path, t.cwd, entries, leaf)
+	// Even a fork before the first message must be resumable by a remote
+	// client; an empty branch marker forces the lazy writer's header out.
+	if w.Leaf() == "" {
+		w.Branch("")
+	}
 	w.Close()
 	if err := w.Err(); err != nil {
-		return "", "", nil, err
+		return "", "", "", nil, err
 	}
-	return w.Path, text, entryImages(entries, id), nil
+	return w.Path, w.ID, text, entryImages(entries, id), nil
 }

@@ -161,6 +161,8 @@ type (
 	// an ID that is unique for the agent. The text and reasoning items of the
 	// response are the blocks session.BlockID(sessionID, EntryID, ...) names.
 	MessageSaved struct{ EntryID string }
+	// UserMessageSaved gives the input shown before the run its persisted entry ID.
+	UserMessageSaved struct{ EntryID string }
 	// StepEnd fires after each model response. Context is the estimated
 	// context size afterwards. TTFT is the time from sending the request
 	// to its first streamed output, Generation from there to the end of
@@ -174,8 +176,9 @@ type (
 	// SteerCommitted fires when steering messages are added to the
 	// conversation of the running turn.
 	SteerCommitted struct {
-		Texts []string
-		User  []bool // set by a front end that knows which steers the user sent
+		Texts    []string
+		EntryIDs []string // persisted entries, one per text when recording
+		User     []bool   // set by a front end that knows which steers the user sent
 	}
 	// CompactStart, CompactDelta and CompactEnd bracket a compaction.
 	// A cap that lowered an automatic compaction's trigger is named by
@@ -402,15 +405,19 @@ func (a *Agent) commitSteers(emit func(any)) bool {
 	if len(s) == 0 {
 		return false
 	}
-	for _, text := range s {
+	ids := make([]string, len(s))
+	for i, text := range s {
 		if a.SteerNote != nil {
 			if n := a.SteerNote(text); n != "" {
 				text += "\n\n" + n
 			}
 		}
 		a.appendMessage(provider.Message{Role: "user", Content: text}, session.Entry{})
+		if a.EntryID != nil {
+			ids[i] = a.EntryID()
+		}
 	}
-	emit(SteerCommitted{Texts: s})
+	emit(SteerCommitted{Texts: s, EntryIDs: ids})
 	return true
 }
 

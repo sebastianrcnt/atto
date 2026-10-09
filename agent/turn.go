@@ -113,6 +113,9 @@ func (a *Agent) RunWithImages(ctx context.Context, input string, imgs []provider
 	}
 	m := provider.Message{Role: "user", Content: input, Images: imgs}
 	a.appendMessage(m, session.Entry{})
+	if a.EntryID != nil {
+		emit(UserMessageSaved{EntryID: a.EntryID()})
+	}
 	a.sent = sentInput{input: raw, imgs: imgs, msg: m, index: len(a.messages) - 1}
 	return a.loop(ctx, emit, true)
 }
