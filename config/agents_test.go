@@ -8,32 +8,33 @@ import (
 
 func TestAgentSettingsCompatibility(t *testing.T) {
 	// The old subagents key stays readable; explicit agents settings win.
+	// The gate and limits older versions had are accepted and ignored.
 	for _, c := range []struct {
-		name, raw string
-		enabled   bool
-		limit     int
+		name, raw     string
+		model, effort string
 	}{
-		{"old", `{"subagents":{"enabled":true,"maxConcurrent":5}}`, true, 5},
-		{"new", `{"agents":{"enabled":true,"maxConcurrent":7}}`, true, 7},
-		{"both", `{"agents":{"enabled":false,"maxConcurrent":2},"subagents":{"enabled":true,"maxConcurrent":5}}`, false, 2},
-		{"default", `{}`, false, DefaultMaxAgents},
+		{"old", `{"subagents":{"enabled":true,"maxConcurrent":5,"maxDepth":3,"model":"a/b"}}`, "a/b", ""},
+		{"new", `{"agents":{"enabled":false,"maxConcurrent":7,"effort":"low"}}`, "", "low"},
+		{"both", `{"agents":{"model":"x/y"},"subagents":{"enabled":true,"model":"a/b"}}`, "x/y", ""},
+		{"default", `{}`, "", ""},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Setenv(EnvDir, t.TempDir())
 			if err := os.WriteFile(SettingsPath(), []byte(c.raw), 0o600); err != nil {
 				t.Fatal(err)
 			}
-			s, err := LoadSettings()
-			if err != nil || s.AgentsEnabled() != c.enabled || s.AgentLimit() != c.limit {
-				t.Fatalf("settings: %+v %v", s, err)
+			check := func(when string) {
+				s, err := LoadSettings()
+				m, e := s.AgentDefaults()
+				if err != nil || m != c.model || e != c.effort {
+					t.Fatalf("%s: settings: %+v %v", when, s, err)
+				}
 			}
+			check("read")
 			if err := UpdateSettings(map[string]any{"unknown": "preserved"}); err != nil {
 				t.Fatal(err)
 			}
-			s, err = LoadSettings()
-			if err != nil || s.AgentsEnabled() != c.enabled || s.AgentLimit() != c.limit {
-				t.Fatalf("settings changed on migration: %+v %v", s, err)
-			}
+			check("rewritten")
 			data, err := os.ReadFile(SettingsPath())
 			if err != nil {
 				t.Fatal(err)

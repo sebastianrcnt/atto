@@ -221,9 +221,7 @@ func Collect(ag *agent.Agent, hookSrc []config.HookSource, modelFrom, effortFrom
 
 	l.Config = configFiles(src.Cwd)
 
-	if st, _ := config.LoadSettings(); st.AgentsEnabled() {
-		l.Agents = true
-	}
+	l.Agents = true // agents are always available
 	l.Presets, l.PresetWarnings = agentstate.LoadPresets(agentstate.Dirs(src.Cwd, agent.ProjectRoot(src.Cwd)))
 	l.LegacyAgents, l.LegacyPresets, l.LegacyPresetWarnings = l.Agents, l.Presets, l.PresetWarnings
 
@@ -270,9 +268,7 @@ func Collect(ag *agent.Agent, hookSrc []config.HookSource, modelFrom, effortFrom
 		l.Prompt.Parts = append(l.Prompt.Parts, Part{Name: "MCP servers", Detail: "one line naming " + strings.Join(names, ", ") + "; used through atto mcp in the shell"})
 	}
 
-	if l.Agents {
-		l.Prompt.Parts = append(l.Prompt.Parts, Part{Name: "agents", Detail: "atto agent and " + plural(len(l.Presets), "preset")})
-	}
+	l.Prompt.Parts = append(l.Prompt.Parts, Part{Name: "agents", Detail: "atto agent and " + plural(len(l.Presets), "preset")})
 
 	tool := ag.Shell.ToolName()
 	l.Context = []Part{{Name: "tool", Detail: tool + " (the only tool)"}}
@@ -499,7 +495,7 @@ func (l Loaded) Summary() []Row {
 		rows = append(rows, Row{"MCP", "ignored: " + ShortPath(l.MCPIgnored)})
 	}
 
-	if l.Agents { // off by default: no row then
+	if custom := slices.ContainsFunc(l.Presets, func(p agentstate.Preset) bool { return p.Path != "" }); custom { // the built-in role alone is no news
 		var names []string
 		for _, p := range l.Presets {
 			names = append(names, p.Name)
@@ -686,9 +682,6 @@ func (l Loaded) Details() []Section {
 	out = append(out, s)
 
 	s = Section{Title: "Agent roles (atto agent)"}
-	if !l.Agents {
-		s.Title += " · off: \"agents\": {\"enabled\": true} in " + ShortPath(config.SettingsPath()) + " turns them on"
-	}
 	for _, p := range l.Presets {
 		text := "built-in"
 		if p.Path != "" {

@@ -139,7 +139,7 @@ func TestCollect(t *testing.T) {
 	if !exists["settings"] || !exists["models"] || exists["credentials"] || exists["project settings (hooks)"] {
 		t.Errorf("config %+v", l.Config)
 	}
-	if l.Prompt.Bytes == 0 || len(l.Prompt.Parts) != 4 {
+	if l.Prompt.Bytes == 0 || len(l.Prompt.Parts) != 5 {
 		t.Errorf("prompt %+v", l.Prompt)
 	}
 	var ctx []string

@@ -10,7 +10,7 @@ import (
 var samples = map[string]any{
 	"system":                   System{Kind: "powershell", WinPS51: true, Tool: "powershell", Sub: "SUB", MCP: "a, b", Cwd: "/w", OS: "linux", Arch: "amd64", Shell: "/bin/sh", Date: "2026-01-02"},
 	"bash_tool":                map[string]any{"Kind": "bash"},
-	"agent":                    Agent{Name: "w1", Preset: "docs", Instructions: "Be brief.", Path: "/root/w1", Parent: "/root"},
+	"agent":                    Agent{Name: "w1", Preset: "docs", Instructions: "Be brief.", ID: "a1b2c3d4", Path: "/root/w1", Parent: "/root", ParentID: "p0p0p0p0"},
 	"agent_parent":             map[string]any{"Presets": "Roles (-role; default general):\n- docs"},
 	"compact":                  map[string]any{"Words": 700},
 	"compact_prefix":           nil,
@@ -54,7 +54,10 @@ func TestRender(t *testing.T) {
 		{"goal_continuation", Goal{Objective: "a &lt; b"}, "<objective>\na &lt; b\n</objective>"},
 		{"goal_continuation", Goal{Turns: 3}, "verified.\n\nGoal turns so far: 3\n\nUser messages:"},
 		{"system", System{Kind: "bash", Tool: "bash", Date: "d"}, `run "atto goal resume '<why>'" (never resume on your own)`},
-		{"agent", Agent{Name: "w", Preset: "p", Path: "/root/w", Parent: "/root"}, `You are agent /root/w, in a team of atto agents working for the user: /root started you with role p`},
+		{"agent", Agent{Name: "w", Preset: "p", ID: "a1b2c3d4", Path: "/root/w", Parent: "/root", ParentID: "p0p0p0p0"}, `You are agent /root/w (session a1b2c3d4), in a team of atto agents working for the user: /root (session p0p0p0p0) started you with role p`},
+		{"agent", Agent{Name: "w", Preset: "p", ID: "a1b2c3d4", Path: "/root"}, `the user started you from a shell, so you have no parent agent, with role p`},
+		{"agent", Agent{Name: "w", ID: "a1b2c3d4", Path: "/root"}, `saved for whoever polls you (atto agent wait or report)`},
+		{"agent_parent", map[string]any{"Presets": "R"}, `you may start atto agents on your own judgement when they help`},
 	} {
 		if got := Render(c.name, c.data); !strings.Contains(got, c.want) {
 			t.Errorf("%s: %q not in %q", c.name, c.want, got)

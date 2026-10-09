@@ -201,8 +201,8 @@ func TestAgentHelpAndWorktreePrompts(t *testing.T) {
 		t.Fatal(err)
 	}
 	top, _, _ := strings.Cut(out, "usage:")
-	// Help must document the older settings spelling for existing installs.
-	for _, text := range []string{`"agents": {"enabled": true}`, `"subagents"`, "plain shell", "no running atto session or atto -p root"} {
+	// Help says agents need no setting and that old keys are ignored.
+	for _, text := range []string{"always available", "plain shell", "no running atto session or atto -p root"} {
 		if !strings.Contains(top, text) {
 			t.Errorf("help introduction does not mention %q: %s", text, top)
 		}

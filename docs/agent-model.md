@@ -266,3 +266,15 @@ backup-based migration in section 4.
 6. **Turn job ownership and index complexity?** Keep child jobs parent-owned,
    root jobs self-owned with explicit refs; start with cached file inventory,
    not a database. Revisit both only with measured operational pain.
+
+## Decision (2026-10-09): no gate, no depth limit, no concurrency limit
+
+The user removed the on/off gate and both limits. Agents are always available
+(`agents.enabled` does not exist; old settings files that carry it are read and
+ignored), any agent may start agents at any depth (`agents.maxDepth` is gone) and
+every queued agent turn starts at once (`agents.maxConcurrent` is gone, and with
+it the per-parent slot files). What stays: `agents.model` and `agents.effort`
+defaults; tree locks for spawn/close races; ancestry validation with cycle
+detection (a bounded walk, never a limit on depth); and the per-agent turn lock,
+so one agent runs one turn at a time. The sections above that describe limits,
+slots or the outside-root depth change are superseded by this decision.

@@ -120,11 +120,10 @@ func TestAgentModel(t *testing.T) {
 func TestAgentRefusals(t *testing.T) {
 	agentServer(t, func(int, string) string { return textAnswer("done") })
 	t.Chdir(t.TempDir())
-	// Off by default.
-	if _, err := runAgent(t, "start", "a", "general", "task", "-session", "p1"); err == nil || !strings.Contains(err.Error(), `"enabled": true`) {
-		t.Fatalf("off: %v", err)
+	// There is no gate: a settings file that says "enabled": false changes nothing.
+	if err := os.WriteFile(config.SettingsPath(), []byte(`{"agents":{"enabled":false,"maxDepth":1,"maxConcurrent":1}}`), 0o644); err != nil {
+		t.Fatal(err)
 	}
-	enableAgents(t, "")
 	for _, c := range []struct {
 		args []string
 		err  string
@@ -142,16 +141,11 @@ func TestAgentRefusals(t *testing.T) {
 			t.Errorf("%v: %v", c.args, err)
 		}
 	}
-	// Agents nest only as deep as the settings allow: by default an agent
-	// (here p1's agent "a") may not start agents of its own.
+	// Agents nest to any depth: p1's agent "a" starts "b" at once.
 	if _, err := runAgent(t, "spawn", "a", "the task", "-session", "p1"); err != nil {
 		t.Fatal(err)
 	}
 	a, _ := agentstate.Load("p1", "a")
-	if _, err := runAgent(t, "spawn", "b", "deeper", "-session", a.Session); err == nil || !strings.Contains(err.Error(), "maxDepth") {
-		t.Fatalf("spawn below the depth: %v", err)
-	}
-	enableAgents(t, `,"maxDepth":2`)
 	if out, err := runAgent(t, "spawn", "b", "deeper", "-session", a.Session); err != nil || !strings.Contains(out, "agent /root/a/b started") {
 		t.Fatalf("nested spawn: %q %v", out, err)
 	}
@@ -248,7 +242,7 @@ func TestAgentStartWaitReport(t *testing.T) {
 	})
 	cwd := t.TempDir()
 	t.Chdir(cwd)
-	enableAgents(t, `,"maxConcurrent":1`)
+	enableAgents(t, "")
 	if err := os.MkdirAll(filepath.Join(cwd, ".atto", "agents"), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -371,33 +365,47 @@ func TestAgentWaitTimeout(t *testing.T) {
 	}
 }
 
-func TestAgentQueueBeyondLimit(t *testing.T) {
+// Every agent turn starts at once: there is no concurrency limit.
+func TestAgentTurnsAreNotLimited(t *testing.T) {
 	release := make(chan struct{})
+	var mu sync.Mutex
+	inFlight, peak := 0, 0
 	agentServer(t, func(int, string) string {
+		mu.Lock()
+		inFlight++
+		peak = max(peak, inFlight)
+		mu.Unlock()
 		<-release
+		mu.Lock()
+		inFlight--
+		mu.Unlock()
 		return textAnswer("ok")
 	})
 	t.Chdir(t.TempDir())
-	enableAgents(t, `,"maxConcurrent":1`)
-	for _, n := range []string{"one", "two"} {
+	enableAgents(t, `,"maxConcurrent":1`) // ignored
+	names := []string{"one", "two", "three", "four", "five"}
+	for _, n := range names {
 		if _, err := runAgent(t, "start", n, "general", "x", "-session", "p1"); err != nil {
 			t.Fatal(err)
 		}
 	}
-	// The second waits for the first's slot.
-	var out string
-	for range 100 {
-		out, _ = runAgent(t, "list", "-session", "p1")
-		if strings.Contains(out, "running") && strings.Contains(out, "queued") {
+	for range 200 {
+		mu.Lock()
+		p := peak
+		mu.Unlock()
+		if p == len(names) {
 			break
 		}
 		sleepBriefly()
 	}
-	if !strings.Contains(out, "running") || !strings.Contains(out, "queued") {
-		t.Fatalf("list %q", out)
+	mu.Lock()
+	p := peak
+	mu.Unlock()
+	if p != len(names) {
+		t.Fatalf("only %d of %d turns ran at once", p, len(names))
 	}
 	close(release)
-	for _, n := range []string{"one", "two"} {
+	for _, n := range names {
 		if out, err := runAgent(t, "wait", n, "-timeout", "30s", "-session", "p1"); err != nil || !strings.Contains(out, "done") {
 			t.Fatalf("%s: %q %v", n, out, err)
 		}

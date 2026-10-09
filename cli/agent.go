@@ -27,10 +27,8 @@ import (
 )
 
 // agentUsage includes the older settings spelling for compatibility with old installs.
-const agentUsage = `Agents are off unless settings.json has "agents": {"enabled": true}
-(the older "subagents" key works too); spawn/task/send fail with "agents are off".
-Works from a plain shell: no running atto session or atto -p root is needed.
-A model-run root is only needed when a model should orchestrate the agents.
+const agentUsage = `Agents are always available, from a plain shell or from a model's shell: no setting
+turns them on, and no running atto session or atto -p root is needed.
 
 usage:
   atto agent spawn NAME "<task>" [-role R] [-worktree]
@@ -73,10 +71,10 @@ HEAD, and commits its work there: use it when agents edit files in
 parallel. close removes the worktree, refusing while it has uncommitted
 changes unless -force, and keeps the branch for you to merge.
 
-In the agents setting, "maxDepth" (default 1) is how deep agents may start
-agents of their own, "maxConcurrent" (default 3) caps the turns each
-session's agents run at once (more wait in a queue), "model" and "effort"
-apply to agents whose role names none (else they use their parent's).
+Agents may start agents of their own at any depth, and every turn starts at
+once. In the agents setting, "model" and "effort" apply to agents whose role
+names none (else they use their parent's); older "enabled", "maxDepth" and
+"maxConcurrent" keys are ignored.
 
 Every command accepts -session ID (default: $ATTO_SESSION_ID). Outside
 atto, without -session or ATTO_SESSION_ID, a lightweight parent is created
@@ -153,12 +151,6 @@ func RunAgent(args []string, out io.Writer) error {
 	settings, err := config.LoadSettings()
 	if err != nil {
 		return fmt.Errorf("%s: %w", config.SettingsPath(), err)
-	}
-	switch sub {
-	case "spawn", "task", "send":
-		if !settings.AgentsEnabled() {
-			return fmt.Errorf(`agents are off. Only the user can turn them on: "agents": {"enabled": true} in %s`, config.SettingsPath())
-		}
 	}
 	if all {
 		if !outsideAgentCaller() {
@@ -246,9 +238,6 @@ func RunAgent(args []string, out io.Writer) error {
 		}
 		if text == "" {
 			return fmt.Errorf(`give the agent its task: atto agent spawn %s "..."`, addr)
-		}
-		if d, maxd := agentstate.Depth(*session), settings.AgentMaxDepth(); d >= maxd {
-			return fmt.Errorf("agents may nest %d deep (\"agents\": {\"maxDepth\": N} in settings.json raises it), and this session is %s: do the work yourself", maxd, agentstate.PathOf(*session))
 		}
 		if role == "" {
 			role = "general"
@@ -908,7 +897,7 @@ func (e ExitCode) Error() string { return fmt.Sprintf("exit status %d", int(e)) 
 
 // RunAgentTurn is the hidden entry point of an agent's turn (atto
 // _agent-turn -session <parent> <name> <turn>), started by atto agent as
-// a job of the parent session. It waits for a slot, runs the turn as
+// a job of the parent session. It runs the turn as
 // atto -p resuming the agent's session, records how it went and tells
 // the parent. It exits 0 once it has told the parent, however the turn
 // went.
@@ -934,18 +923,10 @@ func RunAgentTurn(args []string, _ io.Writer) error {
 	ctx, cancel := context.WithCancelCause(sigCtx)
 	defer cancel(nil)
 	go watchAgentInterrupt(ctx, st, cancel)
-	release, err := agentstate.Acquire(ctx, *parent, func() int {
-		s, _ := config.LoadSettings()
-		return s.AgentLimit()
-	})
-	if err != nil {
-		if errors.Is(context.Cause(ctx), agent.ErrUserInterrupt) {
-			t.Status, t.Ended = agentstate.Stopped, time.Now()
-			return agentstate.SaveTurn(*parent, name, t)
-		}
-		return err
+	if errors.Is(context.Cause(ctx), agent.ErrUserInterrupt) { // stopped while queued
+		t.Status, t.Ended = agentstate.Stopped, time.Now()
+		return agentstate.SaveTurn(*parent, name, t)
 	}
-	defer release()
 	t.Status, t.Started = agentstate.Running, time.Now()
 	_ = agentstate.SaveTurn(*parent, name, t)
 
@@ -953,7 +934,7 @@ func RunAgentTurn(args []string, _ io.Writer) error {
 	runErr := RunPrint(PrintOptions{
 		Prompt: st.Prompt, Model: st.Model, Effort: st.Effort, Resume: st.Session, Format: "text", Verbose: true,
 		Worker: &agent.Worker{Name: name, Preset: st.Preset, Instructions: st.Instructions, Worktree: st.Worktree, Branch: st.Branch,
-			Path: agentstate.PathOf(st.Session), Parent: agentstate.PathOf(*parent), CanSpawn: canSpawn(st.Session)},
+			Path: agentstate.PathOf(st.Session), Parent: agentstate.PathOf(*parent)},
 		done: func(r printResult) { res = r }, turnContext: ctx,
 	})
 	t.Ended = time.Now()
@@ -1045,10 +1026,4 @@ func turnEvent(st agentstate.State, t agentstate.Turn) events.Event {
 	}
 	return events.Event{Source: "agent", Text: agentstate.Envelope(agentstate.FinalAnswer, from, to, body),
 		Title: fmt.Sprintf("◆ agent %s %s after %s", from, what, tui.FormatDuration(t.Duration()))}
-}
-
-// canSpawn reports whether agent session may start agents of its own.
-func canSpawn(session string) bool {
-	s, _ := config.LoadSettings()
-	return s.AgentsEnabled() && agentstate.Depth(session) < s.AgentMaxDepth()
 }

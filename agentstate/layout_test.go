@@ -153,20 +153,6 @@ func TestConcurrentLayoutMigration(t *testing.T) {
 func TestBothLayoutsCoordinateWithOldDaemon(t *testing.T) {
 	t.Setenv(config.EnvDir, t.TempDir())
 	installOldLayout(t)
-	write(t, filepath.Join(config.AgentStateDir(), "p", "b.json"), `{"name":"b","parent":"p","session":"new"}`)
-	// Old daemons keep using locks in the legacy layout, even for parents
-	// with some new-layout records. Never create a second set of lock inodes.
-	release, err := lockFile(filepath.Join(legacyDir(), "p", "slots", "0"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer release()
-	if r, ok, err := TryAcquire("p", 1); err != nil || ok {
-		if r != nil {
-			r()
-		}
-		t.Fatalf("old daemon's slot ignored: %v %v", ok, err)
-	}
 	closeTree, err := CloseTree("p")
 	if err != nil {
 		t.Fatal(err)

@@ -471,26 +471,24 @@ func (a *Agent) Reload() (changed bool) {
 type Worker struct {
 	Name, Preset string
 	Instructions string // its role's
-	// Path and Parent: where it is in its tree, /root/tests under /root.
-	Path, Parent string
-	// CanSpawn: it may start agents of its own (the depth allows it).
-	CanSpawn bool
+	// ID is the agent's own session ID; Path where it is in its tree
+	// (/root for a root, /root/tests under it). Parent and ParentID name the
+	// agent that started it, both "" for an agent started from a shell.
+	ID, Path, Parent, ParentID string
 	// Worktree and Branch: the git worktree it works in, with -worktree.
 	Worktree, Branch string
 }
 
 // workerPart is the prompt's paragraph about agents: for an agent, what
-// it is; for any session (an agent too, when it may) that may start
+// it is; for any session (an agent too) that may start
 // agents, how, with the roles. It has no trailing newline.
-func workerPart(sub *Worker, enabled bool, presets []agentstate.Preset) string {
+func workerPart(sub *Worker, presets []agentstate.Preset) string {
 	var parts []string
 	if sub != nil {
-		parts = append(parts, prompts.Render("agent", prompts.Agent{Name: sub.Name, Preset: sub.Preset, Instructions: sub.Instructions, Path: sub.Path, Parent: sub.Parent, Worktree: sub.Worktree, Branch: sub.Branch}))
+		parts = append(parts, prompts.Render("agent", prompts.Agent{Name: sub.Name, Preset: sub.Preset, Instructions: sub.Instructions, ID: sub.ID, Path: sub.Path, Parent: sub.Parent, ParentID: sub.ParentID, Worktree: sub.Worktree, Branch: sub.Branch}))
 	}
-	if enabled && (sub == nil || sub.CanSpawn) {
-		list := strings.TrimSuffix(agentstate.PromptList(presets), "\n")
-		parts = append(parts, prompts.Render("agent_parent", map[string]any{"Presets": list}))
-	}
+	list := strings.TrimSuffix(agentstate.PromptList(presets), "\n")
+	parts = append(parts, prompts.Render("agent_parent", map[string]any{"Presets": list}))
 	return strings.Join(parts, "\n\n")
 }
 
@@ -524,11 +522,8 @@ func (a *Agent) scan(start time.Time) (Sources, string) {
 	if a.MCP != nil {
 		mcp = a.MCP.PromptServers()
 	}
-	var presets []agentstate.Preset
-	if (a.Worker == nil || a.Worker.CanSpawn) && st.AgentsEnabled() {
-		presets, _ = agentstate.LoadPresets(agentstate.Dirs(a.Cwd, projectRoot(a.Cwd)))
-	}
-	sub := workerPart(a.Worker, st.AgentsEnabled(), presets)
+	presets, _ := agentstate.LoadPresets(agentstate.Dirs(a.Cwd, projectRoot(a.Cwd)))
+	sub := workerPart(a.Worker, presets)
 	prompt := buildPrompt(a.Cwd, a.Shell, start, sk, files, mcp, sub, a.NoGoals)
 	var instr strings.Builder
 	writeInstructions(&instr, files)
@@ -878,7 +873,8 @@ func stripImages(m provider.Message, note string) provider.Message {
 }
 
 func systemPrompt(cwd string, sh shell.Shell, start time.Time, sk []skills.Skill) string {
-	return buildPrompt(cwd, sh, start, sk, loadInstructions(cwd), nil, "")
+	presets, _ := agentstate.LoadPresets(agentstate.Dirs(cwd, projectRoot(cwd)))
+	return buildPrompt(cwd, sh, start, sk, loadInstructions(cwd), nil, workerPart(nil, presets))
 }
 
 // sub is the paragraph about agents (see workerPart), "" for none.

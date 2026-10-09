@@ -171,22 +171,15 @@ type Settings struct {
 // DaemonOn reports whether interactive atto runs in the daemon.
 func (s Settings) DaemonOn() bool { return s.Daemon == nil || *s.Daemon }
 
-// AgentSettings configures agents in settings.json.
+// AgentSettings configures agents in settings.json. Agents are always
+// available: the "enabled", "maxDepth" and "maxConcurrent" keys older
+// versions read are accepted in the file and ignored.
 type AgentSettings struct {
-	// Enabled turns on atto agent (off by default): the model may then
-	// start agents from presets, when the user asks for them.
-	Enabled bool `json:"enabled,omitempty"`
-	// MaxConcurrent caps the agent turns a session runs at once; more
-	// wait in a queue. Default 3.
-	MaxConcurrent int `json:"maxConcurrent,omitempty"`
 	// Model and Effort apply to agents whose preset names none;
 	// without them an agent uses the model and effort of the session
 	// that starts it.
 	Model  string `json:"model,omitempty"`
 	Effort string `json:"effort,omitempty"`
-	// MaxDepth is how deep agent trees may grow: 1 (the default) lets a
-	// session start agents, 2 lets those start agents too, and so on.
-	MaxDepth int `json:"maxDepth,omitempty"`
 }
 
 // agents is the agent settings, under either name.
@@ -197,37 +190,12 @@ func (s Settings) agents() *AgentSettings {
 	return s.LegacyAgents
 }
 
-// AgentsEnabled reports whether atto agent is turned on.
-func (s Settings) AgentsEnabled() bool { return s.agents() != nil && s.agents().Enabled }
-
-// DefaultAgentDepth is AgentSettings.MaxDepth's default, as codex's.
-const DefaultAgentDepth = 1
-
-// AgentMaxDepth is how deep agent trees may grow.
-func (s Settings) AgentMaxDepth() int {
-	if a := s.agents(); a != nil && a.MaxDepth > 0 {
-		return a.MaxDepth
-	}
-	return DefaultAgentDepth
-}
-
 // AgentDefaults is the model and effort settings give agents, if any.
 func (s Settings) AgentDefaults() (model, effort string) {
 	if a := s.agents(); a != nil {
 		return a.Model, a.Effort
 	}
 	return "", ""
-}
-
-// DefaultMaxAgents is AgentSettings.MaxConcurrent's default.
-const DefaultMaxAgents = 3
-
-// AgentLimit is how many agent turns may run at once.
-func (s Settings) AgentLimit() int {
-	if a := s.agents(); a != nil && a.MaxConcurrent > 0 {
-		return a.MaxConcurrent
-	}
-	return DefaultMaxAgents
 }
 
 // ToolOutputSettings is settings.json's "toolOutput": how the full output of

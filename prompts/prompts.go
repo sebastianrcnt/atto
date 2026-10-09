@@ -64,7 +64,9 @@ type System struct {
 // Agent is the data of "agent".
 type Agent struct {
 	Name, Preset, Instructions string
-	Path, Parent               string // its path and its parent's: /root/tests, /root
+	ID                         string // its own session ID
+	Path                       string // its path in its tree: /root, /root/tests
+	Parent, ParentID           string // its parent's path and session ID; "" for an agent started from a shell
 	Worktree, Branch           string // with -worktree
 }
 
