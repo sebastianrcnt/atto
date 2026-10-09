@@ -32,12 +32,7 @@ func NewTree(cmd *exec.Cmd) *Tree {
 			windows.CloseHandle(job)
 		}
 	}
-	cmd.Cancel = func() error {
-		if t.job != 0 {
-			return windows.TerminateJobObject(t.job, 1)
-		}
-		return cmd.Process.Kill()
-	}
+	cmd.Cancel = t.kill
 	return t
 }
 
@@ -63,12 +58,84 @@ func (t *Tree) Close() {
 }
 
 // Kill terminates the whole tree now.
-func (t *Tree) Kill() {
-	if t.job != 0 {
-		_ = windows.TerminateJobObject(t.job, 1)
-	} else if t.cmd.Process != nil {
-		_ = t.cmd.Process.Kill()
+func (t *Tree) Kill() { _ = t.kill() }
+
+// kill terminates the process, the job's other members and the descendants
+// that are outside the job. Windows PowerShell 5.1 starts its children
+// outside the job object of the process that runs it, so the job alone leaves
+// them (and the output pipe they hold) behind. They are looked up before the
+// process goes, while its ID cannot belong to anyone else.
+func (t *Tree) kill() error {
+	var rest []uint32
+	if t.cmd.Process != nil {
+		rest = descendants(uint32(t.cmd.Process.Pid))
 	}
+	var err error
+	if t.job != 0 {
+		err = windows.TerminateJobObject(t.job, 1)
+	} else if t.cmd.Process != nil {
+		err = t.cmd.Process.Kill()
+	}
+	for _, pid := range rest {
+		if h, e := windows.OpenProcess(windows.PROCESS_TERMINATE, false, pid); e == nil {
+			_ = windows.TerminateProcess(h, 1)
+			windows.CloseHandle(h)
+		}
+	}
+	return err
+}
+
+// descendants are the running processes that the running process pid
+// started, and those they started in turn.
+func descendants(pid uint32) []uint32 {
+	snap, err := windows.CreateToolhelp32Snapshot(windows.TH32CS_SNAPPROCESS, 0)
+	if err != nil {
+		return nil
+	}
+	defer windows.CloseHandle(snap)
+	children := map[uint32][]uint32{}
+	entry := windows.ProcessEntry32{Size: uint32(unsafe.Sizeof(windows.ProcessEntry32{}))}
+	for err = windows.Process32First(snap, &entry); err == nil; err = windows.Process32Next(snap, &entry) {
+		children[entry.ParentProcessID] = append(children[entry.ParentProcessID], entry.ProcessID)
+	}
+	root := startTime(pid)
+	if root == 0 {
+		return nil
+	}
+	var out []uint32
+	started := map[uint32]uint64{pid: root}
+	for queue := []uint32{pid}; len(queue) > 0; queue = queue[1:] {
+		parent := queue[0]
+		for _, child := range children[parent] {
+			if _, seen := started[child]; seen {
+				continue
+			}
+			// A process cannot be older than its parent; one that is has
+			// the ID of a parent that is long gone.
+			at := startTime(child)
+			if at == 0 || at < started[parent] {
+				continue
+			}
+			started[child] = at
+			out = append(out, child)
+			queue = append(queue, child)
+		}
+	}
+	return out
+}
+
+// startTime is when pid started, as a FILETIME, or 0 if it is not running.
+func startTime(pid uint32) uint64 {
+	h, err := windows.OpenProcess(windows.PROCESS_QUERY_LIMITED_INFORMATION, false, pid)
+	if err != nil {
+		return 0
+	}
+	defer windows.CloseHandle(h)
+	var created, exited, kernel, user windows.Filetime
+	if windows.GetProcessTimes(h, &created, &exited, &kernel, &user) != nil || exited.HighDateTime != 0 || exited.LowDateTime != 0 {
+		return 0
+	}
+	return uint64(created.HighDateTime)<<32 | uint64(created.LowDateTime)
 }
 
 // ownConsole gives cmd a hidden console of its own unless this process's

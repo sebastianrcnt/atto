@@ -90,3 +90,37 @@ func testOutlivesTree(t *testing.T) {
 	}
 	t.Fatal("detached child did not start")
 }
+
+// Killing a tree takes the command's descendants with it, whether or not the
+// shell started them inside the job (Windows PowerShell 5.1 does not).
+func TestTreeKillTakesDescendants(t *testing.T) {
+	sh := Default()
+	script := "ping -n 60 127.0.0.1 > $null"
+	if sh.Kind == Cmd {
+		script = "ping -n 60 127.0.0.1 > nul"
+	}
+	cmd := sh.Command(t.Context(), script)
+	cmd.Dir = t.TempDir()
+	tree := NewTree(cmd)
+	defer tree.Close()
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	tree.Started()
+	var kids []uint32
+	for deadline := time.Now().Add(10 * time.Second); len(kids) == 0 && time.Now().Before(deadline); time.Sleep(20 * time.Millisecond) {
+		kids = descendants(uint32(cmd.Process.Pid))
+	}
+	if len(kids) == 0 {
+		t.Fatal("the shell started nothing")
+	}
+	tree.Kill()
+	_ = cmd.Wait()
+	for _, pid := range kids {
+		for deadline := time.Now().Add(5 * time.Second); Alive(int(pid)); time.Sleep(20 * time.Millisecond) {
+			if time.Now().After(deadline) {
+				t.Fatalf("process %d outlived its tree", pid)
+			}
+		}
+	}
+}
