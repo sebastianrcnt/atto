@@ -479,7 +479,7 @@ query tokens are supported intentionally. There is no Codex account/config/
 sandbox/approval-policy adapter. See [the full compatibility research](codex-app-server-compat.md)
 for details, and [working example clients](../examples/clients/README.md).
 
-### Desktop resource and status methods
+### Resource, status and debug methods
 
 `thread/files`, `item/image` and `item/output` are native client resources, not
 an unrestricted filesystem API. Reads are resolved from the current thread's

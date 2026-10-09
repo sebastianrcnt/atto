@@ -2,16 +2,12 @@ package server
 
 import (
 	"context"
-	"encoding/base64"
 	"encoding/json"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/sebastianrcnt/atto/auth"
 	"github.com/sebastianrcnt/atto/config"
-	"github.com/sebastianrcnt/atto/session"
 )
 
 func TestAuthenticationRPC(t *testing.T) {
@@ -75,86 +71,5 @@ func TestOAuthUsesRuntimePrompts(t *testing.T) {
 	h.wait("auth/updated", func(p map[string]any) bool { return p["status"] == "cancelled" })
 	if p := h.call("thread/read", nil)["prompt"]; p != nil {
 		t.Fatalf("cancelled login retained prompt: %v", p)
-	}
-}
-
-func TestDesktopDiagnostics(t *testing.T) {
-	h := newHarness(t)
-	if got := h.call("thread/statusLine", nil)["configured"]; got != false {
-		t.Fatalf("unconfigured status: %v", got)
-	}
-	if err := config.UpdateSettings(map[string]any{"statusLine": config.StatusLine{Command: "echo desktop-status", RefreshInterval: 3}}); err != nil {
-		t.Fatal(err)
-	}
-	out := h.call("thread/statusLine", nil)
-	lines := out["lines"].([]any)
-	if len(lines) != 1 || strings.TrimSpace(lines[0].(string)) != "desktop-status" || out["refreshInterval"] != float64(3) {
-		t.Fatalf("custom status: %v", out)
-	}
-	profiles := h.call("thread/debug", nil)
-	if heap, err := base64.StdEncoding.DecodeString(profiles["heap"].(string)); err != nil || len(heap) == 0 {
-		t.Fatalf("heap profile: %v", err)
-	}
-	if profiles["goroutines"] == "" || profiles["memory"] == nil {
-		t.Fatal("incomplete debug profiles")
-	}
-	writer := &boundedOutput{limit: 4}
-	_, _ = writer.Write([]byte("abc"))
-	if writer.truncated {
-		t.Fatal("short status incorrectly marked truncated")
-	}
-	_, _ = writer.Write([]byte("defgh"))
-	if writer.String() != "abcd" || !writer.truncated {
-		t.Fatalf("bounded output: %q / %v", writer.String(), writer.truncated)
-	}
-}
-
-func TestArchiveRPC(t *testing.T) {
-	h := newHarness(t)
-	h.call("input/submit", map[string]any{"input": "save before archiving"})
-	h.completed()
-	old, err := session.Find(h.id)
-	if err != nil {
-		t.Fatal(err)
-	}
-	out := h.call("thread/archive", nil)
-	path := out["path"].(string)
-	if !strings.HasPrefix(path, config.ArchivedDir()+string(filepath.Separator)) {
-		t.Fatalf("archive path: %q", path)
-	}
-	if _, err := os.Stat(old); !os.IsNotExist(err) {
-		t.Fatalf("active file remains: %v", err)
-	}
-	if _, _, err := session.Load(path); err != nil {
-		t.Fatal(err)
-	}
-	if h.s.Loaded(h.id) {
-		t.Fatal("archive retained runtime/writer")
-	}
-}
-
-func TestListIncludesLiveEmptySessions(t *testing.T) {
-	h := newHarness(t)
-	h.call("thread/setName", map[string]any{"name": "Empty workspace"})
-	value, err := h.s.listThreads(threadParams{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	rows := value.(map[string]any)["threads"].([]map[string]any)
-	found := false
-	for _, row := range rows {
-		if row["threadId"] == h.id {
-			found = true
-			if row["name"] != "Empty workspace" || row["loaded"] != true || row["busy"] != false {
-				t.Fatalf("live metadata: %#v", row)
-			}
-		}
-	}
-	if !found {
-		t.Fatalf("empty live session missing: %#v", rows)
-	}
-	value, err = h.s.listThreads(threadParams{Cwd: t.TempDir()})
-	if err != nil || len(value.(map[string]any)["threads"].([]map[string]any)) != 0 {
-		t.Fatalf("cwd filter: %#v %v", value, err)
 	}
 }

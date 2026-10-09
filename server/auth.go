@@ -9,7 +9,7 @@ import (
 	"github.com/sebastianrcnt/atto/config"
 )
 
-// Login belongs to the runtime, not a desktop's process. Disconnect leaves
+// Login belongs to the runtime, not a client's process. Disconnect leaves
 // the question available to another client; cancel or session close ends it.
 type loginRun struct {
 	provider string

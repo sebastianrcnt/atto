@@ -3,11 +3,9 @@ package server
 import (
 	"bytes"
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"io"
 	"runtime"
-	"runtime/pprof"
 	"strings"
 	"time"
 
@@ -16,7 +14,6 @@ import (
 	"github.com/sebastianrcnt/atto/shell"
 )
 
-type archiveRequest struct{ path string }
 type statusLineRequest struct {
 	command string
 	cwd     string
@@ -94,13 +91,4 @@ func runStatusLine(ctx context.Context, r statusLineRequest) (any, error) {
 		lines = strings.Split(text, "\n")
 	}
 	return map[string]any{"configured": true, "lines": lines, "refreshInterval": r.refresh, "truncated": out.truncated}, nil
-}
-
-func debugProfiles() any {
-	var heap, goroutines bytes.Buffer
-	_ = pprof.Lookup("heap").WriteTo(&heap, 0)
-	_ = pprof.Lookup("goroutine").WriteTo(&goroutines, 2)
-	var mem runtime.MemStats
-	runtime.ReadMemStats(&mem)
-	return map[string]any{"heap": base64.StdEncoding.EncodeToString(heap.Bytes()), "goroutines": goroutines.String(), "memory": mem}
 }

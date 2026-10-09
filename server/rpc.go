@@ -17,6 +17,10 @@ import (
 	"github.com/sebastianrcnt/atto/session"
 )
 
+// archiveRequest asks threadCall to close the thread and move its transcript
+// off the lane.
+type archiveRequest struct{ path string }
+
 // threadCall serves the requests that act on one thread; ok is false for
 // a method it does not know. State is resolved on the thread's lane;
 // resource I/O, status commands, profiles and archive cleanup run off it.
