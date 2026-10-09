@@ -1,0 +1,5 @@
+[
+  " custom status line",
+  " \u001b[38;5;2msecond line\u001b[39m",
+  " \u001b[38;5;5mPursuing goal (10s)\u001b[39m\u001b[2m · \u001b[22m\u001b[38;5;2m● 1 job running \u001b[0m\u001b]8;;\u0007…"
+]

@@ -1,2 +1,2 @@
-◆ Orca · Working…   ◉ Goal 0s · 0 tokens
-━───────── 11% 31k/262k · cache 85%
+ ◆ Orca  ━───────── 11% 31k/262k
+ ↑12k ↓3.4k · $0.123   /work/proj (main)

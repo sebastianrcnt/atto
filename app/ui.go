@@ -235,10 +235,17 @@ func (p *paneDock) Click(line int) bool {
 	return e.Click(line - 1 + offset)
 }
 
-// renderUIStatus is priority-aware and passive. One slot is one clipped row;
-// high-priority goal/activity are retained before low-priority contributions.
-func (a *App) renderUIStatus(width int) []string {
+// Additional provider slots retain generic priority-aware layout. Built-in
+// slots use the native status compositor in ui_status.go.
+func (a *App) renderAdditionalUIStatus(width int) []string {
 	items := a.liveUI(ui.Status)
+	var extra []ui.Instance
+	for _, i := range items {
+		if !isBuiltinStatus(i.ID) {
+			extra = append(extra, i)
+		}
+	}
+	items = extra
 	sequence := map[string]int{}
 	for index, i := range items {
 		sequence[i.ID] = index
@@ -305,9 +312,6 @@ func (a *App) renderUIStatus(width int) []string {
 			gap = 0
 		}
 		out = append(out, tui.Truncate(left+strings.Repeat(" ", gap)+right, width, "…"))
-	}
-	if flags := a.extensionStatus(); len(flags) > 0 {
-		out = append(out, tui.Truncate(strings.Join(flags, tui.Dim(" · ")), width, "…"))
 	}
 	return out
 }

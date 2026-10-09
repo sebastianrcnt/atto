@@ -1,2 +1,2 @@
-◆ Orca · ━───────── 11% 31k/262k · cache 85% · Working…     ◉ Goal 0s · 0 tokens
-↑12k ↓3.4k · W2k · $0.123                                      /work/proj (main)
+ ◆ Orca  ━───────── 11% 31k/262k · cache 85% · ↑12k ↓3.4k · W2k · $0.123
+                                                           /work/proj (main) · ?

@@ -53,9 +53,11 @@
   pane. A longer pane scrolls locally to keep its focused control visible.
 - Diff uses a local disclosure instead of the old string display header. Content,
   summary, git semantics and native expansion shortcuts are preserved.
-- Status prioritizes goal/activity, then model/context; lower-priority slots may
-  move to the second row or disappear first. Fresh-input accounting and cache
-  write totals are preserved. Memory reports worker heap, not frontend RSS.
+- Status now retains main's native ordered two-row/drop/path compositor, goal
+  reservation and separate transient indicator row (corrected in the status
+  review follow-up). Effort stays in its native position; activity remains above
+  the editor, not duplicated in status. Memory remains frontend RSS, not worker
+  heap. See [the status review report](ui-status-review-fix.md).
 - Helper dialogs now render portable controls; input shows Enter/Tab/Escape
   guidance. Command-center and private credential/trust UI are not wrapped.
 - Image is validated and renders the specified `[image: alt]` fallback. There is
@@ -111,7 +113,7 @@ no push was performed.
 
 These are ANSI-stripped committed harness goldens, not invented terminal output.
 Before fixtures reconstruct the prior native components using the same demo
-content. Status after also demonstrates the new goal/activity slots.
+content. Status after uses the main-compatible portable slots.
 
 ### /diff
 
@@ -176,11 +178,11 @@ Before:
                                                            /work/proj (main) · ?
 ```
 
-After:
+After (byte-identical rendering through portable slots):
 
 ```text
-◆ Orca · ━───────── 11% 31k/262k · cache 85% · Working…     ◉ Goal 0s · 0 tokens
-↑12k ↓3.4k · W2k · $0.123                                      /work/proj (main)
+ ◆ Orca  ━───────── 11% 31k/262k · cache 85% · ↑12k ↓3.4k · W2k · $0.123
+                                                           /work/proj (main) · ?
 ```
 
 ### Goal

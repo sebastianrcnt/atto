@@ -134,7 +134,9 @@ func (a *App) startStatusLine(cfg *config.StatusLine) {
 		a.ui.Do(func() { a.gitBranch = branch })
 		a.statusTrigger()
 	})
-	if cfg == nil || cfg.Command == "" {
+	// Attached clients consume the worker's shared custom Text tree. Only the
+	// RSS/branch monitor is local; do not start a second command refresh loop.
+	if a.conn != nil || cfg == nil || cfg.Command == "" {
 		return
 	}
 	go a.statusLoop(cfg)
@@ -233,11 +235,7 @@ func runStatusCommand(command string, input []byte, cwd string) ([]string, error
 // column everywhere the editor rules do) so CJK terminals line up.
 func (a *App) renderStatus(width int) []string {
 	if len(a.liveUI(ui.Status)) > 0 {
-		out := a.renderUIStatus(width)
-		if len(out) > 0 {
-			out[0] = a.withToast(out[0], width)
-		}
-		return out
+		return a.renderUIStatus(width)
 	}
 	// The goal indicator goes at the right end of the first row, as codex's
 	// footer shows it; the row gives up room for it. On a terminal too narrow
@@ -423,7 +421,6 @@ type statusCache struct {
 }
 
 func (a *App) buildStatus(m config.ModelRef, effort string, first, width int) []string {
-	sep := tui.Dim(" · ")
 	u := &a.usage
 
 	items := []statusItem{{text: tui.FG(6, "◆ ") + a.models.DisplayName(m)}}
@@ -482,15 +479,20 @@ func (a *App) buildStatus(m config.ModelRef, effort string, first, width int) []
 	}
 
 	items = append(items, statusItem{text: tui.Dim(fmtBytes(rssBytes.Load())), drop: dropMem, right: true})
+	return layoutStatus(items, core.ShortPath(a.cwd), a.gitBranch, first, width)
+}
+
+// layoutStatus is the unchanged main row/drop/path algorithm. The portable
+// adapter supplies rendered trees as items; it never priority-packs built-ins.
+func layoutStatus(items []statusItem, where, branch string, first, width int) []string {
+	sep := tui.Dim(" · ")
 	for i := range items {
 		items[i].w = tui.VisibleWidth(items[i].text)
 	}
 
-	branch := ""
-	if a.gitBranch != "" {
-		branch = " (" + a.gitBranch + ")"
+	if branch != "" {
+		branch = " (" + branch + ")"
 	}
-	where := core.ShortPath(a.cwd)
 	whereW, branchW, sepW := tui.VisibleWidth(where+branch), tui.VisibleWidth(branch), tui.VisibleWidth(sep)
 
 	// row lays out one row w wide: l at the left, the directory (when
@@ -558,7 +560,10 @@ func (a *App) buildStatus(m config.ModelRef, effort string, first, width int) []
 		keep(cut)
 		// The first row takes the left items in order while they fit (the
 		// model always); the rest start the second.
-		n, w := 1, left[0].w
+		n, w := 0, 0
+		if len(left) > 0 {
+			n, w = 1, left[0].w
+		}
 		for ; n < len(left); n++ {
 			add := cmp.Or(len(left[n].pre), sepW) + left[n].w
 			if 1+w+add > first {

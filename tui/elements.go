@@ -821,3 +821,28 @@ func (e *Elements) FocusLine() int {
 	}
 	return -1
 }
+
+// StatusSpans retains nested native SGR attribute scopes for passive Text slots.
+// It emits no clipping/wrapping: the status compositor owns that layout.
+func StatusSpans(n ui.Node, theme func(ui.ThemeKey, string) string) string {
+	if n.Type != "Text" {
+		return ui.PlainText(n)
+	}
+	text := expandElementTabs(propString(n, "text"))
+	for _, c := range n.Children {
+		text += StatusSpans(c, theme)
+	}
+	if propBool(n, "bold") {
+		text = Bold(text)
+	}
+	if propBool(n, "italic") {
+		text = Italic(text)
+	}
+	if propBool(n, "underline") {
+		text = "\x1b[4m" + text + "\x1b[24m"
+	}
+	if c := propString(n, "color"); c != "" {
+		text = theme(ui.ThemeKey(c), text)
+	}
+	return text
+}
