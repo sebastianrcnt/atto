@@ -191,7 +191,8 @@ func spawnedBy(c caller, parent, cwd string) *session.SpawnedBy {
 }
 
 // sessionTurn is the number of the turn session id is in: for an agent its
-// turn counter, for any other session how many user messages it holds.
+// turn counter, for any other session how many user messages it holds. The
+// file is streamed, never held.
 func sessionTurn(id string) int {
 	if st, err := agentstate.Load(id); err == nil {
 		return st.Turns
@@ -200,16 +201,13 @@ func sessionTurn(id string) int {
 	if err != nil {
 		return 0
 	}
-	_, entries, err := session.Load(path)
-	if err != nil {
-		return 0
-	}
 	n := 0
-	for _, e := range session.Active(entries) {
+	_ = session.Visit(path, func(_ int, e session.Entry) error {
 		if e.Type == session.TypeMessage && e.Message != nil && e.Message.Role == "user" {
 			n++
 		}
-	}
+		return nil
+	})
 	return n
 }
 

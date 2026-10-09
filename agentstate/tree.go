@@ -72,8 +72,8 @@ func managedSession(id string) bool {
 	if err != nil {
 		return false
 	}
-	s, err := session.Summarize(path)
-	return err == nil && s.Agent != nil
+	h, err := session.ReadHeader(path)
+	return err == nil && h.Agent != nil
 }
 
 // Ancestry is the chain from session up to its root, session first. It

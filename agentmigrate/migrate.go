@@ -338,8 +338,8 @@ func (c *converter) convert(id string, visiting map[string]bool) (agentstate.Sta
 	default: // a child of an ordinary session (or of one that no longer exists)
 		cwd := ""
 		if p, err := session.Find(parent); err == nil {
-			if s, err := session.Summarize(p); err == nil {
-				cwd = s.Cwd
+			if h, err := session.ReadHeader(p); err == nil {
+				cwd = h.Cwd
 			}
 		}
 		if cwd == "" {
