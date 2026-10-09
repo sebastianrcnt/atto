@@ -24,6 +24,7 @@ func TestFailedTurnReplaysAsErrorNotice(t *testing.T) {
 	a := agent.New(config.ModelRef{ProviderName: "p", Provider: config.Provider{BaseURL: srv.URL}, Model: config.Model{ID: "m"}}, "", os.TempDir())
 	dir := t.TempDir()
 	w := session.New(dir)
+	t.Cleanup(w.Close) // Windows cannot remove a session file that is still open
 	a.Record = w.Append
 	runErr := a.Run(context.Background(), "hello", func(any) {})
 	if runErr == nil {
