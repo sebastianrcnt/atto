@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io/fs"
 	"path/filepath"
-	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -181,16 +180,16 @@ func LastAssistant(id string) string {
 	if err != nil {
 		return ""
 	}
-	_, entries, err := Load(path)
-	if err != nil {
-		return ""
-	}
-	for _, e := range slices.Backward(Active(entries)) {
+	var last string
+	if err := VisitActive(path, func(e Entry) error {
 		if m := e.Message; e.Type == TypeMessage && m != nil && m.Role == "assistant" {
 			if text := strings.TrimSpace(m.Content); text != "" {
-				return text
+				last = text
 			}
 		}
+		return nil
+	}); err != nil {
+		return ""
 	}
-	return ""
+	return last
 }
