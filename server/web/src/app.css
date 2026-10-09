@@ -1273,3 +1273,13 @@ body {
 .inventory-row .state-dot.needs-you {
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--warning) 12%, transparent);
 }
+/* iOS Safari zooms the page into any focused field whose text is smaller than
+   16px. Touch devices get 16px fields; the page keeps pinch zoom. */
+@media (hover: none) and (pointer: coarse) {
+  input,
+  textarea,
+  select,
+  .composer textarea {
+    font-size: 16px !important;
+  }
+}
