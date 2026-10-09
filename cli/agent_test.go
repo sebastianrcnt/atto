@@ -415,7 +415,7 @@ func TestAgentExternalParent(t *testing.T) {
 	}
 	enableAgents(t, "")
 	// Commands that only read create no parent.
-	path, _, _ := externalParentPath()
+	path := filepath.Join(config.Dir(), "external_parents")
 	if out, err := runAgent(t, "list"); err != nil || out != "no agents\n" {
 		t.Fatalf("list before any agent: %q %v", out, err)
 	}
@@ -429,8 +429,7 @@ func TestAgentExternalParent(t *testing.T) {
 	if err != nil || !strings.HasPrefix(out, "external parent created: ") {
 		t.Fatalf("create: %q %v", out, err)
 	}
-	b, _ := os.ReadFile(path)
-	parent := strings.TrimSpace(string(b))
+	parent := strings.TrimPrefix(strings.SplitN(out, "\n", 2)[0], "external parent created: ")
 	hpath, _ := session.Find(parent)
 	h, entries, err := session.Load(hpath)
 	if err != nil || !h.External || len(entries) == 0 || entries[0].Name != "atto agent (external)" {
@@ -445,7 +444,7 @@ func TestAgentExternalParent(t *testing.T) {
 	}
 	t.Chdir(child)
 	if out, err := runAgent(t, "list"); err != nil || !strings.Contains(out, "/root/a") || strings.Contains(out, "external parent created") {
-		t.Fatalf("reuse: %q %v", out, err)
+		t.Fatalf("project inventory: %q %v", out, err)
 	}
 	if out, err := runAgent(t, "list", "-session", "explicit"); err != nil || out != "no agents\n" {
 		t.Fatalf("explicit: %q %v", out, err)

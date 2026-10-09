@@ -102,19 +102,14 @@ func TestAgentOutsideIDAcrossProjectsAndListAll(t *testing.T) {
 	agentServer(t, func(int, string) string { return textAnswer("done") })
 	enableAgents(t, "")
 	var agents []agentstate.State
-	var mappings []string
+	var parents []string
 	for _, project := range []string{t.TempDir(), t.TempDir()} {
 		t.Chdir(project)
-		parent, release, err := externalParent(&strings.Builder{}, true)
+		parent, err := newExternalParent(&strings.Builder{})
 		if err != nil {
 			t.Fatal(err)
 		}
-		release()
-		path, _, err := externalParentPath()
-		if err != nil {
-			t.Fatal(err)
-		}
-		mappings = append(mappings, path)
+		parents = append(parents, parent)
 		agents = append(agents, savedIDAgent(t, parent, "same-name"))
 	}
 	// A third directory has no external parent, yet can reach both exact agents.
@@ -155,8 +150,8 @@ func TestAgentOutsideIDAcrossProjectsAndListAll(t *testing.T) {
 		if _, err := runAgent(t, "close", "@"+st.Session); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := os.Stat(mappings[i]); !os.IsNotExist(err) {
-			t.Fatal("other project's parent mapping retained:", err)
+		if path, err := session.Find(parents[i]); err != nil || !isArchived(path) {
+			t.Fatalf("other project's parent not archived: %s %v", path, err)
 		}
 	}
 }

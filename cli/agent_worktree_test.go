@@ -251,3 +251,50 @@ func TestAgentCloseKeepsAncestorsOfFailedRemoval(t *testing.T) {
 		t.Fatal("retry left state")
 	}
 }
+
+func TestExternalSameLabelWorktreesHaveDistinctParentsAndBranches(t *testing.T) {
+	agentServer(t, func(int, string) string { return textAnswer("done") })
+	repo := gitRepo(t)
+	t.Chdir(filepath.Join(repo, "sub"))
+	enableAgents(t, "")
+	var states []agentstate.State
+	for range 2 {
+		st, out := spawnExternalAgent(t, "panes", "-worktree")
+		states = append(states, st)
+		t.Cleanup(func() { _, _ = removeWorktree(st, true) })
+		if st.Branch != "atto/"+st.Parent+"/panes" || !strings.Contains(out, "atto agent close @"+st.Session) {
+			t.Fatalf("fresh-parent worktree: %+v %q", st, out)
+		}
+		if _, err := runAgent(t, "wait", "@"+st.Session, "-timeout", "30s"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if states[0].Parent == states[1].Parent || states[0].Branch == states[1].Branch || states[0].Worktree == states[1].Worktree {
+		t.Fatalf("outside worktrees collided: %+v", states)
+	}
+	if out, err := runAgent(t, "list"); err != nil || !strings.Contains(out, "@"+states[0].Session) || !strings.Contains(out, "@"+states[1].Session) {
+		t.Fatalf("worktree project lookup: %q %v", out, err)
+	}
+	if _, err := runAgent(t, "report", "panes"); err == nil || !strings.Contains(err.Error(), "2 agents named panes") {
+		t.Fatal("worktree labels should be project-wide:", err)
+	}
+	for _, st := range states {
+		path, err := session.Find(st.Parent)
+		if err != nil {
+			t.Fatal(err)
+		}
+		h, _, err := session.Load(path)
+		if err != nil || h.Cwd != externalProject(repo) {
+			t.Fatalf("worktree parent project: %+v %v", h, err)
+		}
+		if _, err := runAgent(t, "close", "@"+st.Session); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := os.Stat(st.Worktree); !os.IsNotExist(err) {
+			t.Fatal("worktree remained:", err)
+		}
+		if !hasBranch(repo, st.Branch) {
+			t.Fatal("worktree branch not kept:", st.Branch)
+		}
+	}
+}
