@@ -9,17 +9,21 @@ A picture of the whole structure (concepts, processes, memory, agents, commands,
 ## Structure in one paragraph
 
 Five concepts. A **session** is a JSONL file (the source of truth). A **worker** (`atto _session-server`) executes one session.
-The **daemon** (`atto _daemon`) only starts, lists and retires workers; it holds no screens. **Clients** (TUI, Swing, web,
+The **daemon** (`atto _daemon`) only starts, lists and retires workers; it holds no screens. **Clients** (TUI,
 `app-server`, `-p`, scripts) attach to workers over JSON-RPC and only render. An **agent** is a session started by another
 session; its identity is its session ID and its tree position is metadata. Without the daemon (Windows, `ATTO_NO_DAEMON=1`)
 the worker runs inside the client process. Keep this separation strict: clients never read `~/.atto` or the daemon directly.
+The Swing and web clients are gone (tags `archive/swing` and `archive/web-frozen`); protocol revision 3 is the only one
+served, and `atto app-server --listen stdio:// | unix:// | ws://` is how other clients attach. `/remote` and `atto serve`
+only print that the web UI is being rebuilt.
 
 ## Done today (2026-10-09)
 
 | What | Commits | Notes |
 |---|---|---|
 | Engine/front-end split (overnight) | `177199d` … `a59521f` | runtime owns execution, workers, `app-server --listen stdio/unix/ws`; `docs/tui-as-client.md`, `docs/protocol.md` |
-| Swing client | `7098497` … `ec9a016` | `clients/swing`, JDK 21 only; not bundled into atto (decided) |
+| Swing client, then removed | `7098497` … `ec9a016` | `clients/swing`, JDK 21 only; deleted the same day, tag `archive/swing` |
+| Web and Swing removal | the commits after `9dd33fa` | `clients/swing`, `server/web`, the HTTP/SSE gateway, `server.Scope` and `/remote` plumbing, `subagent/*` aliases, protocol revisions 1 and 2 with full snapshots, `remote.port`; tags `archive/swing`, `archive/web-frozen`; `/remote` and `atto serve` print a one-line pointer to `app-server` |
 | PTY panes removed | `c39c0f9`, `90e5da7`, `8eaba18` | daemon protocol 4, workers only; commands are `atto` and `atto resume [ID\|name]`; `attach`, `connect`, `/detach`, `-c`, `-resume` removed (pointer message); `atto daemon kill SESSION` |
 | Archived sessions zstd | `f258d85`, `9879a0b`, `2013169` | `archived_sessions/*.jsonl.zst`; `atto sessions compress` migrated 24 → 8.4 MB here |
 | Agent `@ID` addresses, no shared outside parent | `fb92f37` … `a8b4023` | being superseded by the agent model work |
@@ -47,11 +51,13 @@ mid-turn, migration on a copy of the real `agent-state/`, send/interrupt/queued 
 ## Next, in order
 
 1. **`thread/list` extension** (brief `/tmp/atto-runs/w18b_overview.txt`): the command center and `atto resume` picker get
-   agent metadata and needs-you flags from `thread/list`; remove `scanCenter`'s direct disk/daemon reads; Swing uses the same.
+   agent metadata and needs-you flags from `thread/list`; remove `scanCenter`'s direct disk/daemon reads.
    No new overview method, no push notifications (decided).
 2. **Command center tidy-up:** `a` archive/unarchive, `d` delete, finished agent trees folded by default, no `/root/` prefix.
-3. **Windows daemon:** workers on Windows (AF_UNIX sockets work since Windows 10). Verify on `win`.
-4. Small: the startup Config line lists `~\.atto\settings.json` twice on Windows; a `cli` test failed once under full load (not reproduced in 6 reruns).
+3. **New web UI** on a new shared UI-element layer (planned, not started): it attaches through `atto app-server --listen ws://`
+   and speaks revision 3 (`docs/protocol.md`); `/remote` and `atto serve` return when it exists.
+4. **Windows daemon:** workers on Windows (AF_UNIX sockets work since Windows 10). Verify on `win`.
+5. Small: the startup Config line lists `~\.atto\settings.json` twice on Windows; a `cli` test failed once under full load (not reproduced in 6 reruns).
 
 ## Decisions and things to know
 

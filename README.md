@@ -162,8 +162,7 @@ Esc/Ctrl+C exits without starting anything. Ambiguous names or prefixes list the
 matching session IDs.
 
 `/clear`, `/new`, `/resume` and `/fork` switch only this TUI's conversation;
-accepted work in the previous worker continues. `/remote` controls the same worker
-from the frozen web client. `atto app-server` and `atto serve` route sessions to
+accepted work in the previous worker continues. `atto app-server` routes sessions to
 workers too; pass `-in-process` to use single-process operation. `atto -p -session ID`
 on a live worker routes its prompt there (text/JSON; per-run overrides and
 stream-json are refused with a pointer to `atto resume`). Other print runs and
@@ -209,7 +208,7 @@ File mentions, as in pi: type `@` at the start of a word to pick a file or folde
 
 Pasting the path of an image file, or dropping the file on the terminal, attaches it too. Images show as `[image 1: 1024x768 PNG]` in the input; delete the placeholder to drop the image. Images larger than 2048 pixels are scaled down. Clipboard images need `osascript` (macOS; `pngpaste` is used if installed), `wl-paste` or `xclip` (Linux), or PowerShell (Windows, WSL).
 
-`atto -p` attaches images given with `-image` and an image piped to stdin (PNG, JPEG, GIF or WebP, recognized by its first bytes); the prompt argument is then the text. In the web client (`atto serve`, `/remote`), attach images with the image button, by pasting or by dropping them; over JSON-RPC, `turn/start` takes `images: [{mimeType, data}]` (base64 or a `data:` URL, at most 10 of 10 MB each). Either way the model must accept images.
+`atto -p` attaches images given with `-image` and an image piped to stdin (PNG, JPEG, GIF or WebP, recognized by its first bytes); the prompt argument is then the text. Over JSON-RPC (`atto app-server`), `turn/start` takes `images: [{mimeType, data}]` (base64 or a `data:` URL, at most 10 of 10 MB each). Either way the model must accept images.
 
 Pastes over 1000 characters show as `[Pasted Content 1234 chars]` and are sent in full.
 
@@ -252,7 +251,7 @@ To use the terminal's own selection instead, hold the key that bypasses mouse re
 | `/goal [<objective>\|clear\|edit\|pause\|resume]` | set or view the goal for a long-running task, as in codex: bare `/goal` (or `status`) shows it with the time and tokens used, `help` shows the usage, `edit` opens a prompt, a new objective asks before replacing an unfinished goal. The words help and status alone never become an objective. Clearing or pausing while a turn runs is told to the model. A message sent while the goal is waiting, paused, stalled or usage limited carries a short note saying so, so the model answers instead of resuming goal work; a message sent while a goal turn runs says the goal is still active. A turn that fails for any reason a retry might fix (anything but an interrupt, a usage limit, an authentication failure or a request the provider rejected) is retried after 10s, 30s, 1m, 2m, 5m and 10m before the goal stalls (each turn has already sent a failed request up to 5 more times itself); Esc, `/goal pause` and `/goal clear` end the wait. The status shows at the right of the status line ("Pursuing goal (14m)"), Esc pauses it, and opening a session with a paused or stalled goal asks whether to resume |
 | `/agents` | the agent command center (as `←` on an empty prompt) |
 | `/close` | stop this session and its work, then exit the TUI |
-| `/remote [on [port]\|off]` | control this session from a phone or browser: serves atto's web client on port 7879 (or `"remote": {"port": N}` in `settings.json`), prints its link and a QR code, and marks messages sent from there "from remote"; `off` closes every connection and revokes the link |
+| `/remote` | prints that the web UI is being rebuilt and that `atto app-server --listen ws://HOST:PORT` serves the protocol meanwhile |
 | `/jobs`, `/stop` | list or stop background jobs |
 | `/timer`, `/timers` | wake the agent later, or list pending timers |
 | `/quit` | exit atto |
@@ -311,7 +310,7 @@ atto sessions delete [-y] <id>       permanent: also removes its jobs, inbox, go
 
 `delete` asks first on a terminal and refuses without `-y` elsewhere. Inside an atto agent only `list` and `show` work, so a model can't destroy session history.
 
-A session is open in one atto at a time: while a terminal has it, resuming it in another (or with `atto -p`, or from `atto serve`) is refused with the pid that holds it, since two writers would undo each other's work and goal.
+A session is open in one atto at a time: while a terminal has it, resuming it in another (or with `atto -p`, or from `atto app-server`) is refused with the pid that holds it, since two writers would undo each other's work and goal.
 
 **Hooks** use the same format as Claude Code: `PreToolUse`, `PostToolUse`, `UserPromptSubmit`, `Stop`, `PreCompact`, `SessionStart`, `SessionEnd` and `Notification`.
 
@@ -324,7 +323,7 @@ A session is open in one atto at a time: while a terminal has it, resuming it in
 
 **Project code approval.** A repository may bring executable hooks, MCP servers or extensions. At startup, and when `/reload` finds new or changed content, the TUI asks **once**, listing all pending items together: **Allow all**, **Review one by one**, or **Deny**. Allow all approves only the content shown, not future items or changes. Review offers Allow/Deny for each item. Decisions are remembered by content hash; unchanged denials stay off without asking again. `Esc` means “not now”: content stays off and is not asked about again until the next atto run (or until it changes).
 
-Where nothing can ask (`atto -p`, `atto app-server`, `atto serve`, background workers), unapproved content stays off and a warning names each item and its approval command. Approve ahead of time from your own terminal:
+Where nothing can ask (`atto -p`, `atto app-server`, background workers), unapproved content stays off and a warning names each item and its approval command. Approve ahead of time from your own terminal:
 
 ```
 atto trust                            # list project items and their decisions
@@ -484,15 +483,9 @@ atto agent roles                    what -role picks from
   The body is added to the agent's system prompt; the names and descriptions are listed for the sessions that may start agents. `atto context` shows them too.
 - The old command names still work: `start` (with `NAME PRESET "<task>"` too), `next`, `steer`, `wait-any`, `stop`, `rm`, `presets`.
 
-**Front end and back end are separate.** Both servers speak the same JSON-RPC protocol, built around threads, turns and items:
+**Front end and back end are separate.** Clients attach to the session runtime over one JSON-RPC protocol, built around threads, turns and items (revision 3 is the only one served). `atto app-server` serves it over JSON-lines stdio by default, or `--listen unix:///tmp/atto.sock` (0600, removed on exit), or `--listen ws://127.0.0.1:7878` (one JSON-RPC message per text message). Socket disconnect is detach, not stop. The terminal UI is one such client. A new web UI is planned; until then `atto serve` and `/remote` only print that it is being rebuilt, and `atto app-server` is the way to attach other clients. The [client-author protocol reference](docs/protocol.md) covers every method, notification, handshake, cursor and prompt; a [small Python client](examples/clients/README.md) shows how to attach. `server/protocol.go` contains the Go DTOs.
 
-- `atto serve` serves it over HTTP + SSE, also exposes WebSocket at `/ws` with the same token, and includes a web client, so you can use atto from a phone. Listening beyond this machine (`-listen 0.0.0.0:7878`), it prints the link with a QR code to scan.
-- `atto app-server` serves it over JSON-lines stdio by default, or `--listen unix:///tmp/atto.sock` (0600, removed on exit), or `--listen ws://127.0.0.1:7878` (one JSON-RPC message per text message). Socket disconnect is detach, not stop.
-- `/remote` in the TUI serves the session you are in, with the same protocol and web client: the browser shows the conversation as it streams, and what you send from it goes in as if typed (a turn, or a steer while one runs); Stop, Background, model and effort work too. `/clear` and `/resume` take the browser along. Each `/remote on` makes a new token, so `/remote off` revokes the link; quitting atto stops it. There is no TLS: use it on a network you trust (or Tailscale).
-
-The web client shows what the terminal does: commands the model ran one after another fold into one line (`toolGroups` in `settings.json` applies), the status line sits under the input (model, context, cache hit rate, ↑/↓ tokens, cost) with the activity line above it while a turn runs (its time and tokens, orange when the model has been quiet for a while), and steers or queued messages not taken yet are listed above the input, where they can be edited or dropped. The ⋯ menu starts a new conversation, compacts, undoes the last turn (its message returns to the input), switches model and effort, and opens the session's background jobs (their output, and Stop) and agents (their reports and, read only, their transcripts). The [client-author protocol reference](docs/protocol.md) covers every method, notification, handshake, cursor and prompt; [small Python and browser clients](examples/clients/README.md) show how to attach. `server/protocol.go` contains the Go DTOs.
-
-WS listeners beyond loopback require a bearer token (printed by app-server on stderr and saved in `~/.atto/server-token`); send `Authorization: Bearer <token>` or `?token=`. Browser origins must be same-host, loopback, or explicitly added with repeatable `--allow-origin https://client.example`. There is no built-in TLS: prefer a private network or TLS proxy. All transports route sessions to daemon workers when available; `--in-process` keeps a standalone server runtime. `initialize` then `initialized` starts the protocol handshake. Detaching leaves worker execution alive; `thread/close` ends it.
+WS listeners beyond loopback require a bearer token (printed by app-server on stderr and saved in `~/.atto/server-token`); send `Authorization: Bearer <token>` or `?token=`. Browser origins must be same-host, loopback, or explicitly added with repeatable `--allow-origin https://client.example`. There is no built-in TLS: prefer a private network or TLS proxy. All transports route sessions to daemon workers when available; `--in-process` keeps a standalone server runtime. `initialize` (listing protocol revision 3) then `initialized` starts the protocol handshake. Detaching leaves worker execution alive; `thread/close` ends it.
 
 ## Safety
 
@@ -511,7 +504,7 @@ Everything lives in `~/.atto`. Set `ATTO_DIR` to move it.
 
 | Path | Contents |
 | --- | --- |
-| `settings.json` | default model and effort, renderer, `mouse`, `toolGroups` (`false`: no command groups), `spinnerVerbs` (the word the activity line shows while commands run, drawn once per turn: `en`, the default, made-up English verbs; `ko`, made-up Korean words, as `글벅거리는 중…`; `ko-literary`, Korean verbs; `off`, just `Working…`), `spinnerScanner` (`true`: a sweeping `▰▱` scanner before that word), status line, hooks, `updateCheck`, `doubleEscapeAction` (`tree`, `fork` or `none`), `branchSummary.skipPrompt`, `toolOutputTokenLimit` (how much of a command's output the model gets, default 10000 tokens; the middle is cut and the full output saved to a file, as in codex), `toolOutput` (`fileHeadMB`, `fileTailMB`: how much of the start and end of one command's output its file keeps, 32 each; `totalMB`: all saved output, 1024, the oldest files go first; `minFreeMB`: free disk space needed to save any, 1024; `0` or absent is the default and a negative `totalMB` or `minFreeMB` turns that limit off), `backgroundExit` (experimental: `false` turns off the exit menu that offers "Run in background" while a turn runs), `remote.port` (`/remote`'s port, default 7879), `daemon` (`false`: run sessions in-process instead of in daemon workers), `extensions` (`disabled` names, handler `timeout` in seconds), `skills.disabled` (built-in skills to turn off), `agents` (`model`, `effort`: defaults for roles that name none; agents are always on and unlimited, so the old `enabled`, `maxDepth` and `maxConcurrent` are ignored) |
+| `settings.json` | default model and effort, renderer, `mouse`, `toolGroups` (`false`: no command groups), `spinnerVerbs` (the word the activity line shows while commands run, drawn once per turn: `en`, the default, made-up English verbs; `ko`, made-up Korean words, as `글벅거리는 중…`; `ko-literary`, Korean verbs; `off`, just `Working…`), `spinnerScanner` (`true`: a sweeping `▰▱` scanner before that word), status line, hooks, `updateCheck`, `doubleEscapeAction` (`tree`, `fork` or `none`), `branchSummary.skipPrompt`, `toolOutputTokenLimit` (how much of a command's output the model gets, default 10000 tokens; the middle is cut and the full output saved to a file, as in codex), `toolOutput` (`fileHeadMB`, `fileTailMB`: how much of the start and end of one command's output its file keeps, 32 each; `totalMB`: all saved output, 1024, the oldest files go first; `minFreeMB`: free disk space needed to save any, 1024; `0` or absent is the default and a negative `totalMB` or `minFreeMB` turns that limit off), `backgroundExit` (experimental: `false` turns off the exit menu that offers "Run in background" while a turn runs), `daemon` (`false`: run sessions in-process instead of in daemon workers), `extensions` (`disabled` names, handler `timeout` in seconds), `skills.disabled` (built-in skills to turn off), `agents` (`model`, `effort`: defaults for roles that name none; agents are always on and unlimited, so the old `enabled`, `maxDepth` and `maxConcurrent` are ignored) |
 | `agents/` | agent roles (`<name>.md`) |
 | `agent-state/` | one record per agent session ID (`<id>.json`, `.turn.json`, `.turn.json.interrupt`, `.turn.lock`), the format marker `.format` and `.coord/` locks (separate from roles) |
 | `backups/` | backups atto takes itself, before `atto agent migrate`; never part of a backup |
@@ -557,9 +550,7 @@ go install ./cmd/atto          # this machine
 scripts/deploy.sh win linux    # other machines over ssh, no GitHub involved
 ```
 
-Enable the pre-commit checks (gofmt, vet, modernize, tidy, web dist) with `git config core.hooksPath .githooks`.
-
-The web client (`server/web`) is Preact and TypeScript styled with Tailwind; its built bundle in `server/web/dist` is committed, so `go build` needs nothing else. After changing `server/web/src`, run `go generate ./server/web` (it downloads the pinned Tailwind standalone CLI and Preact once, checking their SHA-256, and bundles with esbuild; no Node) and commit `dist/`; a test fails while `dist/` is stale.
+Enable the pre-commit checks (gofmt, vet, modernize, tidy) with `git config core.hooksPath .githooks`.
 
 `scripts/deploy.sh` builds an edge binary of this checkout for each host's system and installs it where the install scripts would (`%LOCALAPPDATA%\Programs\atto` on Windows, `~/.local/bin` elsewhere), so `atto update` there keeps following edge. Its version ends in `.local`.
 

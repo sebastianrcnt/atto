@@ -1,6 +1,7 @@
 # atto native protocol: a client author's reference
 
-Protocol revision **3** (revisions 1 and 2 remain accepted). This is atto's native
+Protocol revision **3** is the only revision served: `initialize` must list 3 in
+`protocolVersions` (see the handshake below). This is atto's native
 JSON-RPC API, inspired by Codex app-server, **not a Codex wire adapter**. See
 [the detailed Codex v2 comparison](codex-app-server-compat.md) and
 [implementation status](tui-as-client.md#8-implementation-status-on-main).
@@ -15,7 +16,6 @@ atto app-server --listen stdio://             # explicit default
 atto app-server --listen unix:///tmp/atto.sock
 atto app-server --listen ws://127.0.0.1:7878
 atto app-server --listen ws://0.0.0.0:7878 --allow-origin https://client.example
-atto serve --listen 127.0.0.1:7878             # HTTP/SSE, web UI, and /ws
 ```
 
 - **stdio:** start a subprocess; write one JSON message per line to stdin and
@@ -25,23 +25,22 @@ atto serve --listen 127.0.0.1:7878             # HTTP/SSE, web UI, and /ws
   at startup: remove a stale socket yourself after checking its owner is gone.
   This is **raw JSON lines**, not Codex's WebSocket-over-UDS. Unix listeners are
   unavailable on Windows versions without Unix-socket support.
-- **WebSocket:** HTTP upgrade at `/` for app-server, `/ws` for serve and scoped
-  `/remote` handlers. One JSON-RPC message per text message, no trailing newline
-  required. RFC 6455 masking, fragmentation, ping/pong and close are supported;
+- **WebSocket:** HTTP upgrade at any path (use `/`). One JSON-RPC message per
+  text message, no trailing newline required. RFC 6455 masking, fragmentation, ping/pong and close are supported;
   binary messages are refused. Max message size is 64 MiB (aggregate fragments).
   Server frames are unmasked. No compression or subprotocol is negotiated.
   Slow writes have a 10-second deadline. Framing errors close with 1002;
   binary messages with 1003, invalid UTF-8 with 1007, oversize with 1009.
-- **HTTP:** `POST /rpc` with a JSON request body → a JSON reply (204 for a
-  notification). `GET /events` streams SSE notifications. Existing web clients
-  continue using these endpoints, unchanged.
 
-`serve` always requires its bearer token for RPC, SSE and WS. app-server WS
-requires it when bound beyond loopback, but not when bound only to loopback.
-The persistent token is generated in `~/.atto/server-token` (or
+There is no HTTP RPC or SSE endpoint, and no web page: the web UI is being
+rebuilt, and `atto serve` and `/remote` only say so. Attach other clients with
+`atto app-server`.
+
+app-server WS requires the bearer token when bound beyond loopback, but not when
+bound only to loopback. The persistent token is generated in `~/.atto/server-token` (or
 `$ATTO_DIR/server-token`, 0600); app-server prints the token and file on stderr
 for non-loopback listeners. Supply `Authorization: Bearer <token>` or
-`?token=<token>` (browser WebSocket/EventSource cannot set headers). Do not log
+`?token=<token>` (browser WebSocket cannot set headers). Do not log
 query tokens. Non-loopback listeners print a no-TLS warning: use a trusted
 private network such as Tailscale or a TLS reverse proxy. There is no built-in
 TLS termination, sandbox or per-command approval policy.
@@ -52,9 +51,9 @@ flag. Missing Origin is allowed for non-browser clients; `null`/`file://` is
 refused unless an HTTP(S) origin is used instead. Origin permission is not
 a substitute for the bearer token. Tokens are transport auth, not provider keys.
 
-Each stream/socket is an independent equal client with a `clientId`. HTTP/SSE
-retains its legacy shared anonymous identity per handler. All transports use
-the same dispatcher, event hub and worker routing. There is no hidden TUI owner.
+Each stream/socket is an independent equal client with a `clientId`. All
+transports use the same dispatcher, event hub and worker routing. There is no
+hidden TUI owner.
 
 ## Envelope and handshake
 
@@ -65,7 +64,7 @@ order: notifications may appear before a response. Use distinct integer or
 string IDs. Requests on a connection are handled in order; `ping` is a fence.
 
 ```json
-{"id":1,"method":"initialize","params":{"protocolVersions":[3,2],"clientInfo":{"name":"my-client","title":"My client","version":"1"},"capabilities":{"interactive":true,"images":true}}}
+{"id":1,"method":"initialize","params":{"protocolVersions":[3],"clientInfo":{"name":"my-client","title":"My client","version":"1"},"capabilities":{"interactive":true,"images":true}}}
 ```
 
 ```json
@@ -76,14 +75,15 @@ string IDs. Requests on a connection are handled in order; `ping` is a fence.
 {"method":"initialized"}
 ```
 
-The newest shared revision is selected; no version list selects revision 2
-so legacy clients retain full snapshots. No overlap returns `unsupportedProtocol`.
+`protocolVersions` is required and must include 3. A client that offers only
+other revisions, or no list, gets `unsupportedProtocol` with a message naming
+the revision served (older revisions are no longer accepted).
 `clientInfo` uses Codex's name/title/version shape; capabilities currently use
 `interactive` (can answer prompts) and `images`. Unknown capability fields,
 such as Codex's `experimentalApi`, are tolerated, not a promise to implement
 that feature. `settings.toolGroups` is a display preference. Send `initialized`
-after the result; it is an acknowledgment, **not a mandatory gate**, to keep
-legacy clients working. Repeated initialize is also tolerated.
+after the result; it is an acknowledgment, **not a mandatory gate**. Repeated
+initialize is also tolerated.
 
 ## Thread → turn → item lifecycle
 
@@ -150,7 +150,7 @@ the redundant `jsonrpc` field on notifications.
 `priced`, `subscription`, `turnId`, `items`, `usage`, `turn`, `pending`, `context`,
 `eventId`, `serverInstanceId`, `prompt`, `goal`, `extensionUi`, `runKind`,
 `activity`, `jobs`, `timers`, `readOnly`, `offline`, `sessionPath`, `longContext`,
-`live`, `hasMore`, `before`. Revision 3 snapshot replies always include `items`,
+`hasMore`, `before`. Snapshot replies always include `items`,
 `hasMore` and `before`, even for an empty tail. `context` is the loaded AGENTS/skills/hooks/extensions/MCP/config report.
 A read-only/offline snapshot is not an execution owner. Use resume before writes.
 
@@ -230,7 +230,7 @@ by `TestProtocolReferenceMethods`; adding a method without documenting it fails.
 
 | Method | Params | Result / semantics |
 | --- | --- | --- |
-| `initialize` | `{protocolVersions?,clientInfo?,capabilities?}` | `{name,version,protocolVersion,serverInstanceId,clientId?,eventId,settings,live?,threadId?}` |
+| `initialize` | `{protocolVersions,clientInfo?,capabilities?}` | `{name,version,protocolVersion,serverInstanceId,clientId?,eventId,settings}`; `protocolVersions` must include 3 |
 | `initialized` | `{}` (normally notification) | `{}`; handshake acknowledgment |
 | `ping` | `{}` | `{}`; ordering fence on the same connection |
 | `models/list` | `{}` | `{models:[{id,name,contextWindow,efforts,hasKey,images}]}` |
@@ -245,7 +245,7 @@ by `TestProtocolReferenceMethods`; adding a method without documenting it fails.
 | `thread/resume` | T + `cwd?,deferStart?,limit?` | Snapshot + context, items; joins owner, ID/prefix resolution |
 | `thread/attach` | T + `limit?` | Snapshot + items; follows a loaded thread |
 | `thread/read` | T + `offline?,limit?` | Snapshot + items, cursor; offline reads file without loading |
-| `thread/items` | `{threadId,before,limit?,offline?}` | Revision 3: earlier transcript page `{items,hasMore,before}`, oldest first; does not change the live event cursor. |
+| `thread/items` | `{threadId,before,limit?,offline?}` | Earlier transcript page `{items,hasMore,before}`, oldest first; does not change the live event cursor. |
 | `thread/entry` | `{threadId,entryId,offline?}` | Read one complete session entry from disk, including unloaded or off-branch messages (tree copy/edit). |
 | `thread/list` | `{cwd?,archived?,includeAgents?,includeClosedAgents?,includeArchived?}` | `{threads:[{threadId,name?,preview?,lastMessage?,cwd?,model?,branch?,updatedAt?,messages?,loaded?,live?,busy?,archived?,external?,openPrompt?,goalWaiting?,agent?,clients?,version?,pid?}]}`; inventory without attaching or starting workers |
 | `thread/detach` | T + `reason?` | `{closed,stoppedJobs?,notices?}`; releases client, not work |
@@ -257,11 +257,11 @@ by `TestProtocolReferenceMethods`; adding a method without documenting it fails.
 | `thread/setLabel` | T + `entryId,label` | `{}`; label session tree entry |
 | `thread/compact` | T | `{turnId}`; idle only, asynchronous compaction |
 | `thread/rollback` | T + `numTurns?` | Snapshot + `{input}`; idle only, default 1 user message |
-| `thread/tree` | T + `offline?,query?` | `{entries,leaf}`; all saved branches, entry IDs and labels. Revision 3 rows contain bounded display previews; use thread/entry for full text. A nonempty query searches full text on disk and returns `{matches:[entryId]}`. |
+| `thread/tree` | T + `offline?,query?` | `{entries,leaf}`; all saved branches, entry IDs and labels. Rows contain bounded display previews; use thread/entry for full text. A nonempty query searches full text on disk and returns `{matches:[entryId]}`. |
 | `thread/navigate` | T + `entryId,summary?:{mode:none|auto|custom,instructions?}` | `{}`; branch movement, optional async summary; follow branchChanged |
 | `thread/fork` | T + `entryId` | `{threadId,path,input,images}`; new saved branch (even before the first message); resume using threadId, no access to the server filesystem required |
 | `thread/files` | T + `query?,limit?` | `{files:[{path,directory}],truncated}`; workspace-relative paths, case-insensitive substring filter, default 100/max 1000 matches; gitignore-aware walk capped at 50,000 entries/20 levels; cancellation supported |
-| `item/image` | T + `itemId,index,preview?,offline?` | `{mimeType,data}`; preview returns a ≤600×350 PNG for JDK-only clients; otherwise base64 stored image selected by zero-based image index of a transcript item, max 10 MiB; never accepts a client filesystem path |
+| `item/image` | T + `itemId,index,preview?,offline?` | `{mimeType,data}`; preview returns a ≤600×350 PNG for clients that cannot decode every format; otherwise base64 stored image selected by zero-based image index of a transcript item, max 10 MiB; never accepts a client filesystem path |
 | `item/output` | T + `itemId,offline?` | `{output,truncated}`; stored full user-shell output or available tool output (saved output is zstd-compressed on disk; the cap is on the text after decompression), capped at 10 MiB; truncated is true if full output is unavailable or exceeds cap |
 | `thread/archive` | `{threadId,stop?}` | `{threadId,path}`; close runtime/stop jobs, release writer, compress into archive; busy workers require confirmed `stop:true` |
 | `thread/unarchive` | `{threadId}` | `{threadId,path}`; restore archived transcript; does not reopen a closed agent record |
@@ -283,7 +283,7 @@ by `TestProtocolReferenceMethods`; adding a method without documenting it fails.
 | `turn/steer` | T + `input` | `{inputId}`; active model turn only; boundary delivery |
 | `turn/interrupt` | T + `mode?:cancel|sendPending` | `{interrupted}`; default sendPending (Esc), cancel returns steers (Ctrl+C) |
 | `turn/background` | T | `{accepted:true}`; running hosted command becomes a job |
-| `turn/unsteer` | T + `inputId?` or legacy `input,queued?` | `{inputId,text,images,clientId}`; most recent if no ID; committed input refused |
+| `turn/unsteer` | T + `inputId?` | `{inputId,text,images,clientId}`; most recent if no ID; committed input refused |
 | `input/submit` | T + `input,images?,intent?:auto|queue|replace|steer` | `{inputId?,status:started|steered|queued|done,turnId?}`; typed input, slash commands and !shell; empty resumes queue/held goal |
 | `queue/resume` | T | `{}`; unpause and run queued input |
 | `shell/start` | T + `command,exclude?` | `{}`; user shell (!, or !! excluded from model) |
@@ -330,11 +330,9 @@ client, not every client's editor.
 | `agent/tree` | T | `{rootThreadId,agents:[Agent]}`; observational tree (up to 1,000 sessions), including descendants and, when the root is itself an agent started from a shell, the root; Agent adds parentThreadId and absolute `/root/…` path |
 | `agent/read` | T + `name` (name/path, `..`, or `@<session id>`) or `agentId` (a session ID or unique prefix) | `{agent:Agent,message,items:[Item]}`; read-only transcript/report |
 | `agent/turn` | T + `turn` | `{turn,status:"accepted"}`; local, for `atto agent` only: run turn N that the agent's record names (task, spawn, successor) in this worker, which holds the agent's session. Refused (`unsupportedCapability`) by a thread that is not an agent session of a daemon worker. It is idempotent; it attaches nothing. The worker records the turn (`~/.atto/agent-state`), stops it on an interrupt request, and tells the parent when it ends |
-| `subagent/list` | T | `{agents,subagents}`; frozen web alias |
-| `subagent/read` | T + `name` | `{agent,subagent,message,items}`; frozen web alias |
 | `mcp/list` | T | `{servers:[ServerInfo]}`; configured MCP servers/status/tool counts |
 
-For `agent/read` and its `subagent/read` alias, a `name` beginning with `@`
+For `agent/read`, a `name` beginning with `@`
 addresses the agent's **own** session (`Agent.threadId`), not its parent's.
 Accepts a full ID or a unique prefix of at least 6 characters. Resolution is
 limited to the tree rooted at `threadId`'s root: another tree's agent is
@@ -342,8 +340,7 @@ indistinguishable from an unknown ID. Ambiguous prefixes return an invalid-param
 error listing matching candidates in that tree; too-short prefixes are rejected,
 and not-found errors suggest `atto agent list`. Closed/removed agents return a
 clear closed error; their archived transcripts remain readable through the
-existing session/thread transcript APIs. Name/path behavior and the alias's
-response fields are unchanged. `agent/list` and `agent/tree` already return
+existing session/thread transcript APIs. `agent/list` and `agent/tree` already return
 `Agent.threadId`, usable as `@<threadId>`, and have no address parameter. The CLI's
 outside-caller, cross-tree `@ID` scope and `list -all` do not apply to these
 thread-scoped protocol methods.
@@ -399,7 +396,6 @@ clientId filtering. `events/reset` may be global or worker-scoped.
 | `thread/closed` | T + `{reason,handoff}`; explicit close/idle retirement |
 | `thread/handedOff` | T + `{line?}` or `{finished:true}` |
 | `thread/handoffFailed` | T + `{error}` |
-| `thread/switched` | `{threadId,previousThreadId}`; scoped /remote changed session |
 | `events/reset` | `{eventId,serverInstanceId,threadId?}`; replace snapshot, don't append replay twice |
 | `commands/changed` | T; refresh commands/list |
 | `extension/notify` | T + `{extension,message,level}` |
@@ -464,16 +460,13 @@ concurrent events, then discard those at or below the cursor. This prevents
 missed or doubled text during attach. Never reuse an old cursor after instance
 change. `server.ThreadView` implements this rule for Go clients.
 
-SSE reconnects with `Last-Event-ID` or `?lastEventId=` (header wins), replaying
-available recent events. The ring retains up to 10,000 events, bounded by 2 MiB;
-when the cursor is too old/from another run, it emits `events/reset`. Socket /
-stdio / WS connections get events from connection time, **not arbitrary cursor
-replay**; on reconnect read/resume a fresh snapshot. A lagging socket subscriber
-gets events/reset and continues from the newest subscription; lagging SSE is
-closed so it reconnects. Treat a reset as a snapshot boundary. Facades translate
-worker event cursors into their own hub sequence, including worker restarts.
+There is no cursor replay: socket, stdio and WS connections get events from
+connection time, so on reconnect read or resume a fresh snapshot. A lagging
+subscriber gets `events/reset` and continues from the newest event. Treat a
+reset as a snapshot boundary. Facades translate worker event cursors into their
+own hub sequence, including worker restarts.
 
-## Detach, close, workers and scoped /remote
+## Detach, close and workers
 
 EOF, WebSocket close and `thread/detach` release only that client's attachment
 and gates. With daemon workers, turns, goals, jobs, timers and prompts continue.
@@ -483,26 +476,20 @@ and unanswered prompts prevent retirement. All frontends join the same worker
 and writer lease; `thread/resume` never creates a second execution owner.
 
 `--in-process`, `ATTO_NO_DAEMON=1`, disabled daemon and Windows keep execution
-in the app-server/serve process. Disconnecting one client still doesn't stop its
+in the app-server process. Disconnecting one client still doesn't stop its
 thread, but ending that **server process** closes its runtimes. Closing a worker
 facade detaches; stopping the daemon ends its workers. A worker crash restores
 saved session state, not unsaved accepted inputs, in-flight requests, prompts or
 extension promises. Durable input journaling/deduplication is not implemented.
 
-A `/remote` scoped gateway follows one selected thread: initialize returns
-`live:true,threadId`; thread/list exposes only it; naming another thread is
-refused. thread/start is refused (use the owning TUI's /clear); turn/start and
-turn/steer use typed input semantics instead of strict start/steer. thread/switched
-means reread. Closing the gateway stops no worker. WS also respects this scope.
-
 ## Differences from Codex app-server v2
 
 Shared concepts and method names do not imply compatible DTOs. atto snapshots
 are flat, text turn input is a string, item/delta is generic, usage/settings/goals
-have native shapes, and initialization negotiates revisions but has no required
-handshake gate. Prompt questions use notifications plus prompt/answer, not
-bidirectional RPC envelopes. Native SSE replay, event cursors, input/submit,
-queue/gate controls, jobs, extension UI and subagent aliases are additional API.
+have native shapes, and initialization requires revision 3, though no handshake gate
+stops other requests. Prompt questions use notifications plus prompt/answer, not
+bidirectional RPC envelopes. Event cursors, input/submit, queue/gate
+controls, jobs and extension UI are additional API.
 Unix sockets use JSON lines rather than Codex WS-over-UDS. Browser origins and
 query tokens are supported intentionally. There is no Codex account/config/
 sandbox/approval-policy adapter. See [the full compatibility research](codex-app-server-compat.md)
@@ -515,7 +502,7 @@ an unrestricted filesystem API. Reads are resolved from the current thread's
 cwd/transcript on its lane, then performed off the execution lane. Set `offline:true` to resolve resources from a saved read-only session without
 loading or acquiring a writer. Item output
 can only return bytes still retained by the runtime/file; it cannot reconstruct
-output that the engine discarded. JDK-only clients request `item/image` with `preview:true` to render PNG
+output that the engine discarded. clients that cannot decode WebP request `item/image` with `preview:true` to render PNG
 previews of every native format, including WebP. Omitting preview returns the
 original bytes.
 
@@ -549,7 +536,7 @@ method was removed; worker/state adds name and state diagnostics. Worker retenti
 
 ## Revision 3: lazy transcript loading
 
-Clients negotiating revision 3 receive only the transcript after the last active
+Clients receive only the transcript after the last active
 compaction, capped to the latest `limit` items (default 200), on `thread/resume`,
 `thread/attach` and `thread/read`. Results carry `hasMore` and an exclusive
 `before` cursor. Pass that cursor to `thread/items` to prepend an earlier page;
@@ -559,25 +546,22 @@ a branch change or replacement snapshot arrives. Items are always oldest-first.
 
 Paging does not replace a snapshot or advance `eventId`: merge by item ID,
 preferring an already loaded live item. Events retain their existing IDs and
-exactly-once snapshot boundary. Clients negotiating revision 2 (including the
-frozen web client), or scripts with no handshake, retain full snapshots.
+exactly-once snapshot boundary. There is no full-snapshot mode.
 
 ```json
 {"jsonrpc":"2.0","id":5,"method":"thread/items","params":{"threadId":"example","before":"example-i201","limit":200}}
 ```
 
-The TUI and Swing negotiate revision 3 and request older pages at the top of
-loaded content. Prepending preserves the visible anchor and does not reset the
-live reducer. The TUI shows a temporary `loading earlier messages` line; Swing
-also offers a Load earlier messages button. Tree search/copy/fork and saved
-output/image access resolve unloaded entries from disk. Example clients remain
-revision 2 intentionally: their full-snapshot reducers need no paging support.
+The TUI requests older pages at the top of loaded content. Prepending preserves
+the visible anchor and does not reset the live reducer; the TUI shows a
+temporary `loading earlier messages` line. Tree search/copy/fork and saved
+output/image access resolve unloaded entries from disk.
 
 An unattached worker retains no completed transcript items, including the tail.
 It keeps the active model context and fixed runtime state; session entries and
 live events are still recorded/emitted. Attaching reconstructs a tail from disk;
 the last detach drops it again. Archived JSONL.zst reads stream without a temporary
-decompressed file. Shared opens for print, workers, app-server, serve and /remote
+decompressed file. Shared opens for print, workers and app-server
 use the same context-only reader. A default 32 MiB **soft** Go memory budget
 bounds transient allocations (not large model contexts); `GOMEMLIMIT` or an
 embedded application's explicit limit takes precedence. Rare large reads,
@@ -608,7 +592,7 @@ includes paused, blocked and usage-limited goals, or an active held goal.
 
 Frontends build trees from parent links, derive status/tabs, and refresh on
 opening and explicit refresh. There is no overview method or inventory change
-notification. Scoped live links still list only their session.
+notification.
 
 Archive/delete of an open agent closes its subtree deepest-first under the
 agent tree lock. Any running/queued descendant turn is refused even with

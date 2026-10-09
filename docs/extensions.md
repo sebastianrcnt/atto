@@ -160,9 +160,8 @@ file as `block_display` entries (the status and text as last set), so a
 resumed session shows it without the extension running again; a result for
 a block that no longer exists (the session was switched meanwhile) is
 ignored, and the view does not jump when a block above it changes height.
-The web client (`atto serve`, and `/remote` from the TUI) shows them too,
-with a "show original" link under a replaced block; the server saves them
-the same way. In `atto -p` they do nothing and nothing is saved. Example,
+Protocol clients (`atto app-server`) get them as data (`item/display`), and
+the server saves them the same way. In `atto -p` they do nothing and nothing is saved. Example,
 in a few lines:
 
 ```ts
@@ -218,16 +217,16 @@ p/m (1 failed)" per extension, and every call is a line in
   session shows it again. While collapsed it shows the first `preview` lines
   (default 10) and a "+N lines" row; click it or press ctrl+t to expand.
   `lang: "diff"` colours added lines green, removed lines red, `@@` lines
-  cyan and file headers dim; any other value is plain text. The web client
-  shows the same block; in `atto -p` the title and text arrive as a notice.
+  cyan and file headers dim; any other value is plain text. Protocol clients
+  get the same block as an `extText` item; in `atto -p` the title and text arrive as a notice.
 - `ctx.ui.select(title, options)`: `Promise<string | undefined>`.
 - `ctx.ui.confirm(text)`: `Promise<boolean>`.
 - `ctx.ui.input(prompt)`: `Promise<string | undefined>`.
 
 Without a UI (`atto -p`, the server), `notify` goes to stderr (`-p`) or to
 the client as an `extension/notify` notification (server); status items and
-widgets are dropped (`-p`) or shown above the web client's input (server,
-as `/remote` shows the TUI's); `select` and `input` resolve to `undefined` and
+widgets are dropped (`-p`) or sent to the client as `extension/ui` (server);
+`select` and `input` resolve to `undefined` and
 `confirm` to `false` at once. In the TUI, a dialog asked while another
 dialog is open gets that default answer too. Time the user spends on a
 dialog does not count against the handler timeout.

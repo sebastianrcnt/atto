@@ -4,6 +4,15 @@ Research/design, 2026-10-07. This is a plan for **atto's own protocol**, not
 Codex wire compatibility. Method names below are proposals unless explicitly
 identified as existing. Historical research is preserved below; §8 records implementation status.
 
+**Later status (2026-10-09):** the Java Swing client, the frozen web client
+(`server/web`), the HTTP/SSE gateway (`POST /rpc`, `GET /events`), the scoped
+gateway behind `/remote` (`server.Scope`), the `subagent/*` aliases and protocol
+revisions 1 and 2 were removed (tags `archive/swing`, `archive/web-frozen`).
+`/remote` and `atto serve` now only say that the web UI is being rebuilt; other
+clients attach with `atto app-server --listen stdio:// | unix:// | ws://`. Text
+below that describes those pieces is historical; see "Web and Swing clients
+removed" at the end of §8.
+
 ## Recommendation
 
 Make the TUI a renderer/editor of protocol state, and make a session runtime in
@@ -1067,12 +1076,11 @@ remain as documented.
 ### Lazy transcript loading — done (2026-10-09)
 
 Native revision 3 snapshots contain only the post-compaction tail (default 200)
-with `hasMore`/`before`; `thread/items` streams earlier pages from disk. The frozen
-web client and other revision 2 clients still receive full snapshots. Event IDs,
-snapshot fences and exactly-once reduction are unchanged. The TUI/Swing prepend
-older pages on scroll-up without moving the visible message; the TUI temporarily
-shows “loading earlier messages”. Swing keeps at most 400 rendered components
-while retaining pages the user explicitly requested. Loaded items use the existing
+with `hasMore`/`before`; `thread/items` streams earlier pages from disk (revision 3
+is now the only revision served; there are no full snapshots). Event IDs,
+snapshot fences and exactly-once reduction are unchanged. The TUI prepends
+older pages on scroll-up without moving the visible message and temporarily
+shows “loading earlier messages”. Loaded items use the existing
 renderers. Tree entries are compact previews in revision 3; full-text tree search,
 copy, fork and saved item resources read disk rather than relying on loaded items.
 
@@ -1117,7 +1125,7 @@ prompt, the job that stands for the turn), find or start the worker
   running, waiting or being recorded is not retired; an idle one retires after the
   usual retention. `atto agent close` closes the worker first (it holds the
   session's lease) and then archives the session.
-- **Clients.** A TUI, app-server client or Swing attaches to a running agent
+- **Clients.** A TUI or app-server client attaches to a running agent
   session like any other and sees the live items; the worker is the writer. The
   agent's model and effort are in its session (written at spawn), and its system
   prompt (`agent.WorkerOf`) says what it is. With no client the runtime keeps no
@@ -1132,3 +1140,32 @@ prompt, the job that stands for the turn), find or start the worker
   an already-running worker); extension hooks such as SessionStart/SessionEnd run
   per worker, not per turn; the turn's stderr log (`atto job output`) is a one-line
   note, the transcript is the record.
+
+### Web and Swing clients removed (2026-10-09)
+
+Decided: the new web UI will be built later on a new shared UI-element layer, so
+the old clients and everything that existed only for them are gone.
+
+- **Removed clients:** `clients/swing` (Java Swing, tag `archive/swing`) and
+  `server/web` (Preact/TypeScript bundle and its generator, tag
+  `archive/web-frozen`).
+- **Removed transport and glue:** `POST /rpc`, the SSE stream (`GET /events`,
+  `Last-Event-ID` replay and the hub's replay ring), static file serving, the
+  `#token=` link/QR flow, `server.Scope`/`ScopedHandler`, `thread/switched`, the
+  `live` shapes of initialize/thread/read/thread/list, `server.Publish`,
+  `OnClients`, and `app/remote.go` with the TUI's local-picker advertising
+  (`prompt/clientOpen` stays in the protocol).
+- **Removed compatibility:** the `subagent/list` and `subagent/read` aliases and
+  their duplicate result keys, revision 1 `turn/unsteer` by text, and protocol
+  revisions 1 and 2. `initialize` requires `protocolVersions` to include 3 and
+  otherwise fails with `unsupportedProtocol` naming revision 3; `thread/start`,
+  `thread/resume`, `thread/attach` and `thread/read` always return the paged tail
+  (`hasMore`, `before`), `thread/tree` always returns bounded rows, and
+  `snapshotVersion` is gone.
+- **Kept:** `atto app-server --listen stdio:// | unix:// | ws://` with its token
+  and Origin checks, and the generic methods the Swing client used (workspace
+  file listing, item output and image previews, auth, statusLine, debug,
+  archive/delete, `thread/list` inventory).
+- **Commands:** `/remote` and `atto serve` print one line saying the web UI is
+  being rebuilt and that `atto app-server --listen ws://HOST:PORT` serves the
+  protocol meanwhile. `settings.json`'s `remote.port` is ignored.

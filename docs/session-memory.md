@@ -16,7 +16,9 @@ process-lifetime `getrusage(RUSAGE_SELF)`**, not a heap estimate. RSS includes
 fixture generation and runtime setup, making the peak conservative. Sampling
 can miss sub-millisecond heap spikes; getrusage still captures the process peak.
 
-The baseline deliberately reconstructs the prior full-active-branch reader and
+(Historical: the full-snapshot baseline below measured the revision 2 path, which
+has since been removed, and its test modes are gone; the numbers are kept for
+comparison.) The baseline deliberately reconstructs the prior full-active-branch reader and
 full display replay and, for attach, the old whole-value `json.Encoder` buffer,
 with no soft memory budget. It is a reproducible synthetic comparison, not a
 claim that this test is executing a historical binary. The new revision-2 wire
@@ -124,5 +126,5 @@ go test ./session -run TestReadContextLargeSessionMemory -v -count=1
 Contract coverage includes per-version snapshot shapes, empty `hasMore:false`
 metadata, paging across compaction/branch navigation, page merges racing live
 events without cursor movement, headless read/reattach, TUI scroll-up loading,
-Swing reducer paging and real stdio/Unix/WS e2e (including fragmented large pages).
+reducer paging and real stdio/Unix/WS e2e (including fragmented large pages).
 JSONL/zstd fork/search/entry tests cover full text outside the loaded tail.

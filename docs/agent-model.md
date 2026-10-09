@@ -204,8 +204,8 @@ it is itself a managed agent. Keep existing `threadId`, `name`, `path`, `preset`
 `parentThreadId` fields; use empty/omitted parent for roots and add root ID/depth,
 origin/project and closed lifecycle. `agent/read` accepts an optional agent ID
 in addition to existing `name` addresses, reusing the same authorization rules.
-Retain `subagent/*` aliases and duplicate result keys for the frozen web client;
-never fabricate a parent to satisfy it. Selected-thread child panels still
+The `subagent/*` aliases and duplicate result keys were kept for the frozen web
+client and are gone with it (2026-10-09); never fabricate a parent. Selected-thread child panels still
 work; virtual project groups are client presentation, not protocol threads.
 Coordinate DTO/docs/contract tests with the paging work, not its implementation.
 
