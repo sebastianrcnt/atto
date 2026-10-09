@@ -84,6 +84,7 @@ func (a *Agent) runTool(ctx context.Context, tc provider.ToolCall, index int, dr
 		a.bg = bg
 		a.bgMu.Unlock()
 	}
+	args.callID = tc.ID
 	res := runShell(ctx, a.Shell, a.Cwd, env, args, func(s string) { emit(ToolOutput{ID: tc.ID, Chunk: s}) }, bg)
 	if bg != nil {
 		a.bgMu.Lock()
@@ -96,7 +97,7 @@ func (a *Agent) runTool(ctx context.Context, tc provider.ToolCall, index int, dr
 		if res.Output != "" && !strings.HasSuffix(res.Output, "\n") {
 			chunk = "\n" + chunk
 		}
-		res.Output += chunk
+		res.appendOutput(chunk)
 		emit(ToolOutput{ID: tc.ID, Chunk: chunk})
 	}
 	out := res.ForModel(args)

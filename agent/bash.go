@@ -1,7 +1,6 @@
 package agent
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -9,11 +8,11 @@ import (
 	"os"
 	"os/exec"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/sebastianrcnt/atto/jobs"
+	"github.com/sebastianrcnt/atto/outputs"
 	"github.com/sebastianrcnt/atto/prompts"
 	"github.com/sebastianrcnt/atto/shell"
 )
@@ -28,14 +27,14 @@ const (
 	// DefaultToolOutputTokens is how much output goes back to the model
 	// unless settings.json says otherwise (SetToolOutputTokenLimit).
 	DefaultToolOutputTokens = 10_000
-	// Hard cap on what is buffered in memory per command.
+	// maxCaptureBytes is the most that may go back to the model.
 	maxCaptureBytes = 8 * 1024 * 1024
 )
 
 // maxOutputBytes is what goes back to the model, as in codex: about
 // DefaultToolOutputTokens tokens (4 bytes per token), cut from the middle so
 // both the start (the first error) and the end (the summary) survive. The
-// full output is saved to a file.
+// full output is saved to a file (package outputs).
 var maxOutputBytes atomic.Int64
 
 func init() { SetToolOutputTokenLimit(0) }
@@ -84,8 +83,9 @@ type BashArgs struct {
 	// Background starts the command as a job (atto job start). Named as
 	// in Claude Code's Bash tool, like the other parameters, so models
 	// trained on it use it without being told.
-	Background  bool `json:"run_in_background,omitempty"`
-	userCommand bool // ! commands keep their long wait and kill on cancellation
+	Background  bool   `json:"run_in_background,omitempty"`
+	userCommand bool   // ! commands keep their long wait and kill on cancellation
+	callID      string // names the saved output; set by the agent
 }
 
 // TimeLimit is the kill timeout for a direct or session-less command.
@@ -114,7 +114,9 @@ func (a BashArgs) waitLimit(session string) time.Duration {
 }
 
 type BashResult struct {
-	Output   string // raw combined output (possibly capped)
+	// Output is the combined output: all of it if it was short, else its
+	// start and end around a marker.
+	Output   string
 	ExitCode int
 	TimedOut bool
 	Canceled bool
@@ -129,6 +131,16 @@ type BashResult struct {
 	Background string
 	// Note says why a command could not move to the background.
 	Note string
+
+	// FullOutput is the file holding the whole output (zstd-compressed;
+	// outputs.Open reads it), "" if the output was short, became a job or
+	// could not be saved (NotSaved says why). FullOutputOmitted is how many
+	// bytes of its middle the file leaves out.
+	FullOutput        string
+	FullOutputOmitted int64
+	NotSaved          string
+
+	view *outView // what Output is the preview of; nil for a hand-built result
 }
 
 // Why a command runs in the background.
@@ -154,27 +166,67 @@ var ShellHost bool
 // background reports; the rest is in its job log.
 const tailLines = 40
 
-// streamWriter collects output and forwards chunks to a callback.
+// streamWriter streams a command's output to its saved file and forwards
+// chunks to a callback.
 type streamWriter struct {
-	mu       sync.Mutex
-	buf      bytes.Buffer
-	dropped  int
+	out      *outputs.Writer
+	keep     int
 	onOutput func(string)
 }
 
+func newStreamWriter(session, call string, onOutput func(string)) *streamWriter {
+	keep := int(maxOutputBytes.Load())
+	return &streamWriter{out: outputs.New(outputs.Options{Session: session, Name: call, Keep: keep}), keep: keep, onOutput: onOutput}
+}
+
 func (w *streamWriter) Write(p []byte) (int, error) {
-	w.mu.Lock()
-	if room := maxCaptureBytes - w.buf.Len(); room > 0 {
-		w.buf.Write(p[:min(len(p), room)])
-		w.dropped += max(0, len(p)-room)
-	} else {
-		w.dropped += len(p)
-	}
-	w.mu.Unlock()
+	_, _ = w.out.Write(p)
 	if w.onOutput != nil {
 		w.onOutput(string(p))
 	}
 	return len(p), nil
+}
+
+// finish takes the output into res. A command that became a job keeps no
+// file: its job log has the output.
+func (w *streamWriter) finish(res *BashResult) {
+	snap := w.out.Snapshot()
+	v := outView{keep: w.keep, head: snap.Head, tail: snap.Tail, n: int(snap.Bytes), nl: int(snap.Lines)}
+	res.view, res.Output = &v, v.preview()
+	if res.Job > 0 {
+		w.out.Discard()
+		return
+	}
+	saved, err := w.out.Save()
+	res.FullOutput, res.FullOutputOmitted = saved.Path, saved.Omitted
+	if err != nil {
+		res.NotSaved = notSaved(err)
+	}
+}
+
+// notSaved says why output was not saved.
+func notSaved(err error) string {
+	if errors.Is(err, outputs.ErrLowDisk) {
+		return "low disk space"
+	}
+	return err.Error()
+}
+
+// appendOutput adds text the command did not write (a note) to the output.
+func (r *BashResult) appendOutput(s string) {
+	r.Output += s
+	if r.view != nil {
+		v := r.view.appendString(s)
+		r.view = &v
+	}
+}
+
+// textView is the output as a view.
+func (r BashResult) textView() outView {
+	if r.view != nil {
+		return *r.view
+	}
+	return viewOf(r.Output)
 }
 
 // RunBash runs args.Command with the default shell (bash on Unix,
@@ -238,9 +290,10 @@ func startJob(session, cwd string, env []string, args BashArgs) BashResult {
 // host could not start (and so neither did the command).
 func runHosted(ctx context.Context, sh shell.Shell, cwd string, env []string, session string, args BashArgs, onOutput func(string), bg <-chan struct{}) (BashResult, bool) {
 	start := time.Now()
-	w := &streamWriter{onOutput: onOutput}
+	w := newStreamWriter(session, args.callID, onOutput)
 	h, err := jobs.StartHost(sh, cwd, env, args.Command, w)
 	if err != nil {
+		w.out.Discard()
 		if se, ok := errors.AsType[*jobs.StartError](err); ok {
 			return BashResult{Err: se, ExitCode: -1, Duration: time.Since(start)}, true
 		}
@@ -353,15 +406,10 @@ wait:
 		_ = h.Wait()
 	}
 	res.Duration = time.Since(start)
-	w.mu.Lock()
-	res.Output = w.buf.String()
-	if w.dropped > 0 {
-		res.Output += fmt.Sprintf("\n[%d bytes of output dropped]", w.dropped)
-	}
-	w.mu.Unlock()
 	if res.Canceled || res.TimedOut || res.Err != nil {
 		res.ExitCode, res.Job, res.Background = -1, 0, ""
 	}
+	w.finish(&res)
 	return res, true
 }
 
@@ -377,7 +425,7 @@ func runDirect(ctx context.Context, sh shell.Shell, cwd string, env []string, ar
 	tree := shell.NewTree(cmd)
 	defer tree.Close()
 	cmd.WaitDelay = 2 * time.Second // don't hang on pipes held by orphaned children
-	w := &streamWriter{onOutput: onOutput}
+	w := newStreamWriter(envValue(env, "ATTO_SESSION_ID"), args.callID, onOutput)
 	cmd.Stdout, cmd.Stderr = w, w
 
 	err := cmd.Start()
@@ -386,12 +434,6 @@ func runDirect(ctx context.Context, sh shell.Shell, cwd string, env []string, ar
 		err = cmd.Wait()
 	}
 	res := BashResult{Duration: time.Since(start), WaitLimit: args.timeout()}
-	w.mu.Lock()
-	res.Output = w.buf.String()
-	if w.dropped > 0 {
-		res.Output += fmt.Sprintf("\n[%d bytes of output dropped]", w.dropped)
-	}
-	w.mu.Unlock()
 
 	switch {
 	case ctx.Err() != nil:
@@ -408,6 +450,7 @@ func runDirect(ctx context.Context, sh shell.Shell, cwd string, env []string, ar
 			res.ExitCode = -1
 		}
 	}
+	w.finish(&res)
 	return res
 }
 
@@ -423,7 +466,7 @@ func (r BashResult) ForModel(args BashArgs) string {
 	if limit == 0 {
 		limit = args.timeout()
 	}
-	out := truncateMiddle(tidy(r.Output))
+	out := r.modelOutput()
 	var b strings.Builder
 	b.WriteString(out)
 	if out != "" && !strings.HasSuffix(out, "\n") {
@@ -449,14 +492,10 @@ func (r BashResult) ForModel(args BashArgs) string {
 // see BackgroundStatus).
 func (r BashResult) backgroundForModel(args BashArgs) string {
 	var b strings.Builder
-	lines := strings.Split(tidy(r.Output), "\n")
-	if len(lines) == 1 && lines[0] == "" {
-		lines = nil
-	}
+	lines, total := r.textView().tidy().lastLines(tailLines)
 	shown := ""
-	if len(lines) > tailLines {
-		shown = fmt.Sprintf(" (above: the last %d of %d lines so far)", tailLines, len(lines))
-		lines = lines[len(lines)-tailLines:]
+	if total > tailLines {
+		shown = fmt.Sprintf(" (above: the last %d of %d lines so far)", tailLines, total)
 	}
 	for _, l := range lines {
 		b.WriteString(l + "\n")
@@ -502,44 +541,61 @@ func tidy(s string) string {
 	return strings.Join(lines, "\n")
 }
 
-// truncateMiddle keeps the first and last maxOutputBytes/2 bytes (on line
-// boundaries) and saves the full text to a temp file when it had to cut.
-func truncateMiddle(s string) string {
-	body, note, path, cut := cutMiddle(s)
-	if !cut {
-		return s
+// modelOutput is the output as the model reads it: tidied, and with its
+// middle cut when it is long.
+func (r BashResult) modelOutput() string {
+	if r.view == nil {
+		return truncateMiddle(tidy(r.Output))
 	}
-	if path != "" {
-		note += "; full output: " + path
+	body, note, cut := r.view.tidy().cut(int(maxOutputBytes.Load()))
+	if !cut {
+		r.dropUnneededFile()
+		return body
+	}
+	return cutMessage(note, body, r.FullOutput, r.FullOutputOmitted, r.NotSaved)
+}
+
+// dropUnneededFile deletes the saved output of a command whose output,
+// once tidied, was not cut after all.
+func (r BashResult) dropUnneededFile() {
+	if r.FullOutput != "" {
+		_ = os.Remove(r.FullOutput)
+	}
+}
+
+// readHint tells the model how to read a saved output.
+const readHint = "atto output PATH [-head N|-tail N|-grep RE]"
+
+// cutMessage is the text a cut output becomes: the note, closed, saying
+// where the full output is, and the body.
+func cutMessage(note, body, path string, omitted int64, notSaved string) string {
+	switch {
+	case path != "":
+		note += "; full output: " + path + " (zstd; read it with: " + strings.Replace(readHint, "PATH", path, 1) + ")"
+		if omitted > 0 {
+			note += fmt.Sprintf("; the file omits %d bytes from its middle", omitted)
+		}
+	case notSaved != "":
+		note += "; the full output was not saved: " + notSaved
 	}
 	return note + "]\n" + body
 }
 
-// cutMiddle is truncateMiddle in parts: the text with its middle
-// replaced by a marker, the start of the note saying so (no closing
-// bracket) and the file holding the full text ("" if it could not be
-// written). cut is false when s was short enough to keep whole.
-func cutMiddle(s string) (body, note, path string, cut bool) {
-	limit := int(maxOutputBytes.Load())
-	if len(s) <= limit {
-		return s, "", "", false
+// truncateMiddle keeps the first and last maxOutputBytes/2 bytes (on line
+// boundaries) of a text held whole, and saves the full text when it had to
+// cut. Output a command streamed is cut by BashResult.modelOutput instead.
+func truncateMiddle(s string) string {
+	v := viewOf(s)
+	body, note, cut := v.cut(int(maxOutputBytes.Load()))
+	if !cut {
+		return s
 	}
-	half := limit / 2
-	head := s[:half]
-	if i := strings.LastIndexByte(head, '\n'); i > 0 {
-		head = head[:i]
+	w := outputs.New(outputs.Options{Keep: int(maxOutputBytes.Load())})
+	_, _ = w.Write([]byte(s))
+	saved, err := w.Save()
+	why := ""
+	if err != nil {
+		why = notSaved(err)
 	}
-	tail := s[len(s)-half:]
-	if i := strings.IndexByte(tail, '\n'); i >= 0 && i < len(tail)-1 {
-		tail = tail[i+1:]
-	}
-	total := strings.Count(s, "\n") + 1
-	omitted := total - (strings.Count(head, "\n") + 1) - (strings.Count(tail, "\n") + 1)
-	note = fmt.Sprintf("[output truncated: %d lines, ~%d tokens; showing the start and the end", total, len(s)/4)
-	if f, err := os.CreateTemp("", "atto-bash-*.log"); err == nil {
-		_, _ = f.WriteString(s)
-		f.Close()
-		path = f.Name()
-	}
-	return fmt.Sprintf("%s\n[… %d lines omitted …]\n%s", head, max(omitted, 0), tail), note, path, true
+	return cutMessage(note, body, saved.Path, saved.Omitted, why)
 }

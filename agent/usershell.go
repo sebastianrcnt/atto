@@ -17,7 +17,7 @@ import (
 
 // RunUserShell runs a command the user typed in the agent's working
 // directory and returns it as a session record. The output is cut like a
-// tool result (the full text in a temp file); canceling ctx kills the
+// tool result (the full text in a file under ~/.atto/outputs); canceling ctx kills the
 // command. Safe to call while a turn runs: it touches no conversation
 // state.
 func (a *Agent) RunUserShell(ctx context.Context, command string, exclude bool, onOutput func(string)) session.BashExec {
@@ -33,21 +33,24 @@ func (a *Agent) RunUserShellWithBackground(ctx context.Context, command string, 
 	// No timeout of its own: the user can cancel. (At the longest a command
 	// may run, a shell host moves it to the background, noted below.)
 	res := runShell(ctx, a.Shell, a.Cwd, env, BashArgs{Command: command, Timeout: int(MaxBashTimeout.Seconds()), userCommand: true}, onOutput, bg)
-	out := tidy(res.Output)
+	v := res.textView().tidy()
 	if res.Err != nil {
-		out = strings.TrimRight(out+"\n"+res.Err.Error(), "\n")
+		v = v.appendString("\n" + res.Err.Error()).trimNL()
 	}
 	if res.TimedOut {
-		out = strings.TrimRight(out+"\n[timed out after "+res.WaitLimit.String()+"]", "\n")
+		v = v.appendString("\n[timed out after " + res.WaitLimit.String() + "]").trimNL()
 	}
 	if res.Job > 0 && res.Background == BackgroundUser {
-		out = strings.TrimRight(out+fmt.Sprintf("\n[the user moved this command to the background after %s; it is still running as job %d]", res.Duration.Round(time.Second), res.Job), "\n")
+		v = v.appendString(fmt.Sprintf("\n[the user moved this command to the background after %s; it is still running as job %d]", res.Duration.Round(time.Second), res.Job)).trimNL()
 	} else if res.Job > 0 {
-		out = strings.TrimRight(out+fmt.Sprintf("\n[still running after %s; moved to the background as job %d]", res.WaitLimit, res.Job), "\n")
+		v = v.appendString(fmt.Sprintf("\n[still running after %s; moved to the background as job %d]", res.WaitLimit, res.Job)).trimNL()
 	}
 	b := session.BashExec{Command: command, ExitCode: res.ExitCode, Cancelled: res.Canceled, Exclude: exclude, DurationMs: res.Duration.Milliseconds()}
-	if body, _, path, cut := cutMiddle(out); cut {
-		out, b.Truncated, b.FullOutputPath = body, true, path
+	out, _, cut := v.cut(int(maxOutputBytes.Load()))
+	if cut {
+		b.Truncated, b.FullOutputPath = true, res.FullOutput
+	} else {
+		res.dropUnneededFile()
 	}
 	b.Output = out
 	return b
@@ -70,7 +73,11 @@ func BashExecutionText(b session.BashExec) string {
 		fmt.Fprintf(&s, "\n\nCommand exited with code %d", b.ExitCode)
 	}
 	if b.Truncated && b.FullOutputPath != "" {
-		s.WriteString("\n\n[Output truncated. Full output: " + b.FullOutputPath + "]")
+		s.WriteString("\n\n[Output truncated. Full output: " + b.FullOutputPath)
+		if strings.HasSuffix(b.FullOutputPath, ".zst") {
+			s.WriteString(" (zstd; read it with: " + strings.Replace(readHint, "PATH", b.FullOutputPath, 1) + ")")
+		}
+		s.WriteString("]")
 	}
 	return s.String()
 }

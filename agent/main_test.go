@@ -10,6 +10,7 @@ import (
 	"github.com/sebastianrcnt/atto/config"
 	"github.com/sebastianrcnt/atto/images"
 	"github.com/sebastianrcnt/atto/jobs"
+	"github.com/sebastianrcnt/atto/outputs"
 )
 
 // The test binary doubles as atto for the processes commands run under:
@@ -53,6 +54,7 @@ func TestMain(m *testing.M) {
 		}
 	}
 	ShellHost = true
+	outputs.SetLimits(testLimits)
 	home, err := os.MkdirTemp("", "atto-home")
 	if err != nil {
 		panic(err)

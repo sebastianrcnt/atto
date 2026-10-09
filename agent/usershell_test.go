@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"io"
 	"os"
 	"reflect"
 	"runtime"
@@ -9,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/sebastianrcnt/atto/config"
+	"github.com/sebastianrcnt/atto/outputs"
 	"github.com/sebastianrcnt/atto/session"
 )
 
@@ -83,11 +85,16 @@ func TestRunUserShellCutsLongOutput(t *testing.T) {
 		t.Fatalf("truncated=%v path=%q len=%d", x.Truncated, x.FullOutputPath, len(x.Output))
 	}
 	defer os.Remove(x.FullOutputPath)
-	full, err := os.ReadFile(x.FullOutputPath)
+	r, err := outputs.Open(x.FullOutputPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	full, err := io.ReadAll(r)
 	if err != nil || !strings.HasPrefix(string(full), "1\n2\n") || !strings.Contains(string(full), "\n20000") {
 		t.Fatalf("full output file: %v", err)
 	}
-	if !strings.Contains(BashExecutionText(x), "[Output truncated. Full output: "+x.FullOutputPath+"]") {
+	if !strings.Contains(BashExecutionText(x), "[Output truncated. Full output: "+x.FullOutputPath+" (zstd; read it with: atto output "+x.FullOutputPath+" ") {
 		t.Fatal("no truncation note for the model")
 	}
 }

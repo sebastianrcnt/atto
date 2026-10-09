@@ -57,8 +57,8 @@ func TestTruncateMiddle(t *testing.T) {
 	if !strings.Contains(out, "\nline 0\n") || !strings.Contains(out, "line 19999") || !strings.Contains(out, "lines omitted") {
 		t.Fatal("start and end must both survive")
 	}
-	if len(out) > int(maxOutputBytes.Load())+300 {
-		t.Fatalf("kept %d bytes", len(out))
+	if _, body, _ := strings.Cut(out, "]\n"); len(body) > int(maxOutputBytes.Load())+100 {
+		t.Fatalf("kept %d bytes", len(body))
 	}
 	if s := "short\n"; truncateMiddle(s) != s {
 		t.Fatal("short output is untouched")
@@ -76,8 +76,8 @@ func TestToolOutputTokenLimit(t *testing.T) {
 	defer SetToolOutputTokenLimit(0)
 	SetToolOutputTokenLimit(100) // 400 bytes
 	out := truncateMiddle(strings.Repeat("line of output\n", 200))
-	if !strings.Contains(out, "[output truncated:") || len(out) > 400+300 {
-		t.Fatalf("not cut to the limit: %d bytes", len(out))
+	if _, body, _ := strings.Cut(out, "]\n"); !strings.Contains(out, "[output truncated:") || len(body) > 400+100 {
+		t.Fatalf("not cut to the limit: %d bytes", len(body))
 	}
 	SetToolOutputTokenLimit(0)
 	if maxOutputBytes.Load() != DefaultToolOutputTokens*4 {

@@ -24,6 +24,7 @@ import (
 	"github.com/sebastianrcnt/atto/goal"
 	"github.com/sebastianrcnt/atto/hooks"
 	"github.com/sebastianrcnt/atto/jobs"
+	"github.com/sebastianrcnt/atto/outputs"
 	"github.com/sebastianrcnt/atto/provider"
 	"github.com/sebastianrcnt/atto/session"
 )
@@ -42,6 +43,7 @@ func Load() (config.Settings, config.ModelsFile, error) {
 		return settings, config.ModelsFile{}, fmt.Errorf("%s: %w", config.SettingsPath(), err)
 	}
 	agent.SetToolOutputTokenLimit(settings.ToolOutputTokenLimit)
+	outputs.SetLimits(outputs.FromSettings(settings.ToolOutput))
 	models, err := config.LoadModels()
 	if err != nil {
 		return settings, models, fmt.Errorf("%s: %w", config.ModelsPath(), err)
