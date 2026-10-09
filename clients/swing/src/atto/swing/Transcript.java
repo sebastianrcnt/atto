@@ -35,34 +35,50 @@ final class Transcript extends JPanel {
     final javax.swing.Timer timer;
     List<Object> items = List.of();
     int page = 200;
-    boolean dirty, following = true, adjusting;
+    boolean dirty, following = true, adjusting, loadingEarlier;
     int userScrollVersion;
     Transcript(SessionPane pane) {
         super(new BorderLayout()); this.pane = pane;
         rows.setLayout(new BoxLayout(rows, BoxLayout.Y_AXIS));
         rows.setBackground(Ui.canvas); scroll.setBorder(BorderFactory.createEmptyBorder()); scroll.getViewport().setBackground(Ui.canvas); scroll.getVerticalScrollBar().setUnitIncrement(22);
-        scroll.addMouseWheelListener(e -> { if (e.getWheelRotation() < 0) { following = false; userScrollVersion++; bottom.setVisible(true); } });
+        scroll.addMouseWheelListener(e -> { if (e.getWheelRotation() < 0) { following = false; userScrollVersion++; bottom.setVisible(true); if (scroll.getVerticalScrollBar().getValue() == 0) loadEarlier(); } });
         scroll.getVerticalScrollBar().addMouseListener(new MouseAdapter() { public void mousePressed(MouseEvent e) { following = false; userScrollVersion++; bottom.setVisible(true); } });
         scroll.getVerticalScrollBar().addAdjustmentListener(e -> {
-            if (adjusting || !scroll.getVerticalScrollBar().getValueIsAdjusting()) return;
+            if (!adjusting && !following && scroll.getVerticalScrollBar().getValue() == 0) loadEarlier();
+ if (adjusting || following) return;
             JScrollBar bar = scroll.getVerticalScrollBar();
-            following = bar.getValue() + bar.getVisibleAmount() >= bar.getMaximum() - 35;
+            boolean atBottom = bar.getValue() + bar.getVisibleAmount() >= bar.getMaximum() - 35;
+ if (atBottom && page > 200) { page = Math.max(200, page - 200); dirty = true; }
+ following = atBottom && page == 200;
             bottom.setVisible(!following);
         });
         add(earlier, BorderLayout.NORTH); add(scroll, BorderLayout.CENTER); add(bottom, BorderLayout.SOUTH); bottom.setVisible(false);
         scroll.addComponentListener(new ComponentAdapter() { public void componentResized(ComponentEvent e) { invalidateRows(); } });
         timer = new javax.swing.Timer(50, e -> { if (dirty) render(); }); timer.start();
     }
-    void update(List<Object> items) { this.items = items; dirty = true; }
+    void update(List<Object> items) { if (following) page = 200; else if (!loadingEarlier) page += Math.max(0, items.size() - this.items.size()); this.items = items; dirty = true; }
     void invalidateRows() { fingerprints.clear(); dirty = true; }
     void close() { timer.stop(); }
-    void loadEarlier() { following = false; userScrollVersion++; page += 200; fingerprints.clear(); dirty = true; }
-    void bottom() { following = true; bottom.setVisible(false); SwingUtilities.invokeLater(() -> scroll.getVerticalScrollBar().setValue(scroll.getVerticalScrollBar().getMaximum())); }
+    void loadEarlier() {
+        if (loadingEarlier) return;
+        following = false; userScrollVersion++;
+        if (items.size() > page) { page += 200; dirty = true; return; }
+        if (!yes(pane.info.get("hasMore"))) return;
+        loadingEarlier = true; earlier.setText("Loading earlier messages…"); earlier.setEnabled(false);
+        pane.desktop.core.loadEarlier(pane.id).whenComplete((value, failure) -> Desktop.edt(() -> {
+            loadingEarlier = false; earlier.setText("Load earlier messages"); earlier.setEnabled(true);
+            if (failure == null) page += Json.list(obj(value).get("items")).size(); dirty = true;
+        }));
+    }
+    void bottom() { page = 200; dirty = true; following = true; bottom.setVisible(false); SwingUtilities.invokeLater(() -> scroll.getVerticalScrollBar().setValue(scroll.getVerticalScrollBar().getMaximum())); }
     void render() {
         dirty = false; int scrollVersion = userScrollVersion; boolean follow = following; int oldScroll = scroll.getVerticalScrollBar().getValue(); adjusting = true;
-        int start = Math.max(0, items.size() - page); earlier.setVisible(start > 0);
+        String anchorId = ""; int anchorOffset = 0;
+        for (var entry : rendered.entrySet()) { JPanel row = entry.getValue(); if (row.getY() + row.getHeight() > oldScroll) { anchorId = entry.getKey(); anchorOffset = oldScroll - row.getY(); break; } }
+        final String pinnedId = anchorId; final int pinnedOffset = anchorOffset;
+        int start = Math.max(0, items.size() - page); earlier.setVisible(start > 0 || yes(pane.info.get("hasMore")) || loadingEarlier);
         List<String> ids = new ArrayList<>(); boolean structure = false;
-        for (Object value : items.subList(start, items.size())) {
+        for (Object value : items.subList(start, Math.min(items.size(), start + 400))) {
             Map<String, Object> item = obj(value); String id = str(item.get("id")); ids.add(id);
             String fingerprint = write(item) + "|" + pane.desktop.fontSize + "|" + expanded.contains(id);
             JPanel row = rendered.get(id);
@@ -78,7 +94,8 @@ final class Transcript extends JPanel {
         rows.revalidate(); rows.repaint();
         SwingUtilities.invokeLater(() -> {
             if (scrollVersion != userScrollVersion) { adjusting = false; return; }
-            scroll.getVerticalScrollBar().setValue(follow ? scroll.getVerticalScrollBar().getMaximum() : oldScroll);
+            JPanel pinned = rendered.get(pinnedId);
+ scroll.getVerticalScrollBar().setValue(follow ? scroll.getVerticalScrollBar().getMaximum() : pinned == null ? oldScroll : pinned.getY() + pinnedOffset);
             adjusting = false; following = follow;
         });
     }

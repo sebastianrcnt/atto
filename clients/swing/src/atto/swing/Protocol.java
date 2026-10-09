@@ -45,7 +45,7 @@ public final class Protocol implements AutoCloseable {
                 dispatch.execute(() -> {
                     if (closed || gen != generation) { next.close(); return; }
                     transport = next;
-                    call("initialize", map("protocolVersions", List.of(2, 1),
+                    call("initialize", map("protocolVersions", List.of(3, 2, 1),
                         "clientInfo", map("name", "atto-swing", "title", "atto Swing", "version", "1"),
                         "capabilities", map("interactive", true, "images", true))).whenCompleteAsync((v, e) -> {
                             if (e != null) { disconnected(gen, e); return; }

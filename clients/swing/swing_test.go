@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/sebastianrcnt/atto/provider"
 	"github.com/sebastianrcnt/atto/provider/providertest"
 	"github.com/sebastianrcnt/atto/session"
 )
@@ -124,7 +125,12 @@ func TestSwingNativeProtocol(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 			defer cancel()
 			env := append(os.Environ(), "ATTO_NO_DAEMON=1", "ATTO_SESSION_ID=", "ATTO_AGENT=", "HOME="+t.TempDir(), "USERPROFILE="+t.TempDir())
-			args := []string{"-Djava.awt.headless=true", "-jar", jar, "--selftest", "--atto", binary, "--in-process", "--cwd", t.TempDir()}
+			paging := session.New(t.TempDir())
+			for i := range 350 {
+				paging.Append(session.Entry{Type: session.TypeMessage, Message: &provider.Message{Role: "assistant", Content: fmt.Sprintf("paging-%03d", i) + strings.Repeat(" padding", 1000)}})
+			}
+			paging.Close()
+			args := []string{"-Djava.awt.headless=true", "-jar", jar, "--selftest", "--atto", binary, "--in-process", "--cwd", t.TempDir(), paging.ID}
 			if transport != "stdio" {
 				address, token := startListener(t, ctx, binary, env, transport)
 				args = append(args, "--connect", address)
@@ -140,10 +146,11 @@ func TestSwingNativeProtocol(t *testing.T) {
 				t.Fatalf("Swing self-test: %v\nstdout: %s\nstderr: %s", err, &stdout, &stderr)
 			}
 			var result struct {
-				SelfTest string `json:"selftest"`
-				ID       string `json:"threadId"`
+				SelfTest    string `json:"selftest"`
+				PagingItems int    `json:"pagingItems"`
+				ID          string `json:"threadId"`
 			}
-			if err := json.Unmarshal(bytes.TrimSpace(stdout.Bytes()), &result); err != nil || result.SelfTest != "passed" {
+			if err := json.Unmarshal(bytes.TrimSpace(stdout.Bytes()), &result); err != nil || result.SelfTest != "passed" || result.PagingItems != 350 {
 				t.Fatalf("self-test result: %s (%v)", &stdout, err)
 			}
 			path, err := session.Find(result.ID)

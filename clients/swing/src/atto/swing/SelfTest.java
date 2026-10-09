@@ -84,7 +84,22 @@ final class SelfTest {
             Map<String, Object> recovered = core.hydrate("thread/resume", map("threadId", id)).get(30, TimeUnit.SECONDS);
             check(list(recovered.get("items")).stream().map(x -> str(obj(x).get("id"))).distinct().count() == list(recovered.get("items")).size(), "Duplicates after reconnect snapshot");
             if (!System.getProperty("os.name").startsWith("Windows")) check(list(recovered.get("items")).stream().anyMatch(x -> "queued executed".equals(obj(x).get("text"))), "Reconnect lost saved queued input");
-            System.out.println(write(map("selftest", "passed", "threadId", id, "sessionPath", reattached.get("sessionPath"), "items", list(reattached.get("items")).size())));
+            int pagingItems = 0;
+            if (!options.session().isEmpty()) {
+                Map<String, Object> paged = core.hydrate("thread/resume", map("threadId", options.session(), "deferStart", true)).get(30, TimeUnit.SECONDS);
+                String pagingId = str(paged.get("threadId"));
+                check(yes(paged.get("hasMore")) && list(paged.get("items")).size() <= 200, "Large-session attach was not paged");
+                check(list(paged.get("items")).stream().noneMatch(x -> str(obj(x).get("text")).startsWith("paging-000")), "Attach included oldest message");
+                while (yes(paged.get("hasMore"))) {
+                    core.loadEarlier(pagingId).get(30, TimeUnit.SECONDS);
+                    paged = core.protocol.dispatch.submit(() -> core.threads.get(pagingId).snapshot()).get(30, TimeUnit.SECONDS);
+                }
+                pagingItems = (int)list(paged.get("items")).stream().filter(x -> str(obj(x).get("text")).startsWith("paging-")).count();
+                check(pagingItems == 350, "Earlier paging lost transcript items");
+                check(list(paged.get("items")).stream().map(x -> str(obj(x).get("id"))).distinct().count() == list(paged.get("items")).size(), "Pages duplicated items");
+                call(core, "thread/close", pagingId, Map.of());
+            }
+            System.out.println(write(map("selftest", "passed", "threadId", id, "sessionPath", reattached.get("sessionPath"), "items", list(reattached.get("items")).size(), "pagingItems", pagingItems)));
             call(core, "thread/close", id, Map.of());
         }
     }

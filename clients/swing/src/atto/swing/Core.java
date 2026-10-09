@@ -10,7 +10,8 @@ public final class Core implements AutoCloseable {
     public final Protocol protocol;
     final Map<String, ThreadState> threads = new LinkedHashMap<>();
     final List<Map<String, Object>> backlog = new ArrayList<>();
-    final Set<String> hydrating = new HashSet<>();
+    final Set<String> paging = new HashSet<>();
+ final Set<String> hydrating = new HashSet<>();
     final Set<String> dirty = new HashSet<>();
     boolean updateScheduled;
     long operation, backlogFloor;
@@ -90,6 +91,22 @@ public final class Core implements AutoCloseable {
             if (t.needsSnapshot) hydrateOnLane("thread/read", map("threadId", actual));
             return t.snapshot();
         }, protocol.dispatch).whenCompleteAsync((v, e) -> { if (e != null) { hydrating.remove(id); if (!(e instanceof CancellationException) && !(e.getCause() instanceof CancellationException)) error.accept(e.getMessage()); } }, protocol.dispatch);
+    }
+    public CompletableFuture<Map<String, Object>> loadEarlier(String id) {
+        CompletableFuture<Map<String, Object>> result = new CompletableFuture<>();
+        protocol.dispatch.execute(() -> {
+            ThreadState t = threads.get(id);
+            if (t == null || !yes(t.info.get("hasMore")) || !paging.add(id)) { result.complete(Map.of()); return; }
+            long generation = t.generation;
+            protocol.call("thread/items", map("threadId", id, "before", t.info.get("before"), "offline", yes(t.info.get("offline")), "limit", 200))
+                .whenCompleteAsync((value, failure) -> {
+                    paging.remove(id);
+                    if (failure != null) { result.completeExceptionally(failure); error.accept(failure.getMessage()); return; }
+                    if (threads.get(id) != t || generation != t.generation) { result.complete(Map.of()); return; }
+                    t.prepend(obj(value)); changed.accept(t.projection()); result.complete(obj(value));
+                }, protocol.dispatch);
+        });
+        return result;
     }
     public CompletableFuture<Object> call(String method, String id, Map<String, Object> fields) {
         Map<String, Object> params = new LinkedHashMap<>(fields);

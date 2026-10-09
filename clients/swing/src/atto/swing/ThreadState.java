@@ -8,6 +8,7 @@ public final class ThreadState {
     public Map<String, Object> info = new LinkedHashMap<>();
     public final LinkedHashMap<String, Map<String, Object>> items = new LinkedHashMap<>();
     public long cursor;
+ public long generation;
     public boolean needsSnapshot;
     private long snapshotCursor;
     private final Set<Long> seen = new HashSet<>();
@@ -15,12 +16,23 @@ public final class ThreadState {
     private final Map<String, Long> fieldVersions = new HashMap<>();
 
     public void reset(Map<String, Object> snapshot) {
-        info = new LinkedHashMap<>(obj(freeze(snapshot)));
+        generation++;
+ info = new LinkedHashMap<>(obj(freeze(snapshot)));
         items.clear(); seen.clear(); itemVersions.clear(); fieldVersions.clear();
         for (Object it : list(info.remove("items"))) {
             Map<String, Object> item = obj(freeze(it)); items.put(str(item.get("id")), item);
         }
         cursor = snapshotCursor = num(info.get("eventId")); needsSnapshot = false;
+    }
+    /** Earlier pages do not move the live snapshot/event boundary. */
+    public void prepend(Map<String, Object> page) {
+        LinkedHashMap<String, Map<String, Object>> merged = new LinkedHashMap<>();
+        for (Object value : list(page.get("items"))) {
+            Map<String, Object> item = obj(freeze(value)); String id = str(item.get("id"));
+            if (!items.containsKey(id)) merged.put(id, item);
+        }
+        merged.putAll(items); items.clear(); items.putAll(merged);
+        info.put("hasMore", yes(page.get("hasMore"))); info.put("before", page.get("before"));
     }
     public boolean apply(Map<String, Object> event) {
         String method = str(event.get("method")); Map<String, Object> p = obj(event.get("params"));

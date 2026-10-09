@@ -81,7 +81,12 @@ public final class Tests {
         state.apply(notification(4, "prompt/open", "prompt", map("id", "p"))); state.apply(notification(5, "prompt/closed", "id", "different"));
         check(!obj(state.info.get("prompt")).isEmpty(), "Other prompt closure ignored");
         state.apply(notification(6, "prompt/closed", "id", "p")); check(state.info.get("prompt") == null, "Prompt withdrawn");
-        Map<String, Object> copied = state.snapshot(); obj(list(copied.get("items")).getFirst()).put("output", "changed"); check(!str(state.items.get("c").get("output")).equals("changed"), "Snapshot is isolated");
+        long beforePage = state.cursor;
+        state.prepend(map("items", List.of(item("old", "agentMessage", "earlier"), item("c", "commandExecution", "stale")), "hasMore", true, "before", "old"));
+        check(new ArrayList<>(state.items.keySet()).equals(List.of("old", "c")), "Earlier page prepends in chronological order without duplicates");
+        check(state.cursor == beforePage && str(state.items.get("c").get("output")).endsWith("next"), "Page preserves cursor and live text while fetch is pending");
+        check(yes(state.info.get("hasMore")) && str(state.info.get("before")).equals("old"), "Page stores earlier cursor");
+        Map<String, Object> copied = state.snapshot(); obj(list(copied.get("items")).getLast()).put("output", "changed"); check(!str(state.items.get("c").get("output")).equals("changed"), "Snapshot is isolated");
     }
     static void markdown() {
         List<Markdown.Block> blocks = Markdown.parse("# Title\n\nhello `code`\n- a\n1. b\n> quote\n```java\na < b\n```\n");
