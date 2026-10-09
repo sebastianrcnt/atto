@@ -84,6 +84,9 @@ func externalParent(out io.Writer, create bool) (string, func(), error) {
 }
 
 func forgetExternalParent(parent string) error {
+	if parent == "" {
+		return nil
+	}
 	if len(agentstate.List(parent)) != 0 {
 		return nil
 	}

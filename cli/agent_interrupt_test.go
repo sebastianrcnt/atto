@@ -40,7 +40,7 @@ func TestAgentInterruptKeepsHostedCommand(t *testing.T) {
 			t.Fatal("worker shell did not start")
 		}
 	}
-	if out, err := runAgent(t, "interrupt", "a", "-session", "root"); err != nil || !strings.Contains(out, "interrupted") {
+	if out, err := runAgent(t, "interrupt", "@"+st.Session); err != nil || !strings.Contains(out, "interrupted") {
 		t.Fatalf("interrupt: %q %v", out, err)
 	}
 	if st.Latest().Status != agentstate.Stopped {
@@ -85,7 +85,7 @@ func TestAgentInterruptForceStopsUnresponsiveWorker(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	st := agentstate.State{Parent: "root", Name: "a", Session: "unresponsive", Turns: 1, Job: worker.ID}
+	st := agentstate.State{Parent: "root", Name: "a", Session: "abcdef12", Turns: 1, Job: worker.ID}
 	if err := agentstate.Save(st); err != nil {
 		t.Fatal(err)
 	}
@@ -97,7 +97,7 @@ func TestAgentInterruptForceStopsUnresponsiveWorker(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { jobs.KillAll("root"); jobs.KillAll(st.Session) })
-	out, err := runAgent(t, "interrupt", "a", "-session", "root")
+	out, err := runAgent(t, "stop", "@"+st.Session[:6])
 	if err != nil || !strings.Contains(out, "force-stopped") {
 		t.Fatalf("fallback: %q %v", out, err)
 	}

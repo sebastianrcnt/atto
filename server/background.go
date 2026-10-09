@@ -87,7 +87,7 @@ func background(method, sid string, p threadParams) (any, error) {
 		return result, nil
 	case "agent/read", "subagent/read":
 		st, err := agentstate.Load(sid, p.Name)
-		if strings.Contains(p.Name, "/") || p.Name == ".." {
+		if strings.HasPrefix(p.Name, "@") || strings.Contains(p.Name, "/") || p.Name == ".." {
 			var target agentstate.Target
 			target, err = agentstate.Resolve(sid, p.Name)
 			if err == nil {

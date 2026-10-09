@@ -43,7 +43,7 @@ usage:
   atto agent wait [AGENT...] [-timeout 10m]
                                        block until one of them (default: any you started)
                                        finishes a turn, and print its report
-  atto agent list                      the agents you started, and theirs
+  atto agent list [-all]               the agents you started, and theirs; IDs and addresses
   atto agent report AGENT              its last answer, status, duration and tokens
   atto agent interrupt AGENT           stop its running turn (it stays, for new tasks)
   atto agent close AGENT... | close -done [-force]
@@ -55,7 +55,11 @@ with the same tools. Each has a path from the root of its tree: the
 session that started the first ones is /root, its agent "tests" is
 /root/tests. AGENT is a name you gave (tests), a path below you
 (tests/lint), ".." for the agent that started you, or a full path (/root,
-/root/tests). An agent sees only what it is sent. When its turn ends, its
+/root/tests), or @ID (its own session ID or a unique prefix of at least
+6 characters). Inside atto, @ID stays within your own tree; outside atto
+it works from any directory or parent. list -all is for outside callers
+and shows agents under every external parent. An agent sees only what it
+is sent. When its turn ends, its
 final answer reaches the agent that started it by itself, wrapped in
 <atto_internal_context source="agent"> with Message Type FINAL_ANSWER;
 messages and tasks arrive the same way (MESSAGE, NEW_TASK). wait exits with
@@ -82,7 +86,7 @@ spawn accepts -m provider/model and -effort LEVEL for external callers only;
 in atto's model shell (ATTO_SESSION_ID / ATTO_AGENT set), use -role instead.
 wait and report accept -json: one object; duration is in seconds.
 Old names still work: start (spawn), next (task, idle), steer (task,
-running), wait-any (wait), stop (interrupt), rm (close), presets (roles).`
+running), wait-any (wait), stop (interrupt), rm (close), presets (roles), read/show (report).`
 
 // agentInterruptWait gives a worker time to record a graceful stop before
 // an unresponsive process is force-stopped. Tests shorten it.
@@ -116,6 +120,10 @@ func RunAgent(args []string, out io.Writer) error {
 	if sub == "wait" || sub == "report" {
 		fs.BoolVar(&jsonOut, "json", false, "JSON report")
 	}
+	all := false
+	if sub == "list" {
+		fs.BoolVar(&all, "all", false, "outside atto: agents of every external parent")
+	}
 	done := fs.Bool("done", false, "close: every agent that is not running or queued")
 	words, err := parseInterleaved(fs, rest)
 	if err != nil {
@@ -145,7 +153,19 @@ func RunAgent(args []string, out io.Writer) error {
 			return fmt.Errorf(`agents are off. Only the user can turn them on: "agents": {"enabled": true} in %s`, config.SettingsPath())
 		}
 	}
-	if *session == "" {
+	if all {
+		if !outsideAgentCaller() {
+			return errors.New("atto agent list -all is for external callers only; inside atto use atto agent list")
+		}
+		return agentListAll(out)
+	}
+	idOnly := len(words) > 0 && sub != "spawn" && sub != "roles" && strings.HasPrefix(words[0], "@")
+	if sub == "wait" || sub == "close" {
+		for _, word := range words {
+			idOnly = idOnly && strings.HasPrefix(word, "@")
+		}
+	}
+	if *session == "" && !(outsideAgentCaller() && idOnly) {
 		if config.InAgent() || config.InAgentCommand() { // atto's own commands always name their session
 			return requireSession(*session)
 		}
@@ -303,7 +323,7 @@ func RunAgent(args []string, out io.Writer) error {
 		if text == "" {
 			return fmt.Errorf(`usage: atto agent send AGENT "<text>"`)
 		}
-		t, err := agentstate.Resolve(*session, addr)
+		t, err := resolveAgentAddress(*session, addr)
 		if err != nil {
 			return err
 		}
@@ -327,12 +347,36 @@ func RunAgent(args []string, out io.Writer) error {
 var agentAliases = map[string]string{
 	"start": "spawn", "next": "task", "steer": "task", "wait-any": "wait",
 	"stop": "interrupt", "rm": "close", "presets": "roles", "ls": "list",
+	"read": "report", "show": "report",
+}
+
+// ID scope follows the actual caller, never a -session override. Names and
+// paths still resolve relative to the selected parent as before.
+func outsideAgentCaller() bool {
+	return os.Getenv("ATTO_SESSION_ID") == "" && !config.InAgentCommand()
+}
+
+func resolveAgentAddress(parent, addr string) (agentstate.Target, error) {
+	if strings.HasPrefix(addr, "@") {
+		if outsideAgentCaller() {
+			return agentstate.Resolve("", addr)
+		}
+		caller := os.Getenv("ATTO_SESSION_ID")
+		if caller == "" {
+			caller = parent
+		}
+		if err := requireSession(caller); err != nil {
+			return agentstate.Target{}, err
+		}
+		return agentstate.Resolve(caller, addr)
+	}
+	return agentstate.Resolve(parent, addr)
 }
 
 // agentAt is the agent addr names, seen from session: one that some
 // session started, not a root.
 func agentAt(session, addr string) (agentstate.State, error) {
-	t, err := agentstate.Resolve(session, addr)
+	t, err := resolveAgentAddress(session, addr)
 	if err != nil {
 		return agentstate.State{}, err
 	}
@@ -423,7 +467,14 @@ func agentRemove(out io.Writer, parent string, names []string, done, force bool)
 					fmt.Fprintf(out, "warning: agent %s: archiving its session: %v\n", path, err)
 				}
 			}
-			agentstate.Remove(s.Parent, s.Name)
+			if err := agentstate.Remove(s.Parent, s.Name); err != nil {
+				refused = append(refused, fmt.Sprintf("agent %s: closing: %v", path, err))
+				blocked[s.Parent] = true
+				continue
+			}
+			if err := forgetExternalParent(s.Parent); err != nil {
+				refused = append(refused, err.Error())
+			}
 			fmt.Fprintf(out, "closed agent %s (session %s archived)\n", path, s.Session)
 		}
 	}
@@ -538,7 +589,7 @@ func agentStart(out io.Writer, settings config.Settings, parent, name, preset, t
 		undo()
 		return err
 	}
-	fmt.Fprintf(out, "agent %s started (session %s, %s · %s, role %s, job %d).\n", agentstate.PathOf(st.Session), st.Session, st.Model, orDash(effort), p.Name, st.Job)
+	fmt.Fprintf(out, "agent %s started (@%s, session %s, %s · %s, role %s, job %d).\n", agentstate.PathOf(st.Session), agentstate.ShortID(st.Session), st.Session, st.Model, orDash(effort), p.Name, st.Job)
 	if useWorktree {
 		fmt.Fprintf(out, "It works in worktree %s on branch %s (from %.7s); atto agent close %s removes the worktree and keeps the branch.\n", st.Worktree, st.Branch, st.Base, name)
 	}
@@ -641,6 +692,9 @@ func agentModel(models config.ModelsFile, settings config.Settings, p agentstate
 // takeFinalAnswer removes from parent's inbox the final answers of st that
 // wait there: its report says the same, once.
 func takeFinalAnswer(parent string, st agentstate.State) {
+	if parent == "" {
+		parent = st.Parent
+	}
 	evs := events.Drain(parent)
 	var keep []events.Event
 	mark := "◆ agent " + agentstate.PathOf(st.Session) + " "
@@ -769,19 +823,38 @@ func agentList(out io.Writer, parent string) error {
 		}
 	}
 	walk(parent)
+	return agentListRows(out, parent, rows)
+}
+
+func agentListAll(out io.Writer) error {
+	var rows []agentstate.State
+	for _, st := range agentstate.ListAll() {
+		path, err := session.Find(agentstate.Root(st.Session))
+		if err != nil {
+			continue
+		}
+		h, _, err := session.Load(path)
+		if err == nil && h.External {
+			rows = append(rows, st)
+		}
+	}
+	return agentListRows(out, "", rows)
+}
+
+func agentListRows(out io.Writer, parent string, rows []agentstate.State) error {
 	if len(rows) == 0 {
 		fmt.Fprintln(out, "no agents")
 		return listAgentWorkers(out, parent, rows)
 	}
 	tw := tabwriter.NewWriter(out, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(tw, "AGENT\tROLE\tMODEL\tSTATUS\tTURN\tTASK")
+	fmt.Fprintln(tw, "AGENT\tID\tADDRESS\tROLE\tMODEL\tSTATUS\tTURN\tTASK")
 	for _, s := range rows {
 		t := s.Latest()
 		d := "-"
 		if t.Duration() > 0 {
 			d = tui.FormatDuration(t.Duration())
 		}
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n", agentstate.PathOf(s.Session), s.Preset, s.Model, t.Status, d, tui.Truncate(tui.FirstLineWithEllipsis(s.Task), 60, "…"))
+		fmt.Fprintf(tw, "%s\t%s\t@%s\t%s\t%s\t%s\t%s\t%s\n", agentstate.PathOf(s.Session), agentstate.ShortID(s.Session), agentstate.ShortID(s.Session), s.Preset, s.Model, t.Status, d, tui.Truncate(tui.FirstLineWithEllipsis(s.Task), 60, "…"))
 	}
 	if err := tw.Flush(); err != nil {
 		return err
