@@ -3,6 +3,7 @@ package extensions
 import (
 	"fmt"
 	"github.com/sebastianrcnt/atto/config"
+	"github.com/sebastianrcnt/atto/ui"
 	"maps"
 	"os"
 	"path/filepath"
@@ -221,4 +222,15 @@ func eventually(t *testing.T, what string, cond func() bool) {
 		}
 	}
 	t.Fatalf("timed out waiting for %s", what)
+}
+
+// Keep the old command comparison corpus: decode the new tree to the old
+// passive trace in tests only. Production native commands never call ShowText.
+func (h *fakeHost) UIBlock(title string, tree ui.Node) {
+	var parts []string
+	for _, child := range tree.Children {
+		parts = append(parts, ui.PlainText(child))
+	}
+	preview := int(tree.Props["previewLines"].(float64))
+	h.ShowText("diff", title, strings.TrimRight(strings.Join(parts, "\n"), "\n"), TextOptions{Lang: "diff", Preview: preview})
 }

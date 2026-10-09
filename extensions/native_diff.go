@@ -13,6 +13,8 @@ import (
 	"unicode/utf16"
 
 	"github.com/sebastianrcnt/atto/shell"
+	"github.com/sebastianrcnt/atto/ui"
+	"unicode/utf8"
 )
 
 type fileStat struct {
@@ -280,11 +282,6 @@ func (m *Manager) nativeDiff(ctx context.Context, h Host, args string) {
 		hidden := len(diff) - 2000
 		diff = append(diff[:2000], fmt.Sprintf("... diff cut: %d more lines (run git diff for all of it)", hidden))
 	}
-	lines := append([]string{}, summary...)
-	if len(diff) > 0 {
-		lines = append(lines, "")
-		lines = append(lines, diff...)
-	}
 	title := "git diff"
 	if staged {
 		title += " --staged"
@@ -293,6 +290,31 @@ func (m *Manager) nativeDiff(ctx context.Context, h Host, args string) {
 		title += " " + path
 	}
 	if ctx.Err() == nil {
-		h.ShowText("diff", title, strings.Join(lines, "\n"), TextOptions{Lang: "diff", Preview: len(summary) + 1 + 14})
+		tree := diffTree(title, summary, diff)
+		if host, ok := h.(interface{ UIBlock(string, ui.Node) }); ok {
+			host.UIBlock(title, tree)
+		} else {
+			h.Notify("diff", ui.PlainText(tree), "info")
+		}
+
 	}
+}
+
+// diffTree preserves the git/error/line truncation pipeline above, adding the
+// catalog's byte budget. It is shared by full and noext builds.
+func diffTree(title string, summary, diff []string) ui.Node {
+	var rows []ui.Row
+	for i, line := range summary[1:] {
+		rows = append(rows, ui.Row{Key: fmt.Sprintf("file-%d", i), Cells: []string{line}})
+	}
+	source := strings.Join(diff, "\n")
+	const budget = 110 << 10
+	if len(source) > budget {
+		source = source[:budget]
+		for !utf8.ValidString(source) {
+			source = source[:len(source)-1]
+		}
+		source += "\n... diff cut: byte limit (run git diff for all of it)"
+	}
+	return ui.Collapse(ui.CollapseProps{Key: "diff", Title: title, PreviewLines: len(summary) + 1 + 14}, ui.Text(ui.TextProps{Text: summary[0], Bold: true}), ui.List(ui.ListProps{Rows: rows, EmptyText: ""}), ui.Text(ui.TextProps{}), ui.Diff(ui.DiffProps{Source: source}))
 }

@@ -1,0 +1,21 @@
+± git diff · diff
+  2 files changed, +4 -1 (1 staged, 1 unstaged, 1 untracked)
+    M  util.go    +2 -0
+     M main.go    +2 -1
+    ?? notes.txt  untracked
+
+  == Staged changes ==
+  diff --git a/util.go b/util.go
+  index 06ab7d0..5194a23 100644
+  --- a/util.go
+  +++ b/util.go
+  @@ -1 +1,3 @@
+   package main
+  +
+  +func util() {}
+  == Unstaged changes ==
+  diff --git a/main.go b/main.go
+  index d6e0156..c337e17 100644
+  --- a/main.go
+  +++ b/main.go
+    + 8 lines (click or ctrl+t to expand)

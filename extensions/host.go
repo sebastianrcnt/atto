@@ -3,6 +3,7 @@ package extensions
 import (
 	"errors"
 	"fmt"
+	"github.com/sebastianrcnt/atto/ui"
 	"io"
 	"sync"
 )
@@ -125,3 +126,6 @@ func (h *Headless) SendMessage(text string) {
 		h.Send(text)
 	}
 }
+
+// UIBlock prints native portable blocks for noninteractive frontends.
+func (h *Headless) UIBlock(title string, tree ui.Node) { h.Notify("atto", ui.PlainText(tree), "info") }

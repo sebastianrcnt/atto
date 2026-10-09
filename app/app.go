@@ -534,6 +534,9 @@ func (a *App) onInput(data string) bool {
 		}
 	case "ctrl+t":
 		a.details.on = !a.details.on
+		for _, e := range a.uiBlocks {
+			e.ExpandAll(a.details.on)
+		}
 		a.details.gen++ // the expanded blocks are confirmation enough
 		return true
 	case "ctrl+o": // original text of the blocks an extension replaced

@@ -471,11 +471,19 @@ func (e *Elements) render(n ui.Node, w, x, y int, color, background ui.ThemeKey)
 		for _, c := range n.Children {
 			body = append(body, e.render(c, max(1, w-2), x+2, y+len(out)+len(body), color, background)...)
 		}
+		hidden := 0
 		if !open {
-			body = body[:min(len(body), propInt(n, "previewLines", 0))]
+			preview := min(len(body), propInt(n, "previewLines", 0))
+			hidden = len(body) - preview
+			body = body[:preview]
 		}
 		for _, l := range body {
 			out = append(out, "  "+l)
+		}
+		if hidden > 0 {
+			out = append(out, e.style(ui.Muted, fmt.Sprintf("  + %d lines (click or ctrl+t to expand)", hidden)))
+		} else if open {
+			out = append(out, e.style(ui.Muted, "  − Show less (click)"))
 		}
 	case "Image":
 		out = []string{"[image: " + propString(n, "alt") + "]"}
@@ -487,7 +495,14 @@ func (e *Elements) render(n ui.Node, w, x, y int, color, background ui.ThemeKey)
 		out[maxLines-1] = Truncate(out[maxLines-1], max(1, w-1), "") + "…"
 	}
 	if n.Key != "" && (n.Type == "Button" || n.Type == "Input" || n.Type == "Select" || n.Type == "Collapse") {
-		e.hits = append(e.hits, elementHit{n.Key, x, y, w, len(out)})
+		if n.Type == "Collapse" {
+			e.hits = append(e.hits, elementHit{n.Key, x, y, w, 1})
+			if len(out) > 1 {
+				e.hits = append(e.hits, elementHit{n.Key, x, y + len(out) - 1, w, 1})
+			}
+		} else {
+			e.hits = append(e.hits, elementHit{n.Key, x, y, w, len(out)})
+		}
 	}
 	for i, l := range out {
 		l = Truncate(l, w, "…")
@@ -704,4 +719,11 @@ func defaultRows(n int) int {
 		return 8
 	}
 	return n
+}
+
+// ExpandAll applies native Ctrl+T to the existing client-local disclosures.
+func (e *Elements) ExpandAll(open bool) {
+	for key := range e.open {
+		e.open[key] = open
+	}
 }
