@@ -57,7 +57,7 @@ func TestRender(t *testing.T) {
 		{"agent", Agent{Name: "w", Preset: "p", ID: "a1b2c3d4", Path: "/root/w", Parent: "/root", ParentID: "p0p0p0p0"}, `You are agent /root/w (session a1b2c3d4), in a team of atto agents working for the user: /root (session p0p0p0p0) started you with role p`},
 		{"agent", Agent{Name: "w", Preset: "p", ID: "a1b2c3d4", Path: "/root"}, `the user started you from a shell, so you have no parent agent, with role p`},
 		{"agent", Agent{Name: "w", ID: "a1b2c3d4", Path: "/root"}, `saved for whoever polls you (atto agent wait or report)`},
-		{"agent_parent", map[string]any{"Presets": "R"}, `you may start atto agents on your own judgement when they help`},
+		{"agent_parent", map[string]any{"Presets": "R"}, `start atto agents only when the user asks for them or approves your proposal`},
 	} {
 		if got := Render(c.name, c.data); !strings.Contains(got, c.want) {
 			t.Errorf("%s: %q not in %q", c.name, c.want, got)

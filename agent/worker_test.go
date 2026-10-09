@@ -21,7 +21,7 @@ func TestSystemPromptAgents(t *testing.T) {
 	write(t, filepath.Join(repo, ".atto", "agents", "review.md"), "---\ndescription: Reviews diffs\n---\nBe strict.")
 	write(t, filepath.Join(dir, "settings.json"), `{"agents":{"enabled":false}}`)
 	a.SetStart(start)
-	for _, want := range []string{"on your own judgement", "do not for a small task", "atto agent spawn NAME", "atto agent send NAME", "FINAL_ANSWER", "- general: ", "- review: Reviews diffs"} {
+	for _, want := range []string{"only when the user asks for them or approves your proposal", "never for a small task", "atto agent spawn NAME", "atto agent send NAME", "FINAL_ANSWER", "- general: ", "- review: Reviews diffs"} {
 		if !strings.Contains(a.system, want) {
 			t.Fatalf("missing %q:\n%s", want, a.system)
 		}
