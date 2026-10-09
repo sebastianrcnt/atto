@@ -32,6 +32,11 @@ var Install = installSh
 func init() {
 	if runtime.GOOS == "windows" {
 		Install = installPs1
+		if Variant == "slim" {
+			Install = `$env:ATTO_VARIANT="slim"; ` + Install
+		}
+	} else if Variant == "slim" {
+		Install = strings.Replace(Install, "| sh", "| ATTO_VARIANT=slim sh", 1)
 	}
 }
 
@@ -71,10 +76,14 @@ var Channel = ""
 
 // Describe is the version with its channel, as `atto -version` prints it.
 func Describe() string {
-	if Channel == "" {
-		return Current()
+	v := Current()
+	if Variant == "slim" {
+		v += " (slim)"
 	}
-	return Current() + " (" + Channel + ")"
+	if Channel != "" {
+		v += " (" + Channel + ")"
+	}
+	return v
 }
 
 func Current() string {
@@ -89,7 +98,16 @@ func Current() string {
 
 // Asset is this platform's binary name in a release.
 func Asset() string {
-	name := "atto_" + runtime.GOOS + "_" + runtime.GOARCH
+	return AssetFor(Variant)
+}
+
+// AssetFor is the asset for an explicitly selected variant. Callers validate it.
+func AssetFor(variant string) string {
+	prefix := "atto"
+	if variant == "slim" {
+		prefix += "-slim"
+	}
+	name := prefix + "_" + runtime.GOOS + "_" + runtime.GOARCH
 	if runtime.GOOS == "windows" {
 		name += ".exe"
 	}
@@ -277,7 +295,11 @@ func Managed(exe string) string {
 	case strings.Contains(p, "/Cellar/") || strings.Contains(p, "/homebrew/"):
 		return "brew upgrade atto"
 	case strings.Contains(p, "/go/bin/") || os.Getenv("GOBIN") != "" && strings.HasPrefix(exe, os.Getenv("GOBIN")):
-		return "go install github.com/" + Repo + "/cmd/atto@latest"
+		tags := ""
+		if Variant == "slim" {
+			tags = "-tags noext "
+		}
+		return "go install " + tags + "github.com/" + Repo + "/cmd/atto@latest"
 	}
 	return ""
 }
@@ -285,20 +307,29 @@ func Managed(exe string) string {
 // InstallRelease downloads tag's binary, checks it against the release's
 // checksums.txt and replaces exe with it.
 func InstallRelease(ctx context.Context, tag, exe string) error {
+	return InstallReleaseVariant(ctx, tag, exe, Variant)
+}
+
+// InstallReleaseVariant switches only when explicitly called with a variant.
+func InstallReleaseVariant(ctx context.Context, tag, exe, variant string) error {
+	if variant != "full" && variant != "slim" {
+		return fmt.Errorf("unknown variant %q; use slim or full", variant)
+	}
+	asset := AssetFor(variant)
 	sums, err := fetch(ctx, dlURL+tag+"/checksums.txt", 1<<20)
 	if err != nil {
 		return err
 	}
-	want, err := checksum(string(sums), Asset())
+	want, err := checksum(string(sums), asset)
 	if err != nil {
 		return err
 	}
-	bin, err := fetch(ctx, dlURL+tag+"/"+Asset(), 256<<20)
+	bin, err := fetch(ctx, dlURL+tag+"/"+asset, 256<<20)
 	if err != nil {
 		return err
 	}
 	if got := sha256.Sum256(bin); hex.EncodeToString(got[:]) != want {
-		return fmt.Errorf("checksum mismatch for %s: refusing to install", Asset())
+		return fmt.Errorf("checksum mismatch for %s: refusing to install", asset)
 	}
 	return replace(exe, bin)
 }

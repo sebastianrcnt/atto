@@ -29,10 +29,21 @@ func fakeReleases(t *testing.T) {
 		sum := sha256.Sum256([]byte(body))
 		mux.HandleFunc("/dl/"+tag+"/checksums.txt", func(w http.ResponseWriter, r *http.Request) {
 			fmt.Fprintf(w, "%s  %s\n", hex.EncodeToString(sum[:]), update.Asset())
+			other := "slim"
+			if update.Variant == "slim" {
+				other = "full"
+			}
+			otherSum := sha256.Sum256([]byte(body + "-" + other))
+			fmt.Fprintf(w, "%s  %s\n", hex.EncodeToString(otherSum[:]), update.AssetFor(other))
 		})
 		mux.HandleFunc("/dl/"+tag+"/"+update.Asset(), func(w http.ResponseWriter, r *http.Request) {
 			fmt.Fprint(w, body)
 		})
+		other := "slim"
+		if update.Variant == "slim" {
+			other = "full"
+		}
+		mux.HandleFunc("/dl/"+tag+"/"+update.AssetFor(other), func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, body+"-"+other) })
 	}
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
@@ -107,7 +118,7 @@ func TestChannelShowAndValidate(t *testing.T) {
 	if err := runChannel(nil, &out, update.Current(), "x"); err != nil {
 		t.Fatal(err)
 	}
-	if got := out.String(); got != "atto v0.0.3-dev.14+abc1234 (edge)\n" {
+	if got := out.String(); got != "atto "+update.Describe()+"\n" {
 		t.Fatalf("got %q", got)
 	}
 	if err := runChannel([]string{"nightly"}, &out, "v0.0.2", "x"); err == nil {
@@ -184,5 +195,42 @@ func TestUpdateWording(t *testing.T) {
 	}
 	if got := availableLine("dev", "v0.0.2"); got != "atto dev · v0.0.2 is available (atto update)" {
 		t.Error(got)
+	}
+}
+
+func TestUpdateSwitchesVariantExplicitlyAtSameVersion(t *testing.T) {
+	t.Setenv(config.EnvDir, t.TempDir())
+	t.Setenv("GOBIN", "")
+	fakeReleases(t)
+	setBuild(t, "v0.0.2", "stable")
+	exe := newExe(t)
+	other := "slim"
+	if update.Variant == "slim" {
+		other = "full"
+	}
+	var out bytes.Buffer
+	if err := runUpdate(nil, &out, "v0.0.2", exe); err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := os.ReadFile(exe); string(b) != "old" {
+		t.Fatal("implicit variant change")
+	}
+	if err := runUpdate([]string{"-variant", other, "-check"}, &out, "v0.0.2", exe); err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := os.ReadFile(exe); string(b) != "old" {
+		t.Fatal("check installed")
+	}
+	if err := runUpdate([]string{"-variant", other}, &out, "v0.0.2", exe); err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := os.ReadFile(exe); string(b) != "stable-binary-"+other {
+		t.Fatalf("%q", b)
+	}
+	if !strings.Contains(out.String(), "Switched variant: "+update.Variant+" → "+other) {
+		t.Fatal(out.String())
+	}
+	if err := runUpdate([]string{"-variant", "unknown"}, &out, "v0.0.2", exe); err == nil {
+		t.Fatal("unknown variant accepted")
 	}
 }

@@ -249,16 +249,20 @@ func TestAvailableFollowsBinaryChannel(t *testing.T) {
 func TestDescribe(t *testing.T) {
 	oldV, oldC := Version, Channel
 	defer func() { Version, Channel = oldV, oldC }()
+	suffix := ""
+	if Variant == "slim" {
+		suffix = " (slim)"
+	}
 	Version, Channel = "v0.0.3-dev.14+abc1234", Edge
-	if got := Describe(); got != "v0.0.3-dev.14+abc1234 (edge)" {
+	if got := Describe(); got != "v0.0.3-dev.14+abc1234"+suffix+" (edge)" {
 		t.Fatal(got)
 	}
 	Version, Channel = "v0.0.2", Stable
-	if got := Describe(); got != "v0.0.2 (stable)" {
+	if got := Describe(); got != "v0.0.2"+suffix+" (stable)" {
 		t.Fatal(got)
 	}
 	Version, Channel = "v0.0.2", ""
-	if got := Describe(); got != "v0.0.2" {
+	if got := Describe(); got != "v0.0.2"+suffix {
 		t.Fatal(got)
 	}
 }

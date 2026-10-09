@@ -32,10 +32,15 @@ func RunUpdate(args []string, out io.Writer) error {
 
 func runUpdate(args []string, out io.Writer, cur, exe string) error {
 	fs := newFlags("update")
+	variant := fs.String("variant", update.Variant, "binary variant: slim or full")
 	checkOnly := fs.Bool("check", false, "only report whether a newer release exists")
 	if err := fs.Parse(args); err != nil || fs.NArg() > 0 {
-		return fmt.Errorf("usage: atto update [-check]")
+		return fmt.Errorf("usage: atto update [-check] [-variant slim|full]")
 	}
+	if *variant != "slim" && *variant != "full" {
+		return fmt.Errorf("unknown variant %q; use slim or full", *variant)
+	}
+	switchingVariant := *variant != update.Variant
 	channel := update.Channel
 	if channel == "" {
 		channel = update.Stable // a dev build has no channel; stable is the default
@@ -47,18 +52,28 @@ func runUpdate(args []string, out io.Writer, cur, exe string) error {
 		return err
 	}
 	install, _ := update.Plan(rel, cur, false)
+	if switchingVariant {
+		install = true
+	}
 	if !install {
 		fmt.Fprintln(out, latestLine(cur))
 		return nil
 	}
 	if *checkOnly {
-		fmt.Fprintln(out, availableLine(cur, rel.Version))
+		if switchingVariant {
+			fmt.Fprintf(out, "atto %s · %s (%s) is available (atto update -variant %s)\n", cur, rel.Version, *variant, *variant)
+		} else {
+			fmt.Fprintln(out, availableLine(cur, rel.Version))
+		}
 		return nil
 	}
-	if err := installTo(ctx, out, rel, cur, exe); err != nil {
+	if err := installToVariant(ctx, out, rel, cur, exe, *variant); err != nil {
 		return err
 	}
 	fmt.Fprintln(out, updatedLine(cur, rel.Version))
+	if switchingVariant {
+		fmt.Fprintf(out, "Switched variant: %s → %s.\n", update.Variant, *variant)
+	}
 	fmt.Fprintln(out, "Running sessions keep the old version until restarted.")
 	return nil
 }
@@ -66,11 +81,15 @@ func runUpdate(args []string, out io.Writer, cur, exe string) error {
 // installTo replaces exe with rel's binary, after the checks both update and
 // channel share.
 func installTo(ctx context.Context, out io.Writer, rel update.Release, cur, exe string) error {
+	return installToVariant(ctx, out, rel, cur, exe, update.Variant)
+}
+
+func installToVariant(ctx context.Context, out io.Writer, rel update.Release, cur, exe, variant string) error {
 	if how := update.Managed(exe); how != "" {
 		return fmt.Errorf("%s was installed by another tool; update it with: %s", exe, how)
 	}
 	fmt.Fprintf(out, "Updating %s from %s to %s…\n", exe, cur, rel.Version)
-	if err := update.InstallRelease(ctx, rel.Tag, exe); err != nil {
+	if err := update.InstallReleaseVariant(ctx, rel.Tag, exe, variant); err != nil {
 		if os.IsPermission(err) {
 			return fmt.Errorf("%w\n%s isn't writable; reinstall with: %s", err, filepath.Dir(exe), update.Install)
 		}
