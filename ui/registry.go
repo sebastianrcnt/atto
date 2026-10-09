@@ -105,6 +105,7 @@ type live struct {
 // the owning session lane. Publish should preserve the order of lane work.
 type Registry struct {
 	siteSeq int
+	busy    bool
 	// Enqueue dispatches accepted callbacks after Route returns; worker lanes use it.
 	Enqueue         func(context.Context, Handler, Action)
 	providerRenders map[string][]time.Time
@@ -381,6 +382,26 @@ func (r *Registry) render(m Match, force bool) {
 	s.generation++
 	gen := s.generation
 	e := Event{Site: m.Site, ID: m.ID, Surface: "shared", Props: copyMap(s.props)}
+	if e.Props == nil {
+		e.Props = map[string]any{}
+	}
+	switch m.Site {
+	case Pane:
+		for key, value := range map[string]any{"title": s.Options.Title, "placement": s.Options.Placement, "columns": s.Options.Columns, "rows": s.Options.Rows, "closeOnEscape": s.Options.CloseOnEscape} {
+			if _, ok := e.Props[key]; !ok {
+				e.Props[key] = value
+			}
+		}
+	case Band:
+		e.Props["busy"] = r.busy
+	case Status:
+		e.Props["busy"] = r.busy
+		e.Props["priority"] = s.Options.Priority
+		e.Props["align"] = s.Options.Align
+	case Toast:
+		e.Props["level"] = s.Options.Level
+		e.Props["expiresAt"] = s.Options.ExpiresAt
+	}
 	originalProps := copyMap(e.Props)
 	fallback := clone(s.fallback)
 	owner := s.owner
@@ -1089,5 +1110,17 @@ func (r *Registry) SetProps(match Match, props map[string]any) {
 	defer r.mu.Unlock()
 	if s := r.sites[match]; s != nil {
 		s.props = copyMap(props)
+	}
+}
+
+// SetBusy refreshes session-owned band/status props, independent of clients.
+func (r *Registry) SetBusy(busy bool) {
+	r.mu.Lock()
+	changed := r.busy != busy
+	r.busy = busy
+	r.mu.Unlock()
+	if changed {
+		r.Invalidate(Match{Site: Band})
+		r.Invalidate(Match{Site: Status})
 	}
 }

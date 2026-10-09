@@ -376,3 +376,22 @@ type forbiddenMarshaler string
 func (forbiddenMarshaler) MarshalJSON() ([]byte, error) {
 	panic("validator must not run a prop's code")
 }
+
+func TestSessionBusyPropsAndPaneMetadata(t *testing.T) {
+	r := NewRegistry(nil, nil)
+	defer r.Stop()
+	var props map[string]any
+	r.Render("observer", Match{Site: Pane}, func(e Event, next Next) (*Node, error) { props = e.Props; return next(e) })
+	_ = r.Open("atto", OpenOptions{Site: Pane, ID: "atto/metadata", Title: "Metadata"})
+	if props["title"] != "Metadata" || props["placement"] != "auto" || props["columns"] != 40 {
+		t.Fatal(props)
+	}
+	r.SetBusy(true)
+	for _, site := range []Site{Band, Status} {
+		r.Render("observer", Match{Site: site}, func(e Event, next Next) (*Node, error) { props = e.Props; return next(e) })
+		_ = r.Open("atto", OpenOptions{Site: site, ID: "atto/" + string(site)})
+		if props["busy"] != true {
+			t.Fatal(props)
+		}
+	}
+}

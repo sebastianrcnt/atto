@@ -237,6 +237,7 @@ func (t *thread) publish(method string, params map[string]any) {
 	if t.elements != nil && !strings.HasPrefix(method, "ui/") {
 		switch method {
 		case "thread/updated", "goal/updated", "turn/started", "turn/completed", "turn/activity", "thread/usage", "thread/status":
+			t.elements.SetBusy(t.turns.Busy)
 			t.elements.Invalidate(ui.Match{Site: ui.Status})
 			if method == "goal/updated" {
 				t.elements.Invalidate(ui.Match{Site: ui.Pane, ID: "atto/goal"})

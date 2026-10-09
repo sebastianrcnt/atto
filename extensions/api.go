@@ -59,6 +59,7 @@ func (e *ext) install() *goja.Object {
 	_ = atto.Set("on", e.jsOn)
 	_ = atto.Set("registerCommand", e.jsRegisterCommand)
 	_ = atto.Set("onDispose", func(v goja.Value) {
+		e.readOnlyRender()
 		fn, ok := goja.AssertFunction(v)
 		if !ok {
 			panic(e.vm.NewTypeError("atto.onDispose: pass a function"))
@@ -93,6 +94,7 @@ func (e *ext) install() *goja.Object {
 var eventNames = []string{"session_start", "session_end", "turn_start", "turn_end", "tool_call", "tool_result", "user_prompt", "message_end", "reasoning_end", "step_end"}
 
 func (e *ext) jsOn(event string, v goja.Value) {
+	e.readOnlyRender()
 	if !slices.Contains(eventNames, event) {
 		panic(e.vm.NewTypeError("atto.on: unknown event %q (events: %s)", event, strings.Join(eventNames, ", ")))
 	}
@@ -111,6 +113,7 @@ func (e *ext) jsOn(event string, v goja.Value) {
 var commandName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9:_-]*$`)
 
 func (e *ext) jsRegisterCommand(name string, spec *goja.Object) {
+	e.readOnlyRender()
 	if !commandName.MatchString(name) {
 		panic(e.vm.NewTypeError("registerCommand: %q is not a command name (letters, digits, -, _, :; no leading /)", name))
 	}
@@ -169,6 +172,7 @@ func (e *ext) sessionObject() *goja.Object {
 	// user's messages and the model's answers, without commands and their
 	// output.
 	_ = o.Set("messages", func(c goja.FunctionCall) goja.Value {
+		e.readOnlyRender()
 		limit := 50
 		if v := c.Argument(0); !goja.IsUndefined(v) && !goja.IsNull(v) {
 			limit = int(v.ToInteger())
@@ -241,6 +245,7 @@ func (e *ext) installTimers() {
 		}
 	}
 	clear := func(c goja.FunctionCall) goja.Value {
+		e.readOnlyRender()
 		id := c.Argument(0).ToInteger()
 		e.mu.Lock()
 		if t, ok := e.timers[id]; ok {

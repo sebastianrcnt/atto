@@ -68,6 +68,7 @@ func (e *ext) jsComplete(opts *goja.Object) goja.Value {
 // jsSetCompleteConcurrency is atto.setCompleteConcurrency(n): how many
 // atto.complete requests this extension has in flight (1 to 16; default 1).
 func (e *ext) jsSetCompleteConcurrency(n int) {
+	e.readOnlyRender()
 	if n < 1 || n > maxCompleting {
 		panic(e.vm.NewTypeError("atto.setCompleteConcurrency: n must be from 1 to %d", maxCompleting))
 	}
