@@ -221,7 +221,6 @@ func runStatusCommand(command string, input []byte, cwd string) ([]string, error
 // builtinStatus). Only characters with an unambiguous width (box drawing renders as one
 // column everywhere the editor rules do) so CJK terminals line up.
 func (a *App) renderStatus(width int) []string {
-	a.paneSync()
 	// The goal indicator goes at the right end of the first row, as codex's
 	// footer shows it; the row gives up room for it. On a terminal too narrow
 	// for both, it takes a row of its own.

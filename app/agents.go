@@ -3,10 +3,8 @@ package app
 import (
 	"fmt"
 	"github.com/sebastianrcnt/atto/core"
-	"os"
 	"path/filepath"
 	"slices"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -14,16 +12,16 @@ import (
 	"github.com/sebastianrcnt/atto/agent"
 	"github.com/sebastianrcnt/atto/agentstate"
 	"github.com/sebastianrcnt/atto/daemon"
+	"github.com/sebastianrcnt/atto/server"
 	"github.com/sebastianrcnt/atto/session"
 	"github.com/sebastianrcnt/atto/tui"
 )
 
 // The agent command center, after codex's: every atto session, running
-// (the daemon's panes) or saved, grouped by project, with tabs for what
+// (daemon workers) or saved, grouped by project, with tabs for what
 // they are doing and the selected one's details on the right. ← on an
 // empty prompt (or /agents) opens it, → or Enter goes to the selected
-// session: the daemon shows that pane on this terminal, or opens a saved
-// session in a new one; ← or Esc comes back. n starts a new session in the
+// session in this same TUI; ← or Esc comes back. n starts a new session in the
 // selected one's project, / searches. "atto agents" shows it by itself.
 // Agents are equal sessions, shown as a tree under the session (or shell
 // parent) that started them. Space folds/unfolds a tree; filtering reveals
@@ -31,8 +29,6 @@ import (
 // transcript read-only, with the usual ctrl+r refresh. Ctrl+C closes the
 // center only, never interrupting the underlying session's work.
 
-// listPanes lists the daemon's panes; tests replace it.
-var listPanes = daemon.List
 var listWorkers = daemon.Workers
 
 // listSaved lists saved sessions, newest first; tests replace it.
@@ -90,9 +86,9 @@ var tabNames = []string{"All", "Needs you", "Working", "Ready", "Inactive"}
 type centerItem struct {
 	id, title, cwd                 string
 	branch, prompt                 string
-	pane                           *daemon.Pane // nil: saved, not running
-	current                        bool         // this atto's own session
-	tab                            int          // tabNeedsYou .. tabInactive
+	live                           bool // a worker is running
+	current                        bool // this atto's own session
+	tab                            int  // tabNeedsYou .. tabInactive
 	updated                        time.Time
 	parent, agentPath, role, model string
 	external, archived             bool
@@ -116,14 +112,16 @@ func (it centerItem) status() string {
 }
 
 type agentCenter struct {
-	a        *App // nil: on its own (atto agents)
-	onClose  func()
-	onSwitch func(pane int)
+	a       *App // nil: on its own (atto agents)
+	onClose func()
 	// onOpen opens a saved session (cwd is its directory); onNew starts a
 	// session in cwd.
 	onOpen func(id, cwd string)
 	onNew  func(cwd string)
 
+	scope     string // resume picker: this directory only
+	resume    bool
+	picking   bool
 	items     []centerItem
 	tab       int
 	sel       int // index into shown()
@@ -140,39 +138,13 @@ func (a *App) cmdAgents(string) { a.openAgents(tabAll) }
 
 func (a *App) openAgents(tab int) {
 	c := &agentCenter{a: a, tab: tab, onClose: a.closeModal}
-	c.onSwitch = func(id int) {
-		if a.pane.on {
-			a.ui.Emit(daemon.MarkerSeq("switch", strconv.Itoa(id)))
-			return
-		}
-		if a.workers() {
-			if panes, err := listPanes(); err == nil {
-				for _, p := range panes {
-					if p.ID == id && p.Session != "" {
-						a.closeModal()
-						a.resumeID(p.Session)
-						return
-					}
-				}
-			}
-		}
-		a.notice("This atto runs outside the daemon: show that session from a shell with atto attach %d.", id)
-	}
-	c.onOpen = func(id, cwd string) {
-		if a.pane.on {
-			a.ui.Emit(daemon.MarkerSeq("open", id, cwd))
-			return
-		}
-		if path, err := session.Find(id); err == nil {
-			a.requestResume(path)
-		}
-	}
+	c.onOpen = func(id, cwd string) { a.resumeID(id) }
 	c.onNew = func(cwd string) {
-		if a.pane.on {
-			a.ui.Emit(daemon.MarkerSeq("new", cwd))
+		if !a.workers() {
+			a.cmdClear("")
 			return
 		}
-		a.cmdClear("")
+		a.openThread("", map[string]any{"cwd": cwd}, func(info server.ThreadInfo, old *conn) { a.switchTo(info, "new", old, nil) })
 	}
 	c.apply(centerSnapshot{})
 	c.selectCurrent()
@@ -182,7 +154,6 @@ func (a *App) openAgents(tab int) {
 }
 
 type centerSnapshot struct {
-	panes   []daemon.Pane
 	workers []daemon.Worker
 	saved   []session.Summary
 	agents  []centerAgent
@@ -194,9 +165,8 @@ type centerAgent struct {
 }
 
 func scanCenter() centerSnapshot {
-	panes, _ := listPanes()
 	workers, _ := listWorkers()
-	snapshot := centerSnapshot{panes: panes, workers: workers, saved: listSaved()}
+	snapshot := centerSnapshot{workers: workers, saved: listSaved()}
 	for _, s := range agentstate.ListAll() {
 		snapshot.agents = append(snapshot.agents, centerAgent{s, s.Latest()})
 	}
@@ -258,7 +228,7 @@ func (c *agentCenter) watch(ui *tui.TUI, active func() bool, quit <-chan struct{
 	}
 }
 
-// reload gathers the sessions: the daemon's panes, this one (when atto
+// reload gathers the sessions: live workers, this one (when atto
 // runs directly), then the saved ones, newest first.
 func (c *agentCenter) reload() { c.apply(scanCenter()); c.loaded = true }
 
@@ -267,58 +237,20 @@ func (c *agentCenter) apply(snapshot centerSnapshot) {
 	if sh := c.shown(); c.sel < len(sh) {
 		keep = sh[c.sel].id
 	}
-	panes := snapshot.panes
-	self, _ := strconv.Atoi(os.Getenv(daemon.EnvPane))
 	var items []centerItem
 	seen := map[string]bool{}
-	for i := range panes {
-		p := panes[i]
-		it := centerItem{id: p.Session, title: p.Name, cwd: p.Cwd, pane: &p, updated: p.Active,
-			current: c.a != nil && (p.ID == self || (p.Session != "" && p.Session == c.a.threadID))}
-		switch p.State {
-		case "working":
-			it.tab = tabWorking
-		case "waiting":
-			it.tab = tabNeedsYou
-		default:
-			it.tab = tabReady
-		}
-		if it.id == "" {
-			it.id = fmt.Sprintf("pane:%d", p.ID)
-		}
-		if seen[it.id] {
-			// Multiple panes may view one agent transcript. Prefer this
-			// terminal's pane, otherwise a working/waiting pane over an idle one.
-			j := slices.IndexFunc(items, func(x centerItem) bool { return x.id == it.id })
-			if it.current || (!items[j].current && items[j].tab == tabReady && it.tab != tabReady) {
-				items[j] = it
-			}
-			continue
-		}
-		items = append(items, it)
-		seen[it.id] = true
-	}
 	for _, w := range snapshot.workers {
-		if seen[w.Session] {
-			for i := range items {
-				if items[i].id == w.Session {
-					if w.Busy {
-						items[i].tab = tabWorking
-					} else if items[i].tab == tabWorking {
-						items[i].tab = tabReady
-					}
-				}
-			}
-			continue
-		}
 		state := tabReady
 		if w.Busy {
 			state = tabWorking
 		}
-		items = append(items, centerItem{id: w.Session, cwd: w.Cwd, updated: w.Started, tab: state, current: c.a != nil && c.a.threadID == w.Session})
+		if w.State == "waiting" {
+			state = tabNeedsYou
+		}
+		items = append(items, centerItem{id: w.Session, title: w.Name, live: true, cwd: w.Cwd, updated: w.Started, tab: state, current: c.a != nil && c.a.threadID == w.Session})
 		seen[w.Session] = true
 	}
-	if a := c.a; a != nil && !seen[a.threadID] {
+	if a := c.a; a != nil && a.threadID != "" && !seen[a.threadID] {
 		it := centerItem{id: a.threadID, title: a.sessName, cwd: a.cwd, current: true, updated: time.Now(), tab: tabReady}
 		switch {
 		case a.busy:
@@ -340,12 +272,13 @@ func (c *agentCenter) apply(snapshot centerSnapshot) {
 			title = s.Preview
 		}
 		if seen[s.ID] {
-			for j := range items { // fill in what the pane doesn't know
+			for j := range items { // enrich live session metadata
 				if items[j].id == s.ID {
 					if items[j].title == "" {
 						items[j].title = title
 					}
 					items[j].branch, items[j].prompt, items[j].model = s.Branch, s.Preview, s.Model
+					items[j].updated = s.Updated
 					items[j].parent, items[j].external, items[j].archived = s.AgentOf, s.External, s.Archived
 				}
 			}
@@ -371,14 +304,8 @@ func (c *agentCenter) apply(snapshot centerSnapshot) {
 		if st.Branch != "" {
 			it.branch = st.Branch
 		}
-		// A live pane's waiting/working state is more precise than turn state.
 		viewer := it.current && c.a != nil && c.a.readOnly != ""
-		if it.pane != nil && it.pane.State != "waiting" && turn.Status.Active() {
-			// A pane may be a read-only viewer of the headless turn. Its idle
-			// frontend does not make the actual agent idle.
-			it.tab = tabWorking
-		}
-		if it.pane == nil && (!it.current || viewer) && !it.archived {
+		if (!it.live && !it.current || viewer) && !it.archived {
 			switch turn.Status {
 			case agentstate.Running, agentstate.Queued:
 				it.tab = tabWorking
@@ -388,6 +315,9 @@ func (c *agentCenter) apply(snapshot centerSnapshot) {
 				it.tab = tabInactive
 			}
 		}
+	}
+	if c.scope != "" {
+		items = slices.DeleteFunc(items, func(it centerItem) bool { return !session.SameDir(it.cwd, c.scope) || it.archived || it.parent != "" })
 	}
 	c.items = items
 	c.reorder()
@@ -401,6 +331,18 @@ func (c *agentCenter) apply(snapshot centerSnapshot) {
 
 // reorder sorts the items: by project, or newest first when flat.
 func (c *agentCenter) reorder() {
+	if c.resume {
+		slices.SortStableFunc(c.items, func(x, y centerItem) int {
+			if x.live != y.live {
+				if x.live {
+					return -1
+				}
+				return 1
+			}
+			return y.updated.Compare(x.updated)
+		})
+		return
+	}
 	if c.flat {
 		slices.SortStableFunc(c.items, func(x, y centerItem) int { return y.updated.Compare(x.updated) })
 		return
@@ -538,6 +480,16 @@ func centerTree(items []centerItem) []centerItem {
 }
 
 func (c *agentCenter) selectCurrent() {
+	if c.resume {
+		var latest time.Time
+		for i, it := range c.shown() {
+			if it.updated.After(latest) {
+				latest = it.updated
+				c.sel = i
+			}
+		}
+		return
+	}
 	for i, it := range c.shown() {
 		if it.current {
 			c.sel = i
@@ -609,6 +561,7 @@ func (c *agentCenter) HandleInput(data string) {
 			c.top = 0
 		}
 	case "n":
+		c.picking = true
 		cwd := ""
 		if c.sel < len(sh) {
 			cwd = sh[c.sel].cwd
@@ -622,11 +575,10 @@ func (c *agentCenter) HandleInput(data string) {
 			return
 		}
 		it := sh[c.sel]
+		c.picking = true
 		c.close()
 		switch {
 		case it.current:
-		case it.pane != nil:
-			c.onSwitch(it.pane.ID)
 		default:
 			c.onOpen(it.id, it.cwd)
 		}
@@ -763,6 +715,9 @@ func (c *agentCenter) renderList(sh []centerItem, width, bodyH int) []string {
 				title += " · " + it.branch
 			}
 		}
+		if it.live {
+			title += " (live)"
+		}
 		if it.current {
 			title += " (here)"
 		}
@@ -873,13 +828,8 @@ func (c *agentCenter) renderDetail(it centerItem, width int) []string {
 		out = append(out, "", tui.Dim("Branch"))
 		out = append(out, wrap(it.branch)...)
 	}
-	if it.pane != nil {
-		shown := "detached"
-		if n := it.pane.Clients; n > 0 {
-			shown = fmt.Sprintf("shown on %d terminal(s)", n)
-		}
-		out = append(out, "", tui.Dim("Pane"))
-		out = append(out, wrap(fmt.Sprintf("#%d · %s", it.pane.ID, shown))...)
+	if it.live {
+		out = append(out, "", tui.Dim("Live worker"))
 	}
 	if it.prompt != "" {
 		out = append(out, "", tui.Dim("Prompt"))
@@ -897,7 +847,6 @@ func (c *agentCenter) lastMessage(id string) string { return c.msgs[id] }
 
 // AgentsPick is what the center by itself was left with.
 type AgentsPick struct {
-	Pane    int    // attach to this pane
 	Session string // or open this saved session
 	New     bool   // or start a new session
 	Cwd     string // in this directory
@@ -906,15 +855,15 @@ type AgentsPick struct {
 // RunAgents shows the agent center on this terminal by itself and returns
 // what was picked (the zero value for nothing).
 func RunAgents() (AgentsPick, error) {
-	ui := tui.New(tui.NewProcessTerminal())
+	terminal := tui.NewProcessTerminal()
+	ui := tui.New(terminal)
 	done := make(chan struct{})
 	var once sync.Once
 	quit := func() { once.Do(func() { close(done) }) }
 	var pick AgentsPick
 	c := &agentCenter{onClose: quit,
-		onSwitch: func(id int) { pick = AgentsPick{Pane: id} },
-		onOpen:   func(id, cwd string) { pick = AgentsPick{Session: id, Cwd: cwd} },
-		onNew:    func(cwd string) { pick = AgentsPick{New: true, Cwd: cwd} },
+		onOpen: func(id, cwd string) { pick = AgentsPick{Session: id, Cwd: cwd} },
+		onNew:  func(cwd string) { pick = AgentsPick{New: true, Cwd: cwd} },
 	}
 	c.reload()
 	ui.Screen = c
@@ -929,6 +878,8 @@ func RunAgents() (AgentsPick, error) {
 	if err := ui.Start(); err != nil {
 		return pick, err
 	}
+	stopSignals := watchTerminalExit(func() { terminal.InterruptOutput(); quit() })
+	defer stopSignals()
 	go c.watch(ui, func() bool { return true }, done)
 	for {
 		select {

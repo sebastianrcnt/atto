@@ -160,7 +160,7 @@ type Settings struct {
 	Agents       *AgentSettings `json:"agents,omitempty"`
 	LegacyAgents *AgentSettings `json:"subagents,omitempty"`
 	// Daemon: false runs the TUI in the terminal's own process instead of
-	// a pane of the atto daemon (package daemon). ATTO_NO_DAEMON=1 does
+	// a session worker of the atto daemon (package daemon). ATTO_NO_DAEMON=1 does
 	// the same for one run.
 	Daemon *bool `json:"daemon,omitempty"`
 }

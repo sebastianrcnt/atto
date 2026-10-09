@@ -47,7 +47,7 @@ var Builtins = []CommandInfo{
 	{Name: "debug", Desc: "Save a heap profile and memory figures to ~/.atto/debug", Local: true},
 	{Name: "login", Args: "[provider]", Desc: "Sign in with an account or save an API key", Local: true},
 	{Name: "logout", Args: "[provider]", Desc: "Remove stored credentials", Local: true},
-	{Name: "resume", Desc: "Resume a saved conversation (the agent center's Inactive tab)", Local: true},
+	{Name: "resume", Desc: "Switch session in the agent center", Local: true},
 	{Name: "sessions", Desc: "Pick, archive, rename or preview saved conversations", Local: true},
 	{Name: "tree", Desc: "Go back to any point of the conversation (also esc esc)", Local: true},
 	{Name: "fork", Desc: "Start a new conversation from an earlier message", Local: true},
@@ -64,7 +64,6 @@ var Builtins = []CommandInfo{
 	{Name: "clear", Desc: "Start a new conversation", Local: true},
 	{Name: "new", Desc: "Start a new conversation", Local: true},
 	{Name: "agents", Desc: "Every atto session, its goal and subagents (also ← on an empty prompt)", Local: true},
-	{Name: "detach", Desc: "Leave atto running in the daemon (atto attach returns)", Local: true},
 	{Name: "close", Desc: "Stop this session and its work, then exit", Local: true},
 	{Name: "quit", Desc: "Leave this client (daemon sessions keep running)", Local: true},
 	{Name: "exit", Desc: "Exit atto", Local: true},
@@ -156,6 +155,9 @@ func ResolveCommand(cmds []CommandInfo, text string) (CommandInfo, string, error
 	}
 	switch len(match) {
 	case 0:
+		if name == "detach" {
+			return CommandInfo{}, arg, fmt.Errorf("/detach was removed; use /quit to leave and atto resume to return.")
+		}
 		return CommandInfo{}, arg, fmt.Errorf("Unknown command /%s.", name)
 	case 1:
 		return match[0], arg, nil

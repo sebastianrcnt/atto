@@ -26,6 +26,7 @@ type Terminal interface {
 // ProcessTerminal drives the real stdin/stdout.
 type ProcessTerminal struct {
 	in, out  *os.File
+	output   processOutput
 	oldState *term.State
 	console  consoleState // platform console modes to restore (Windows)
 	done     chan struct{}
@@ -62,6 +63,7 @@ func (t *ProcessTerminal) Start(onInput func(string), onResize func()) error {
 	if err != nil {
 		return err
 	}
+	t.output.start(t.out)
 	t.oldState = st
 	t.console = enableVT(t.in, t.out)
 	t.done = make(chan struct{})
@@ -150,13 +152,17 @@ func (t *ProcessTerminal) Stop() {
 	_ = term.Restore(int(t.in.Fd()), t.oldState)
 	restoreVT(t.console)
 	t.oldState = nil
+	t.output.close()
 }
 
 func (t *ProcessTerminal) Write(s string) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	_, _ = io.WriteString(t.out, s)
+	t.output.write(t.out, s)
 }
+
+// InterruptOutput bounds writes while cleaning up a disappearing terminal.
+func (t *ProcessTerminal) InterruptOutput() { t.output.interrupt() }
 
 func (t *ProcessTerminal) Size() (int, int) {
 	w, h, err := term.GetSize(int(t.out.Fd()))

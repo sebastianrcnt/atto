@@ -29,9 +29,9 @@ import (
 	"github.com/sebastianrcnt/atto/session"
 )
 
-// Session workers. Besides panes, the daemon runs one worker per session
+// The daemon runs one worker per session
 // a terminal shows: "atto _session-server", the session's runtime
-// (package server) behind a Unix socket of its own. A pane's TUI is a
+// (package server) behind a Unix socket of its own. Each TUI is a
 // client of the worker, so closing the terminal, or the TUI crashing,
 // ends a view and never the work; any number of terminals can show the
 // same session, each with its own editor. The daemon finds or starts the
@@ -72,34 +72,63 @@ func (d *daemon) startWorker(h Hello) workerAnswer {
 	}
 	if h.Target != "" {
 		d.mu.Lock()
-		var found *worker
+		exact := d.workers[h.Target]
+		var live []*worker
 		for id, w := range d.workers {
-			if id == h.Target {
-				found = w
-				break
-			}
 			if strings.HasPrefix(id, h.Target) {
-				if found != nil {
-					d.mu.Unlock()
-					return workerAnswer{Error: "ambiguous session " + h.Target}
-				}
-				found = w
+				live = append(live, w)
 			}
 		}
+		d.mu.Unlock()
+		if exact != nil {
+			return workerAnswer{Worker: exact.info}
+		}
+		path, err := session.Find(h.Target)
+		if err != nil {
+			if strings.Contains(err.Error(), "ambiguous") {
+				return workerAnswer{Error: err.Error()}
+			}
+			if len(live) == 1 {
+				return workerAnswer{Worker: live[0].info}
+			}
+			if len(live) == 0 {
+				return workerAnswer{Error: err.Error()}
+			}
+		}
+		var saved session.Summary
+		if err == nil {
+			saved, err = session.Summarize(path)
+			if err != nil {
+				return workerAnswer{Error: err.Error()}
+			}
+		}
+		ids := map[string]bool{}
+		if saved.ID != "" {
+			ids[saved.ID] = true
+		}
+		for _, w := range live {
+			ids[w.info.Session] = true
+		}
+		if len(ids) > 1 {
+			var candidates []string
+			for id := range ids {
+				candidates = append(candidates, id)
+			}
+			slices.Sort(candidates)
+			return workerAnswer{Error: fmt.Sprintf("session %q is ambiguous: matches %s", h.Target, strings.Join(candidates, ", "))}
+		}
+		d.mu.Lock()
+		found := d.workers[saved.ID]
 		d.mu.Unlock()
 		if found != nil {
 			return workerAnswer{Worker: found.info}
 		}
-		path, err := session.Find(h.Target)
-		if err != nil {
-			return workerAnswer{Error: err.Error()}
-		}
-		saved, err := session.Summarize(path)
-		if err != nil {
-			return workerAnswer{Error: err.Error()}
-		}
 		h.Target = saved.ID
+		if saved.Cwd != "" {
+			h.Cwd = saved.Cwd
+		}
 	}
+
 	sock, err := workerSocket()
 	if err != nil {
 		return workerAnswer{Error: err.Error()}
@@ -108,12 +137,14 @@ func (d *daemon) startWorker(h Hello) workerAnswer {
 	if h.Target != "" {
 		args = append(args, "-session", h.Target)
 	}
+	// Test/deployment override: normal workers retain the one-minute default.
+	if retention := os.Getenv("ATTO_WORKER_RETENTION"); retention != "" {
+		args = append(args, "-retention", retention)
+	}
 	args = append(args, h.Args...)
 	cmd := exec.Command(d.exe, args...)
 	cmd.Dir = h.Cwd
-	cmd.Env = slices.DeleteFunc(slices.Clone(h.Env), func(e string) bool {
-		return strings.HasPrefix(e, EnvPane+"=") || strings.HasPrefix(e, EnvPaneToken+"=")
-	})
+	cmd.Env = slices.Clone(h.Env)
 	out, err := cmd.StdoutPipe()
 	if err != nil {
 		return workerAnswer{Error: err.Error()}
@@ -170,7 +201,7 @@ func (d *daemon) startWorker(h Hello) workerAnswer {
 		if d.workers[w.info.Session] == w {
 			delete(d.workers, w.info.Session)
 		}
-		if len(d.panes) == 0 && len(d.workers) == 0 {
+		if len(d.workers) == 0 {
 			d.idle.Reset(d.idleAfter)
 		}
 		d.mu.Unlock()
@@ -198,6 +229,10 @@ func (d *daemon) workerList() []Worker {
 		c.Close()
 		if err == nil {
 			out[i].ID, out[i].Version, out[i].Clients, out[i].Busy = state.ID, state.Version, state.Clients, state.Busy
+			if state.Cwd != "" {
+				out[i].Cwd = state.Cwd
+			}
+			out[i].Name, out[i].State = state.Name, state.State
 		}
 	}
 	slices.SortFunc(out, func(a, b Worker) int { return a.Started.Compare(b.Started) })

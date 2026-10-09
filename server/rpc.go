@@ -114,7 +114,15 @@ var threadMethods = map[string]func(t *thread, client string, p threadParams) (a
 		return t.itemResource(p, "output")
 	},
 	"worker/state": func(t *thread, client string, p threadParams) (any, error) {
-		return map[string]any{"id": t.s.instance, "session": t.id, "cwd": t.cwd, "clients": len(t.attached), "busy": t.turns.Busy || t.shell != nil, "version": t.s.Version, "pid": os.Getpid()}, nil
+		busy := t.turns.Busy || t.shell != nil
+		state := "idle"
+		if busy {
+			state = "working"
+		}
+		if t.prompt != nil || (t.goal.Active() && t.goal.Held()) {
+			state = "waiting"
+		}
+		return map[string]any{"id": t.s.instance, "session": t.id, "name": t.name, "state": state, "cwd": t.cwd, "clients": len(t.attached), "busy": busy, "version": t.s.Version, "pid": os.Getpid()}, nil
 	},
 	"mcp/list": func(t *thread, client string, p threadParams) (any, error) {
 		if t.mcp == nil {

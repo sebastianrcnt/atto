@@ -24,24 +24,14 @@ import (
 // protocol client (docs/tui-as-client.md, phase H); other runs still run
 // their own agent (RunPrint).
 
-// workerFor is the worker of the session -session or -c names, if a
+// workerFor is the worker of the session -session names, if a
 // daemon worker runs it.
 func workerFor(o PrintOptions) (daemon.Worker, bool, error) {
-	if !daemon.Enabled() || o.Background || o.NoSave || o.Worker != nil || (o.Resume == "" && !o.Continue) {
+	if !daemon.Enabled() || o.Background || o.NoSave || o.Worker != nil || o.Resume == "" {
 		return daemon.Worker{}, false, nil
 	}
 	id := o.Resume
-	if id == "" {
-		cwd, err := os.Getwd()
-		if err != nil {
-			return daemon.Worker{}, false, nil
-		}
-		s, ok := session.Latest(cwd)
-		if !ok {
-			return daemon.Worker{}, false, nil
-		}
-		id = s.ID
-	} else if path, err := session.Find(id); err == nil {
+	if path, err := session.Find(id); err == nil {
 		if s, err := session.Summarize(path); err == nil {
 			id = s.ID
 		}
@@ -74,10 +64,10 @@ func workerFor(o PrintOptions) (daemon.Worker, bool, error) {
 // json (the result object).
 func printViaWorker(o PrintOptions, w daemon.Worker, out, errOut io.Writer) error {
 	if o.Format == "stream-json" {
-		return errors.New("this session runs in the atto daemon: use -output-format text or json, or atto connect")
+		return errors.New("this session runs in the atto daemon: use -output-format text or json, or atto resume")
 	}
 	if o.Goal != "" || len(o.Images) > 0 || o.Model != "" || o.Effort != "" || o.MaxSteps > 0 {
-		return errors.New("this session runs in the atto daemon: -goal, -image, -m, -effort and -max-steps are not taken there; use atto connect")
+		return errors.New("this session runs in the atto daemon: -goal, -image, -m, -effort and -max-steps are not taken there; use atto resume")
 	}
 	nc, err := daemon.DialWorker(w)
 	if err != nil {
@@ -173,7 +163,7 @@ func printOnClient(o PrintOptions, id string, c *server.Client, out, errOut io.W
 		}
 	}
 	if sub.Status == server.StatusDone && sub.InputID == "" && !strings.HasPrefix(o.Prompt, "/") {
-		failed = "the session did not start a turn; use atto connect to check its model and state"
+		failed = "the session did not start a turn; use atto resume to check its model and state"
 	}
 	res.DurationMs = time.Since(began).Milliseconds()
 	res.Result = strings.TrimSpace(answer.String())

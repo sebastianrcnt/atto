@@ -149,3 +149,46 @@ func TestWorkerSessionsAreNotListed(t *testing.T) {
 		t.Fatalf("find: %s %v", p, err)
 	}
 }
+
+func TestFindNamesCaseInsensitiveAndAmbiguous(t *testing.T) {
+	t.Setenv("ATTO_DIR", t.TempDir())
+	a := New(t.TempDir())
+	a.Append(Entry{Type: TypeName, Name: "Fix parser"})
+	a.Close()
+	if path, err := Find("FIX PARSER"); err != nil || path != a.Path {
+		t.Fatalf("name: %s %v", path, err)
+	}
+	b := New(t.TempDir())
+	b.Append(Entry{Type: TypeName, Name: "fix parser"})
+	b.Close()
+	if _, err := Find("Fix parser"); err == nil || !strings.Contains(err.Error(), a.ID) || !strings.Contains(err.Error(), b.ID) {
+		t.Fatalf("ambiguous names: %v", err)
+	}
+	if path, err := Find(a.ID); err != nil || path != a.Path {
+		t.Fatalf("exact ID: %s %v", path, err)
+	}
+}
+
+func TestFindUniquePrefixAndAmbiguity(t *testing.T) {
+	t.Setenv("ATTO_DIR", t.TempDir())
+	makeSession := func(id string) *Writer {
+		w := New(t.TempDir())
+		old := w.ID
+		w.ID = id
+		w.Path = strings.Replace(w.Path, old+".jsonl", id+".jsonl", 1)
+		w.Append(Entry{Type: TypeName, Name: id})
+		w.Close()
+		return w
+	}
+	a := makeSession("abc123")
+	if path, err := Find("abc"); err != nil || path != a.Path {
+		t.Fatalf("prefix %s %v", path, err)
+	}
+	b := makeSession("abc456")
+	if _, err := Find("abc"); err == nil || !strings.Contains(err.Error(), a.ID) || !strings.Contains(err.Error(), b.ID) {
+		t.Fatalf("ambiguous prefix: %v", err)
+	}
+	if path, err := Find(a.ID); err != nil || path != a.Path {
+		t.Fatalf("exact %s %v", path, err)
+	}
+}

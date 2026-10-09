@@ -59,9 +59,11 @@ func lines(a *App) string {
 // runtime of its own: a cold resume.
 func reopen(t *testing.T, a *App) *App {
 	t.Helper()
-	id := a.threadID
-	if err := a.conn.c.Call(context.Background(), "thread/close", map[string]any{"threadId": id}, nil); err != nil {
+	var id, cwd string
+	var cn *conn
+	a.ui.Do(func() { id, cwd, cn = a.threadID, a.cwd, a.conn })
+	if err := cn.c.Call(context.Background(), "thread/close", map[string]any{"threadId": id}, nil); err != nil {
 		t.Fatal(err)
 	}
-	return startApp(t, a.cwd, Options{Session: id})
+	return startApp(t, cwd, Options{Session: id})
 }

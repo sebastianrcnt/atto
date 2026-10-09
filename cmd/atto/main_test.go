@@ -53,10 +53,10 @@ func TestEditDistance(t *testing.T) {
 
 func TestResumeArgs(t *testing.T) {
 	cases := []struct{ in, want string }{
-		{"atto resume", "atto -resume"},
+		{"atto resume", "atto"},
 		{"atto resume ab12", "atto -session ab12"},
 		{"atto resume -m x ab12", "atto -m x -session ab12"},
-		{"atto resume -m x", "atto -m x -resume"},
+		{"atto resume -m x", "atto -m x"},
 	}
 	for _, c := range cases {
 		got := strings.Join(resumeArgs(strings.Fields(c.in)), " ")

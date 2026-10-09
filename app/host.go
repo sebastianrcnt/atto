@@ -12,7 +12,7 @@ import (
 
 // Where sessions run. Without the daemon, one runtime in this process
 // runs every session the terminal opens, over one connection. In a daemon
-// pane each session runs in a worker of its own (daemon.StartWorker): the
+// mode each session runs in a worker of its own (daemon.StartWorker): the
 // terminal connects to the worker of the session it shows, and switching
 // sessions switches connections, leaving the old worker to finish what it
 // runs.
@@ -100,7 +100,11 @@ func (a *App) dialWorker(id string, params map[string]any) (*conn, server.Thread
 			args = append(args, "-"+k, v)
 		}
 	}
-	w, readOnly, err := daemon.StartWorker(id, a.cwd, args)
+	cwd := a.cwd
+	if dir, _ := params["cwd"].(string); dir != "" {
+		cwd = dir
+	}
+	w, readOnly, err := daemon.StartWorker(id, cwd, args)
 	if err != nil {
 		return nil, server.ThreadInfo{}, err
 	}

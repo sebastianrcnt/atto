@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"runtime"
 	"slices"
 	"sort"
 	"strings"
@@ -21,7 +20,6 @@ import (
 	"github.com/sebastianrcnt/atto/provider"
 	"github.com/sebastianrcnt/atto/server"
 	"github.com/sebastianrcnt/atto/update"
-	"golang.org/x/term"
 )
 
 const usage = `atto — a terminal coding harness
@@ -39,12 +37,9 @@ usage:
   atto login [provider]             sign in (ChatGPT, …); /login inside atto
   atto logout <provider>            remove stored credentials
   atto resume [id]                  resume a session (no id: pick one)
-  atto attach [ID] | attach -l      return to an atto running in the daemon
-                                    (closed terminal, SSH drop, /detach)
-  atto connect [session]            attach an independent TUI to a session worker
-  atto agents                       every atto the daemon runs, with goals and
+  atto agents                       sessions, with goals and
                                     agents; enter attaches (← in atto too)
-  atto daemon [status|kill|stop]    the daemon interactive atto runs in
+  atto daemon [status|kill|stop]    session worker supervisor
   atto sessions [list|show|rename|archive|unarchive|delete]
                                     manage saved sessions (atto sessions -h)
   atto history grep|show ...        search a session transcript
@@ -76,7 +71,7 @@ flags:
 // changing credentials. "" is atto itself (interactive or -p). Commands
 // that work on the agent's own session (history, job, goal, reload...) or
 // only read (context, models) are allowed.
-var nestedRefused = map[string]bool{"": true, "attach": true, "connect": true, "_session-server": true, "agents": true, "daemon": true, "_daemon": true, "serve": true, "app-server": true, "resume": true, "login": true, "logout": true, "auth": true, "update": true, "channel": true, "_continue": true}
+var nestedRefused = map[string]bool{"": true, "_session-server": true, "agents": true, "daemon": true, "_daemon": true, "serve": true, "app-server": true, "resume": true, "login": true, "logout": true, "auth": true, "update": true, "channel": true, "_continue": true}
 
 func refuseNested(cmd string) {
 	if !config.InAgent() || !nestedRefused[cmd] {
@@ -127,8 +122,6 @@ func subcommands() map[string]func([]string, io.Writer) error {
 		"_supervise":  cli.RunSupervise,
 		"_shell":      cli.RunShellHost,
 		"_continue":   cli.RunContinue,
-		"attach":      cli.RunAttach,
-		"connect":     cli.RunConnect,
 		"_session-server": func(args []string, out io.Writer) error {
 			provider.UserAgent = "github.com/sebastianrcnt/atto/" + update.Current()
 			return daemon.RunWorker(update.Current(), args)
@@ -245,7 +238,7 @@ func parseInterleaved(fs *flag.FlagSet, args []string) []string {
 func initialPrompt(positional []string) string { return strings.Join(positional, " ") }
 
 // resumeArgs rewrites "atto resume [id] [flags]" into the flags it means:
-// -session <id>, or -resume for the picker. Other flags pass through.
+// -session <id>; no ID means the picker. Other flags pass through.
 func resumeArgs(args []string) []string {
 	out := []string{args[0]}
 	var id string
@@ -261,20 +254,25 @@ func resumeArgs(args []string) []string {
 	if id != "" {
 		return append(out, "-session", id)
 	}
-	return append(out, "-resume")
+	return out
 }
 
 func main() {
-	daemon.ConsumePaneToken()
 	update.Cleanup()
 	mcp.Version = update.Current()
 	// This binary serves `atto _shell`, so the agent's commands can run
 	// under shell hosts and move to the background.
 	agent.ShellHost = true
+	picker := false
+	if len(os.Args) > 1 && (os.Args[1] == "attach" || os.Args[1] == "connect") {
+		fmt.Fprintln(os.Stderr, "atto: this command was removed; use atto resume")
+		os.Exit(2)
+	}
 	if len(os.Args) > 1 && os.Args[1] == "resume" {
-		// Not a subcommand function: it starts the TUI, like -resume / -session.
+		// Resume is TUI startup, not a separate execution command.
 		refuseNested("resume")
 		os.Args = resumeArgs(os.Args)
+		picker = !slices.Contains(os.Args, "-session")
 	}
 	if len(os.Args) > 1 {
 		refuseNested(os.Args[1])
@@ -293,6 +291,14 @@ func main() {
 		}
 	}
 
+	for _, arg := range os.Args[1:] {
+		name, _, _ := strings.Cut(strings.TrimLeft(arg, "-"), "=")
+		if strings.HasPrefix(arg, "-") && (name == "c" || name == "resume") {
+			fmt.Fprintln(os.Stderr, "atto: this flag was removed; use atto resume (print mode: atto -p -session ID)")
+			os.Exit(2)
+		}
+	}
+
 	fs := flag.NewFlagSet("atto", flag.ExitOnError)
 	fs.Usage = func() {
 		fmt.Fprint(os.Stderr, usage)
@@ -302,9 +308,7 @@ func main() {
 	print := fs.Bool("p", false, "standalone session, not an agent in a tree: run the prompt non-interactively and exit")
 	model := fs.String("m", "", "model to use, as provider/id (see: atto models)")
 	effort := fs.String("effort", "", "reasoning effort for this run")
-	cont := fs.Bool("c", false, "continue the most recent session in this directory")
 	sessionID := fs.String("session", "", "continue the session with this ID")
-	resume := fs.Bool("resume", false, "pick a saved session to resume (interactive)")
 	inline := fs.Bool("inline", false, "render inline in the main screen instead of fullscreen")
 	format := fs.String("output-format", "text", "print mode output: text, json or stream-json")
 	partial := fs.Bool("include-partial", false, "stream-json: also emit text and reasoning deltas")
@@ -340,7 +344,7 @@ func main() {
 		if err == nil {
 			err = cli.RunPrint(cli.PrintOptions{
 				Prompt: prompt, Images: imgs, Model: *model, Effort: *effort, Format: *format, Partial: *partial,
-				Verbose: *verbose, MaxSteps: *maxSteps, Continue: *cont, Resume: *sessionID, NoSave: *noSave,
+				Verbose: *verbose, MaxSteps: *maxSteps, Resume: *sessionID, NoSave: *noSave,
 				Goal: *goalObj,
 			})
 		}
@@ -349,19 +353,11 @@ func main() {
 			fmt.Fprintln(os.Stderr, msg)
 			os.Exit(2)
 		}
-		if useDaemon() {
-			code, note, derr := daemon.Run(daemon.Hello{Op: "new", Args: os.Args[1:], Cwd: cwd(), Env: os.Environ()})
-			if derr == nil {
-				if note != "" {
-					fmt.Fprintln(os.Stderr, note)
-				}
-				os.Exit(code)
-			}
-			fmt.Fprintf(os.Stderr, "atto: running without the daemon: %v\n", derr)
-			// Sessions then run in this process too, not in its workers.
+		if daemon.Enabled() && !daemon.Usable() {
+			fmt.Fprintln(os.Stderr, "atto: running without the daemon: the running daemon uses an older protocol; run atto daemon stop -force, then try again")
 			os.Setenv("ATTO_NO_DAEMON", "1")
 		}
-		err = app.Run(app.Options{Prompt: initialPrompt(positional), Inline: *inline, Continue: *cont, Resume: *resume, Model: *model, Session: *sessionID, Effort: *effort})
+		err = app.Run(app.Options{Prompt: initialPrompt(positional), Inline: *inline, Resume: picker, Model: *model, Session: *sessionID, Effort: *effort})
 	}
 	if errors.Is(err, cli.ErrPrintFailed) {
 		os.Exit(1)
@@ -370,23 +366,4 @@ func main() {
 		fmt.Fprintln(os.Stderr, "atto:", err)
 		os.Exit(1)
 	}
-}
-
-// useDaemon reports whether interactive atto should run in a pane of the
-// daemon (package daemon): on a terminal, not already in a pane, unless
-// turned off.
-func useDaemon() bool {
-	if runtime.GOOS == "windows" || os.Getenv(daemon.EnvPane) != "" || os.Getenv("ATTO_NO_DAEMON") != "" {
-		return false
-	}
-	if !term.IsTerminal(int(os.Stdin.Fd())) || !term.IsTerminal(int(os.Stdout.Fd())) {
-		return false
-	}
-	s, err := config.LoadSettings()
-	return err != nil || s.DaemonOn()
-}
-
-func cwd() string {
-	d, _ := os.Getwd()
-	return d
 }

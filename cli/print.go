@@ -40,7 +40,6 @@ type PrintOptions struct {
 	Partial  bool   // stream-json: also emit text/reasoning deltas
 	Verbose  bool   // text: show tool activity on stderr
 	MaxSteps int    // stop after this many model calls (0: unlimited)
-	Continue bool   // continue the latest session in this directory
 	Resume   string // continue the session with this ID
 	NoSave   bool   // do not record the run as a session
 	// Goal keeps running turns until the objective is done (or blocked,
@@ -190,21 +189,15 @@ func RunPrint(o PrintOptions) error {
 		return err
 	}
 
-	// Session: new, latest (-c) or by ID (-session).
+	// Session: new or by ID (-session).
 	var saved core.Saved
 	var sess *session.Writer
 	start, source := time.Now(), "startup"
 	switch {
-	case o.Resume != "" || o.Continue:
-		path := ""
-		if o.Resume != "" {
-			if path, err = session.Find(o.Resume); err != nil {
-				return err
-			}
-		} else if s, ok := session.Latest(cwd); ok {
-			path = s.Path
-		} else {
-			return fmt.Errorf("no previous session in this directory")
+	case o.Resume != "":
+		path, err := session.Find(o.Resume)
+		if err != nil {
+			return err
 		}
 		path, err = session.RestoreForWrite(path)
 		if err != nil {

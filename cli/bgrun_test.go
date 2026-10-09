@@ -144,12 +144,9 @@ func TestContinueRefusesASessionAnotherProcessWrites(t *testing.T) {
 	if err := RunContinue([]string{w.ID}, io.Discard); !errors.Is(err, session.ErrLocked) {
 		t.Fatalf("continue: %v", err)
 	}
-	// So does a plain -p run into the session, and -c.
+	// So does a plain -p run into the session.
 	if err := RunPrint(PrintOptions{Prompt: "more", Resume: w.ID}); !errors.Is(err, session.ErrLocked) {
 		t.Fatalf("-p -session: %v", err)
-	}
-	if err := RunPrint(PrintOptions{Prompt: "more", Continue: true}); !errors.Is(err, session.ErrLocked) {
-		t.Fatalf("-p -c: %v", err)
 	}
 	if len(bodies()) != 0 {
 		t.Fatal("nothing was sent")

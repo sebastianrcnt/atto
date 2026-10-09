@@ -16,6 +16,7 @@ import (
 	"github.com/sebastianrcnt/atto/config"
 	"github.com/sebastianrcnt/atto/provider/providertest"
 	"github.com/sebastianrcnt/atto/server"
+	"github.com/sebastianrcnt/atto/session"
 )
 
 // workerClient connects to w and attaches to its session.
@@ -247,5 +248,40 @@ func TestWorkerDoesNotUnlinkLiveSocket(t *testing.T) {
 	}
 	if _, err := os.Stat(sock); err != nil {
 		t.Fatalf("live socket unlinked: %v", err)
+	}
+}
+
+func TestWorkerResumeNamePrefixAndAmbiguity(t *testing.T) {
+	startDaemon(t, 5*time.Second)
+	defer Stop(true)
+	m := providertest.New(t)
+	m.Install(t, config.Dir())
+	cwd := t.TempDir()
+	w, _, err := StartWorker("", cwd, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, _ := workerClient(t, w)
+	defer c.Close()
+	if err := c.Call(context.Background(), "thread/setName", map[string]any{"threadId": w.Session, "name": "Fix parser"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	for _, target := range []string{"FIX PARSER", w.Session[:4]} {
+		got, _, err := StartWorker(target, cwd, nil)
+		if err != nil || got.PID != w.PID {
+			t.Fatalf("resume %q: %+v %v", target, got, err)
+		}
+	}
+	saved := session.New(cwd)
+	original := saved.ID
+	saved.ID = w.Session[:2] + "saved"
+	saved.Path = strings.Replace(saved.Path, original+".jsonl", saved.ID+".jsonl", 1)
+	saved.Append(session.Entry{Type: session.TypeName, Name: "other saved session"})
+	saved.Close()
+	if _, _, err := StartWorker(w.Session[:2], cwd, nil); err == nil || !strings.Contains(err.Error(), w.Session) || !strings.Contains(err.Error(), saved.ID) {
+		t.Fatalf("ambiguous live/saved prefix: %v", err)
+	}
+	if got, _, err := StartWorker(w.Session, cwd, nil); err != nil || got.PID != w.PID {
+		t.Fatalf("exact live ID: %+v %v", got, err)
 	}
 }

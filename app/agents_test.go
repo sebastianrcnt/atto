@@ -18,16 +18,16 @@ func centerText(a *App) string {
 	return tui.StripEscapes(strings.Join(a.modal.Render(160), "\n"))
 }
 
-// fakeCenter replaces the daemon's panes and the saved sessions.
-func fakeCenter(t *testing.T, panes []daemon.Pane, saved []session.Summary) {
-	oldP, oldS := listPanes, listSaved
-	t.Cleanup(func() { listPanes, listSaved = oldP, oldS })
-	listPanes = func() ([]daemon.Pane, error) { return panes, nil }
+// fakeCenter replaces the worker and saved-session discovery.
+func fakeCenter(t *testing.T, workers []daemon.Worker, saved []session.Summary) {
+	oldP, oldS := listWorkers, listSaved
+	t.Cleanup(func() { listWorkers, listSaved = oldP, oldS })
+	listWorkers = func() ([]daemon.Worker, error) { return workers, nil }
 	listSaved = func() []session.Summary { return saved }
 }
 
 func TestLeftOnEmptyPromptOpensCenter(t *testing.T) {
-	a, _ := paneApp(t, false)
+	a, _ := recordedApp(t)
 	fakeCenter(t, nil, nil)
 	a.editor.SetText("draft")
 	a.onInput("\x1b[D")
@@ -47,92 +47,8 @@ func TestLeftOnEmptyPromptOpensCenter(t *testing.T) {
 	}
 }
 
-func TestCenterListsSessionsByProjectAndState(t *testing.T) {
-	a, rec := paneApp(t, true)
-	t.Setenv(daemon.EnvPane, "1")
-	now := time.Now()
-	fakeCenter(t,
-		[]daemon.Pane{
-			{ID: 1, Cwd: a.cwd, Session: a.threadID, Clients: 1, State: "idle", Active: now},
-			{ID: 2, Cwd: "/w/api", Session: "s2", Name: "fix the api", State: "working", Active: now.Add(-time.Minute)},
-			{ID: 3, Cwd: "/w/api", Session: "s3", Name: "answer me", State: "waiting", Active: now.Add(-2 * time.Minute)},
-		},
-		[]session.Summary{
-			{ID: "s2", Cwd: "/w/api", Preview: "fix the api please", Branch: "main", Updated: now},
-			{ID: "old", Cwd: "/w/web", Name: "css cleanup", Branch: "dev", Updated: now.Add(-3 * time.Hour)},
-			{ID: "kid", Cwd: "/w/api", Preview: "an agent", AgentOf: "s2", Updated: now},
-		})
-	a.cmdAgents("")
-	waitCenter(t, a)
-	text := centerText(a)
-	for _, want := range []string{"Agent command center", "All 5", "Needs you 1", "Working 1", "Ready 1", "Inactive 2",
-		"/w/api  3", "fix the api", "Working", "answer me", "Needs you", "/w/web  1", "css cleanup", "Inactive", "3h ago", "(here)", "Task details"} {
-		if !strings.Contains(text, want) {
-			t.Fatalf("center lacks %q:\n%s", want, text)
-		}
-	}
-	if !strings.Contains(text, "└─ /root/an agent") {
-		t.Fatalf("agent tree missing:\n%s", text)
-	}
-
-	// Tabs filter; enter on a running session switches to its pane.
-	c := a.modal.(*agentCenter)
-	c.HandleInput("\t") // Needs you
-	if sh := c.shown(); len(sh) != 1 || sh[0].id != "s3" {
-		t.Fatalf("needs you: %+v", sh)
-	}
-	rec.take()
-	c.HandleInput("\r")
-	if a.modal != nil || !strings.Contains(rec.take(), daemon.MarkerSeq("switch", "3")) {
-		t.Fatal("enter switches to the pane")
-	}
-
-	// A saved session opens in a new pane; n starts one in its project.
-	a.cmdAgents("")
-	waitCenter(t, a)
-	c = a.modal.(*agentCenter)
-	for range 4 {
-		c.HandleInput("\t") // Inactive
-	}
-	for i, it := range c.shown() {
-		if it.id == "old" {
-			c.sel = i
-		}
-	}
-	c.HandleInput("\x1b[C") // →
-	if got := rec.take(); !strings.Contains(got, daemon.MarkerSeq("open", "old", "/w/web")) {
-		t.Fatalf("open wrote %q", got)
-	}
-	a.cmdAgents("")
-	waitCenter(t, a)
-	a.modal.(*agentCenter).HandleInput("n")
-	if got := rec.take(); !strings.Contains(got, daemon.MarkerSeq("new", a.cwd)) {
-		t.Fatalf("new wrote %q", got)
-	}
-
-	// / searches; esc clears the search, then closes.
-	a.cmdAgents("")
-	waitCenter(t, a)
-	c = a.modal.(*agentCenter)
-	for _, k := range []string{"/", "c", "s", "s"} {
-		c.HandleInput(k)
-	}
-	if sh := c.shown(); len(sh) != 1 || sh[0].id != "old" {
-		t.Fatalf("search: %+v", sh)
-	}
-	c.HandleInput("\r")
-	c.HandleInput("\x1b")
-	if a.modal == nil || len(c.shown()) != 5 {
-		t.Fatal("esc clears the search first")
-	}
-	c.HandleInput("\x1b")
-	if a.modal != nil {
-		t.Fatal("esc closes")
-	}
-}
-
 func TestCenterDirectResumesInPlace(t *testing.T) {
-	a, _ := paneApp(t, false)
+	a, _ := recordedApp(t)
 	a.sessName = "here now"
 	other := session.New(a.cwd)
 	other.Append(session.Entry{Type: session.TypeName, Name: "earlier work"})
@@ -141,10 +57,17 @@ func TestCenterDirectResumesInPlace(t *testing.T) {
 	a.cmdResume("")
 	waitCenter(t, a)
 	c := a.modal.(*agentCenter)
-	if c.tab != tabInactive {
-		t.Fatalf("/resume opens on Inactive, tab %d", c.tab)
+	if c.tab != tabAll {
+		t.Fatalf("/resume opens on All, tab %d", c.tab)
 	}
-	a.ui.Do(func() { c.HandleInput("\r") })
+	a.ui.Do(func() {
+		for i, it := range c.shown() {
+			if it.id == other.ID {
+				c.sel = i
+			}
+		}
+		c.HandleInput("\r")
+	})
 	within(t, a, "the resumed session", func() bool { return a.threadID == other.ID })
 }
 
@@ -162,6 +85,14 @@ func TestCenterDefersResumeWhileBusy(t *testing.T) {
 	model.Started(5 * time.Second)
 	a.ui.Do(func() { a.cmdResume("") })
 	waitCenter(t, a)
+	a.ui.Do(func() {
+		c := a.modal.(*agentCenter)
+		for i, it := range c.shown() {
+			if it.id == other.ID {
+				c.sel = i
+			}
+		}
+	})
 	key(a, "\r")
 	within(t, a, "resume while the old session runs", func() bool { return a.threadID == other.ID })
 	var old server.ThreadInfo
@@ -187,18 +118,17 @@ func TestCenterDefersResumeWhileBusy(t *testing.T) {
 
 func TestStandaloneCenterPicks(t *testing.T) {
 	t.Setenv("ATTO_DIR", t.TempDir())
-	t.Setenv(daemon.EnvPane, "")
-	fakeCenter(t, []daemon.Pane{{ID: 4, Cwd: "/w", Session: "s4", Name: "four", State: "idle", Active: time.Now()}},
+	fakeCenter(t, []daemon.Worker{{Cwd: "/w", Session: "s4", Name: "four", Started: time.Now()}},
 		[]session.Summary{{ID: "s9", Cwd: "/x", Name: "nine", Updated: time.Now().Add(-time.Hour)}})
 	var picked string
-	c := &agentCenter{onClose: func() {}, onSwitch: func(id int) { picked = "pane" }, onOpen: func(id, cwd string) { picked = "open " + id + " " + cwd }, onNew: func(cwd string) { picked = "new " + cwd }}
+	c := &agentCenter{onClose: func() {}, onOpen: func(id, cwd string) { picked = "open " + id + " " + cwd }, onNew: func(cwd string) { picked = "new " + cwd }}
 	c.reload()
 	text := tui.StripEscapes(strings.Join(c.Render(160), "\n"))
 	if !strings.Contains(text, "four") || !strings.Contains(text, "nine") || strings.Contains(text, "(here)") || !strings.Contains(text, "esc quit") {
 		t.Fatalf("center:\n%s", text)
 	}
 	c.HandleInput("\r")
-	if picked != "pane" {
+	if picked != "open s4 /w" {
 		t.Fatalf("picked %q", picked)
 	}
 	c.HandleInput("\x1b[B")
@@ -215,7 +145,7 @@ func TestStandaloneCenterPicks(t *testing.T) {
 // Fullscreen, the center takes the whole screen at the terminal's size; on
 // a phone-narrow terminal rows drop the status and age columns.
 func TestCenterScreenLayouts(t *testing.T) {
-	a, _ := paneApp(t, false)
+	a, _ := recordedApp(t)
 	now := time.Now().Add(-time.Minute) // saved sessions predate the current one
 	var saved []session.Summary
 	for i := range 40 {
@@ -279,7 +209,7 @@ func waitCenter(t *testing.T, a *App) {
 }
 
 func TestCenterRefreshDoesNotBlockUI(t *testing.T) {
-	a, _ := paneApp(t, false)
+	a, _ := recordedApp(t)
 	fakeCenter(t, nil, nil)
 	entered, release := make(chan struct{}), make(chan struct{})
 	listSaved = func() []session.Summary {
@@ -308,4 +238,69 @@ func TestCenterRefreshDoesNotBlockUI(t *testing.T) {
 		t.Fatal("snapshot did not swap in")
 	}
 	a.closeModal()
+}
+
+// The startup picker is directory-local, with live workers first, but its
+// default cursor still selects the most recently used saved conversation.
+func TestResumeCenterLiveOrderAndDefault(t *testing.T) {
+	now := time.Now()
+	c := &agentCenter{scope: "/work", resume: true, flat: true}
+	c.apply(centerSnapshot{
+		workers: []daemon.Worker{{Session: "live", Cwd: "/work", Started: now.Add(-time.Hour)}},
+		saved: []session.Summary{
+			{ID: "recent", Cwd: "/work", Name: "last conversation", Updated: now},
+			{ID: "live", Cwd: "/work", Name: "running conversation", Updated: now.Add(-time.Hour)},
+			{ID: "elsewhere", Cwd: "/other", Updated: now},
+		},
+	})
+	c.selectCurrent()
+	shown := c.shown()
+	if len(shown) != 2 || shown[0].id != "live" || shown[c.sel].id != "recent" {
+		t.Fatalf("rows %+v selected %d", shown, c.sel)
+	}
+	if text := tui.StripEscapes(strings.Join(c.Render(160), "\n")); !strings.Contains(text, "(live)") {
+		t.Fatalf("live marker missing: %s", text)
+	}
+}
+
+func TestCenterWorkerProjectStateAndNavigation(t *testing.T) {
+	now := time.Now()
+	c := &agentCenter{}
+	var picked string
+	c.onClose = func() {}
+	c.onOpen = func(id, cwd string) { picked = id + " " + cwd }
+	c.onNew = func(cwd string) { picked = "new " + cwd }
+	c.apply(centerSnapshot{
+		workers: []daemon.Worker{
+			{Session: "working", Name: "fix the API", Cwd: "/api", Busy: true, State: "working", Started: now},
+			{Session: "waiting", Name: "answer me", Cwd: "/api", State: "waiting", Started: now.Add(-time.Minute)},
+		},
+		saved: []session.Summary{{ID: "saved", Name: "CSS cleanup", Cwd: "/web", Updated: now.Add(-time.Hour)}},
+	})
+	text := tui.StripEscapes(strings.Join(c.Render(160), "\n"))
+	for _, want := range []string{"All 3", "Needs you 1", "Working 1", "Inactive 1", "/api  2", "/web  1", "fix the API", "CSS cleanup", "(live)"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("missing %q: %s", want, text)
+		}
+	}
+	c.HandleInput("\t")
+	c.HandleInput("\r")
+	if picked != "waiting /api" {
+		t.Fatalf("picked %q", picked)
+	}
+	c.HandleInput("n")
+	if picked != "new /api" {
+		t.Fatalf("new %q", picked)
+	}
+	c.tab = tabAll
+	for _, k := range []string{"/", "C", "S", "S", "\r"} {
+		c.HandleInput(k)
+	}
+	if sh := c.shown(); len(sh) != 1 || sh[0].id != "saved" {
+		t.Fatalf("search %+v", sh)
+	}
+	c.HandleInput("\r")
+	if picked != "saved /web" {
+		t.Fatalf("saved %q", picked)
+	}
 }

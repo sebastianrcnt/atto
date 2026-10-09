@@ -16,12 +16,15 @@ import (
 // Find locates a session file by ID in the active and archived directories.
 // An exact ID wins; otherwise a prefix that matches exactly one session is
 // accepted, so the short IDs shown in listings can be pasted as typed.
+// If no ID matches, a case-insensitive exact session name is accepted.
 func Find(id string) (string, error) {
-	if id == "" || strings.ContainsAny(id, `/\*?[`) {
+	if id == "" {
 		return "", fmt.Errorf("session %q not found", id)
 	}
 	var exact string
 	prefix := map[string]string{} // full ID -> path
+	names := map[string]string{}
+	var paths []string
 	for _, root := range []string{config.SessionsDir(), config.ArchivedDir()} {
 		_ = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 			if err != nil || d.IsDir() || !IsSessionFile(path) {
@@ -45,11 +48,20 @@ func Find(id string) (string, error) {
 					prefix[full] = path
 				}
 			}
+			paths = append(paths, path)
 			return nil
 		})
 		if exact != "" {
 			return exact, nil
 		}
+	}
+	if len(prefix) == 0 {
+		for _, path := range paths {
+			if saved, err := Summarize(path); err == nil && saved.Name != "" && strings.EqualFold(saved.Name, id) {
+				names[saved.ID] = path
+			}
+		}
+		prefix = names
 	}
 	switch len(prefix) {
 	case 0:
@@ -64,7 +76,7 @@ func Find(id string) (string, error) {
 		ids = append(ids, full)
 	}
 	sort.Strings(ids)
-	return "", fmt.Errorf("session id %q is ambiguous: matches %s", id, strings.Join(ids, ", "))
+	return "", fmt.Errorf("session %q is ambiguous: matches %s", id, strings.Join(ids, ", "))
 }
 
 // RelTime formats t as a short age: "now", "5m ago", "3d ago".

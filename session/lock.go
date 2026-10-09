@@ -100,7 +100,7 @@ func LockedBy(path string) (LockInfo, bool) {
 // LockError describes a locked session for the user.
 func LockError(l LockInfo) error {
 	if l.Kind == KindTUI {
-		return openError(fmt.Sprintf("session is open in another atto (pid %d): continue it there (atto attach, if it runs in the daemon), or close it there first", l.PID))
+		return openError(fmt.Sprintf("session is open in another atto (pid %d): use atto resume if it runs in a worker, or close it there first", l.PID))
 	}
 	if l.Kind == KindRun || l.Kind == KindServer {
 		return openError(fmt.Sprintf("session is being written by another atto (%s, pid %d): close it there first", l.Kind, l.PID))

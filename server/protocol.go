@@ -95,7 +95,7 @@
 //	               the thread goes on; one with retention 0 that is left
 //	               idle closes (reason: clear, resume, exit). Jobs, timers, goals
 //	               and prompts prevent retirement; worker retention defaults to 1m.
-//	worker/state   {threadId}  → {id, session, cwd, clients, busy, version, pid}
+//	worker/state   {threadId}  → {id, session, name, state, cwd, clients, busy, version, pid}
 //	               internal worker registry diagnostics; no attachment is added.
 //	thread/close   {threadId, reason?}  → {closed, stoppedJobs?, notices?}
 //	thread/read    {threadId, offline?}  (offline: from the file, not loading it)

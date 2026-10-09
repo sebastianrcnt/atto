@@ -454,9 +454,9 @@ func formatSize(n int64) string {
 	return fmt.Sprintf("%.1fGB", float64(n)/(k*k*k))
 }
 
-// cmdResume opens the agent center on its saved sessions (Inactive): the
+// cmdResume opens the agent center on all sessions: the
 // center is where sessions are picked now.
-func (a *App) cmdResume(string) { a.openAgents(tabInactive) }
+func (a *App) cmdResume(string) { a.openAgents(tabAll) }
 
 // cmdSessions opens the session picker, which also archives, renames and
 // previews saved sessions.

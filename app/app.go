@@ -30,13 +30,12 @@ import (
 var Version = update.Current()
 
 type Options struct {
-	Inline   bool   // render inline instead of fullscreen
-	Continue bool   // resume the latest session in this directory
-	Resume   bool   // open the resume picker at startup
-	Model    string // provider/id to use instead of the default
-	Effort   string // effort to use instead of the default
-	Session  string // resume the session with this ID
-	Prompt   string // first message, submitted once the UI is up (atto "fix the build")
+	Inline  bool   // render inline instead of fullscreen
+	Resume  bool   // open the resume picker at startup
+	Model   string // provider/id to use instead of the default
+	Effort  string // effort to use instead of the default
+	Session string // resume the session with this ID
+	Prompt  string // first message, submitted once the UI is up (atto "fix the build")
 }
 
 // modal is a picker shown in place of the editor.
@@ -48,7 +47,6 @@ type modal interface {
 type App struct {
 	ui     *tui.TUI
 	models config.ModelsFile
-	pane   pane // the daemon pane this atto runs in, if any
 
 	// conn is the connection to the session runtime; threadID the thread
 	// this terminal shows and info its state as the runtime last said.
@@ -228,7 +226,10 @@ func Run(opts Options) error {
 	if err != nil {
 		return err
 	}
-	a := newApp(tui.NewProcessTerminal(), models, cwd)
+	terminal := tui.NewProcessTerminal()
+	a := newApp(terminal, models, cwd)
+	stopSignals := watchTerminalExit(func() { terminal.InterruptOutput(); a.doQuit() })
+	defer stopSignals()
 	if opts.Inline || rendererMode(settings.Renderer) == tui.Inline {
 		a.ui.Mode = tui.Inline
 	}
@@ -250,19 +251,18 @@ func Run(opts Options) error {
 			return err
 		}
 	}
-	if err := a.open(opts); err != nil {
-		if srv != nil {
-			srv.Close()
+	if !opts.Resume {
+		if err := a.open(opts); err != nil {
+			if srv != nil {
+				srv.Close()
+			}
+			return err
 		}
-		return err
 	}
 	a.statusCmd = settings.StatusLine != nil && settings.StatusLine.Command != ""
 	a.startStatusLine(settings.StatusLine)
 	if config.CatalogStale() {
 		go a.refreshCatalog()
-	}
-	if opts.Resume {
-		a.cmdResume("")
 	}
 
 	tui.OnPanic = writeCrash
@@ -270,8 +270,7 @@ func Run(opts Options) error {
 		a.shutdown()
 		return err
 	}
-	a.startPane()
-	a.ui.Do(func() {
+	start := func() {
 		a.trustDone = func() {
 			a.rpcErr("thread/sessionStart", nil)
 			if opts.Prompt != "" {
@@ -279,6 +278,29 @@ func Run(opts Options) error {
 			}
 		}
 		a.askProjectApprovals()
+	}
+	a.ui.Do(func() {
+		if opts.Resume {
+			a.openAgents(tabAll)
+			c := a.modal.(*agentCenter)
+			c.scope = a.cwd
+			c.resume = true
+			c.flat = true
+			c.onClose = func() {
+				a.closeModal()
+				if !c.picking {
+					a.doQuit()
+				}
+			}
+			c.onOpen = func(id, cwd string) {
+				a.openThread(id, map[string]any{"deferStart": true}, func(info server.ThreadInfo, old *conn) { a.switchTo(info, "resume", old, start) })
+			}
+			c.onNew = func(cwd string) {
+				a.openThread("", map[string]any{"cwd": cwd, "deferStart": true}, func(info server.ThreadInfo, old *conn) { a.switchTo(info, "new", old, start) })
+			}
+		} else {
+			start()
+		}
 	})
 	if a.ui.Mode == tui.Fullscreen && !a.ui.NoMouse {
 		go func() {
@@ -302,13 +324,6 @@ func Run(opts Options) error {
 // open opens the first session: the one asked for, or a new one.
 func (a *App) open(opts Options) error {
 	id := opts.Session
-	if opts.Continue {
-		if s, ok := session.Latest(a.cwd); ok {
-			id = s.ID
-		} else {
-			defer a.notice("No previous session in this directory.")
-		}
-	}
 	var info server.ThreadInfo
 	var err error
 	if id != "" {
@@ -317,7 +332,7 @@ func (a *App) open(opts Options) error {
 			if errors.Is(err, errWorkerProtocol) || errors.Is(err, daemon.ErrProtocol) {
 				return err
 			}
-			defer a.errorNotice(err)
+			return err
 		}
 	}
 	if info.ID == "" {
@@ -332,6 +347,9 @@ func (a *App) open(opts Options) error {
 // show makes info the thread this terminal shows.
 func (a *App) show(info server.ThreadInfo) {
 	a.threadID = info.ID
+	if a.workers() && info.Cwd != "" {
+		a.cwd = info.Cwd
+	}
 	a.closed = false
 	a.applySnapshot(info)
 	a.treeEntries, a.treeLeaf = nil, ""
@@ -360,7 +378,9 @@ func (a *App) shutdown() error {
 	}
 	if cn.own == nil {
 		// A worker's session goes on; if it retires, SessionEnd says exit.
-		_ = cn.c.Call(context.Background(), "thread/detach", map[string]any{"threadId": a.threadID, "reason": "exit"}, nil)
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		_ = cn.c.Call(ctx, "thread/detach", map[string]any{"threadId": threadID, "reason": "exit"}, nil)
 		return cn.c.Close()
 	}
 	if threadID != "" && bgLine == "" {

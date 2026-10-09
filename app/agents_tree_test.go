@@ -157,7 +157,7 @@ func TestCenterAgentSnapshot(t *testing.T) {
 func TestCenterOpensAgentTranscript(t *testing.T) {
 	for _, locked := range []bool{false, true} {
 		t.Run(map[bool]string{false: "idle", true: "running"}[locked], func(t *testing.T) {
-			a, _ := paneApp(t, false)
+			a, _ := recordedApp(t)
 			w := session.NewAgent(a.cwd, a.threadID)
 			w.Append(session.Entry{Type: session.TypeName, Name: "tests"})
 			w.Append(session.Entry{Type: session.TypeMessage, Message: &provider.Message{Role: "user", Content: "Run tests"}})
@@ -199,24 +199,6 @@ func TestCenterOpensAgentTranscript(t *testing.T) {
 	}
 }
 
-func TestCenterDaemonOpensAgent(t *testing.T) {
-	a, rec := paneApp(t, true)
-	fakeCenter(t, nil, []session.Summary{{ID: "agent", Name: "tests", AgentOf: a.threadID, Cwd: "/trees/tests"}})
-	a.cmdAgents("")
-	waitCenter(t, a)
-	c := a.modal.(*agentCenter)
-	for i, it := range c.shown() {
-		if it.id == "agent" {
-			c.sel = i
-		}
-	}
-	rec.take()
-	c.HandleInput("\r")
-	if got := rec.take(); !strings.Contains(got, daemon.MarkerSeq("open", "agent", "/trees/tests")) {
-		t.Fatalf("marker %q", got)
-	}
-}
-
 func TestCenterStateStatusVocabulary(t *testing.T) {
 	for _, test := range []struct {
 		status agentstate.Status
@@ -231,19 +213,14 @@ func TestCenterStateStatusVocabulary(t *testing.T) {
 			t.Fatalf("%s mapped to %s", test.status, c.items[0].status())
 		}
 	}
-	// A live pane's question overrides agent turn state.
-	c := &agentCenter{}
-	c.apply(centerSnapshot{panes: []daemon.Pane{{Session: "child", State: "waiting"}}, agents: []centerAgent{{state: agentstate.State{Session: "child", Parent: "gone", Name: "child"}, turn: agentstate.Turn{Status: agentstate.Running}}}})
-	if c.items[0].tab != tabNeedsYou {
-		t.Fatal("pane waiting state lost")
-	}
+
 }
 
 func TestCenterScanIncludesShellNestedAndClosedAgents(t *testing.T) {
 	t.Setenv("ATTO_DIR", t.TempDir())
-	oldP := listPanes
-	listPanes = func() ([]daemon.Pane, error) { return nil, nil }
-	t.Cleanup(func() { listPanes = oldP })
+	oldP := listWorkers
+	listWorkers = func() ([]daemon.Worker, error) { return nil, nil }
+	t.Cleanup(func() { listWorkers = oldP })
 	root := session.NewExternal("/project")
 	root.Append(session.Entry{Type: session.TypeName, Name: "atto agent (external)"})
 	root.Close()
@@ -306,9 +283,9 @@ func TestCenterScanIncludesShellNestedAndClosedAgents(t *testing.T) {
 
 func TestCenterEmptyParentStillAnchorsAgent(t *testing.T) {
 	t.Setenv("ATTO_DIR", t.TempDir())
-	oldP := listPanes
-	listPanes = func() ([]daemon.Pane, error) { return nil, nil }
-	t.Cleanup(func() { listPanes = oldP })
+	oldP := listWorkers
+	listWorkers = func() ([]daemon.Worker, error) { return nil, nil }
+	t.Cleanup(func() { listWorkers = oldP })
 	parent := session.New("/work")
 	parent.Append(session.Entry{Type: session.TypeName, Name: "empty parent"})
 	parent.Close()
@@ -323,33 +300,10 @@ func TestCenterEmptyParentStillAnchorsAgent(t *testing.T) {
 	}
 }
 
-func TestCenterPaneIdentityAndAgentViewerState(t *testing.T) {
-	c := &agentCenter{}
-	c.apply(centerSnapshot{panes: []daemon.Pane{
-		{ID: 1, Session: "agent", State: "idle"},
-		{ID: 2, Session: "agent", State: "working"},
-		{ID: 3}, {ID: 4},
-	}, agents: []centerAgent{{state: agentstate.State{Session: "agent", Parent: "gone", Name: "tests"}, turn: agentstate.Turn{Status: agentstate.Running}}}})
-	sh := c.shown()
-	if len(sh) != 3 || len(c.items) != 3 {
-		t.Fatalf("duplicate or missing panes: %+v", sh)
-	}
-	for _, it := range sh {
-		if it.id == "agent" && (it.tab != tabWorking || it.pane.ID != 2) {
-			t.Fatalf("wrong agent pane %+v", it)
-		}
-	}
-	// A single idle viewer pane must not downgrade a headless running turn.
-	c.apply(centerSnapshot{panes: []daemon.Pane{{ID: 1, Session: "agent", State: "idle"}}, agents: []centerAgent{{state: agentstate.State{Session: "agent", Parent: "gone", Name: "tests"}, turn: agentstate.Turn{Status: agentstate.Running}}}})
-	if c.items[0].tab != tabWorking {
-		t.Fatal("idle viewer hid working agent")
-	}
-}
-
 func TestCenterCtrlCClosesWithoutInterruptingSession(t *testing.T) {
 	for _, typing := range []bool{false, true} {
 		t.Run(map[bool]string{false: "list", true: "search"}[typing], func(t *testing.T) {
-			a, _ := paneApp(t, false)
+			a, _ := recordedApp(t)
 			fakeCenter(t, nil, nil)
 			a.busy = true
 			a.editor.SetText("keep my draft")
