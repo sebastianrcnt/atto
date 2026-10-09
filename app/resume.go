@@ -173,22 +173,25 @@ func (p *resumePicker) startPreview() {
 	}
 	p.previewing = it.Data.(session.Summary)
 	p.preview, p.previewOff = nil, 0
-	_, entries, err := session.Load(p.previewing.Path)
-	if err != nil {
-		p.preview = []previewMsg{{"error", err.Error()}}
-	}
-	for _, e := range session.Active(entries) {
+	err := session.VisitActive(p.previewing.Path, func(e session.Entry) error {
 		m := e.Message
 		if e.Type != session.TypeMessage || m == nil || strings.TrimSpace(m.Content) == "" {
-			continue
+			return nil
 		}
 		if m.Role == "user" || m.Role == "assistant" {
 			p.preview = append(p.preview, previewMsg{m.Role, strings.TrimSpace(m.Content)})
+			if len(p.preview) > previewMsgs {
+				copy(p.preview, p.preview[1:])
+				p.preview[len(p.preview)-1] = previewMsg{}
+				p.preview = p.preview[:len(p.preview)-1]
+			}
 		}
+		return nil
+	})
+	if err != nil {
+		p.preview = []previewMsg{{"error", err.Error()}}
 	}
-	if n := len(p.preview); n > previewMsgs {
-		p.preview = p.preview[n-previewMsgs:]
-	}
+
 	p.mode = modePreview
 }
 

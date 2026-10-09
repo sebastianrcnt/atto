@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/sebastianrcnt/atto/clipboard"
+	"github.com/sebastianrcnt/atto/session"
 	"github.com/sebastianrcnt/atto/tui"
 )
 
@@ -117,6 +118,23 @@ func (a *App) copySelection(text string) { a.copyText(text, a.showToast) }
 // cmdCopy copies the last answer as markdown.
 func (a *App) cmdCopy(string) {
 	text := lastAnswer(a.ui.Body.Children)
+	if text == "" && a.view.Info.HasMore {
+		id := a.threadID
+		go func() {
+			older := session.LastAssistant(id)
+			a.ui.Do(func() {
+				if id != a.threadID {
+					return
+				}
+				if older == "" {
+					a.notice("Nothing to copy yet.")
+					return
+				}
+				a.copyText(older, func(note string) { a.showToast("Last answer: " + note) })
+			})
+		}()
+		return
+	}
 	if text == "" {
 		a.notice("Nothing to copy yet.")
 		return

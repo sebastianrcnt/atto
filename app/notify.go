@@ -196,6 +196,8 @@ func (a *App) reread() {
 // drawn again from its items, those in progress included, and the
 // footer's state taken over.
 func (a *App) applySnapshot(info server.ThreadInfo) {
+	a.pageEpoch++
+	a.pageLoading = false
 	a.view.Reset(info)
 	a.closeSessionPrompt()
 	if a.stopTicker != nil {

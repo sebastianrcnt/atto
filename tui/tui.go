@@ -48,6 +48,10 @@ type TUI struct {
 	// Stop from here.
 	OnInput func(data string) bool
 
+	// OnScrollTop requests an earlier page when scrolling past loaded content.
+	// Like OnInput it runs under the UI lock.
+	OnScrollTop func()
+
 	// ClearOnShrink forces a full redraw when content shrinks below the
 	// largest height rendered so far, so no stale rows remain.
 	ClearOnShrink bool
@@ -364,7 +368,16 @@ func (t *TUI) pad(lines []string) []string {
 }
 
 // ScrollBy scrolls the fullscreen body up (n > 0) or down (n < 0).
-func (t *TUI) ScrollBy(n int) { t.scroll = max(0, t.scroll+n) }
+func (t *TUI) ScrollBy(n int) {
+	t.scroll = max(0, t.scroll+n)
+	if maximum := max(0, t.prevBodyLen-t.viewRows); n > 0 && t.scroll > maximum && t.OnScrollTop != nil {
+		// Preserve the last loaded viewport before a page changes body height.
+		// An unbounded wheel/page-up overshoot otherwise anchors outside the
+		// previous layout and jumps to the beginning of the incoming page.
+		t.scroll = maximum
+		t.OnScrollTop()
+	}
+}
 
 // ScrollToBottom jumps back to the newest output.
 func (t *TUI) ScrollToBottom() { t.scroll = 0 }

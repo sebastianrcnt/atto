@@ -94,6 +94,15 @@ func startAppTerm(t *testing.T, cwd string, term tui.Terminal, opts ...Options) 
 
 func startAppStartup(t *testing.T, cwd string, term tui.Terminal, release bool, opts ...Options) *App {
 	t.Helper()
+	a := startAppRuntime(t, cwd, term, release, opts...)
+	settle(a)
+	return a
+}
+
+// startAppRuntime attaches exactly as production does. Most feature tests then
+// preload the tree in settle; attach-memory tests deliberately do not.
+func startAppRuntime(t *testing.T, cwd string, term tui.Terminal, release bool, opts ...Options) *App {
+	t.Helper()
 	models, err := config.LoadModels()
 	if err != nil {
 		t.Fatal(err)
@@ -122,7 +131,7 @@ func startAppStartup(t *testing.T, cwd string, term tui.Terminal, release bool, 
 	if release {
 		a.ui.Do(func() { a.rpcErr("thread/sessionStart", nil) })
 	}
-	settle(a)
+	a.syncRPC(10 * time.Second)
 	return a
 }
 

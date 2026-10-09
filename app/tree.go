@@ -46,10 +46,14 @@ type treePicker struct {
 
 	label *labelInput // set while editing a label
 
-	onSelect func(id string)
-	onCancel func()
-	onCopy   func(text string)
-	onLabel  func(id, label string)
+	onSelect        func(id string)
+	onCancel        func()
+	onCopy          func(text string)
+	onCopyEntry     func(id string)
+	onSearch        func(query string)
+	searchRequested string
+	searchMatches   map[string]bool
+	onLabel         func(id, label string)
 }
 
 type treeFilter int
@@ -199,6 +203,9 @@ func (p *treePicker) passes(f *flatNode) bool {
 	if !ok {
 		return false
 	}
+	if p.query != "" && p.searchMatches != nil {
+		return p.searchMatches[e.ID]
+	}
 	if p.query != "" {
 		text := strings.ToLower(p.searchText(f.n))
 		for tok := range strings.FieldsSeq(strings.ToLower(p.query)) {
@@ -211,6 +218,11 @@ func (p *treePicker) passes(f *flatNode) bool {
 }
 
 func (p *treePicker) applyFilter() {
+	if p.onSearch != nil && p.query != p.searchRequested {
+		p.searchRequested = p.query
+		p.searchMatches = nil
+		p.onSearch(p.query)
+	}
 	if p.selected < len(p.visible) {
 		p.lastSelected = p.visible[p.selected].n.Entry.ID
 	}
@@ -482,6 +494,10 @@ func (p *treePicker) HandleInput(data string) {
 			p.onSelect(cur)
 		}
 	case "ctrl+x":
+		if p.onCopyEntry != nil && cur != "" {
+			p.onCopyEntry(cur)
+			return
+		}
 		if p.onCopy != nil && cur != "" {
 			p.onCopy(p.copyText(p.visible[p.selected].n))
 		}

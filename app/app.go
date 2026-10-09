@@ -56,6 +56,8 @@ type App struct {
 	info             server.ThreadInfo
 	snapEvent        int64 // the cursor of the last snapshot
 	view             server.ThreadView
+	pageLoading      bool
+	pageEpoch        int
 	snapshotPending  int
 	notifyEvent      int64
 	snapshotEvents   []server.Notification
@@ -414,6 +416,7 @@ func (a *App) build() {
 	a.ui.SetFocus(a.editor)
 	a.ui.OnInput = a.onInput
 	a.ui.OnCopy = a.copySelection
+	a.ui.OnScrollTop = a.loadEarlier
 	a.ui.PaddingX = 1
 	a.ui.GapY = 1
 	a.ui.Pin = a.pinnedPrompt

@@ -8,6 +8,7 @@ import (
 
 	"golang.org/x/term"
 
+	"github.com/sebastianrcnt/atto/agent"
 	"github.com/sebastianrcnt/atto/events"
 	"github.com/sebastianrcnt/atto/server"
 	"github.com/sebastianrcnt/atto/session"
@@ -131,6 +132,55 @@ func (a *App) cmdTree(string) {
 			}
 			a.copyText(text, func(note string) { a.showToast("Selected entry: " + note) })
 		}
+		p.onCopyEntry = func(entryID string) {
+			a.rpc("thread/entry", map[string]any{"entryId": entryID, "offline": a.info.Offline}, func(raw json.RawMessage, err error) {
+				if err != nil {
+					a.errorNotice(err)
+					return
+				}
+				var e session.Entry
+				if json.Unmarshal(raw, &e) != nil {
+					return
+				}
+				text := ""
+				if e.Message != nil {
+					text = e.Message.Content
+				}
+				if e.Type == session.TypeCompaction {
+					text = e.Notes
+				}
+				if e.Type == session.TypeBranchSummary {
+					text = e.Summary
+				}
+				if e.Bash != nil {
+					text = agent.BashExecutionText(*e.Bash)
+				}
+				p.onCopy(text)
+			})
+		}
+		p.onSearch = func(query string) {
+			if query == "" {
+				p.searchMatches = nil
+				return
+			}
+			a.rpc("thread/tree", map[string]any{"query": query, "offline": a.info.Offline}, func(raw json.RawMessage, err error) {
+				if err != nil || a.modal != p || p.query != query {
+					return
+				}
+				var r struct {
+					Matches []string `json:"matches"`
+				}
+				if json.Unmarshal(raw, &r) != nil {
+					return
+				}
+				p.searchMatches = map[string]bool{}
+				for _, id := range r.Matches {
+					p.searchMatches[id] = true
+				}
+				p.applyFilter()
+			})
+		}
+
 		a.openModal(p)
 	})
 }
