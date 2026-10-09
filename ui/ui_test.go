@@ -311,3 +311,29 @@ func TestRenderDeadlineUsesDefault(t *testing.T) {
 		t.Fatal("late render published")
 	}
 }
+
+func TestHungRendererIsBoundedAndCancelled(t *testing.T) {
+	r := NewRegistry(nil, nil)
+	defer r.Stop()
+	m := Match{Pane, "atto/hung"}
+	finished := make(chan struct{})
+	r.Render("hung", m, func(e Event, next Next) (*Node, error) {
+		<-e.Context.Done()
+		close(finished)
+		return nil, e.Context.Err()
+	})
+	fallback := Text(TextProps{Text: "default"})
+	start := time.Now()
+	_ = r.OpenDefault("atto", OpenOptions{Site: Pane, ID: m.ID}, nil, &fallback)
+	if time.Since(start) > 300*time.Millisecond {
+		t.Fatal("watchdog did not bound render")
+	}
+	select {
+	case <-finished:
+	case <-time.After(time.Second):
+		t.Fatal("provider context was not cancelled")
+	}
+	if PlainText(*r.Snapshot().Instances[0].Tree) != "default" {
+		t.Fatal("did not restore default")
+	}
+}

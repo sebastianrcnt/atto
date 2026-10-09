@@ -113,3 +113,18 @@ func TestElementNarrowSafetyAndDraft(t *testing.T) {
 		t.Fatal("worker value did not reset draft")
 	}
 }
+
+func TestElementCellClicksSelectAndButtons(t *testing.T) {
+	n := ui.Box(ui.BoxProps{}, ui.Box(ui.BoxProps{FlexDirection: "row", Gap: 2}, ui.Button(ui.ButtonProps{Key: "left", Label: "Left"}), ui.Button(ui.ButtonProps{Key: "right", Label: "Right"})), ui.Select(ui.SelectProps{Key: "select", Options: []ui.Option{{Value: "a", Label: "A"}, {Value: "b", Label: "B"}}}))
+	e := &Elements{}
+	_ = e.SetTree(ui.Pane, "atto/p", 1, &n)
+	var events []ui.Action
+	e.OnAction = func(a ui.Action) { events = append(events, a) }
+	e.Render(40)
+	if !e.ClickAt(13, 0) || events[0].Key != "right" {
+		t.Fatal(events)
+	}
+	if !e.ClickAt(0, 2) || len(events) != 2 || events[1].Value == nil || *events[1].Value != "b" {
+		t.Fatal(events)
+	}
+}

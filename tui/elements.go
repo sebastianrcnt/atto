@@ -612,26 +612,47 @@ func (e *Elements) box(n ui.Node, w, x, y int, color, background ui.ThemeKey) []
 		widths := make([]int, len(n.Children))
 		remaining := max(0, inner-gap*max(0, len(n.Children)-1))
 		weight := 0.0
+		fill := make([]bool, len(n.Children))
 		for i, c := range n.Children {
-			if fixed := propInt(c, "width", 0); fixed > 0 {
+			fixed := propInt(c, "width", 0)
+			grow, _ := c.Props["grow"].(float64)
+			switch {
+			case fixed > 0:
 				widths[i] = min(fixed, remaining)
 				remaining -= widths[i]
-			} else {
-				grow, _ := c.Props["grow"].(float64)
+			case c.Type == "Box" || grow > 0:
+				fill[i] = true
 				if grow <= 0 {
 					grow = 1
 				}
 				weight += grow
+			default:
+				intrinsic := 0
+				for line := range strings.SplitSeq(ui.PlainText(c), "\n") {
+					intrinsic = max(intrinsic, VisibleWidth(expandElementTabs(line)))
+				}
+				if c.Type == "Input" {
+					intrinsic = max(intrinsic, 24)
+				}
+				widths[i] = min(max(1, intrinsic), remaining)
+				remaining -= widths[i]
 			}
 		}
+		allocated := 0
+		lastFill := -1
 		for i, c := range n.Children {
-			if propInt(c, "width", 0) == 0 {
+			if fill[i] {
 				grow, _ := c.Props["grow"].(float64)
 				if grow <= 0 {
 					grow = 1
 				}
 				widths[i] = int(float64(remaining) * grow / weight)
+				allocated += widths[i]
+				lastFill = i
 			}
+		}
+		if lastFill >= 0 {
+			widths[lastFill] += remaining - allocated
 		}
 		var cells [][]string
 		height := 0

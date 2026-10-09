@@ -2,7 +2,7 @@
 │                                      │
 │ Portable é 👩‍💻 漢字  UI               │
 │                                      │
-│ Left               Right             │
+│ Left  Right                          │
 │                                      │
 │ --- a/test                           │
 │ +++ b/test                           │

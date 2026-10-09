@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -16,6 +17,7 @@ type Match struct {
 	ID   string `json:"id,omitempty"`
 }
 type Event struct {
+	Context context.Context
 	Site    Site
 	ID      string
 	Surface string
@@ -75,10 +77,11 @@ type RouteError struct {
 func (e *RouteError) Error() string { return e.Message }
 
 type registration struct {
-	owner string
-	match Match
-	fn    Renderer
-	seq   int
+	running atomic.Bool
+	owner   string
+	match   Match
+	fn      Renderer
+	seq     int
 }
 type binding struct {
 	owner string
@@ -133,7 +136,7 @@ func owned(owner, id string) bool {
 func (r *Registry) Render(owner string, match Match, fn Renderer) Dispose {
 	r.mu.Lock()
 	r.seq++
-	reg := &registration{owner, match, fn, r.seq}
+	reg := &registration{owner: owner, match: match, fn: fn, seq: r.seq}
 	r.renders = append(r.renders, reg)
 	r.mu.Unlock()
 	var once sync.Once
@@ -383,8 +386,44 @@ func (r *Registry) render(m Match, force bool) {
 	r.mu.Unlock()
 	// Built-ins are always at the tail, independent of when they registered.
 	sort.SliceStable(regs, func(i, j int) bool { return regs[i].owner != "atto" && regs[j].owner == "atto" })
+	siteContext, cancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
+	defer cancel()
+	e.Context = siteContext
+	tailStart := len(regs)
+	for i, reg := range regs {
+		if reg.owner == "atto" {
+			tailStart = i
+			break
+		}
+	}
+	preparing := true
+	var defaultTree *Node
+	var defaultErr error
 	var call func(int, Event) (*Node, error)
 	call = func(i int, ev Event) (*Node, error) {
+		if siteContext.Err() != nil {
+			return nil, fmt.Errorf("site render deadline exceeded")
+		}
+		if !preparing && i == tailStart {
+			if defaultErr != nil {
+				return nil, defaultErr
+			}
+			n := clone(defaultTree)
+			if IsItem(m.Site) {
+				over := map[string]any{}
+				for _, key := range overrideFields(m.Site) {
+					if value, ok := ev.Props[key]; ok && value != originalProps[key] {
+						if _, ok := value.(string); !ok {
+							return nil, fmt.Errorf("invalid display override")
+						}
+						over[key] = value
+					}
+				}
+				setEngineOverrides(n, over)
+			}
+			return n, nil
+		}
+
 		if i == len(regs) {
 			if m.Site == Dialog && fallback != nil {
 				return &Node{Type: "engine", Props: map[string]any{"site": string(Dialog), "id": m.ID}, engine: true}, nil
@@ -410,12 +449,19 @@ func (r *Registry) render(m Match, force bool) {
 		}
 		reg := regs[i]
 		start := time.Now()
-		n, err := safeRender(reg.fn, ev, func(next Event) (*Node, error) {
+		nextFn := func(next Event) (*Node, error) {
 			if next.Site != e.Site || next.ID != e.ID || next.Surface != e.Surface || !validNextProps(originalProps, next.Props, m.Site) {
 				return nil, fmt.Errorf("immutable identity")
 			}
 			return call(i+1, next)
-		})
+		}
+		var n *Node
+		var err error
+		if reg.owner == "atto" {
+			n, err = safeRender(reg.fn, ev, nextFn)
+		} else {
+			n, err = deadlineRender(reg, ev, nextFn, siteContext)
+		}
 		if time.Since(start) > 100*time.Millisecond {
 			return nil, fmt.Errorf("render deadline exceeded")
 		}
@@ -424,6 +470,10 @@ func (r *Registry) render(m Match, force bool) {
 		}
 		return n, err
 	}
+	// Evaluate the Go-owned tail on the worker lane before external providers.
+	// A timed-out provider can only see these immutable snapshots via next().
+	defaultTree, defaultErr = call(tailStart, e)
+	preparing = false
 	started := time.Now()
 	tree, err := call(0, e)
 	if err == nil && m.Site == Dialog && fallback != nil {
@@ -439,16 +489,7 @@ func (r *Registry) render(m Match, force bool) {
 		tree = clone(fallback)
 		// Recompute the unmodified built-in tail, not the last published tree or
 		// metadata from when the site first opened.
-		tail := len(regs)
-		for i, reg := range regs {
-			if reg.owner == "atto" {
-				tail = i
-				break
-			}
-		}
-		originalEvent := e
-		originalEvent.Props = copyMap(originalProps)
-		if defaultTree, defaultErr := call(tail, originalEvent); defaultErr == nil {
+		if defaultTree, defaultErr := clone(defaultTree), defaultErr; defaultErr == nil {
 			if m.Site == Dialog && fallback != nil {
 				defaultTree, defaultErr = expandDialog(defaultTree, m.ID, fallback)
 			}
@@ -928,3 +969,45 @@ func (r *Registry) UpdateProps(match Match, props map[string]any) {
 }
 
 func sealEngine(n *Node) { b, _ := json.Marshal(n.Props); n.seal = string(b) }
+
+func setEngineOverrides(n *Node, overrides map[string]any) {
+	if n == nil {
+		return
+	}
+	if n.Type == "engine" {
+		n.Props["overrides"] = overrides
+		sealEngine(n)
+	}
+	for i := range n.Children {
+		setEngineOverrides(&n.Children[i], overrides)
+	}
+}
+func deadlineRender(reg *registration, e Event, next Next, site context.Context) (*Node, error) {
+	if !reg.running.CompareAndSwap(false, true) {
+		return nil, fmt.Errorf("provider's previous render has not returned")
+	}
+	ctx, cancel := context.WithTimeout(site, 100*time.Millisecond)
+	defer cancel()
+	e.Context = ctx
+	type result struct {
+		tree *Node
+		err  error
+	}
+	done := make(chan result, 1)
+	go func() {
+		defer reg.running.Store(false)
+		n, err := safeRender(reg.fn, e, func(nextEvent Event) (*Node, error) {
+			if ctx.Err() != nil {
+				return nil, ctx.Err()
+			}
+			return next(nextEvent)
+		})
+		done <- result{n, err}
+	}()
+	select {
+	case out := <-done:
+		return out.tree, out.err
+	case <-ctx.Done():
+		return nil, fmt.Errorf("provider render deadline exceeded")
+	}
+}

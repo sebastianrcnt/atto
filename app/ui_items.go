@@ -67,6 +67,13 @@ func (a *App) applyUIItem(w server.Item) {
 		a.itemUI = map[string]*uiItemBlock{}
 	}
 	b := a.itemUI[w.ID]
+	if w.UIDisplay.Tree == nil {
+		if b != nil {
+			a.replaceUIComponent(b, native)
+			delete(a.itemUI, w.ID)
+		}
+		return
+	}
 	if b == nil {
 		b = &uiItemBlock{original: native, show: expander{d: &a.origView}, elements: &tui.Elements{OnAction: a.uiAction}, app: a}
 		a.itemUI[w.ID] = b
