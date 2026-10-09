@@ -409,8 +409,8 @@ For an outside orchestrator, remember the **agent's own address** from the
 started line, not just its name or its parent's ID:
 
 ```sh
-atto agent spawn panes-123 "task" -worktree
-# agent /root/panes-123 started (@eff39362, session eff39362, ...).
+atto agent spawn panes "task" -worktree
+# agent /root/panes started (@eff39362, session eff39362, ...).
 agent_addr=@eff39362                 # save the address returned by this spawn
 cd /some/other/directory
 atto agent send "$agent_addr" "also check the tests"
@@ -419,10 +419,29 @@ atto agent report "$agent_addr" -json
 atto agent close "$agent_addr"
 ```
 
-No `-session PARENT` is needed for these `@ID` calls. Outside orchestrators in
-the same project still share a parent, so choose a free name when spawning;
-a saved `@ID` reaches exactly that agent even if its name is later reused.
-`atto agent list -all` discovers agents under all external parents.
+No `-session PARENT` is needed for these `@ID` calls. Each outside spawn gets
+its own fresh lightweight parent, so two orchestrators can both spawn `panes`
+in the same project without name or worktree-branch collisions. Remember the
+returned `@ID`: it reaches exactly that agent from anywhere.
+
+Without `-session`, bare names are **project-wide labels**, not a shared parent
+namespace. `atto agent wait panes` works when there is exactly one live
+outside-spawned agent named `panes` in the current project (git root, else cwd).
+When several match, the error lists their addresses, statuses and ages, for
+example `2 agents named panes: @eff39362 (running, 2m); @3fa9c2e1 (done, 1h); use @id`.
+A name with no match explains how to list agents. Paths such as `panes/lint`
+first resolve the `panes` label, then follow that agent's tree. `atto agent list`
+shows all outside-spawned trees in the current project; `list -all` includes all
+projects. `wait` without addresses waits for any running agent directly under
+one of the project's external parents, and `close -done` closes finished trees
+in that project. The command center displays these trees under one
+"agents started from a shell" heading per project, not one heading per parent.
+
+For tree-relative names instead, explicitly select the printed parent with
+`-session PARENT` (or `ATTO_SESSION_ID`); names then remain unique under that
+parent as before. Existing agents under older shared external parents stay
+addressable by `@ID` and by the same project-wide label rules; no files are
+migrated for this change.
 
 ```
 atto agent spawn NAME "<task>" [-role R] [-worktree]
@@ -440,10 +459,10 @@ atto agent close AGENT... | close -done [-force]
 atto agent roles                    what -role picks from
 ```
 
-- **Trees and addresses.** Each agent has a path from the root of its tree: the session that started the first ones is `/root`, its agent `tests` is `/root/tests`, and that one's `lint` is `/root/tests/lint`. `AGENT` is a name you gave, a path below you (`tests/lint`), `..` for the agent that started you, or a full path (`/root`). You can also use `@<session id>`: the agent's own full session ID, or a unique prefix of at least 6 characters. Bare hex IDs are still names, not ID addresses. Prefix ambiguity lists the matching candidates; an unknown ID suggests `atto agent list` (outside atto, `list -all`). Inside an atto session or model shell, `@ID` can only name agents in the caller's own tree; an agent in another tree is reported as not found. Outside atto, `@ID` can reach any agent regardless of directory, parent, or `-session`. Name/path addressing is unchanged. `spawn` prints the `@ID` address in its started line, and `list` shows short `ID` and `ADDRESS` columns. `list -all` is for outside callers only and lists agents under every external parent. A closed/removed ID reports "closed" rather than following a reused name; archived transcripts remain available through the session/history commands and agent command center.
+- **Trees and addresses.** Each agent has a path from the root of its tree: the session that started the first ones is `/root`, its agent `tests` is `/root/tests`, and that one's `lint` is `/root/tests/lint`. `AGENT` is a name you gave, a path below you (`tests/lint`), `..` for the agent that started you, or a full path (`/root`). You can also use `@<session id>`: the agent's own full session ID, or a unique prefix of at least 6 characters. Bare hex IDs are still names, not ID addresses. Prefix ambiguity lists the matching candidates; an unknown ID suggests `atto agent list` (outside atto, `list -all`). Inside an atto session or model shell, `@ID` can only name agents in the caller's own tree; an agent in another tree is reported as not found. Outside atto, `@ID` can reach any agent regardless of directory, parent, or `-session`. Inside-atto and explicit-parent name/path addressing is unchanged; implicit outside names use the project-wide label rules above. `spawn` prints the `@ID` address in its started line, and `list` shows short `ID` and `ADDRESS` columns. `list -all` is for outside callers only and lists agents under every external parent. A closed/removed ID reports "closed" rather than following a reused name; archived transcripts remain available through the session/history commands and agent command center.
 - **Messages.** What one agent sends another arrives wrapped in `<atto_internal_context source="agent">` with a `Message Type` (`NEW_TASK`, `MESSAGE` or `FINAL_ANSWER`), `From` and `To`. When an agent's turn ends, its final answer reaches the session that started it by itself (`FINAL_ANSWER`, cut at 8000 characters; `report` has all of it), and wakes it as a job's exit does. `task` starts a turn; `send` doesn't: a message to an idle session waits in its inbox for its next turn (a running one takes it after its current step, but a turn that has finished is not kept going for it). `wait` returns early when you send a message, so you are never stuck behind it.
-- **Nesting.** `agents.maxDepth` (default 1, as codex) is how deep trees may grow: at 1 only your session starts agents; at 2 they may start their own, and so on. An agent that may start agents is told how; one that may not is told to do the work itself. `agents.maxConcurrent` (default 3) caps the turns each session's agents run at once; the rest wait in a queue (`list` shows them `queued`). Closing an agent closes the agents below it.
-- **From a normal shell**, every command accepts `-session ID`. For spawning and name/path addressing without it (and without `ATTO_SESSION_ID`), atto creates a lightweight parent without calling a model, prints its ID, and reuses it for the project (git root, else cwd). It is named `atto agent (external)` in session lists, is not picked by continue, and is archived and forgotten when `close` removes its last agent.
+- **Nesting.** `agents.maxDepth` (default 1, as codex) is how deep trees may grow: at 1 only your session starts agents; at 2 they may start their own, and so on. An agent that may start agents is told how; one that may not is told to do the work itself. `agents.maxConcurrent` (default 3) caps the turns each session's agents run at once (it is a per-parent limit, not a project-wide cap for fresh outside parents); the rest wait in a queue (`list` shows them `queued`). Closing an agent closes the agents below it.
+- **From a normal shell**, every command accepts `-session ID`. Without it (and without `ATTO_SESSION_ID`), each spawn creates a fresh lightweight parent without calling a model and prints its ID. Later spawns never reuse it. It is named `atto agent (external)` in session lists, is not picked by continue, and is archived and forgotten when `close` removes its last agent. Outside names/paths resolve via project-wide labels as described above; `@ID` is the exact, directory-independent address. Explicit `-session` and inside-atto callers keep their existing tree behavior.
 - External callers can set the model and effort on `spawn` with `-m provider/model -effort LEVEL`; in atto's model shell (`ATTO_SESSION_ID` / `ATTO_AGENT` set) these flags are refused and models pick roles. `read` and `show` are aliases of `report`. `wait` and `report` accept `-json` for one object with `name`, `status`, `turn`, `duration` (seconds), `tokens` (`in`, `cached`, `out`), optional `cost` (estimated USD), `session`, `model`, `message` and optional `error`, `worktree` and `branch`.
 - An agent is its own session (in the parent's directory, or its own worktree with `-worktree`) that sees only what it is sent. Each turn runs headless as a job of the session that started it (`atto job list` shows `agent NAME`); an agent's own agents keep running when its turn ends. Agents' sessions are kept out of the default `atto resume` and `atto sessions` listings, but appear in the agent command center under their parent, recursively. Working includes running/queued agent turns; idle or completed agents are Ready, failed/stopped or closed agents Inactive. Closed agents keep their archived transcripts in the center. The center opens a locked agent transcript read-only (banner and `Ctrl+R` refresh); once unlocked, refresh opens it normally.
 - **Worktrees.** `spawn -worktree` gives the agent a git worktree of its own, so agents editing files in parallel don't clobber each other or your checkout. It is made from the parent's `HEAD` (committed work only) on a new branch `atto/<parent session>/<name>` (spawn refuses if that branch exists), at `~/.atto/worktrees/<parent session>/<name>`: outside the project, so nothing shows up in its `git status` or searches, and short enough for Windows paths. The agent works at the same place in it as the parent and is told to commit there. It needs a git repository with a commit. `report`, `list` and `-json` show the worktree and branch. `close` runs `git worktree remove` and keeps the branch, printing it and its new commits for you to merge; while the worktree has uncommitted changes `close` refuses and lists them, unless `-force`.
