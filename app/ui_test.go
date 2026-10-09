@@ -3,6 +3,7 @@ package app
 import (
 	"fmt"
 	"github.com/sebastianrcnt/atto/tui"
+	"github.com/sebastianrcnt/atto/ui"
 	"os"
 	"testing"
 )
@@ -27,5 +28,26 @@ func builtinGolden(t *testing.T, name string, width int, lines []string) {
 		if tui.VisibleWidth(l) > width {
 			t.Fatalf("%s overflow", name)
 		}
+	}
+}
+
+func TestPortableStatusGoldens(t *testing.T) {
+	a := statusApp(t, nil)
+	before := a.renderStatus(80)
+	builtinGolden(t, "status-before", 80, before)
+	snap := &ui.Snapshot{Version: 1, Instances: []ui.Instance{}}
+	for index, item := range []struct {
+		id, text string
+		priority int
+		align    string
+		color    ui.ThemeKey
+	}{{"model", "◆ Orca", 90, "start", ui.Accent}, {"context", "━───────── 11% 31k/262k", 85, "start", ui.Muted}, {"cache", "cache 85%", 20, "start", ui.Muted}, {"tokens", "↑14k ↓3.4k", 15, "start", ui.Muted}, {"path", "/work/proj (main)", 5, "end", ui.Muted}, {"goal", "◉ Goal 0s · 0 tokens", 100, "end", ui.Accent}, {"activity", "Working…", 100, "start", ui.Accent}} {
+		n := ui.Text(ui.TextProps{Color: item.color, Text: item.text})
+		snap.Instances = append(snap.Instances, ui.Instance{Site: ui.Status, ID: "atto/" + item.id, Rev: int64(index + 1), Options: ui.OpenOptions{Priority: item.priority, Align: item.align}, Tree: &n})
+	}
+	a.view.Info.UI = snap
+	a.applyUI(snap)
+	for _, w := range []int{40, 80, 120, 160} {
+		builtinGolden(t, "status", w, a.renderStatus(w))
 	}
 }

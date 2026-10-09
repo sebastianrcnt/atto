@@ -29,10 +29,14 @@ func TestUIProtocolSnapshotAndStaleAction(t *testing.T) {
 	if err = json.Unmarshal(b, &snap); err != nil {
 		t.Fatal(err)
 	}
-	if len(snap.Instances) != 1 {
+	if len(snap.Instances) < 1 {
 		t.Fatal(string(b))
 	}
-	rev = snap.Instances[0].Rev
+	for _, instance := range snap.Instances {
+		if instance.Site == ui.Pane {
+			rev = instance.Rev
+		}
+	}
 	p := map[string]any{"site": "pane", "id": "atto/test", "key": "press", "type": "press", "rev": rev}
 	h.call("ui/event", p)
 	if err = th.call(func() error {

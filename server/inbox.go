@@ -76,6 +76,7 @@ func (t *thread) inboxTick(reload bool, evs []events.Event, nJobs, nTimers int) 
 		t.requestReload(true)
 	}
 	t.deliverEvents()
+	t.refreshUIStatus()
 	t.goalChanged() // the time of a running turn, and reports from atto goal
 	t.maybeRetire()
 }

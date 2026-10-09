@@ -37,9 +37,15 @@ import (
 // a snapshot taken there and the event ID it reads agree. Nothing on the
 // lane waits for a client: prompts are answered later, as requests.
 type thread struct {
-	s   *Server
-	id  string
-	cwd string
+	statusCommandCache         *statusLineCache
+	customStatusConfigured     bool
+	customStatusLines          []string
+	statusUIInput              string
+	statusUIBusy               bool
+	statusUICheck, statusUIRan time.Time
+	s                          *Server
+	id                         string
+	cwd                        string
 
 	laneMu   sync.Mutex
 	laneQ    []func()
@@ -231,6 +237,12 @@ func (t *thread) stopLane() {
 func (t *thread) publish(method string, params map[string]any) {
 	params["threadId"] = t.id
 	t.s.publish(method, params)
+	if t.elements != nil && !strings.HasPrefix(method, "ui/") {
+		switch method {
+		case "thread/updated", "goal/updated", "turn/started", "turn/completed", "turn/activity", "thread/usage", "thread/status":
+			t.elements.Invalidate(ui.Match{Site: ui.Status})
+		}
+	}
 }
 
 func (t *thread) model() config.ModelRef {

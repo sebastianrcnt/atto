@@ -7,6 +7,7 @@ import (
 	"io"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/sebastianrcnt/atto/config"
@@ -14,7 +15,16 @@ import (
 	"github.com/sebastianrcnt/atto/shell"
 )
 
+type statusLineCache struct {
+	mu     sync.Mutex
+	key    string
+	at     time.Time
+	result any
+	err    error
+}
+
 type statusLineRequest struct {
+	cache   *statusLineCache
 	command string
 	cwd     string
 	input   map[string]any
@@ -51,7 +61,10 @@ func (t *thread) statusLine() (any, error) {
 		"cache": map[string]any{"last_input_tokens": lastInput, "last_cached_tokens": lastCached,
 			"input_tokens": info.Usage.InputTokens, "cached_tokens": info.Usage.CachedInputTokens, "output_tokens": info.Usage.OutputTokens},
 	}
-	return statusLineRequest{command: cfg.Command, cwd: t.cwd, input: input, refresh: cfg.RefreshInterval}, nil
+	if t.statusCommandCache == nil {
+		t.statusCommandCache = &statusLineCache{}
+	}
+	return statusLineRequest{cache: t.statusCommandCache, command: cfg.Command, cwd: t.cwd, input: input, refresh: cfg.RefreshInterval}, nil
 }
 
 // boundedOutput drains the whole pipe while keeping a small display prefix.
@@ -73,6 +86,25 @@ func (w *boundedOutput) Write(p []byte) (int, error) {
 }
 
 func runStatusLine(ctx context.Context, r statusLineRequest) (any, error) {
+	if c := r.cache; c != nil {
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		input := copyStatusInput(r.input)
+		delete(input, "memory")
+		b, _ := json.Marshal(input)
+		key := r.command + string(b)
+		same := key == c.key
+		fresh := r.refresh <= 0 || time.Since(c.at) < time.Duration(r.refresh)*time.Second
+		if c.result != nil && (same && fresh || time.Since(c.at) < 300*time.Millisecond) {
+			return c.result, c.err
+		}
+		uncached := r
+		uncached.cache = nil
+		c.result, c.err = runStatusLine(ctx, uncached)
+		c.key, c.at = key, time.Now()
+		return c.result, c.err
+	}
+
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
 	input, _ := json.Marshal(r.input)

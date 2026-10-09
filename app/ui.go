@@ -76,7 +76,7 @@ func (a *App) liveUI(site ui.Site) []ui.Instance {
 	return out
 }
 func (a *App) focusUI(e *tui.Elements) {
-	if a.editor.Text() != "" || a.modal != nil {
+	if e == nil || a.editor.Text() != "" || a.modal != nil {
 		return
 	}
 	a.focusedSite = e
@@ -183,44 +183,72 @@ func (p *paneDock) Click(line int) bool {
 func (a *App) renderUIStatus(width int) []string {
 	items := a.liveUI(ui.Status)
 	sort.SliceStable(items, func(i, j int) bool { return items[i].Options.Priority > items[j].Options.Priority })
-	remaining := width
-	var kept []ui.Instance
-	for _, i := range items {
-		if e := a.elements[ui.Match{Site: i.Site, ID: i.ID}]; e != nil {
-			lines := e.Render(width)
-			if len(lines) == 0 {
-				continue
-			}
-			w := tui.VisibleWidth(lines[0])
-			if w+2 <= remaining || len(kept) == 0 {
-				kept = append(kept, i)
-				remaining -= w + 2
-			}
-		}
+	type rendered struct {
+		instance ui.Instance
+		text     string
+		order    int
 	}
-	sort.SliceStable(kept, func(i, j int) bool { return kept[i].Rev < kept[j].Rev })
-	var start, end []string
-	for _, i := range kept {
+	var rows [2][]rendered
+	used := [2]int{}
+	var out []string
+	for index, i := range items {
 		e := a.elements[ui.Match{Site: i.Site, ID: i.ID}]
-		lines := e.Render(width)
-		if len(lines) == 0 {
+		if e == nil {
 			continue
 		}
-		if i.Options.Align == "end" {
-			end = append(end, lines[0])
-		} else {
-			start = append(start, lines[0])
+		lines := e.Render(width)
+		if len(lines) == 0 || lines[0] == "" {
+			continue
 		}
+		text := lines[0]
+		w := tui.VisibleWidth(text)
+		row := -1
+		for r := range 2 {
+			extra := 0
+			if used[r] > 0 {
+				extra = 3
+			}
+			if used[r]+w+extra <= width {
+				row = r
+				used[r] += w + extra
+				break
+			}
+		}
+		if row < 0 {
+			if used[0] == 0 {
+				text = tui.Truncate(text, width, "…")
+				row = 0
+				used[0] = width
+			} else {
+				continue
+			}
+		}
+		rows[row] = append(rows[row], rendered{i, text, index})
 	}
-	left, right := strings.Join(start, tui.Dim(" · ")), strings.Join(end, tui.Dim(" · "))
-	if left == "" && right == "" {
-		return nil
+	for _, row := range rows {
+		if len(row) == 0 {
+			continue
+		}
+		sort.SliceStable(row, func(i, j int) bool { return row[i].instance.Rev < row[j].instance.Rev })
+		var start, end []string
+		for _, r := range row {
+			if r.instance.Options.Align == "end" {
+				end = append(end, r.text)
+			} else {
+				start = append(start, r.text)
+			}
+		}
+		left, right := strings.Join(start, tui.Dim(" · ")), strings.Join(end, tui.Dim(" · "))
+		gap := max(1, width-tui.VisibleWidth(left)-tui.VisibleWidth(right))
+		if right == "" {
+			gap = 0
+		}
+		out = append(out, tui.Truncate(left+strings.Repeat(" ", gap)+right, width, "…"))
 	}
-	gap := max(1, width-tui.VisibleWidth(left)-tui.VisibleWidth(right))
-	if right == "" {
-		gap = 0
+	if flags := a.extensionStatus(); len(flags) > 0 {
+		out = append(out, tui.Truncate(strings.Join(flags, tui.Dim(" · ")), width, "…"))
 	}
-	return []string{tui.Truncate(left+strings.Repeat(" ", gap)+right, width, "…")}
+	return out
 }
 func (a *App) portableBlock(w server.Item) *tui.Elements {
 	if a.uiBlocks == nil {

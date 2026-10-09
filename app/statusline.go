@@ -16,6 +16,7 @@ import (
 	"github.com/sebastianrcnt/atto/core"
 	"github.com/sebastianrcnt/atto/shell"
 	"github.com/sebastianrcnt/atto/tui"
+	"github.com/sebastianrcnt/atto/ui"
 )
 
 // statusInput is the JSON a statusLine command receives on stdin. Field
@@ -179,7 +180,17 @@ func (a *App) statusLoop(cfg *config.StatusLine) {
 			continue
 		}
 		last = input
-		lines, err := runStatusCommand(cfg.Command, input, a.cwd)
+		var lines []string
+		var err error
+		if a.conn != nil {
+			var result struct {
+				Lines []string `json:"lines"`
+			}
+			err = a.conn.c.Call(context.Background(), "thread/statusLine", map[string]any{"threadId": a.threadID}, &result)
+			lines = result.Lines
+		} else {
+			lines, err = runStatusCommand(cfg.Command, input, a.cwd)
+		}
 		a.ui.Do(func() {
 			if err != nil {
 				a.statusLines = []string{tui.FG(1, "statusLine: "+err.Error())}
@@ -221,6 +232,13 @@ func runStatusCommand(command string, input []byte, cwd string) ([]string, error
 // builtinStatus). Only characters with an unambiguous width (box drawing renders as one
 // column everywhere the editor rules do) so CJK terminals line up.
 func (a *App) renderStatus(width int) []string {
+	if len(a.liveUI(ui.Status)) > 0 {
+		out := a.renderUIStatus(width)
+		if len(out) > 0 {
+			out[0] = a.withToast(out[0], width)
+		}
+		return out
+	}
 	// The goal indicator goes at the right end of the first row, as codex's
 	// footer shows it; the row gives up room for it. On a terminal too narrow
 	// for both, it takes a row of its own.

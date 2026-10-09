@@ -319,11 +319,8 @@ func (e *Elements) render(n ui.Node, w, x, y int, color, background ui.ThemeKey)
 		}
 		out = Wrap(ui.PlainText(n), w)
 	case "Text":
-		text := propString(n, "text")
-		for _, c := range n.Children {
-			text += ui.PlainText(c)
-		}
-		text = expandElementTabs(text)
+		text := e.textSpans(n, color)
+		color = ""
 		if propString(n, "wrap") == "truncate" {
 			for l := range strings.SplitSeq(text, "\n") {
 				out = append(out, Truncate(l, w, "…"))
@@ -331,21 +328,7 @@ func (e *Elements) render(n ui.Node, w, x, y int, color, background ui.ThemeKey)
 		} else {
 			out = Wrap(text, w)
 		}
-		if propBool(n, "bold") {
-			for i := range out {
-				out[i] = Bold(out[i])
-			}
-		}
-		if propBool(n, "italic") {
-			for i := range out {
-				out[i] = Italic(out[i])
-			}
-		}
-		if propBool(n, "underline") {
-			for i := range out {
-				out[i] = "\x1b[4m" + out[i] + "\x1b[24m"
-			}
-		}
+
 	case "Markdown":
 		out = Markdown(expandElementTabs(propString(n, "text")), w)
 	case "Code", "Diff":
@@ -726,4 +709,27 @@ func (e *Elements) ExpandAll(open bool) {
 	for key := range e.open {
 		e.open[key] = open
 	}
+}
+
+func (e *Elements) textSpans(n ui.Node, color ui.ThemeKey) string {
+	if c := propString(n, "color"); c != "" {
+		color = ui.ThemeKey(c)
+	}
+	text := expandElementTabs(propString(n, "text"))
+	if propBool(n, "bold") {
+		text = Bold(text)
+	}
+	if propBool(n, "italic") {
+		text = Italic(text)
+	}
+	if propBool(n, "underline") {
+		text = "\x1b[4m" + text + "\x1b[24m"
+	}
+	if text != "" {
+		text = e.style(color, text)
+	}
+	for _, c := range n.Children {
+		text += e.textSpans(c, color)
+	}
+	return text
 }
