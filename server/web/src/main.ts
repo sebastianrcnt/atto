@@ -610,6 +610,28 @@ function nativeItem(v: View, i: Data, meta = true) {
       markdown(i.text || ''),
     );
     e.append(details);
+  } else if (i.type === 'event') {
+    // [atto event]s (job exits, timers, monitors, agent messages): their
+    // titles, as the TUI shows them; the full text the model got, verbatim,
+    // when opened (job output keeps its lines).
+    const details = el('details', null, 'thinking event');
+    const l = siteLocal(v.info.threadId, 'native', i.id);
+    details.open = l.open.get('open') || false;
+    details.onclick = (event) => {
+      if ((event.target as HTMLElement).closest('summary'))
+        l.open.set('open', !details.open);
+    };
+    const titles: string[] = i.titles?.length
+      ? i.titles
+      : [String(i.text || '').split('\n')[0]];
+    details.append(
+      el(
+        'summary',
+        titles.map((t) => t.replace(/^\[atto event\]\s*/, '')).join('\n'),
+      ),
+      code(i.text || ''),
+    );
+    e.append(details);
   } else if (i.type === 'uiBlock') {
     e.append(
       uiTree(

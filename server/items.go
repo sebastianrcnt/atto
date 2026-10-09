@@ -4,6 +4,7 @@ import (
 	"time"
 
 	"github.com/sebastianrcnt/atto/core/transcript"
+	"github.com/sebastianrcnt/atto/events"
 	"github.com/sebastianrcnt/atto/provider"
 	"github.com/sebastianrcnt/atto/session"
 )
@@ -24,6 +25,9 @@ func wireItem(sid string, it *transcript.Item) Item {
 		w.Type, w.DurationMs, w.BlockID = ItemReasoning, it.Duration.Milliseconds(), blockID(sid, it)
 	case transcript.Event:
 		w.Type = ItemEvent
+		for _, e := range events.Split(it.Text) {
+			w.Titles = append(w.Titles, events.TitleOf(e))
+		}
 	case transcript.Goal:
 		w.Type = ItemGoal
 	case transcript.Hook:

@@ -367,6 +367,10 @@ type Item struct {
 	TokensBefore int  `json:"tokensBefore,omitempty"`
 	TokensAfter  int  `json:"tokensAfter,omitempty"`
 
+	// event: one title per [atto event] in text, as the TUI shows them
+	// (text stays the full message the model got)
+	Titles []string `json:"titles,omitempty"`
+
 	// hook
 	HookEvent string `json:"hookEvent,omitempty"`
 	Blocked   bool   `json:"blocked,omitempty"`

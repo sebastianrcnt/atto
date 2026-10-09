@@ -172,7 +172,7 @@ A read-only/offline snapshot is not an execution owner. Use resume before writes
   `timeoutMs`, `timedOut`, `pending`, `startedMs`, `job`, `background`, `images`,
   `dropped`, `canceled`, `error`, `resultText`, `reason`, `cap`.
   User shell: `shell`, `excluded`, `truncated`, `fullOutput`, `contextPending`.
-  Compaction: `auto`, `tokensBefore`, `tokensAfter`. Hook: `hookEvent`, `blocked`.
+  Compaction: `auto`, `tokensBefore`, `tokensAfter`. Hook: `hookEvent`, `blocked`. Event: `titles` (one line per `[atto event]` in `text`, as the TUI shows them).
   Display: `blockId`, `uiDisplay?:{rev,tree,actionsEnabled?}`. uiBlock:
   `title`, `ext`, `tree`, `rev`, `uiId`, `actionsEnabled?`. Notice: `level`, `title`, `loaded`,
   `reloaded`, `changes`, `note`. Goal: `goalStatus`, `goalState`.

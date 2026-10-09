@@ -1283,3 +1283,9 @@ body {
     font-size: 16px !important;
   }
 }
+/* [atto event] titles: one quiet line each, like the TUI's event rows. */
+.thinking.event > summary {
+  white-space: pre-line;
+  overflow-wrap: anywhere;
+  color: var(--accent);
+}
