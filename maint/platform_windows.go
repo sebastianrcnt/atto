@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"unsafe"
 )
 
 func busyLock(p string) bool {
@@ -73,7 +74,28 @@ func owned(p string) bool {
 	}
 	defer token.Close()
 	user, e := token.GetTokenUser()
-	return e == nil && owner.Equals(user.User.Sid)
+	if e == nil && owner.Equals(user.User.Sid) {
+		return true
+	}
+	// An elevated process creates files owned by the Administrators group,
+	// the default owner of its token, rather than by the user.
+	def, e := tokenDefaultOwner(token)
+	return e == nil && owner.Equals(def)
+}
+
+// tokenDefaultOwner is the owner that objects created with token get.
+func tokenDefaultOwner(token windows.Token) (*windows.SID, error) {
+	var n uint32
+	e := windows.GetTokenInformation(token, windows.TokenOwner, nil, 0, &n)
+	if e != windows.ERROR_INSUFFICIENT_BUFFER {
+		return nil, e
+	}
+	buf := make([]byte, n)
+	if e = windows.GetTokenInformation(token, windows.TokenOwner, &buf[0], n, &n); e != nil {
+		return nil, e
+	}
+	// The buffer holds a TOKEN_OWNER: a pointer to a SID that follows it.
+	return (*(**windows.SID)(unsafe.Pointer(&buf[0]))).Copy()
 }
 func removeExecutable(p string) error {
 	if e := os.Remove(p); e == nil || os.IsNotExist(e) {
