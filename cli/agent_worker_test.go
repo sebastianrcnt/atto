@@ -437,7 +437,9 @@ func TestWorkerOfAnAgentRetiresOnlyWhenIdle(t *testing.T) {
 	release := make(chan struct{})
 	agentServer(t, func(int, string) string { <-release; return textAnswer("done") })
 	useWorkers(t)
-	t.Setenv("ATTO_WORKER_RETENTION", "300ms")
+	// Long enough that a slow runner's new worker gets its first request
+	// before it counts as idle (it once did not, at 300ms, on Windows CI).
+	t.Setenv("ATTO_WORKER_RETENTION", "1500ms")
 	t.Chdir(t.TempDir())
 	enableAgents(t, "")
 	if _, err := runAgent(t, "spawn", "a", "work", "-session", "p1"); err != nil {
@@ -445,7 +447,7 @@ func TestWorkerOfAnAgentRetiresOnlyWhenIdle(t *testing.T) {
 	}
 	st, _ := agentstate.LoadChild("p1", "a")
 	t.Cleanup(func() { jobs.KillAll("p1"); jobs.KillAll(st.Session) })
-	time.Sleep(1500 * time.Millisecond) // several retention periods, with no client
+	time.Sleep(5 * time.Second) // several retention periods, with no client
 	if _, ok := workerOfSession(t, st.Session); !ok {
 		t.Fatal("the worker of a running turn retired")
 	}
