@@ -791,7 +791,7 @@ goal driver, pending input, shell results, prompts and attachment/gate state.
 settlement and inbox delivery; input IDs and client provenance remain runtime data.
 The port keeps today's `GoalDriver`, split agent package, request logging,
 `step_end`, connection handling and session summary cache. Resume uses
-`core.OpenDisplay`, restores only `session.Context`, reads session-wide snapshots
+`core.Open`, restores only `session.Context`, reads session-wide snapshots
 and uses the lightweight accumulated usage instead of decoding abandoned branches.
 Project trust warnings remain enabled and execution still requires existing trust.
 
@@ -895,8 +895,8 @@ Behavior differences and compatibility choices:
 - TUI startup uses `deferStart` and `thread/sessionStart` so project trust choices
   still happen before startup hooks/MCP approval; other protocol clients retain
   their existing startup behavior. A non-TUI writer remains a read-only display;
-  another TUI writer is still refused. Resume keeps `core.OpenDisplay` and the
-  incremental summary/usage path.
+  another TUI writer is still refused. Resume uses context-only `core.Open` and streaming bounded-tail replay, with
+  the incremental summary/usage path.
 - Runtime-disconnection reporting is local; socket worker reconnect is not wired
   in this phase because panes still have in-process runtimes.
 
@@ -1063,3 +1063,24 @@ The earlier phase notes below/above describe the migration at that time, not a
 promise to keep pane behavior. app-server, serve, /remote, Swing, examples and
 agent execution are unchanged. Worker crash/registry/durable-input limitations
 remain as documented.
+
+### Lazy transcript loading — done (2026-10-09)
+
+Native revision 3 snapshots contain only the post-compaction tail (default 200)
+with `hasMore`/`before`; `thread/items` streams earlier pages from disk. The frozen
+web client and other revision 2 clients still receive full snapshots. Event IDs,
+snapshot fences and exactly-once reduction are unchanged. The TUI/Swing prepend
+older pages on scroll-up without moving the visible message; the TUI temporarily
+shows “loading earlier messages”. Swing keeps at most 400 rendered components
+while retaining pages the user explicitly requested. Loaded items use the existing
+renderers. Tree entries are compact previews in revision 3; full-text tree search,
+copy, fork and saved item resources read disk rather than relying on loaded items.
+
+The common runtime opens only the active model context, replays into a bounded
+display tail, and keeps **zero completed display items with no attached client**.
+Last detach releases the tail; attach reconstructs it. JSONL/zstd scanning and
+connection JSON encoding are streaming, with bounded WS continuation frames.
+Large one-off reads/compactions release unused heap pages; the default 32 MiB soft
+budget is overridable with `GOMEMLIMIT`. Regression tests use a generated
+65.56 MiB session and separate process measurements, not private user transcripts.
+Results/methodology: [session-memory.md](session-memory.md).

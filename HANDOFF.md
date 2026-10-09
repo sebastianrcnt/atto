@@ -60,7 +60,11 @@ unix socket 0600 and removed on exit. CI is green after every phase.
 
 1. Phase H: `atto agent spawn/task/wait` through workers; durable accepted-input journaling and request dedupe.
 2. `-m` / `enabled` restrictions for `atto agent`; request log "all" mode; macOS route-change pool reset (all still undecided).
-3. Lazy transcript display loading for huge sessions (the display path still loads the whole active branch).
+3. **Done (2026-10-09): lazy transcript display loading.** Revision 3 tail snapshots
+   and disk pages; TUI/Swing scroll-up loading; full revision 2 compatibility;
+   streaming context-only/archive reads and JSON writes; unattached workers retain
+   no completed display items. Synthetic process memory regressions and measurements
+   are documented in `docs/session-memory.md`.
 
 ## How the work is done
 
