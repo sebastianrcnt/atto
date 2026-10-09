@@ -5,7 +5,6 @@ import (
 	"errors"
 	"github.com/sebastianrcnt/atto/session"
 	"os"
-	"runtime"
 	"time"
 
 	"github.com/sebastianrcnt/atto/config"
@@ -14,7 +13,7 @@ import (
 
 // Enabled reports whether frontends should use daemon session workers.
 func Enabled() bool {
-	if runtime.GOOS == "windows" || os.Getenv("ATTO_NO_DAEMON") != "" {
+	if os.Getenv("ATTO_NO_DAEMON") != "" {
 		return false
 	}
 	settings, _ := config.LoadSettings()

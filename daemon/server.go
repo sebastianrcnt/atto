@@ -1,5 +1,3 @@
-//go:build !windows
-
 package daemon
 
 import (
@@ -14,7 +12,6 @@ import (
 	"time"
 
 	"github.com/sebastianrcnt/atto/server"
-	"golang.org/x/sys/unix"
 )
 
 var idleExit = 2 * time.Second
@@ -30,7 +27,7 @@ func Serve(exe string) error {
 		return err
 	}
 	defer lock.Close()
-	if err := unix.Flock(int(lock.Fd()), unix.LOCK_EX|unix.LOCK_NB); err != nil {
+	if !tryLock(lock) {
 		return nil // another daemon has it
 	}
 	sock := SocketPath()
@@ -38,15 +35,14 @@ func Serve(exe string) error {
 		return err
 	}
 	cleanWorkerSockets()
-	_ = os.Remove(sock) // a dead daemon's: we hold the lock
-	ln, err := net.Listen("unix", sock)
+	removeSocket(sock) // a dead daemon's: we hold the lock
+	ln, err := listenSocket(sock)
 	if err != nil {
 		return err
 	}
-	_ = os.Chmod(sock, 0o600)
 	d := &daemon{exe: exe, ln: ln, workers: map[string]*worker{}, idleAfter: idleExit}
 	d.idle = time.AfterFunc(d.idleAfter, func() { ln.Close() })
-	defer os.Remove(sock)
+	defer removeSocket(sock)
 	for {
 		c, err := ln.Accept()
 		if err != nil {
@@ -72,6 +68,9 @@ type daemon struct {
 // transported through the daemon.
 func (d *daemon) serve(conn net.Conn) {
 	defer conn.Close()
+	if authConn(conn) != nil {
+		return
+	}
 	_ = conn.SetDeadline(time.Now().Add(workerStartWait + writeWait))
 	typ, b, err := readFrame(conn)
 	var h Hello

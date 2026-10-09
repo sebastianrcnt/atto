@@ -15,7 +15,8 @@ func RunDir() string { return filepath.Join(config.Dir(), "run") }
 // LogPath is where the daemon writes its errors.
 func LogPath() string { return filepath.Join(config.Dir(), "logs", "daemon.log") }
 
-// maxSocketPath stays under the smallest sun_path (104 bytes on macOS).
+// maxSocketPath stays under the smallest sun_path (104 bytes on macOS, 108
+// on Windows).
 const maxSocketPath = 100
 
 // SocketPath is the daemon's Unix socket: in RunDir, or, when that path
@@ -27,5 +28,5 @@ func SocketPath() string {
 		return p
 	}
 	h := sha256.Sum256([]byte(config.Dir()))
-	return filepath.Join(os.TempDir(), fmt.Sprintf("atto-%d", os.Getuid()), fmt.Sprintf("%x.sock", h[:8]))
+	return filepath.Join(os.TempDir(), privateTempName(), fmt.Sprintf("%x.sock", h[:8]))
 }

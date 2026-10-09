@@ -1,5 +1,3 @@
-//go:build !windows
-
 package daemon
 
 import (
@@ -16,17 +14,16 @@ import (
 	"net"
 	"os"
 	"os/exec"
-	"os/signal"
 	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
 	"github.com/sebastianrcnt/atto/config"
 	"github.com/sebastianrcnt/atto/server"
 	"github.com/sebastianrcnt/atto/session"
+	"github.com/sebastianrcnt/atto/shell"
 )
 
 // The daemon runs one worker per session
@@ -46,9 +43,10 @@ const workerStartWait = 20 * time.Second
 
 // worker is a running session worker, in the daemon.
 type worker struct {
-	info Worker
-	cmd  *exec.Cmd
-	done chan struct{}
+	info  Worker
+	cmd   *exec.Cmd
+	done  chan struct{}
+	stdin io.WriteCloser // where the daemon asks a worker to stop, where signals cannot
 }
 
 // workerReq is the "worker" request's answer.
@@ -149,12 +147,16 @@ func (d *daemon) startWorker(h Hello) workerAnswer {
 	if err != nil {
 		return workerAnswer{Error: err.Error()}
 	}
+	stdin, err := workerStdin(cmd)
+	if err != nil {
+		return workerAnswer{Error: err.Error()}
+	}
 	cmd.Stderr = nil
 	if log, err := os.OpenFile(LogPath(), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600); err == nil {
 		cmd.Stderr = log
 		defer log.Close()
 	}
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	shell.Isolate(cmd) // a session (Unix) or hidden console (Windows) of its own
 	if err := cmd.Start(); err != nil {
 		return workerAnswer{Error: err.Error()}
 	}
@@ -170,7 +172,7 @@ func (d *daemon) startWorker(h Hello) workerAnswer {
 	case <-time.After(workerStartWait):
 		_ = cmd.Process.Kill()
 		_ = cmd.Wait()
-		_ = os.Remove(sock)
+		removeSocket(sock)
 		return workerAnswer{Error: "the session's runtime did not start (see " + LogPath() + ")"}
 	}
 	verb, rest, _ := strings.Cut(first, " ")
@@ -178,17 +180,17 @@ func (d *daemon) startWorker(h Hello) workerAnswer {
 	case "ready":
 	case "readonly":
 		_ = cmd.Wait()
-		_ = os.Remove(sock)
+		removeSocket(sock)
 		return workerAnswer{ReadOnly: rest}
 	default:
 		_ = cmd.Wait()
-		_ = os.Remove(sock)
+		removeSocket(sock)
 		if rest == "" {
 			rest = "the session's runtime ended at once (see " + LogPath() + ")"
 		}
 		return workerAnswer{Error: rest}
 	}
-	w := &worker{cmd: cmd, done: make(chan struct{}), info: Worker{Session: rest, Socket: sock, PID: cmd.Process.Pid, Cwd: h.Cwd, Started: time.Now()}}
+	w := &worker{cmd: cmd, stdin: stdin, done: make(chan struct{}), info: Worker{Session: rest, Socket: sock, PID: cmd.Process.Pid, Cwd: h.Cwd, Started: time.Now()}}
 	d.mu.Lock()
 	d.workers[w.info.Session] = w
 	d.idle.Stop()
@@ -196,7 +198,7 @@ func (d *daemon) startWorker(h Hello) workerAnswer {
 	go func() {
 		defer close(w.done)
 		_ = cmd.Wait()
-		_ = os.Remove(sock)
+		removeSocket(sock)
 		d.mu.Lock()
 		if d.workers[w.info.Session] == w {
 			delete(d.workers, w.info.Session)
@@ -253,7 +255,7 @@ func (d *daemon) stopWorkers() {
 	}
 	d.mu.Unlock()
 	for _, w := range workers {
-		_ = w.cmd.Process.Signal(syscall.SIGTERM)
+		stopWorker(w)
 	}
 	deadline := time.After(5 * time.Second)
 	for _, w := range workers {
@@ -280,7 +282,7 @@ func workerSocket() (string, error) {
 	p := filepath.Join(dir, prefix+name)
 	if len(p) > maxSocketPath {
 		h := sha256.Sum256([]byte(config.Dir()))
-		p = filepath.Join("/tmp", fmt.Sprintf("atto-%d", os.Getuid()), fmt.Sprintf("%x-%s", h[:4], name))
+		p = filepath.Join(tempSocketBase(), privateTempName(), fmt.Sprintf("%x-%s", h[:4], name))
 	}
 	if err := privateDir(filepath.Dir(p)); err != nil {
 		return "", err
@@ -312,10 +314,11 @@ func cleanWorkerSockets() {
 			c.Close()
 			continue
 		}
-		if errors.Is(err, syscall.ECONNREFUSED) || errors.Is(err, os.ErrNotExist) {
-			_ = os.Remove(path)
+		if staleSocket(err) {
+			removeSocket(path)
 		}
 	}
+	cleanOrphanTokens(dir, prefix)
 }
 
 // StartWorker asks the daemon (started if need be) for the worker of
@@ -384,13 +387,12 @@ func RunWorker(version string, args []string) error {
 	if err := privateDir(filepath.Dir(*sock)); err != nil {
 		return err
 	}
-	if c, err := trustedDial(*sock); err == nil {
-		c.Close()
-		return errors.New("the worker socket is already in use")
-	} else if errors.Is(err, errPeer) {
+	if busy, err := socketBusy(*sock); err != nil {
 		return err
+	} else if busy {
+		return errors.New("the worker socket is already in use")
 	}
-	defer os.Remove(*sock)
+	defer removeSocket(*sock)
 	fail := func(verb string, err error) error {
 		fmt.Printf("%s %s\n", verb, strings.ReplaceAll(err.Error(), "\n", " "))
 		return err
@@ -424,14 +426,9 @@ func RunWorker(version string, args []string) error {
 		srv.Close()
 		return fail("readonly", errors.New(info.ReadOnly))
 	}
-	_ = os.Remove(*sock)
-	ln, err := net.Listen("unix", *sock)
+	removeSocket(*sock)
+	ln, err := listenSocket(*sock)
 	if err != nil {
-		srv.Close()
-		return fail("error", err)
-	}
-	if err := os.Chmod(*sock, 0o600); err != nil {
-		ln.Close()
 		srv.Close()
 		return fail("error", err)
 	}
@@ -442,22 +439,23 @@ func RunWorker(version string, args []string) error {
 			if err != nil {
 				return
 			}
-			if checkPeer(c.(*net.UnixConn)) != nil {
-				c.Close()
-				continue
-			}
-			go func() { _ = srv.ServeConn(ctx, c) }()
+			go func() {
+				if authConn(c) != nil {
+					c.Close()
+					return
+				}
+				_ = srv.ServeConn(ctx, c)
+			}()
 		}
 	}()
-	sigs := make(chan os.Signal, 1)
-	signal.Notify(sigs, syscall.SIGTERM, syscall.SIGINT, syscall.SIGHUP)
-	defer signal.Stop(sigs)
+	stop, stopped := stopRequests()
+	defer stopped()
 	select {
 	case <-closed:
 		// The session closed while answering thread/close: let that
 		// answer reach the client before the connections go.
 		time.Sleep(250 * time.Millisecond)
-	case <-sigs:
+	case <-stop:
 	}
 	ln.Close()
 	srv.CloseWith("other")

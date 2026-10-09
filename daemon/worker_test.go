@@ -1,5 +1,3 @@
-//go:build !windows
-
 package daemon
 
 import (
@@ -8,6 +6,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -188,7 +187,8 @@ func TestWorkerConcurrentResumeHasOneWriter(t *testing.T) {
 			t.Fatalf("second writer: %+v %v", again, err)
 		}
 	}
-	if st, err := os.Stat(w.Socket); err != nil || st.Mode().Perm() != 0o600 {
+	st, err := os.Stat(w.Socket)
+	if err != nil || runtime.GOOS != "windows" && st.Mode().Perm() != 0o600 {
 		t.Fatalf("private socket: %v %v", st, err)
 	}
 }

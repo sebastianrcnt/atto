@@ -1,5 +1,3 @@
-//go:build !windows
-
 package daemon
 
 import (
@@ -10,13 +8,21 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
-	"syscall"
 	"time"
+
+	"github.com/sebastianrcnt/atto/shell"
 )
 
 // startWait is how long a client waits for a daemon it started.
-const startWait = 5 * time.Second
+var startWait = 5 * time.Second
+
+func init() {
+	if runtime.GOOS == "windows" {
+		startWait = 15 * time.Second // a new process starts slowly under antivirus scans
+	}
+}
 
 // dial connects to the daemon; with start, it starts one if none runs.
 func dial(start bool) (net.Conn, error) {
@@ -57,9 +63,10 @@ func dial(start bool) (net.Conn, error) {
 	}
 }
 
-// spawn starts "atto _daemon" in its own session, with its errors going to
-// the log. Two clients racing both spawn one; the second finds the lock
-// taken and exits.
+// spawn starts "atto _daemon" detached from this terminal (a session of its
+// own on Unix, a hidden console of its own on Windows), with its errors
+// going to the log. Two clients racing both spawn one; the second finds the
+// lock taken and exits.
 func spawn(exe string) error {
 	if err := os.MkdirAll(filepath.Dir(LogPath()), 0o700); err != nil {
 		return err
@@ -70,9 +77,9 @@ func spawn(exe string) error {
 	}
 	defer log.Close()
 	cmd := exec.Command(exe, "_daemon")
-	cmd.Dir = "/"
+	cmd.Dir = daemonDir()
 	cmd.Stderr = log
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	shell.Isolate(cmd)
 	if err := cmd.Start(); err != nil {
 		return err
 	}
