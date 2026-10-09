@@ -90,12 +90,22 @@ func (m *Model) Started(timeout time.Duration) int {
 	}
 }
 
-// SetScript replaces the replies of the requests still to come.
+// SetScript replaces the replies of the requests still to come, and
+// forgets the starts not yet waited for: Started then reports the new
+// script's requests only.
 func (m *Model) SetScript(script ...Reply) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.script = append(m.script[:0:0], script...)
 	m.bodies = m.bodies[:0:0]
+	for {
+		select {
+		case <-m.started:
+			continue
+		default:
+		}
+		break
+	}
 }
 
 func (m *Model) serve(w http.ResponseWriter, r *http.Request) {
