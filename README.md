@@ -288,7 +288,7 @@ For a persistent per-model override, add `compaction.limits` to `~/.atto/setting
 
 Keys are exact `provider/model` IDs. A positive cap compacts at 90% of that many tokens, never later than the window/output limit; `0` or a cap at least as large as the context window disables the tier cap, not auto-compaction. Missing keys use the model's prices. `/context long` bypasses these caps too; `/reload` applies settings changes.
 
-**Sessions** are JSONL files under `~/.atto/sessions/`. As in pi, entries form a tree: going back with `/tree` starts a new branch in the same file and keeps the old one. When that leaves work behind, atto asks whether to summarize the branch being left (optionally with your own instructions); the current model writes the summary, `Esc` cancels it, and the model sees it on the new branch. `"branchSummary": {"skipPrompt": true}` in `settings.json` never asks. `atto history grep` searches every branch and marks entries on other branches; `-active` limits it to the current one.
+**Sessions** are JSONL files under `~/.atto/sessions/`. Archiving stores them as zstd-compressed `.jsonl.zst` files under `~/.atto/archived_sessions/`, keeping the same date layout. Listings, previews, history search and archived agent transcripts read them transparently. Unarchiving restores the original JSONL bytes; resuming an archived session restores it first. Existing plain archives remain readable; they are never compressed automatically. As in pi, entries form a tree: going back with `/tree` starts a new branch in the same file and keeps the old one. When that leaves work behind, atto asks whether to summarize the branch being left (optionally with your own instructions); the current model writes the summary, `Esc` cancels it, and the model sees it on the new branch. `"branchSummary": {"skipPrompt": true}` in `settings.json` never asks. `atto history grep` searches every branch and marks entries on other branches; `-active` limits it to the current one.
 
 Manage sessions from the shell, without the TUI:
 
@@ -297,7 +297,8 @@ atto resume [id]                     resume a session (no id opens the picker; a
 atto sessions [-all] [-archived] [-json] [-n N]   list this directory's sessions (-all: every directory)
 atto sessions show <id>              details and the last user messages
 atto sessions rename <id> <name>
-atto sessions archive|unarchive <id>
+atto sessions archive|unarchive <id>  compress into the archive, or restore JSONL
+atto sessions compress              migrate all legacy plain archives; print count and bytes before/after
 atto sessions delete [-y] <id>       permanent: also removes its jobs, inbox, goal and images no other session uses
 ```
 

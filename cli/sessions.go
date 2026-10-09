@@ -28,8 +28,9 @@ const sessionsUsage = `usage:
   atto sessions [list] [-all] [-archived] [-json] [-n N]   sessions of this directory, newest first
   atto sessions show <id>                                   details and the last user messages
   atto sessions rename <id> <name>                          name a session (like /name)
-  atto sessions archive <id>                                move a session to the archive
+  atto sessions archive <id>                                compress a session into the archive
   atto sessions unarchive <id>                              bring it back
+  atto sessions compress                                   compress legacy plain archives
   atto sessions delete [-y] <id>                            delete it for good, with its jobs,
                                                             inbox, goal and unshared images
 
@@ -79,6 +80,13 @@ func RunSessions(args []string, out io.Writer) error {
 			return fmt.Errorf("%s", sessionsUsage)
 		}
 		return sessionsList(out, *all, *archived, *asJSON, *limit)
+	case "compress":
+		if len(pos) != 0 {
+			return fmt.Errorf("%s", sessionsUsage)
+		}
+		stats, err := session.CompressArchives()
+		fmt.Fprintf(out, "Compressed %d archived session(s): %d -> %d bytes.\n", stats.Count, stats.Before, stats.After)
+		return err
 	case "show", "archive", "unarchive", "delete":
 		if len(pos) != 1 {
 			return fmt.Errorf("%s", sessionsUsage)
@@ -277,7 +285,7 @@ func sessionsShow(out io.Writer, path string) error {
 
 // idOf is the session ID in a file name: <YYYYMMDD-HHMMSS>-<id>.jsonl.
 func idOf(path string) string {
-	base := strings.TrimSuffix(filepath.Base(path), ".jsonl")
+	base := strings.TrimSuffix(strings.TrimSuffix(filepath.Base(path), ".zst"), ".jsonl")
 	return base[strings.LastIndex(base, "-")+1:]
 }
 
@@ -375,7 +383,7 @@ func sessionsDelete(out io.Writer, path string, yes bool) error {
 	if err != nil {
 		return err
 	}
-	if err := os.Remove(path); err != nil {
+	if err := session.RemoveCopies(path); err != nil {
 		return err
 	}
 	for _, sidecar := range []string{session.LockPath(path), session.LogPath(path)} {
@@ -410,7 +418,12 @@ var imageName = regexp.MustCompile(`[0-9a-f]{64}\.[A-Za-z0-9]{2,5}`)
 // it appears (a message, a compaction's replacement history, a future entry
 // type): keeping an image too long is harmless, deleting a used one is not.
 func imageRefs(path string) (map[string]bool, error) {
-	data, err := os.ReadFile(path)
+	r, err := session.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer r.Close()
+	data, err := io.ReadAll(r)
 	if err != nil {
 		return nil, err
 	}
@@ -438,7 +451,7 @@ func pruneImages(candidates map[string]bool) (int, error) {
 				}
 				return err
 			}
-			if d.IsDir() || !strings.HasSuffix(p, ".jsonl") {
+			if d.IsDir() || !session.IsSessionFile(p) {
 				return nil
 			}
 			refs, err := imageRefs(p)

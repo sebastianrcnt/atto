@@ -367,6 +367,8 @@ func (a *App) cmdArchive(string) {
 		a.notice("Nothing to archive yet.")
 		return
 	}
+	// Preserve the preflight check for legacy archive collisions. A .zst
+	// destination is deliberately replaceable after an interrupted archive.
 	rel, err := filepath.Rel(config.SessionsDir(), path)
 	if err != nil {
 		a.errorNotice(err)
