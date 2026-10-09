@@ -403,6 +403,7 @@ func RunWorker(version string, args []string) error {
 	}
 	srv := server.New(version, cwd)
 	srv.LockKind = session.KindTUI
+	srv.AgentTurns = true // the sessions of agents run their turns here
 	srv.Retire, srv.Retention = true, *retention
 	closed := make(chan struct{})
 	var once sync.Once

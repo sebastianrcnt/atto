@@ -327,6 +327,7 @@ client, not every client's editor.
 | `agent/list` | T | `{agents:[Agent]}`; direct children |
 | `agent/tree` | T | `{rootThreadId,agents:[Agent]}`; observational tree (up to 1,000 sessions), including descendants and, when the root is itself an agent started from a shell, the root; Agent adds parentThreadId and absolute `/root/…` path |
 | `agent/read` | T + `name` (name/path, `..`, or `@<session id>`) or `agentId` (a session ID or unique prefix) | `{agent:Agent,message,items:[Item]}`; read-only transcript/report |
+| `agent/turn` | T + `turn` | `{turn,status:"accepted"}`; local, for `atto agent` only: run turn N that the agent's record names (task, spawn, successor) in this worker, which holds the agent's session. Refused (`unsupportedCapability`) by a thread that is not an agent session of a daemon worker. It is idempotent; it attaches nothing. The worker records the turn (`~/.atto/agent-state`), stops it on an interrupt request, and tells the parent when it ends |
 | `subagent/list` | T | `{agents,subagents}`; frozen web alias |
 | `subagent/read` | T + `name` | `{agent,subagent,message,items}`; frozen web alias |
 | `mcp/list` | T | `{servers:[ServerInfo]}`; configured MCP servers/status/tool counts |
@@ -344,6 +345,17 @@ response fields are unchanged. `agent/list` and `agent/tree` already return
 `Agent.threadId`, usable as `@<threadId>`, and have no address parameter. The CLI's
 outside-caller, cross-tree `@ID` scope and `list -all` do not apply to these
 thread-scoped protocol methods.
+
+An agent's session runs in a worker like any other: a client can `thread/attach`
+to it while a turn runs and sees the live items, and the worker is its writer. The
+worker of an agent session differs from others in four ways: an idle agent is not
+woken by inbox events (they wait for its next turn, as they did when an idle agent
+had no process); it is not retired while a turn runs, waits or is being recorded;
+a turn ends with its status, usage and answer recorded and pushed to the parent
+(an agent started from a shell has none), and the jobs of the turn stopped except
+those a user interrupt detached; and an idle one retires after the usual
+retention. Turns appear in `job/list` of the parent (of the agent itself for a root)
+as jobs of kind `agent`, labelled `agent NAME`.
 
 Live session listings include started/forked runtimes before their first message
 is saved, with `loaded` and `busy` state. Cwd filtering and archived listings do

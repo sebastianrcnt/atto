@@ -48,7 +48,14 @@ func (t *thread) pollInbox() {
 	if t.inboxOff.Load() {
 		return
 	}
-	taken := core.Poll(t.id)
+	var taken []events.Event
+	if t.mgd != nil && t.mgd.hold.Load() {
+		// An idle agent is not woken by what arrives: its events wait in the
+		// inbox for its next turn. Timers still fire into it.
+		events.FireDue(t.id, time.Now())
+	} else {
+		taken = core.Poll(t.id)
+	}
 	reload, evs := events.SplitReload(taken)
 	nJobs, nTimers := jobs.ActiveCount(t.id), len(events.Timers(t.id))
 	if !t.do(func() { t.inboxTick(reload, evs, nJobs, nTimers) }) {

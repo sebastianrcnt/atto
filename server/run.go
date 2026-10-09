@@ -127,6 +127,9 @@ func (t *thread) start(kind, activity string, fn func(context.Context, func(any)
 	t.runDone = done
 	t.runStart, t.activity, t.tools = time.Now(), activity, 0
 	t.lastActive = t.runStart
+	if t.mgd != nil {
+		t.mgd.hold.Store(false)
+	}
 	t.cancelGoalRetry() // whatever starts, a goal retry waiting is moot
 	t.usage = provider.Usage{}
 	t.turn = TurnInfo{StartedAt: t.runStart.UnixMilli()}
@@ -217,6 +220,9 @@ func (t *thread) finish(err error, ctxTokens int, reported []events.Event) {
 	t.goalChanged()
 	t.pendingChanged()
 	t.updated()
+	if t.mgd != nil {
+		t.mgd.runEnded(err)
+	}
 	t.maybeRetire()
 }
 
@@ -251,6 +257,9 @@ func (t *thread) onEvent(ev any) {
 		t.usage.PromptTokens += e.Usage.PromptTokens
 		t.usage.CachedTokens += e.Usage.CachedTokens
 		t.usage.CompletionTokens += e.Usage.CompletionTokens
+		if t.mgd != nil {
+			t.mgd.step(e.Usage)
+		}
 		t.total.Add(e.Usage)
 		t.total.LastCost = t.model().Model.Cost
 		t.turn.InputTokens += max(0, e.Usage.PromptTokens-e.Usage.CachedTokens-e.Usage.CacheWriteTokens)

@@ -135,6 +135,9 @@ type thread struct {
 	leaveReason string
 	retireTimer *time.Timer
 	inboxOff    atomic.Bool // closing: the inbox is left alone
+	// mgd, on the session of an agent run by atto agent in this worker, owns
+	// the agent's turns (agentturn.go).
+	mgd *managedAgent
 }
 
 // pendingInput is input waiting: a steer the turn has not taken, a

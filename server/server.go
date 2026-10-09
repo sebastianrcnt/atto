@@ -12,6 +12,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/sebastianrcnt/atto/agent"
+	"github.com/sebastianrcnt/atto/agentstate"
 	"github.com/sebastianrcnt/atto/config"
 	"github.com/sebastianrcnt/atto/core"
 	"github.com/sebastianrcnt/atto/core/transcript"
@@ -39,6 +41,9 @@ type Server struct {
 	// LockKind is the writer lease threads take (session.KindServer by
 	// default; the terminal's own runtime takes session.KindTUI).
 	LockKind string
+	// AgentTurns lets this server run the turns of agents (atto agent task,
+	// spawn...) for the agent sessions it holds, as a session worker does.
+	AgentTurns bool
 	// Retire closes a thread no client is attached to once it has been
 	// idle for Retention: no run, queued input, active goal, running job,
 	// pending timer or open prompt. Retention is 0 in-process; workers
@@ -193,6 +198,7 @@ type threadParams struct {
 	InputID string `json:"inputId"`
 	Queued  bool   `json:"queued"`
 	// job/output, job/stop; subagent/read
+	Turn    int    `json:"turn"` // agent/turn: the agent's turn to run
 	Job     int    `json:"job"`
 	Lines   int    `json:"lines"`
 	Name    string `json:"name"`
@@ -435,6 +441,9 @@ type threadOptions struct {
 	release               func()
 	start                 time.Time
 	modelFrom, effortFrom core.Origin
+	// worker, for the session of an agent this server runs turns of, is how
+	// its system prompt describes it.
+	worker *agent.Worker
 }
 
 // newThread wires an agent, its hooks, extensions and MCP and a session
@@ -457,7 +466,14 @@ func (s *Server) newThread(o threadOptions) (*thread, error) {
 	ag.SteerNote = t.goal.SteerNote // a message sent while the goal runs says so
 	t.ext = core.LoadExtensions(ag, threadHost{t})
 	t.mcp = core.LoadMCP(ag)
+	if o.worker != nil {
+		ag.Worker = o.worker
+		t.mgd = newManagedAgent(t)
+	}
 	core.Bind(ag, hk, o.file, o.start, true)
+	if o.worker != nil { // its commands know they are an agent's, as an agent turn's always did
+		ag.SetSession(o.file.ID, append(core.Env(o.file.ID), config.EnvLegacyAgent+"=1"))
+	}
 	t.loaded = core.Collect(ag, src, o.modelFrom, o.effortFrom)
 	t.catalogVer = t.catalogVersion()
 	t.startLane()
@@ -624,7 +640,22 @@ func (s *Server) resumeThread(client string, p threadParams) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	model, models, effort, modelFrom, effortFrom, err := pickModel("", "", saved.Model, saved.Effort)
+	// The session of an agent run by atto agent: its model and effort are the
+	// agent's, and its system prompt says what it is.
+	var worker *agent.Worker
+	savedModel, savedEffort := saved.Model, saved.Effort
+	if s.AgentTurns && saved.Header.Agent != nil {
+		if rec, err := agentstate.Load(saved.Header.ID); err == nil {
+			worker = agent.WorkerOf(rec)
+			if savedModel == "" {
+				savedModel = rec.Model
+			}
+			if savedEffort == "" {
+				savedEffort = rec.Effort
+			}
+		}
+	}
+	model, models, effort, modelFrom, effortFrom, err := pickModel("", "", savedModel, savedEffort)
 	if err != nil {
 		file.Close()
 		return nil, err
@@ -639,7 +670,7 @@ func (s *Server) resumeThread(client string, p threadParams) (any, error) {
 		cwd = s.Cwd
 	}
 	t, err := s.newThread(threadOptions{cwd: cwd, model: model, models: models, effort: effort, file: file, release: release,
-		start: saved.Header.Time, modelFrom: modelFrom, effortFrom: effortFrom})
+		start: saved.Header.Time, modelFrom: modelFrom, effortFrom: effortFrom, worker: worker})
 	if err != nil {
 		file.Close()
 		return nil, err
@@ -904,6 +935,9 @@ func (s *Server) clientGone(id string) {
 // retirable reports whether the thread has nothing going on and no
 // client: it may close.
 func (t *thread) retirable() bool {
+	if t.mgd != nil && t.mgd.busy() {
+		return false
+	}
 	if t.closing || t.login != nil || len(t.attached) > 0 || t.turns.Busy || t.shell != nil || len(t.turns.Queued) > 0 || len(t.turns.PendingEvents) > 0 || t.turns.SendNow != nil {
 		return false
 	}
@@ -1000,12 +1034,22 @@ func (s *Server) closeThread(t *thread, m closeMode) detachResult {
 	if shellDone != nil {
 		<-shellDone
 	}
+	if t.mgd != nil {
+		t.mgd.wait() // a turn being recorded finishes first
+	}
 	_ = t.call(func() error { return nil }) // the run's end reaches the lane first
 	t.inboxOff.Store(true)
 	var res detachResult
 	if !m.handoff {
 		if t.sess.ReadOnly() == "" && t.readOnly == "" {
-			res.StoppedJobs = core.Leave(t.id)
+			switch {
+			case t.mgd != nil && m.retire:
+				res.StoppedJobs = core.LeaveKeepingAgents(t.id) // idle: the agents it started go on
+			case t.mgd != nil:
+				res.StoppedJobs = core.LeaveAgent(t.id)
+			default:
+				res.StoppedJobs = core.Leave(t.id)
+			}
 		}
 		if t.hooks != nil {
 			res.Notices = t.hooks.SessionEnd(context.Background(), m.reason)

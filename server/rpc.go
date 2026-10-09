@@ -135,6 +135,12 @@ var threadMethods = map[string]func(t *thread, client string, p threadParams) (a
 	"item/output": func(t *thread, client string, p threadParams) (any, error) {
 		return t.itemResource(p, "output")
 	},
+	"agent/turn": func(t *thread, client string, p threadParams) (any, error) {
+		if t.mgd == nil {
+			return nil, failure(ReasonUnsupported, "this session is not an agent that this runtime runs turns of")
+		}
+		return t.mgd.accept(p.Turn)
+	},
 	"worker/state": func(t *thread, client string, p threadParams) (any, error) {
 		busy := t.turns.Busy || t.shell != nil
 		state := "idle"
