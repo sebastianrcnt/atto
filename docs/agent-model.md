@@ -154,54 +154,32 @@ keyed by their original IDs, not invitations to attach orphans to another root.
   roots; keep historical `AgentOf` fallback. Stop writing `External`. Default
   resume/continue must never pick managed agents or legacy dummy parents.
 
-## 4. Migration without breaking daily agents
+## 4. Migration (decided 2026-10-09: simple, backup-based)
 
-Do **not** flatten directories or rewrite open transcripts while old turns run.
-The existing alias preserves old paths/lock inodes, not this new schema; old
-binaries cannot be made safe by merely adding a version marker they never read.
-Use a staged, journaled one-shot conversion with an explicit drain boundary:
+The user decided against dual layouts, journals and drain protocols. atto is a
+personal tool on a few machines; `atto backup`/`atto restore` exist. Migration:
 
-1. Ship dual readers and retain the old `_agent-turn` entry point. Inventory
-   real directories in both layouts, detect symlinks by filesystem identity,
-   deduplicate by session ID, and synthesize metadata for legacy records.
-   Legacy forests remain legacy-owned: new operations on them use existing
-   records, turn/interrupt files and locks, so old workers and new callers agree.
-   New outside roots can use the new format immediately. Do not dual-write turns.
-2. Produce a dry-run manifest covering live state, `_up`, `_closed`, headers,
-   external mappings and tree gates. Back up originals outside the active
-   namespace. Resolve ancestry from state/header before using `_up` as a hint;
-   report conflicting IDs, cycles and missing parents without guessing.
-   For **each direct child of an external parent**, make that child a distinct
-   root, rebase descendant root/depth/path, and recover spawning project from
-   the external parent's cwd. This also splits legacy shared-parent forests.
-   Import `_closed` as closed records; use surviving transcripts to recover
-   parent/name/role, otherwise preserve minimal original root/path tombstone
-   metadata and flag unknown fields rather than inventing ancestry. Unmappable
-   closed IDs remain globally closed but unavailable to inside-tree lookup; do
-   not map them to a newer agent merely because its label matches.
-3. Drain old daemon/turn/job writers and session locks before conversion. The
-   user stops old spawning/orchestration processes; conversion verifies known
-   locks and active jobs, then takes migration/tree locks. Until this boundary,
-   old binaries can spawn and finish normally, and rescans include their agents.
-   If anything is busy, defer, leaving the legacy tree untouched. **No promise
-   of arbitrary old-binary writes after cutover:** they ignore new locks. Require
-   upgrading/restarting old launchers; do not pretend an advisory lock fences
-   them. New legacy operations are fenced by the migration journal.
-4. Stage new ID records and header replacements, fsync, and journal per-item
-   completion/checksums. Commit a format/generation marker only after all
-   records and projections validate; readers use legacy until commit. Recovery
-   finishes or restores an interrupted stage before resuming mutations. Preserve
-   unrelated transcript entries and archive paths. Move old parent directories,
-   `_up`, `_closed`, and obsolete external mappings to the backup; remove the
-   `subagents` alias only when no legacy-owned forests remain. Windows uses
-   staged copies/replacements after drain, not renaming held lock directories.
+1. `atto agent migrate` (also run automatically by the first new-format
+   operation, after asking on a terminal) refuses while any agent turn, job
+   supervisor of an agent turn, or session worker of an agent session is
+   running, naming them.
+2. It runs `atto backup` (default location under ATTO_DIR/backups/, secrets
+   excluded) and prints the path.
+3. It converts everything in one pass: legacy parent directories, `_up`,
+   `_closed`, shared and per-spawn external parents (each direct child of an
+   external parent becomes its own outside root), headers rewritten with the
+   `agent` metadata, records written as `agent-state/<id>.json`. Existing
+   worktrees and branches keep their paths and names. Fake external parent
+   sessions with no messages are deleted; any with real messages stay as
+   ordinary sessions. A format marker is written last.
+4. On any error it stops, leaves the marker unwritten and tells the user to run
+   `atto restore <backup>`; no automatic partial rollback. Re-running after a
+   restore is safe.
 
-Conversion is idempotent by ID + journal version, never name; `--dry-run` and
-explicit `--rollback` are required. Back up empty synthetic parent transcripts outside listings; preserve any
-with real messages as ordinary history. Quarantine ambiguous tombstones. Rollback
-restores original headers/layout **before new-format mutations**; after that,
-rollback needs a separate export/down-conversion (including synthetic parents),
-not copying stale backups over newer work. Worktrees/branches never move.
+Old binaries are not supported after the marker: they refuse to run agent
+commands when the marker is present (add that check to the release before
+the migration release is not possible retroactively; document "upgrade every
+machine; old binaries must not run agents on migrated data").
 
 ## 5. User, model and protocol surface
 
@@ -264,6 +242,11 @@ Implementation sequence, each independently reviewed:
    dirty subtree close, and crash recovery. Benchmark before adding disk indexes.
 6. Enable by default after migration soak; remove legacy writers/aliases only
    in a later compatibility release. Deliver only documentation in this change.
+
+## Decisions (2026-10-09)
+
+The user accepted recommended answers 1-4 and 6 below and replaced 5 with the
+backup-based migration in section 4.
 
 ## Open questions for the user (recommended answers)
 
