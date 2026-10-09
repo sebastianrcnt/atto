@@ -130,7 +130,7 @@ func parentIDs() []string {
 	for _, root := range stateRoots() {
 		dirs, _ := os.ReadDir(root)
 		for _, d := range dirs {
-			if d.IsDir() && d.Name() != "_up" && !seen[d.Name()] {
+			if d.IsDir() && d.Name() != "_up" && d.Name() != "_closed" && !seen[d.Name()] {
 				seen[d.Name()] = true
 				out = append(out, d.Name())
 			}

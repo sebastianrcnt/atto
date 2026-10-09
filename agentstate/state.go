@@ -157,8 +157,15 @@ func Create(s State) error {
 	return Save(s)
 }
 
-// Remove deletes the agent's state (its session stays).
-func Remove(parent, name string) {
+// Remove deletes the agent's state (its session stays), retaining its ID as
+// closed. If recording the closed ID fails, its state is kept and an error
+// returned. As before, deleting missing state is harmless.
+func Remove(parent, name string) error {
+	if s, err := Load(parent, name); err == nil {
+		if err := rememberClosed(s); err != nil {
+			return err
+		}
+	}
 	roots := stateRoots()
 	for _, root := range roots {
 		path := filepath.Join(root, parent, name+".json")
@@ -173,6 +180,7 @@ func Remove(parent, name string) {
 		_ = os.Remove(filepath.Join(root, parent, name+".turn.json"))
 		_ = os.Remove(filepath.Join(root, parent, name+".turn.json.interrupt"))
 	}
+	return nil
 }
 
 // List returns the agents of session parent, oldest first.
