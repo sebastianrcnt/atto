@@ -35,7 +35,7 @@ var controlWait = 3 * time.Second
 // ID workerPID as a job of session owner. silent: its end posts no event
 // (a root's turn, which no one is woken by).
 func StartWorkerTurn(owner, cwd, name string, workerPID int, ctl Control, silent bool) (Job, error) {
-	id, dir, err := reserve(owner)
+	id, dir, err := reserveKind(owner, "agent")
 	if err != nil {
 		return Job{}, err
 	}

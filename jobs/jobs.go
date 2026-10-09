@@ -281,7 +281,7 @@ func startArgs(session, cwd, name string, args []string, quiet bool, kind string
 	if len(args) == 0 {
 		return Job{}, fmt.Errorf("empty command")
 	}
-	id, dir, err := reserve(session)
+	id, dir, err := reserveKind(session, kind)
 	if err != nil {
 		return Job{}, err
 	}
@@ -290,7 +290,12 @@ func startArgs(session, cwd, name string, args []string, quiet bool, kind string
 }
 
 // reserve checks that session may start another job and reserves its ID.
-func reserve(session string) (int, string, error) {
+func reserve(session string) (int, string, error) { return reserveKind(session, "") }
+
+// reserveKind is reserve for a job of kind ("agent" for a turn): the
+// placeholder already has it, so a session that cleans up its jobs, as a
+// turn's end does, spares an agent's turn that is just being started.
+func reserveKind(session, kind string) (int, string, error) {
 	if !fsutil.ValidID(session) {
 		return 0, "", fmt.Errorf("no session: run inside atto (ATTO_SESSION_ID) or pass --session")
 	}
@@ -307,7 +312,7 @@ func reserve(session string) (int, string, error) {
 		return 0, "", err
 	}
 	// Count the reservation before another caller checks the limit.
-	if err := save(dir, Job{ID: id, Session: session, Status: Starting, Started: time.Now()}); err != nil {
+	if err := save(dir, Job{Type: kind, ID: id, Session: session, Status: Starting, Started: time.Now()}); err != nil {
 		_ = os.RemoveAll(dir)
 		return 0, "", err
 	}
