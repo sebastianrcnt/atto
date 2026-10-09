@@ -3,6 +3,7 @@ package agentstate
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -180,13 +181,18 @@ func BeginSpawn(e SpawnEntry) (*Spawn, error) {
 		return nil, err
 	}
 	path := filepath.Join(spawnDir(), e.ID+".json")
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR|os.O_TRUNC, 0o644)
+	f, err := openShared(path, true)
 	if err != nil {
 		return nil, err
 	}
 	if !tryLock(f) {
 		f.Close()
 		return nil, fmt.Errorf("a spawn of %s is already running", e.ID)
+	}
+	if err := f.Truncate(0); err != nil {
+		unlock(f)
+		f.Close()
+		return nil, err
 	}
 	e.Started = time.Now()
 	data, _ := json.Marshal(e)
@@ -227,13 +233,13 @@ func StaleSpawns() []SpawnEntry {
 	var out []SpawnEntry
 	for _, d := range ents {
 		path := filepath.Join(spawnDir(), d.Name())
-		f, err := os.OpenFile(path, os.O_RDWR, 0)
+		f, err := openShared(path, false)
 		if err != nil {
 			continue
 		}
 		if tryLock(f) {
 			var e SpawnEntry
-			if data, err := os.ReadFile(path); err == nil && json.Unmarshal(data, &e) == nil && e.ID != "" {
+			if data, err := io.ReadAll(f); err == nil && json.Unmarshal(data, &e) == nil && e.ID != "" {
 				out = append(out, e)
 			} else {
 				_ = os.Remove(path) // empty: it died before writing anything
