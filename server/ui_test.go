@@ -97,3 +97,47 @@ func TestUIReducerTombstones(t *testing.T) {
 		t.Fatal("covered cursor")
 	}
 }
+
+func TestUIDialogFirstAnswerWins(t *testing.T) {
+	h := newHarness(t)
+	other := h.connect()
+	th, _ := h.s.thread(h.id)
+	calls := 0
+	if err := th.call(func() error {
+		th.ask(&openPrompt{origin: "extension", wire: Prompt{Kind: PromptSelect, Title: "Pick", Options: []PromptOption{{Label: "one"}, {Label: "two"}}}, choose: func(int) { calls++ }, cancel: func() {}})
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	out := h.call("thread/read", nil)
+	b, _ := json.Marshal(out["ui"])
+	var snap ui.Snapshot
+	_ = json.Unmarshal(b, &snap)
+	var dialog ui.Instance
+	for _, i := range snap.Instances {
+		if i.Site == ui.Dialog {
+			dialog = i
+		}
+	}
+	if dialog.ID == "" {
+		t.Fatal("missing dialog")
+	}
+	params := map[string]any{"site": "dialog", "id": dialog.ID, "key": "answer", "type": "select", "value": "1", "rev": dialog.Rev}
+	h.call("ui/event", params)
+	if _, err := h.try(other, "ui/event", params); err == nil {
+		t.Fatal("late answer accepted")
+	}
+	if err := th.call(func() error {
+		if calls != 1 || th.prompt != nil {
+			t.Fatal("broker not settled exactly once")
+		}
+		for _, i := range th.uiRegistry().Snapshot().Instances {
+			if i.Site == ui.Dialog {
+				t.Fatal("answered dialog remains")
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}

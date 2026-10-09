@@ -3,6 +3,7 @@ package app
 import (
 	"github.com/sebastianrcnt/atto/server"
 	"github.com/sebastianrcnt/atto/tui"
+	"github.com/sebastianrcnt/atto/ui"
 )
 
 // The runtime's prompts (an extension's question, an MCP approval, the
@@ -58,6 +59,17 @@ func (a *App) promptClosed(id string) {
 }
 
 func (a *App) showPrompt(p server.Prompt) {
+	if e := a.elements[ui.Match{Site: ui.Dialog, ID: "atto/" + p.ID}]; e != nil {
+		e.OnEscape = func() {
+			a.uiAction(ui.Action{Site: ui.Dialog, ID: e.ID, Rev: e.Rev, Key: "$site", Type: ui.CloseEvent})
+		}
+		a.prompt = &shownPrompt{id: p.ID, m: e}
+		a.ui.Screen = nil
+		a.modal = e
+		a.ui.SetFocus(e)
+		return
+	}
+
 	answer := func(params map[string]any) {
 		params["id"] = p.ID
 		a.promptClosed(p.ID)

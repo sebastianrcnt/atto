@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"github.com/sebastianrcnt/atto/goal"
 	"github.com/sebastianrcnt/atto/jobs"
+	"github.com/sebastianrcnt/atto/server"
 	"github.com/sebastianrcnt/atto/tui"
 	"github.com/sebastianrcnt/atto/ui"
 	"os"
@@ -103,5 +104,40 @@ func TestPortableJobsPaneStop(t *testing.T) {
 	data, err := os.ReadFile(control)
 	if err != nil || string(data) != "stop" {
 		t.Fatalf("stop service didn't run: %q %v", data, err)
+	}
+}
+
+func TestPortableDialogGoldens(t *testing.T) {
+	for _, p := range []server.Prompt{{Kind: server.PromptSelect, Title: "Pick one", Subtitle: "(demo)", Options: []server.PromptOption{{Label: "red"}, {Label: "green"}}}, {Kind: server.PromptSelect, Title: "Sure?", Confirm: true, Options: []server.PromptOption{{Label: "Yes"}, {Label: "No"}}}, {Kind: server.PromptInput, Title: "Name?", Text: "Ann"}} {
+		name := "select"
+		if p.Confirm {
+			name = "confirm"
+		}
+		if p.Kind == server.PromptInput {
+			name = "input"
+		}
+		n := server.DialogTree(p)
+		e := &tui.Elements{}
+		if err := e.SetTree(ui.Dialog, "atto/test", 1, &n); err != nil {
+			t.Fatal(err)
+		}
+		e.SetFocused(true)
+		for _, w := range []int{40, 80, 120, 160} {
+			builtinGolden(t, name, w, e.Render(w))
+		}
+		var before []string
+		if p.Kind == server.PromptInput {
+			before = (&labelInput{title: p.Title, hint: "enter submit  esc cancel", text: p.Text}).Render(80)
+		} else {
+			l := &tui.SelectList{Title: p.Title}
+			if p.Subtitle != "" {
+				l.Title += tui.Dim("  " + p.Subtitle)
+			}
+			for _, o := range p.Options {
+				l.Items = append(l.Items, tui.SelectItem{Label: o.Label, Detail: o.Description})
+			}
+			before = l.Render(80)
+		}
+		builtinGolden(t, name+"-before", 80, before)
 	}
 }

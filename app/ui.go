@@ -93,6 +93,9 @@ func (a *App) focusFirstUI() bool {
 }
 func (a *App) uiNotification(n server.Notification) {
 	a.applyUI(a.view.Info.UI)
+	if p := a.view.Info.Prompt; p != nil && a.modal == nil {
+		a.promptOpened(*p)
+	}
 	var p struct {
 		Site  ui.Site `json:"site"`
 		ID    string  `json:"id"`

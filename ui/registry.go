@@ -321,6 +321,9 @@ func (r *Registry) render(m Match, force bool) {
 	var call func(int, Event) (*Node, error)
 	call = func(i int, ev Event) (*Node, error) {
 		if i == len(regs) {
+			if m.Site == Dialog && fallback != nil {
+				return &Node{Type: "engine", Props: map[string]any{"site": string(Dialog), "id": m.ID}, engine: true}, nil
+			}
 			if IsItem(m.Site) {
 				n := clone(fallback)
 				over := map[string]any{}
@@ -352,6 +355,9 @@ func (r *Registry) render(m Match, force bool) {
 	}
 	started := time.Now()
 	tree, err := call(0, e)
+	if err == nil && m.Site == Dialog && fallback != nil {
+		tree, err = expandDialog(tree, m.ID, fallback)
+	}
 	if time.Since(started) > 250*time.Millisecond {
 		err = fmt.Errorf("site deadline exceeded")
 	}
@@ -600,3 +606,43 @@ func copyMap(m map[string]any) map[string]any {
 	return out
 }
 func copyInstance(i Instance) Instance { i.Tree = clone(i.Tree); return i }
+
+func expandDialog(tree *Node, id string, fallback *Node) (*Node, error) {
+	refs := 0
+	count := 0
+	var expand func(*Node, int) (*Node, error)
+	expand = func(n *Node, depth int) (*Node, error) {
+		if n == nil {
+			return nil, nil
+		}
+		count++
+		if count > MaxNodes || depth > MaxDepth {
+			return nil, fmt.Errorf("dialog wrapper too large")
+		}
+		if n.Type == "engine" {
+			refs++
+			if !n.engine || n.Props["site"] != string(Dialog) || n.Props["id"] != id || len(n.Props) != 2 || len(n.Children) > 0 || len(n.Events) > 0 {
+				return nil, fmt.Errorf("invalid dialog reference")
+			}
+			return clone(fallback), nil
+		}
+		out := *n
+		out.Children = append([]Node(nil), n.Children...)
+		for i := range out.Children {
+			child, err := expand(&out.Children[i], depth+1)
+			if err != nil {
+				return nil, err
+			}
+			out.Children[i] = *child
+		}
+		return &out, nil
+	}
+	out, err := expand(tree, 1)
+	if err != nil {
+		return nil, err
+	}
+	if refs != 1 {
+		return nil, fmt.Errorf("helper dialog must include next exactly once")
+	}
+	return out, nil
+}

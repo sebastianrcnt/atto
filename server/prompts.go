@@ -45,6 +45,7 @@ func (t *thread) ask(p *openPrompt) {
 	}
 	p.wire.Origin = p.origin
 	t.prompt = p
+	t.openUIDialog(p)
 	t.publish("prompt/open", map[string]any{"prompt": p.wire})
 }
 
@@ -56,6 +57,7 @@ func (t *thread) closePrompt(how, by string) *openPrompt {
 		return nil
 	}
 	t.prompt = nil
+	t.closeUIDialog(p, how)
 	t.publish("prompt/closed", map[string]any{"id": p.wire.ID, "how": how, "by": by})
 	return p
 }

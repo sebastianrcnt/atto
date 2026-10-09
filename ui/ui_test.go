@@ -189,3 +189,37 @@ func FuzzValidate(f *testing.F) {
 		}
 	})
 }
+
+func TestDialogMiddlewareRequiresDefaultOnce(t *testing.T) {
+	for _, mode := range []string{"wrap", "replace", "twice"} {
+		t.Run(mode, func(t *testing.T) {
+			r := NewRegistry(nil, nil)
+			defer r.Stop()
+			m := Match{Dialog, "atto/question"}
+			fallback := Input(InputProps{Key: "answer"})
+			r.Render("ext", m, func(e Event, next Next) (*Node, error) {
+				n, err := next(e)
+				if err != nil {
+					return nil, err
+				}
+				out := Text(TextProps{Text: "replacement"})
+				switch mode {
+				case "wrap":
+					out = Box(BoxProps{}, *n, Text(TextProps{Text: "footer"}))
+				case "twice":
+					out = Box(BoxProps{}, *n, *n)
+				}
+				return &out, nil
+			})
+			_ = r.OpenDefault("atto", OpenOptions{Site: Dialog, ID: m.ID}, nil, &fallback)
+			tree := r.Snapshot().Instances[0].Tree
+			if mode == "wrap" {
+				if tree.Type != "Box" || tree.Children[0].Type != "Input" {
+					t.Fatal(tree)
+				}
+			} else if tree.Type != "Input" {
+				t.Fatal("invalid wrapper did not revert")
+			}
+		})
+	}
+}
