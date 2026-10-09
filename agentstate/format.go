@@ -33,7 +33,7 @@ func markerPath() string { return filepath.Join(dir(), ".format") }
 
 // ReadMarker reads the format marker; ok is false when there is none.
 func ReadMarker() (m Marker, ok bool, err error) {
-	data, err := os.ReadFile(markerPath())
+	data, err := fsutil.ReadFile(markerPath())
 	if errors.Is(err, os.ErrNotExist) {
 		return m, false, nil
 	}

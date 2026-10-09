@@ -140,7 +140,7 @@ func Interrupted(id string, turn int) bool {
 	if checkID(id) != nil || turn <= 0 {
 		return false
 	}
-	data, err := os.ReadFile(interruptPath(id))
+	data, err := fsutil.ReadFile(interruptPath(id))
 	return err == nil && strings.TrimSpace(string(data)) == strconv.Itoa(turn)
 }
 

@@ -214,7 +214,7 @@ func RefreshCatalog(ctx context.Context) error {
 // cache is missing).
 func CatalogProviders() map[string]Provider {
 	out := map[string]Provider{}
-	data, err := os.ReadFile(catalogPath())
+	data, err := fsutil.ReadFile(catalogPath())
 	if err != nil {
 		return out
 	}
@@ -257,7 +257,7 @@ func PriceTierNotice(m ModelRef) string {
 	if c == nil || len(c.Tiers) > 0 || c.Input <= 0 && c.Output <= 0 && c.CacheRead <= 0 && c.CacheWrite <= 0 {
 		return ""
 	}
-	data, err := os.ReadFile(catalogPath())
+	data, err := fsutil.ReadFile(catalogPath())
 	var cached map[string]modelsDevProvider
 	reason := "the model is not in the cached models.dev catalog"
 	if err != nil || json.Unmarshal(data, &cached) != nil || cached == nil {

@@ -229,7 +229,7 @@ func Dial(session string) (Backend, error) {
 	if err != nil {
 		return nil, err
 	}
-	data, err := os.ReadFile(p)
+	data, err := fsutil.ReadFile(p)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, ErrNoEndpoint
 	}

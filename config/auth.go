@@ -31,7 +31,7 @@ type AuthEntry = auth.Credential
 // atto does not know); rewrites keep such entries.
 func LoadAuth() (map[string]AuthEntry, error) {
 	out := map[string]AuthEntry{}
-	data, err := os.ReadFile(AuthPath())
+	data, err := fsutil.ReadFile(AuthPath())
 	if errors.Is(err, fs.ErrNotExist) {
 		return out, nil
 	}
@@ -78,7 +78,7 @@ func updateAuth(fn func(raw map[string]json.RawMessage) error) error {
 
 func updateAuthLocked(fn func(raw map[string]json.RawMessage) error) error {
 	raw := map[string]json.RawMessage{}
-	if data, err := os.ReadFile(AuthPath()); err == nil && len(bytes.TrimSpace(data)) > 0 {
+	if data, err := fsutil.ReadFile(AuthPath()); err == nil && len(bytes.TrimSpace(data)) > 0 {
 		if err := json.Unmarshal(bytes.TrimPrefix(data, []byte("\xef\xbb\xbf")), &raw); err != nil {
 			return err
 		}

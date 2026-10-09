@@ -165,7 +165,7 @@ func save(dir string, j Job) error {
 
 func load(dir string) (Job, error) {
 	var j Job
-	data, err := os.ReadFile(filepath.Join(dir, "job.json"))
+	data, err := fsutil.ReadFile(filepath.Join(dir, "job.json"))
 	if err != nil {
 		return j, err
 	}

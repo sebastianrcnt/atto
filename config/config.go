@@ -368,7 +368,7 @@ type StatusLine struct {
 // LoadSettings reads settings.json; a missing file yields zero settings.
 func LoadSettings() (Settings, error) {
 	var s Settings
-	data, err := os.ReadFile(SettingsPath())
+	data, err := fsutil.ReadFile(SettingsPath())
 	if errors.Is(err, fs.ErrNotExist) {
 		return s, nil
 	}
@@ -383,7 +383,7 @@ func LoadSettings() (Settings, error) {
 func UpdateSettings(kv map[string]any) error {
 	return fsutil.WithFileLock(SettingsPath(), func() error {
 		raw := map[string]any{}
-		data, err := os.ReadFile(SettingsPath())
+		data, err := fsutil.ReadFile(SettingsPath())
 		if err != nil && !errors.Is(err, fs.ErrNotExist) {
 			return err
 		}

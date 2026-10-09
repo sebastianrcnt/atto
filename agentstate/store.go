@@ -51,7 +51,7 @@ func Load(id string) (State, error) {
 	if err := checkID(id); err != nil {
 		return s, err
 	}
-	data, err := os.ReadFile(recordPath(id))
+	data, err := fsutil.ReadFile(recordPath(id))
 	if errors.Is(err, os.ErrNotExist) {
 		return s, fmt.Errorf("%w with session %q (see atto agent list)", ErrNotFound, id)
 	}
@@ -233,7 +233,7 @@ func LoadTurn(id string) (Turn, bool) {
 	if checkID(id) != nil {
 		return Turn{}, false
 	}
-	data, err := os.ReadFile(turnPath(id))
+	data, err := fsutil.ReadFile(turnPath(id))
 	if err != nil || json.Unmarshal(data, &t) != nil {
 		return Turn{}, false
 	}
@@ -267,7 +267,7 @@ func forget(id string) {
 // readSummary decodes the first field of a record, "summary", and stops;
 // a record that does not start with it is decoded whole.
 func readSummary(path string) (Summary, bool) {
-	f, err := os.Open(path)
+	f, err := fsutil.Open(path)
 	if err != nil {
 		return Summary{}, false
 	}
@@ -281,7 +281,7 @@ func readSummary(path string) (Summary, bool) {
 			}
 		}
 	}
-	data, err := os.ReadFile(path)
+	data, err := fsutil.ReadFile(path)
 	if err != nil {
 		return Summary{}, false
 	}

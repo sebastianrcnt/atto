@@ -558,7 +558,7 @@ func clipRunes(s string, n int) string {
 func loadDiskSummaries() {
 	summaryCache.diskLoad.Do(func() {
 		summaryCache.disk = map[string]diskSummary{}
-		b, err := os.ReadFile(summaryDiskPath())
+		b, err := fsutil.ReadFile(summaryDiskPath())
 		if err != nil {
 			return
 		}

@@ -88,7 +88,7 @@ func Path(session string) string { return filepath.Join(config.Dir(), "goals", s
 
 // Load returns the session's goal, or nil if it has none.
 func Load(session string) (*Goal, error) {
-	data, err := os.ReadFile(Path(session))
+	data, err := fsutil.ReadFile(Path(session))
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil, nil
 	}
