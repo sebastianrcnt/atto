@@ -526,15 +526,16 @@ remain native: their paging/search, scroll anchors and selection are client-loca
 and dialogs for worker questions already use shared trees. Credential and
 repository-trust flows intentionally remain in the local CLI. Tool/reasoning
 items use accessible disclosures, plain code/output and unified diff lines;
-there is no syntax-highlighting dependency. Browser Markdown is a conservative
-semantic subset (headings, paragraphs, lists, blockquotes, fences, emphasis,
-inline code and allowed links); raw HTML remains literal text. Tool grouping is
+there is no syntax-highlighting dependency. Browser Markdown follows the TUI's safe CommonMark/GFM conventions (tables,
+headings, paragraphs, nested/ordered/task lists, blockquotes, fences, hard breaks,
+emphasis, inline code and allowed links); raw HTML remains literal text. Tool grouping is
 not yet identical to the TUI's grouping preference: the web draws one disclosure
 per command. Clipboard text falls back to a selectable dialog on plain HTTP.
 
 Tests run TS core/catalog and page workflows through Go/esbuild/goja with a
 DOM shim at phone and desktop widths, plus the shared TUI fixture, Go auth/CSP/
-bootstrap/detach tests and real CLI process e2e. No headless browser is available:
-actual browser paint, touch keyboards, CSP enforcement, focus/scroll geometry,
-image paste/drop and light/dark visual appearance still need manual browser QA.
-See docs/ui-stage-4-report.md for verification and live-model evidence.
+bootstrap/detach tests and real CLI process e2e. The 2026-10-10 polish additionally
+checks real headless Chrome at 1400×900, 1024×768 and 390×844 in both themes,
+including local-model turns, shared diff/dialog/context trees, image drafts and
+gateway reconnect. Physical touch keyboards and LAN access remain manual QA.
+See docs/ui-stage-4-report.md for verification and screenshot paths.
