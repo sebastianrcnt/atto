@@ -18,7 +18,7 @@ var statusSlots = []struct {
 	id       string
 	priority int
 	align    string
-}{{"model", 90, "start"}, {"effort", 30, "start"}, {"context", 85, "start"}, {"cache", 20, "start"}, {"tokens", 15, "start"}, {"cost", 10, "start"}, {"path", 5, "end"}, {"memory", 1, "end"}, {"goal", 100, "end"}, {"activity", 100, "start"}, {"jobs", 60, "start"}, {"timers", 50, "start"}, {"custom", 95, "start"}}
+}{{"model", 90, "start"}, {"effort", 30, "start"}, {"context", 85, "start"}, {"cache", 20, "start"}, {"tokens", 15, "start"}, {"cost", 10, "start"}, {"cacheWrite", 1, "start"}, {"path", 5, "end"}, {"memory", 1, "end"}, {"goal", 100, "end"}, {"activity", 100, "start"}, {"jobs", 60, "start"}, {"timers", 50, "start"}, {"custom", 95, "start"}}
 
 func (t *thread) initUIStatus() {
 	r := t.uiRegistry()
@@ -68,8 +68,13 @@ func (t *thread) statusTree(id string) *ui.Node {
 		}
 		color = ui.Muted
 	case "tokens":
-		if u != nil && (u.InputTokens-u.CachedInputTokens > 0 || u.OutputTokens > 0) {
-			text = fmt.Sprintf("↑%s ↓%s", statusTokens(max(0, u.InputTokens-u.CachedInputTokens)), statusTokens(u.OutputTokens))
+		if u != nil && (u.InputTokens-u.CachedInputTokens-u.CacheWriteTokens > 0 || u.OutputTokens > 0) {
+			text = fmt.Sprintf("↑%s ↓%s", statusTokens(max(0, u.InputTokens-u.CachedInputTokens-u.CacheWriteTokens)), statusTokens(u.OutputTokens))
+		}
+		color = ui.Muted
+	case "cacheWrite":
+		if u != nil && u.CacheWriteTokens > 0 {
+			text = "W" + statusTokens(u.CacheWriteTokens)
 		}
 		color = ui.Muted
 	case "cost":
