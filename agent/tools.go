@@ -76,7 +76,7 @@ func (a *Agent) runTool(ctx context.Context, tc provider.ToolCall, index int, dr
 			defer os.RemoveAll(d)
 		}
 	}
-	env = append(slices.Clip(env), config.EnvView+"="+viewDir)
+	env = append(slices.Clip(env), config.EnvView+"="+viewDir, config.EnvToolCallID+"="+tc.ID)
 	var bg chan struct{}
 	if ShellHost && !args.Background && envValue(env, "ATTO_SESSION_ID") != "" {
 		bg = make(chan struct{}, 1)

@@ -7,10 +7,12 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"time"
 
+	"github.com/sebastianrcnt/atto/config"
 	"github.com/sebastianrcnt/atto/jobs"
 	"github.com/sebastianrcnt/atto/outputs"
 	"github.com/sebastianrcnt/atto/prompts"
@@ -266,7 +268,10 @@ func RunShell(ctx context.Context, sh shell.Shell, cwd string, env []string, arg
 // runShell is RunShell with a channel that moves the command to the
 // background on request.
 func runShell(ctx context.Context, sh shell.Shell, cwd string, env []string, args BashArgs, onOutput func(string), bg <-chan struct{}) BashResult {
-	full := append(append(os.Environ(), "TERM=dumb", "PAGER=cat", "GIT_PAGER=cat", "NO_COLOR=1"), env...)
+	// atto's own environment may carry a call ID from a command that started
+	// it; only the call this command belongs to counts.
+	base := slices.DeleteFunc(os.Environ(), func(kv string) bool { return strings.HasPrefix(kv, config.EnvToolCallID+"=") })
+	full := append(append(base, "TERM=dumb", "PAGER=cat", "GIT_PAGER=cat", "NO_COLOR=1"), env...)
 	session := envValue(env, "ATTO_SESSION_ID")
 	if args.Background {
 		return startJob(session, cwd, full, args)

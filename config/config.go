@@ -47,6 +47,13 @@ const EnvLegacyAgent = "ATTO_SUBAGENT"
 // InAgentCommand reports whether this process was started by an agent.
 func InAgentCommand() bool { return InAgent() || os.Getenv(EnvLegacyAgent) != "" }
 
+// EnvToolCallID is set, like Codex's CODEX_TOOL_CALL_ID, in the environment
+// of every command the model runs through its shell tool: the ID of that
+// tool call. Hosted commands and the background jobs they start get it too;
+// commands the user runs with "!" get none. It is tracking, not proof: the
+// model can change its own environment.
+const EnvToolCallID = "ATTO_TOOL_CALL_ID"
+
 // EnvView names the directory "atto view" leaves images in for the
 // command that ran it: the agent sets it for each foreground shell call
 // and attaches what it finds there to that call's result.

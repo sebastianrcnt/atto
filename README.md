@@ -498,7 +498,7 @@ atto has **no per-command permission prompts**. It asks before loading repositor
 
 For untrusted repositories or long unattended runs, run atto in a VM or container.
 
-Commands that atto runs get `ATTO_AGENT=1` in their environment. With it set, atto refuses to start another agent, change credentials, or replace itself. This guards against accidents. It is not a sandbox.
+Commands that atto runs get `ATTO_AGENT=1` and `ATTO_SESSION_ID=<session>` in their environment. With `ATTO_AGENT` set, atto refuses to start another agent, change credentials, or replace itself. This guards against accidents. It is not a sandbox. Every command the model runs through its shell tool also gets `ATTO_TOOL_CALL_ID=<the tool call ID of that command>` (like Codex's `CODEX_TOOL_CALL_ID`), including commands under a shell host and the background jobs they start; commands you run with `!` get none. `atto agent spawn` records it with the session, model, effort and turn that started an agent (`spawnedBy`). These variables are tracking, not proof: a model can change its own environment.
 
 ## Configuration
 
