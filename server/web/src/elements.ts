@@ -372,9 +372,12 @@ export function render(tree: Tree | null, c: Context): HTMLElement {
           flexDirection: p.flexDirection || 'column',
           gap: `${p.gap || 0}${p.flexDirection === 'row' ? 'ch' : 'lh'}`,
           padding: `${p.padding || 0}lh ${p.padding || 0}ch`,
-          alignItems: { start: 'stretch', center: 'center', end: 'flex-end' }[
-            p.align || 'start'
-          ],
+          alignItems: (
+            { start: 'stretch', center: 'center', end: 'flex-end' } as Record<
+              string,
+              string
+            >
+          )[p.align || 'start'],
           width: typeof p.width === 'number' ? p.width + 'ch' : '100%',
           flexGrow: String(p.grow || 0),
           height: p.height ? p.height + 'lh' : 'auto',
@@ -589,6 +592,15 @@ export function render(tree: Tree | null, c: Context): HTMLElement {
       }
       default:
         return el('div', fallback(n), 'ui-text');
+    }
+    if (['Button', 'Input', 'Select'].includes(n.type)) {
+      const controls = [
+        e,
+        ...Array.from(e.querySelectorAll<HTMLElement>('button,input,select')),
+      ];
+      for (const control of controls)
+        if (['BUTTON', 'INPUT', 'SELECT'].includes(control.tagName))
+          control.dataset.uiDisabled = String(!!p.disabled);
     }
     if (n.key) e.dataset.key = n.key;
     for (const k of ['color', 'backgroundColor']) {

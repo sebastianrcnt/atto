@@ -21,6 +21,7 @@ import {
   Local,
   render,
   validTree,
+  Context,
 } from './elements';
 const root = document.getElementById('app')!;
 const views = new Map<string, View>();
@@ -114,7 +115,8 @@ async function refreshInventory() {
     includeClosedAgents: requestedFilter !== 'active',
   });
   if (requestedFilter !== filter) return;
-  inventory = r.threads || [];
+  const rows = r.threads || [];
+  if (JSON.stringify(rows) !== JSON.stringify(inventory)) inventory = rows;
   schedule();
 }
 async function loadCommands(id: string) {
@@ -356,24 +358,15 @@ async function earlier(v: View) {
   const id = v.info.threadId;
   if (pages.has(id) || !v.info.hasMore || v.reset) return;
   pages.add(id);
+  schedule();
   const generation = v.generation;
-  const sc = document.getElementById('transcript');
-  const oldHeight = sc?.scrollHeight || 0,
-    oldTop = sc?.scrollTop || 0;
   try {
     const page = await call(
       'thread/items',
       { before: v.info.before, limit: 100, offline: !!v.info.offline },
       id,
     );
-    if (v.prepend(page, generation)) {
-      paint();
-      const target = document.getElementById('transcript');
-      if (active === id && target) {
-        target.scrollTop = oldTop + target.scrollHeight - oldHeight;
-        scrolls.set(id, target.scrollTop);
-      }
-    }
+    if (v.prepend(page, generation)) schedule();
   } finally {
     pages.delete(id);
     schedule();
@@ -434,6 +427,18 @@ function image(resource: string, img: HTMLImageElement, v: View) {
     },
   );
 }
+const treeDOM = new Map<
+  string,
+  {
+    rev: number;
+    node: HTMLElement;
+    tree: Tree;
+    context: Context;
+    item?: Data;
+    engineNode?: HTMLElement;
+    overrides?: Data;
+  }
+>();
 function uiTree(v: View, i: Data, item?: Data) {
   const scope = v.info.threadId + '\0' + i.site + '\0' + i.id;
   const enabled =
@@ -441,9 +446,31 @@ function uiTree(v: View, i: Data, item?: Data) {
     (!item ||
       !!item.uiDisplay?.actionsEnabled ||
       (item.type === 'uiBlock' && !!item.actionsEnabled));
+  const old = treeDOM.get(scope);
+  if (
+    old &&
+    old.rev === i.rev &&
+    (i.id !== 'atto/context' || old.tree === i.tree)
+  ) {
+    old.item = item;
+    if (item && old.engineNode) {
+      const next = nativeItem(v, { ...item, ...old.overrides }, false);
+      if (old.node === old.engineNode) {
+        next.classList.add('ui-tree');
+        next.dataset.scope = scope;
+        old.node = next;
+      }
+      old.engineNode.replaceWith(next);
+      old.engineNode = next;
+    }
+    old.context.enabled = enabled;
+    syncEnabled(old.node, enabled);
+    return old.node;
+  }
   if (item && i.tree && !validTree(i.tree, i.site, i.id))
     return nativeItem(v, item);
-  const tree = render(i.tree, {
+  let engineNode: HTMLElement | undefined, overrides: Data | undefined;
+  const renderContext: Context = {
     site: i.site,
     id: i.id,
     rev: i.rev,
@@ -471,11 +498,25 @@ function uiTree(v: View, i: Data, item?: Data) {
         }
       }),
     engine: item
-      ? (n) => nativeItem(v, { ...item, ...n.props.overrides }, false)
+      ? (n) => {
+          overrides = n.props.overrides;
+          return (engineNode = nativeItem(v, { ...item, ...overrides }, false));
+        }
       : undefined,
     image: (r, img) => image(r, img, v),
-  });
+  };
+  const tree = render(i.tree, renderContext);
   tree.dataset.scope = scope;
+  syncEnabled(tree, enabled);
+  treeDOM.set(scope, {
+    rev: i.rev,
+    node: tree,
+    tree: i.tree,
+    context: renderContext,
+    item,
+    engineNode,
+    overrides,
+  });
   return tree;
 }
 function itemSite(i: Data) {
@@ -560,7 +601,7 @@ function nativeItem(v: View, i: Data, meta = true) {
     details.append(
       title,
       code(i.command || '', { language: i.shell ? 'shell' : 'bash' }),
-      code(preview),
+      streamBody(code(preview)),
     );
     // Only user disclosure choices persist. Browser toggle events also fire on
     // insertion; remembering those accidentally kept completed tools open.
@@ -571,7 +612,7 @@ function nativeItem(v: View, i: Data, meta = true) {
       details.append(
         button(expanded ? 'Show less' : 'Show more', () => {
           l.open.set('output', !expanded);
-          schedule();
+          invalidateItem(v, i.id);
         }),
       );
     if (i.fullOutput || i.truncated || i.dropped)
@@ -607,7 +648,7 @@ function nativeItem(v: View, i: Data, meta = true) {
         i.status === 'inProgress' ? 'Thinking…' : 'Thinking',
         i.status === 'inProgress' ? 'shimmer' : '',
       ),
-      markdown(i.text || ''),
+      streamBody(markdown(i.text || '')),
     );
     e.append(details);
   } else if (i.type === 'event') {
@@ -629,7 +670,7 @@ function nativeItem(v: View, i: Data, meta = true) {
         'summary',
         titles.map((t) => t.replace(/^\[atto event\]\s*/, '')).join('\n'),
       ),
-      code(i.text || ''),
+      streamBody(code(i.text || '')),
     );
     e.append(details);
   } else if (i.type === 'uiBlock') {
@@ -670,7 +711,7 @@ function nativeItem(v: View, i: Data, meta = true) {
     if (i.level === 'warning' || i.level === 'error')
       text.style.color = `var(--${i.level})`;
     if (i.status === 'inProgress') text.classList.add('streaming');
-    e.append(text);
+    e.append(streamBody(text));
   }
   for (let index = 0; index < (i.images || []).length; index++) {
     const img = el('img');
@@ -681,7 +722,11 @@ function nativeItem(v: View, i: Data, meta = true) {
   return e;
 }
 function drawTranscriptItem(v: View, i: Data) {
-  if (i.type === 'uiBlock' && !i.tree) return el('span');
+  if (i.type === 'uiBlock' && !i.tree) {
+    const placeholder = el('span');
+    placeholder.dataset.item = i.id;
+    return placeholder;
+  }
   const key = v.info.threadId + '\0' + i.id;
   if (!i.uiDisplay?.tree || originals.has(key)) {
     const n = nativeItem(v, i);
@@ -689,7 +734,7 @@ function drawTranscriptItem(v: View, i: Data) {
       n.append(
         button('Show extension drawing', () => {
           originals.delete(key);
-          schedule();
+          invalidateItem(v, i.id);
         }),
       );
     return n;
@@ -709,28 +754,93 @@ function drawTranscriptItem(v: View, i: Data) {
     ),
     button('Show original', () => {
       originals.add(key);
-      schedule();
+      invalidateItem(v, i.id);
     }),
   );
   return e;
 }
-// Reuse unchanged transcript DOM across stream/composer/status paints. This
-// keeps completed blocks, selections and disclosures still instead of flashing
-// the whole conversation on each token. Cache only the currently loaded pages.
-const itemDOM = new Map<string, { fingerprint: string; node: HTMLElement }>();
+// Cache keyed items only for loaded pages; full item events replace one row.
+// Deltas retain the row, disclosure, headers and images and touch only its body.
+const itemDOM = new Map<
+  string,
+  { node: HTMLElement; type: string; rev?: number; uiId?: string }
+>();
+function streamBody(node: HTMLElement) {
+  node.classList.add('stream-body');
+  return node;
+}
+function invalidateItem(v: View, id: string) {
+  v.dirtyItem(id);
+  schedule();
+}
 function transcriptItem(v: View, i: Data) {
   const key = v.info.threadId + '\0' + i.id;
-  const fingerprint = JSON.stringify([
-    i,
-    writable(v),
-    originals.has(key),
-    [...siteLocal(v.info.threadId, 'native', i.id).open],
-    [...siteLocal(v.info.threadId, itemSite(i), i.id).open],
-  ]);
   const old = itemDOM.get(key);
-  if (old?.fingerprint === fingerprint) return old.node;
+  if (old && !v.dirtyItems.has(i.id)) return old.node;
+  if (
+    old &&
+    i.type === 'uiBlock' &&
+    old.type === i.type &&
+    old.uiId === i.uiId &&
+    old.rev === i.rev
+  ) {
+    const cached = treeDOM.get(v.info.threadId + '\0transcript\0' + i.uiId);
+    if (cached) cached.item = i;
+    return old.node;
+  }
+  if (old && v.deltaItems.has(i.id)) {
+    const drawing =
+      i.uiDisplay?.tree && !originals.has(key)
+        ? treeDOM.get(v.info.threadId + '\0' + itemSite(i) + '\0' + i.id)
+        : undefined;
+    // A pure extension drawing has no native text to update. Engine overrides
+    // are display-only: a constant override stays constant while data streams.
+    if (
+      drawing &&
+      (!drawing.engineNode ||
+        (i.type === 'commandExecution' ? 'output' : 'text') in
+          (drawing.overrides || {}))
+    )
+      return old.node;
+    const body = old.node.querySelector<HTMLElement>('.stream-body');
+    if (body) {
+      if (i.type === 'commandExecution') {
+        const output = i.output || '';
+        const expanded = siteLocal(v.info.threadId, 'native', i.id).open.get(
+          'output',
+        );
+        const lines = output.split('\n');
+        const clipped =
+          !expanded && (lines.length > 18 || output.length > 4000);
+        body.replaceChildren(
+          ...Array.from(
+            code(clipped ? lines.slice(-18).join('\n').slice(-4000) : output)
+              .childNodes,
+          ),
+        );
+        let more = old.node.querySelector<HTMLButtonElement>('.output-more');
+        if (clipped && !more) {
+          more = button('Show more', () => {
+            siteLocal(v.info.threadId, 'native', i.id).open.set('output', true);
+            invalidateItem(v, i.id);
+          });
+          more.className = 'output-more';
+          body.parentNode!.appendChild(more);
+        }
+      } else {
+        const text =
+          i.type === 'event' ? code(i.text || '') : markdown(i.text || '');
+        if (i.status === 'inProgress') text.classList.add('streaming');
+        body.replaceChildren(...Array.from(text.childNodes));
+      }
+      return old.node;
+    }
+  }
   const node = drawTranscriptItem(v, i);
-  itemDOM.set(key, { fingerprint, node });
+  for (const b of node.querySelectorAll<HTMLButtonElement>('button'))
+    if (b.textContent === 'Show more' || b.textContent === 'Show less')
+      b.classList.add('output-more');
+  itemDOM.set(key, { node, type: i.type, rev: i.rev, uiId: i.uiId });
   return node;
 }
 function showModal(
@@ -842,6 +952,7 @@ function pane(v: View, instances: Data[], above: boolean) {
 }
 const agentFolds = new Map<string, boolean>();
 let rowMenu = '';
+let foldVersion = 0;
 function sortedRows() {
   const rows = inventory.map((row) => {
     const v = views.get(row.threadId);
@@ -1035,6 +1146,7 @@ function inventoryUI() {
         (row.folded ? '▸ ' : '▾ ') + row.childCount + ' agents',
         () => {
           agentFolds.set(row.threadId, !row.folded);
+          foldVersion++;
           schedule();
         },
       );
@@ -1320,279 +1432,526 @@ async function submit(intent = 'auto') {
     sending.delete(id);
   }
 }
+// A region keeps its outer node for its lifetime. Inputs are small metadata
+// values/references, never serialized transcript text. Reconcile only changed
+// children: inserting an older page never detaches the already loaded rows.
+type Region = {
+  node: HTMLElement;
+  inputs: unknown[];
+  scroll?: number;
+  inventoryScroll?: number;
+};
+const regions = new Map<string, Region>();
+function syncChildren(parent: HTMLElement, nodes: Node[]) {
+  const wanted = new Set(nodes);
+  for (const child of Array.from(parent.childNodes))
+    if (!wanted.has(child)) child.remove();
+  let cursor = parent.firstChild;
+  for (const node of nodes) {
+    if (node === cursor) cursor = cursor.nextSibling;
+    else parent.insertBefore(node, cursor);
+  }
+  while (cursor) {
+    const next = cursor.nextSibling;
+    parent.removeChild(cursor);
+    cursor = next;
+  }
+}
+function region(key: string, inputs: unknown[], build: () => HTMLElement) {
+  const old = regions.get(key);
+  if (
+    old &&
+    inputs.length === old.inputs.length &&
+    inputs.every((x, n) => x === old.inputs[n])
+  )
+    return old.node;
+  if (
+    old?.node.classList.contains('pane-dock') &&
+    old.node.style.width.endsWith('px')
+  ) {
+    const id = old.node.dataset.thread!;
+    paneStates.set(id, {
+      ...paneStates.get(id),
+      scroll: old.node.scrollTop,
+      width: parseFloat(old.node.style.width),
+    });
+  }
+  // Read offsets before a builder can move a cached tree out of this region.
+  // Hidden mobile regions have no CSS box; retain their last visible offset.
+  const scroll = old
+    ? old.node.clientHeight
+      ? old.node.scrollTop
+      : old.scroll || 0
+    : 0;
+  const previousList = old?.node.querySelector<HTMLElement>('.inventory');
+  const inventoryScroll = previousList?.clientHeight
+    ? previousList.scrollTop
+    : old?.inventoryScroll;
+  const disclosures = old
+    ? Array.from(old.node.querySelectorAll<HTMLDetailsElement>('details'))
+    : [];
+  const fresh = build();
+  if (!old) {
+    regions.set(key, { node: fresh, inputs });
+    return fresh;
+  }
+  const node = old.node;
+  old.scroll = scroll;
+  old.inventoryScroll = inventoryScroll;
+  for (const details of fresh.querySelectorAll<HTMLDetailsElement>('details')) {
+    const previous = disclosures.find(
+      (d) =>
+        d.closest('[data-scope]')?.getAttribute('data-scope') ===
+          details.closest('[data-scope]')?.getAttribute('data-scope') &&
+        (d.dataset.key
+          ? d.dataset.key === details.dataset.key
+          : d.className && d.className === details.className),
+    );
+    if (previous) details.open = previous.open;
+  }
+  node.className = fresh.className;
+  node.style.cssText = fresh.style.cssText;
+  if (node.tagName === 'BUTTON')
+    (node as HTMLButtonElement).disabled = (
+      fresh as HTMLButtonElement
+    ).disabled;
+  node.onclick = fresh.onclick;
+  node.onkeydown = fresh.onkeydown;
+  node.onscroll = fresh.onscroll;
+  syncChildren(node, Array.from(fresh.childNodes));
+  node.scrollTop = scroll;
+  const list = node.querySelector<HTMLElement>('.inventory');
+  if (list && inventoryScroll != null) list.scrollTop = inventoryScroll;
+  old.inputs = inputs;
+  return node;
+}
+function siteVersions(instances: Data[]) {
+  return instances.map((i) => i.site + ':' + i.id + ':' + i.rev).join('|');
+}
+function syncEnabled(node: HTMLElement, enabled: boolean) {
+  for (const n of [
+    node,
+    ...Array.from(node.querySelectorAll<HTMLElement>('[data-ui-disabled]')),
+  ]) {
+    if (n.dataset.uiDisabled == null) continue;
+    const disabled = !enabled || n.dataset.uiDisabled === 'true';
+    if ((n as HTMLInputElement).disabled !== disabled)
+      (n as HTMLInputElement).disabled = disabled;
+  }
+}
+type ThreadDOM = {
+  content: HTMLElement;
+  conversation: HTMLElement;
+  transcript: HTMLElement;
+  area: HTMLElement;
+  form: HTMLElement;
+  input: HTMLTextAreaElement;
+  listVersion: number;
+  writable?: boolean;
+  statusFit?: string;
+  siteInputs?: unknown[];
+  promptSize?: string;
+};
+const threadDOMs = new Map<string, ThreadDOM>();
+function threadDOM(v: View) {
+  const id = v.info.threadId;
+  let dom = threadDOMs.get(id);
+  if (!dom) {
+    const content = el('div', null, 'content');
+    const conversation = el('div', null, 'conversation');
+    const transcript = el('div', null, 'transcript');
+    transcript.dataset.thread = id;
+    transcript.onscroll = () => {
+      if (!transcript.isConnected) return;
+      scrolls.set(id, transcript.scrollTop);
+      if (transcript.scrollTop < 40 && v.info.hasMore && !pages.has(id))
+        void run(() => earlier(v));
+    };
+    const area = el('div', null, 'composer-area');
+    const form = el('div', null, 'composer');
+    const input = el('textarea');
+    input.dataset.focusId = 'prompt';
+    input.dataset.thread = id;
+    input.setAttribute('aria-label', 'Message');
+    input.addEventListener('compositionstart', () => (composing = true));
+    const finishComposition = () => {
+      if (!composing) return;
+      composing = false;
+      schedule();
+    };
+    input.addEventListener('compositionend', finishComposition);
+    input.onblur = finishComposition;
+    // Typing repaints nothing but the slash-command menu when it changes.
+    input.oninput = () => {
+      const before = slashMenu(drafts.get(id) || '');
+      drafts.set(id, input.value);
+      growPrompt(input);
+      if (slashMenu(input.value) !== before) schedule();
+    };
+    input.onkeydown = (e) => {
+      if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
+        e.preventDefault();
+        void run(() => submit(e.ctrlKey || e.metaKey ? 'replace' : 'auto'));
+      } else if (e.key === 'Escape') {
+        e.preventDefault();
+        void run(() => call('turn/interrupt'));
+      }
+    };
+    input.onpaste = (e) => {
+      if (e.clipboardData?.files.length) {
+        e.preventDefault();
+        void run(() => addImages(e.clipboardData!.files));
+      }
+    };
+    form.ondragover = (e) => e.preventDefault();
+    form.ondrop = (e) => {
+      e.preventDefault();
+      if (e.dataTransfer) void run(() => addImages(e.dataTransfer!.files));
+    };
+    conversation.append(transcript, area);
+    content.append(conversation);
+    dom = {
+      content,
+      conversation,
+      transcript,
+      area,
+      form,
+      input,
+      listVersion: -1,
+    };
+    threadDOMs.set(id, dom);
+  }
+  return dom;
+}
+
 function composer(v: View, instances: Data[], above: boolean) {
-  const area = el('div', null, 'composer-area');
+  const { area, form, input } = threadDOM(v);
+  const id = v.info.threadId;
+  const parts: HTMLElement[] = [];
   const panes = instances.filter((i) => i.site === 'pane');
-  if (above && panes.length) area.append(pane(v, panes, true));
+  if (above && panes.length) parts.push(paneRegion(v, panes, true));
   for (const i of instances.filter(
     (i) => i.site === 'band' && i.id !== 'atto/queue',
-  )) {
-    const b = el('div', null, 'band');
-    b.append(uiTree(v, i));
-    area.append(b);
-  }
+  ))
+    parts.push(
+      region(id + '\0band\0' + i.id, [i.rev], () => {
+        const b = el('div', null, 'band');
+        b.append(uiTree(v, i));
+        return b;
+      }),
+    );
   const queueBand = instances.find(
     (i) => i.site === 'band' && i.id === 'atto/queue',
   );
-  const pending = el('div', null, 'queue');
-  if (queueBand?.tree) pending.append(uiTree(v, queueBand));
-  if (v.info.pending?.items?.length)
-    pending.append(el('div', 'Next up', 'queue-title'));
-  const p = v.info.pending;
-  for (const i of p?.items || []) {
-    const row = el('div', null, 'pending-row');
-    row.append(
-      el('small', i.kind === 'steer' ? 'Steer' : 'Queued'),
-      el(
-        'span',
-        queueBand?.tree
-          ? ''
-          : plainMarkdown(i.text || i.input || i.preview || 'Pending message'),
-      ),
-    );
-    row.append(
-      button(
-        'Edit',
-        () =>
-          void run(async () => {
-            const r = await call('turn/unsteer', { inputId: i.id });
-            drafts.set(
-              active,
-              (r.text || '') +
-                (drafts.get(active) ? '\n' + drafts.get(active) : ''),
-            );
-            recoverImages(active, r.images || []);
-            schedule();
-          }),
-        !writable(v),
-      ),
-    );
-    pending.append(row);
-  }
-  area.append(pending);
-  const typed = drafts.get(active) || '';
-  if (slashMenu(typed)) {
-    const menu = el('div', null, 'commands');
-    for (const c of (commands.get(active) || [])
-      .filter((c) => c.name.startsWith(typed.slice(1)))
-      .slice(0, 10))
-      menu.append(
-        button('/' + c.name + ' — ' + c.description, () => {
-          drafts.set(active, '/' + c.name + ' ');
-          schedule();
-        }),
-      );
-    area.append(menu);
-  }
-  if (context) {
-    const details = el('details', null, 'context-card');
-    details.open = true;
-    details.append(
-      el(
-        'summary',
-        'Context · ' +
-          (context.contextTokens || 0) +
-          ' / ' +
-          (context.contextWindow || '?') +
-          ' tokens',
-      ),
-      context.tree
-        ? uiTree(v, {
-            site: 'pane',
-            id: 'atto/context',
-            rev: 0,
-            tree: context.tree,
-          })
-        : code(JSON.stringify(context, null, 2)),
-      button('Hide', () => {
-        context = null;
-        schedule();
+  parts.push(
+    region(
+      id + '\0queue',
+      [queueBand?.rev, v.info.pending, writable(v)],
+      () => {
+        const pending = el('div', null, 'queue');
+        if (queueBand?.tree) pending.append(uiTree(v, queueBand));
+        if (v.info.pending?.items?.length)
+          pending.append(el('div', 'Next up', 'queue-title'));
+        const p = v.info.pending;
+        for (const i of p?.items || []) {
+          const row = el('div', null, 'pending-row');
+          row.append(
+            el('small', i.kind === 'steer' ? 'Steer' : 'Queued'),
+            el(
+              'span',
+              queueBand?.tree
+                ? ''
+                : plainMarkdown(
+                    i.text || i.input || i.preview || 'Pending message',
+                  ),
+            ),
+          );
+          row.append(
+            button(
+              'Edit',
+              () =>
+                void run(async () => {
+                  const r = await call('turn/unsteer', { inputId: i.id });
+                  drafts.set(
+                    active,
+                    (r.text || '') +
+                      (drafts.get(active) ? '\n' + drafts.get(active) : ''),
+                  );
+                  recoverImages(active, r.images || []);
+                  schedule();
+                }),
+              !writable(v),
+            ),
+          );
+          pending.append(row);
+        }
+        return pending;
+      },
+    ),
+  );
+  const typed = drafts.get(id) || '';
+  if (slashMenu(typed))
+    parts.push(
+      region(id + '\0commands', [slashMenu(typed), commands.get(id)], () => {
+        const menu = el('div', null, 'commands');
+        for (const c of (commands.get(active) || [])
+          .filter((c) => c.name.startsWith(typed.slice(1)))
+          .slice(0, 10))
+          menu.append(
+            button('/' + c.name + ' — ' + c.description, () => {
+              drafts.set(active, '/' + c.name + ' ');
+              schedule();
+            }),
+          );
+        return menu;
       }),
     );
-    area.append(details);
+  if (context) {
+    const info = context;
+    parts.push(
+      region(id + '\0context', [info], () => {
+        const details = el('details', null, 'context-card');
+        details.open = true;
+        details.append(
+          el(
+            'summary',
+            'Context · ' +
+              (info.contextTokens || 0) +
+              ' / ' +
+              (info.contextWindow || '?') +
+              ' tokens',
+          ),
+          info.tree
+            ? uiTree(v, {
+                site: 'pane',
+                id: 'atto/context',
+                rev: 0,
+                tree: info.tree,
+              })
+            : code(JSON.stringify(info, null, 2)),
+          button('Hide', () => {
+            context = null;
+            schedule();
+          }),
+        );
+        return details;
+      }),
+    );
   }
   if (v.info.busy)
-    area.append(
-      el(
-        'div',
-        typeof v.info.activity === 'string'
-          ? v.info.activity
-          : (v.info.activity?.phase || 'Thinking') + '…',
-        'shimmer',
+    parts.push(
+      region(
+        id + '\0activity',
+        [
+          typeof v.info.activity === 'string'
+            ? v.info.activity
+            : v.info.activity?.phase,
+        ],
+        () =>
+          el(
+            'div',
+            typeof v.info.activity === 'string'
+              ? v.info.activity
+              : (v.info.activity?.phase || 'Thinking') + '…',
+            'shimmer',
+          ),
       ),
     );
-  const form = el('div', null, 'composer');
-  const ims = attachments.get(active) || [];
-  if (ims.length) {
-    const strip = el('div', null, 'attachments');
-    ims.forEach((im, i) => {
-      const group = el('div');
-      const img = el('img');
-      if (im.data) img.src = im.data;
-      img.alt = im.name || 'Recovered image';
-      group.append(
-        img,
-        button('×', () => {
-          ims.splice(i, 1);
-          schedule();
-        }),
-      );
-      strip.append(group);
-    });
-    form.append(strip);
+  const formParts: HTMLElement[] = [];
+  const ims = attachments.get(id) || [];
+  if (ims.length)
+    formParts.push(
+      region(id + '\0attachments', [ims, ims.length], () => {
+        const strip = el('div', null, 'attachments');
+        ims.forEach((im, i) => {
+          const group = el('div');
+          const img = el('img');
+          if (im.data) img.src = im.data;
+          img.alt = im.name || 'Recovered image';
+          group.append(
+            img,
+            button('×', () => {
+              ims.splice(i, 1);
+              schedule();
+            }),
+          );
+          strip.append(group);
+        });
+        return strip;
+      }),
+    );
+  if (input.value !== typed) {
+    input.value = typed;
+    growPrompt(input);
   }
-  const input = el('textarea');
-  input.id = 'prompt';
-  input.dataset.focusId = 'prompt';
-  input.value = typed;
-  input.placeholder =
+  const placeholder =
     v.info.readOnly || v.info.offline
       ? 'Read only — resume an active session to write'
       : v.info.busy
         ? 'Steer the running turn…'
         : 'Message atto…';
-  input.setAttribute('aria-label', 'Message');
-  input.disabled = !writable(v);
-  // Typing repaints nothing but the slash-command menu when it changes.
-  input.oninput = () => {
-    const before = slashMenu(drafts.get(active) || '');
-    drafts.set(active, input.value);
-    growPrompt(input);
-    if (slashMenu(input.value) !== before) schedule();
-  };
-  input.oncompositionstart = () => (composing = true);
-  input.oncompositionend = input.onblur = () => {
-    if (!composing) return;
-    composing = false;
-    schedule();
-  };
-  input.onkeydown = (e) => {
-    if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
-      e.preventDefault();
-      void run(() => submit(e.ctrlKey || e.metaKey ? 'replace' : 'auto'));
-    } else if (e.key === 'Escape') {
-      e.preventDefault();
-      void run(() => call('turn/interrupt'));
-    }
-  };
-  input.onpaste = (e) => {
-    if (e.clipboardData?.files.length) {
-      e.preventDefault();
-      void run(() => addImages(e.clipboardData!.files));
-    }
-  };
-  form.ondragover = (e) => e.preventDefault();
-  form.ondrop = (e) => {
-    e.preventDefault();
-    if (e.dataTransfer) void run(() => addImages(e.dataTransfer!.files));
-  };
-  form.append(input);
-  const bar = el('div', null, 'toolbar');
-  const file = el('input');
-  file.type = 'file';
-  file.accept = 'image/png,image/jpeg,image/gif,image/webp';
-  file.multiple = true;
-  file.hidden = true;
-  file.onchange = () => {
-    if (file.files) void run(() => addImages(file.files!));
-  };
-  bar.append(
-    file,
-    button(
-      '＋',
-      () => file.click(),
-      !writable(v) || !models.find((m) => m.id === v.info.model)?.images,
-    ),
-  );
-  bar.querySelector('button')!.setAttribute('aria-label', 'Attach image');
-  bar.querySelector('button')!.title = 'Attach image';
-  const model = el('select');
-  model.id = 'model';
-  model.dataset.focusId = 'model';
-  model.setAttribute('aria-label', 'Model');
-  for (const m of models) {
-    const o = el('option', m.name || m.id);
-    o.value = m.id;
-    o.disabled = !m.hasKey;
-    model.append(o);
-  }
-  model.value = v.info.model;
-  model.disabled = !writable(v);
-  model.onchange = () =>
-    void run(() => settings('thread/setModel', { model: model.value }));
-  bar.append(model);
-  const effort = el('select');
-  effort.id = 'effort';
-  effort.dataset.focusId = 'effort';
-  effort.setAttribute('aria-label', 'Reasoning effort');
-  for (const x of models.find((m) => m.id === v.info.model)?.efforts ||
-    v.info.efforts ||
-    []) {
-    const o = el('option', x);
-    o.value = x;
-    effort.append(o);
-  }
-  effort.value = v.info.effort;
-  effort.disabled = !writable(v);
-  effort.onchange = () =>
-    void run(() => settings('thread/setEffort', { effort: effort.value }));
-  bar.append(effort);
-  if (!effort.children.length) effort.hidden = true;
-  if (v.info.busy) {
-    bar.append(
-      button('Steer', () => void run(() => submit()), !writable(v)),
-      button('Queue', () => void run(() => submit('queue')), !writable(v)),
-    );
-    const more = el('details', null, 'composer-more');
-    more.append(el('summary', '⋯'));
-    more.append(
-      button('Send now', () => void run(() => submit('replace')), !writable(v)),
-      button(
-        'Background',
-        () => void run(() => call('turn/background')),
+  if (input.placeholder !== placeholder) input.placeholder = placeholder;
+  if (input.disabled !== !writable(v)) input.disabled = !writable(v);
+  formParts.push(input);
+  const bar = region(
+    id + '\0toolbar',
+    [
+      models,
+      v.info.model,
+      v.info.effort,
+      v.info.efforts,
+      v.info.busy,
+      writable(v),
+    ],
+    () => {
+      const bar = el('div', null, 'toolbar');
+      const file = el('input');
+      file.type = 'file';
+      file.accept = 'image/png,image/jpeg,image/gif,image/webp';
+      file.multiple = true;
+      file.hidden = true;
+      file.onchange = () => {
+        if (file.files) void run(() => addImages(file.files!));
+      };
+      bar.append(
+        file,
+        button(
+          '＋',
+          () => file.click(),
+          !writable(v) || !models.find((m) => m.id === v.info.model)?.images,
+        ),
+      );
+      bar.querySelector('button')!.setAttribute('aria-label', 'Attach image');
+      bar.querySelector('button')!.title = 'Attach image';
+      const model = el('select');
+      model.id = 'model';
+      model.dataset.focusId = 'model';
+      model.setAttribute('aria-label', 'Model');
+      for (const m of models) {
+        const o = el('option', m.name || m.id);
+        o.value = m.id;
+        o.disabled = !m.hasKey;
+        model.append(o);
+      }
+      model.value = v.info.model;
+      model.disabled = !writable(v);
+      model.onchange = () =>
+        void run(() => settings('thread/setModel', { model: model.value }));
+      bar.append(model);
+      const effort = el('select');
+      effort.id = 'effort';
+      effort.dataset.focusId = 'effort';
+      effort.setAttribute('aria-label', 'Reasoning effort');
+      for (const x of models.find((m) => m.id === v.info.model)?.efforts ||
+        v.info.efforts ||
+        []) {
+        const o = el('option', x);
+        o.value = x;
+        effort.append(o);
+      }
+      effort.value = v.info.effort;
+      effort.disabled = !writable(v);
+      effort.onchange = () =>
+        void run(() => settings('thread/setEffort', { effort: effort.value }));
+      bar.append(effort);
+      if (!effort.children.length) effort.hidden = true;
+      if (v.info.busy) {
+        bar.append(
+          button('Steer', () => void run(() => submit()), !writable(v)),
+          button('Queue', () => void run(() => submit('queue')), !writable(v)),
+        );
+        const more = el('details', null, 'composer-more');
+        more.append(el('summary', '⋯'));
+        more.append(
+          button(
+            'Send now',
+            () => void run(() => submit('replace')),
+            !writable(v),
+          ),
+          button(
+            'Background',
+            () => void run(() => call('turn/background')),
+            !writable(v),
+          ),
+        );
+        bar.append(more);
+      }
+      const send = button(
+        v.info.busy ? '■' : '↑',
+        () => void run(() => (v.info.busy ? call('turn/interrupt') : submit())),
         !writable(v),
-      ),
-    );
-    bar.append(more);
-  }
-  const send = button(
-    v.info.busy ? '■' : '↑',
-    () => void run(() => (v.info.busy ? call('turn/interrupt') : submit())),
-    !writable(v),
+      );
+      send.className = 'send';
+      send.setAttribute('aria-label', v.info.busy ? 'Stop' : 'Send');
+      send.title = v.info.busy ? 'Stop turn' : 'Send message';
+      bar.append(send);
+      return bar;
+    },
   );
-  send.className = 'send';
-  send.setAttribute('aria-label', v.info.busy ? 'Stop' : 'Send');
-  send.title = v.info.busy ? 'Stop turn' : 'Send message';
-  bar.append(send);
-  form.append(bar);
-  area.append(form);
-  const status = el('footer', null, 'status');
-  const statuses = instances
-    .filter((i) => i.site === 'status')
-    .sort((a, b) => (b.options?.priority || 0) - (a.options?.priority || 0));
-  for (const i of statuses) {
-    const n = uiTree(v, i);
-    n.dataset.priority = String(i.options?.priority || 0);
-    n.dataset.registration = String(instances.indexOf(i));
-    n.style.order = String(instances.indexOf(i));
-    if (i.options?.align === 'end') n.style.marginLeft = 'auto';
-    status.append(n);
-  }
-  status.append(
-    button(
-      (v.info.contextTokens || 0) +
-        ' tokens · $' +
-        (v.info.usage?.cost || 0).toFixed(4),
-      () =>
-        void run(async () => {
-          context = await call('thread/context');
-          schedule();
-        }),
-      !online,
-    ),
+  formParts.push(bar);
+  syncChildren(form, formParts);
+  parts.push(form);
+  const status = region(
+    id + '\0status',
+    [
+      siteVersions(instances.filter((i) => i.site === 'status')),
+      v.info.contextTokens,
+      v.info.usage?.cost,
+      online,
+      innerWidth,
+    ],
+    () => {
+      const status = el('footer', null, 'status');
+      const statuses = instances
+        .filter((i) => i.site === 'status')
+        .sort(
+          (a, b) => (b.options?.priority || 0) - (a.options?.priority || 0),
+        );
+      for (const i of statuses) {
+        const n = uiTree(v, i);
+        n.style.display = '';
+        n.dataset.priority = String(i.options?.priority || 0);
+        n.dataset.registration = String(instances.indexOf(i));
+        n.style.order = String(instances.indexOf(i));
+        if (i.options?.align === 'end') n.style.marginLeft = 'auto';
+        status.append(n);
+      }
+      status.append(
+        button(
+          (v.info.contextTokens || 0) +
+            ' tokens · $' +
+            (v.info.usage?.cost || 0).toFixed(4),
+          () =>
+            void run(async () => {
+              context = await call('thread/context');
+              schedule();
+            }),
+          !online,
+        ),
+      );
+      return status;
+    },
   );
-  area.append(status);
+  parts.push(status);
+  syncChildren(area, parts);
   return area;
+}
+function paneRegion(v: View, panes: Data[], above: boolean) {
+  const selected =
+    panes.find((i) => i.id === paneTab.get(v.info.threadId)) || panes[0];
+  paneTab.set(v.info.threadId, selected.id);
+  return region(
+    v.info.threadId + '\0pane',
+    [
+      siteVersions(panes),
+      paneTab.get(v.info.threadId),
+      above,
+      innerWidth,
+      innerHeight,
+      writable(v),
+    ],
+    () => pane(v, panes, above),
+  );
 }
 function promptDialog(v: View) {
   const p = v.info.prompt;
@@ -1669,255 +2028,467 @@ function promptDialog(v: View) {
   );
   return card;
 }
+const layout = el('div', null, 'layout');
+const workspace = el('main', null, 'workspace');
+root.replaceChildren(layout);
+layout.append(workspace);
 function paint() {
-  const loaded = new Set(
-    [...views.values()].flatMap((v) =>
-      v.items.map((i) => v.info.threadId + '\0' + i.id),
-    ),
-  );
-  for (const key of itemDOM.keys()) if (!loaded.has(key)) itemDOM.delete(key);
-  const oldPane = root.querySelector<HTMLElement>('.pane-dock,.pane-above');
-  if (oldPane?.dataset.thread) {
-    const id = oldPane.dataset.thread;
-    const state = paneStates.get(id) || { scroll: 0 };
-    state.scroll = oldPane.scrollTop;
-    if (
-      oldPane.classList.contains('pane-dock') &&
-      oldPane.style.width.endsWith('px')
-    )
-      state.width = parseFloat(oldPane.style.width);
-    paneStates.set(id, state);
+  // Bounded timing evidence is available to the local CDP verification tool.
+  performance.mark('atto-paint-start');
+  const previousScroll = document.getElementById('transcript');
+  const switching = previousScroll?.dataset.thread !== active;
+  if (switching && previousScroll?.dataset.thread) {
+    scrolls.set(previousScroll.dataset.thread, previousScroll.scrollTop);
+    const previousPane = root.querySelector<HTMLElement>(
+      '.pane-dock,.pane-above',
+    );
+    if (previousPane?.dataset.thread)
+      paneStates.set(previousPane.dataset.thread, {
+        ...paneStates.get(previousPane.dataset.thread),
+        scroll: previousPane.scrollTop,
+        ...(previousPane.style.width?.endsWith('px')
+          ? { width: parseFloat(previousPane.style.width) }
+          : {}),
+      });
   }
-  const oldScroll = document.getElementById('transcript');
-  const oldId = oldScroll?.dataset.thread;
-  const oldBottom = oldScroll
-    ? oldScroll.scrollHeight - oldScroll.scrollTop - oldScroll.clientHeight < 70
-    : true;
-  if (oldScroll && oldId) scrolls.set(oldId, oldScroll.scrollTop);
   const focus = document.activeElement as HTMLInputElement;
   const focusId = focus?.dataset.focusId,
     focusKey = focus?.dataset.key,
     focusScope = focus?.closest('[data-scope]')?.getAttribute('data-scope');
   const start = focus?.selectionStart,
     end = focus?.selectionEnd;
-  const layout = el('div', null, 'layout');
-  layout.append(inventoryUI());
-  const workspace = el('main', null, 'workspace');
-  const top = el('div', null, 'topbar');
-  top.append(
-    button('☰', () => {
-      sidebar = !sidebar;
-      schedule();
-    }),
-  );
-  top.firstElementChild!.classList.add('mobile-menu');
-  const tabs = el('div', null, 'tabs');
-  for (const [id, v] of views) {
-    const tab = button(
-      (v.info.busy ? '◌ ' : v.info.prompt ? '! ' : '') +
-        plainMarkdown(
-          v.info.name ||
-            v.items.find((i) => i.type === 'userMessage')?.text ||
-            'New session',
-        ),
-      () => {
-        active = id;
-        context = null;
-        schedule();
-      },
-    );
-    tab.className = 'tab' + (id === active ? ' active' : '');
-    const group = el(
-      'div',
-      null,
-      'tab-group' + (id === active ? ' active' : ''),
-    );
-    const close = button('×', () => void run(() => detach(id)), !online);
-    close.setAttribute('aria-label', 'Close session tab');
-    group.append(tab, close);
-    tabs.append(group);
-  }
-  top.append(tabs);
-  if (active)
-    top.append(
-      button('Tree', () => void run(() => treeDialog(current()!))),
-      button(
-        'Rename',
-        () => {
-          const name = prompt('Session name', current()?.info.name || '');
-          if (name != null)
-            void run(() => settings('thread/setName', { name }));
-        },
-        !writable(current()),
-      ),
-    );
-  workspace.append(top);
-  const v = current();
-  if (!v) {
-    const empty = el('div', null, 'empty');
-    empty.append(
-      el('div', '✳', 'empty-mark'),
-      el('h2', 'What would you like to build?'),
-      el(
-        'p',
-        'A little help for your next big idea. Start a session, or pick up where you left off.',
-      ),
-      button('New session', () => void run(() => open()), !online),
-    );
-    workspace.append(empty);
-  } else {
-    const content = el('div', null, 'content');
-    const conversation = el('div', null, 'conversation');
-    const sc = el('div', null, 'transcript');
-    sc.id = 'transcript';
-    sc.dataset.thread = active;
-    const more = button(
-      pages.has(active) ? 'Loading earlier messages…' : 'Load earlier messages',
-      () => void run(() => earlier(v)),
-      pages.has(active) || !online,
-    );
-    if (v.info.hasMore) sc.append(more);
-    for (const i of v.items) sc.append(transcriptItem(v, i));
-    if (
-      !v.items.some((i) =>
-        ['userMessage', 'agentMessage', 'commandExecution'].includes(i.type),
-      )
-    ) {
-      const welcome = el('div', null, 'conversation-empty');
-      welcome.append(
-        el('div', '✳', 'empty-mark'),
-        el('h2', 'Ready when you are'),
-        el(
-          'p',
-          'Ask a question, explore your project, or build something new.',
-        ),
-      );
-      sc.append(welcome);
+  for (const [id, dom] of threadDOMs)
+    if (!views.has(id)) {
+      dom.content.remove();
+      threadDOMs.delete(id);
+      for (const key of regions.keys())
+        if (key.startsWith(id + '\0')) regions.delete(key);
+      for (const key of itemDOM.keys())
+        if (key.startsWith(id + '\0')) itemDOM.delete(key);
+      for (const key of treeDOM.keys())
+        if (key.startsWith(id + '\0')) treeDOM.delete(key);
     }
-    sc.onscroll = () => {
-      scrolls.set(v.info.threadId, sc.scrollTop);
-      if (sc.scrollTop < 40 && v.info.hasMore && !pages.has(v.info.threadId))
-        void run(() => earlier(v));
-    };
-    conversation.append(sc);
+  const sidebarNode = region(
+    'sidebar',
+    [
+      inventory,
+      active,
+      filter,
+      sidebar,
+      online,
+      rowMenu,
+      Math.floor(Date.now() / 60000),
+      foldVersion,
+      [...views]
+        .map(([id, v]) => id + ':' + v.inventoryVersion + ':' + v.info.name)
+        .join('|'),
+    ],
+    inventoryUI,
+  );
+  const tabKey = JSON.stringify(
+    [...views].map(([id, v]) => [
+      id,
+      v.info.name,
+      v.info.busy,
+      !!v.info.prompt,
+      v.info.name ? 0 : v.tabVersion,
+    ]),
+  );
+  const top = region(
+    'topbar',
+    [active, online, tabKey, writable(current())],
+    () => {
+      const top = el('div', null, 'topbar');
+      top.append(
+        button('☰', () => {
+          sidebar = !sidebar;
+          schedule();
+        }),
+      );
+      top.firstElementChild!.classList.add('mobile-menu');
+      const tabs = region('tabs', [active, online, tabKey], () => {
+        const tabs = el('div', null, 'tabs');
+        for (const [id, v] of views) {
+          const tab = button(
+            (v.info.busy ? '◌ ' : v.info.prompt ? '! ' : '') +
+              plainMarkdown(
+                v.info.name ||
+                  v.items.find((i) => i.type === 'userMessage')?.text ||
+                  'New session',
+              ),
+            () => {
+              active = id;
+              context = null;
+              schedule();
+            },
+          );
+          tab.className = 'tab' + (id === active ? ' active' : '');
+          const group = el(
+            'div',
+            null,
+            'tab-group' + (id === active ? ' active' : ''),
+          );
+          const close = button('×', () => void run(() => detach(id)), !online);
+          close.setAttribute('aria-label', 'Close session tab');
+          group.append(tab, close);
+          tabs.append(group);
+        }
+        return tabs;
+      });
+      top.append(tabs);
+      if (active)
+        top.append(
+          button('Tree', () => void run(() => treeDialog(current()!))),
+          button(
+            'Rename',
+            () => {
+              const name = prompt('Session name', current()?.info.name || '');
+              if (name != null)
+                void run(() => settings('thread/setName', { name }));
+            },
+            !writable(current()),
+          ),
+        );
+      return top;
+    },
+  );
+  const workspaceParts = [top];
+  const layoutParts = [sidebarNode];
+  const v = current();
+  let newThreadInput: HTMLTextAreaElement | undefined;
+  let stick: HTMLElement | undefined;
+  let restoreThreadScroll: number | undefined;
+  if (!v) {
+    workspaceParts.push(
+      region('empty', [online], () => {
+        const empty = el('div', null, 'empty');
+        empty.append(
+          el('div', '✳', 'empty-mark'),
+          el('h2', 'What would you like to build?'),
+          el(
+            'p',
+            'A little help for your next big idea. Start a session, or pick up where you left off.',
+          ),
+          button('New session', () => void run(() => open()), !online),
+        );
+        return empty;
+      }),
+    );
+  } else {
+    const dom = threadDOM(v);
+    syncChildren(workspace, [top, dom.content]);
+    // Only the attached view has document IDs. Inactive views keep their DOM,
+    // editor and scroll offsets, detached from the workspace until selected.
+    for (const [id, d] of threadDOMs) {
+      const transcriptId = id === active ? 'transcript' : '';
+      const promptId = id === active ? 'prompt' : '';
+      if (d.transcript.id !== transcriptId) d.transcript.id = transcriptId;
+      if (d.input.id !== promptId) d.input.id = promptId;
+    }
+    const sc = dom.transcript;
+    if (switching && dom.listVersion >= 0) {
+      restoreThreadScroll = scrolls.get(active);
+      if (restoreThreadScroll != null) sc.scrollTop = restoreThreadScroll;
+    }
+    const firstPaint = dom.listVersion < 0;
+    if (firstPaint) newThreadInput = dom.input;
+    const bottom = sc.scrollHeight - sc.scrollTop - sc.clientHeight < 70;
+    const structural = dom.listVersion !== v.listVersion;
+    const oldHeight = sc.scrollHeight;
+    const oldTop = sc.scrollTop;
+    const oldFirst = sc.querySelector<HTMLElement>('[data-item]')?.dataset.item;
+    for (const id of v.dirtyItems) {
+      const item = v.items.find((i) => i.id === id);
+      if (!item) continue;
+      const old = itemDOM.get(active + '\0' + id)?.node;
+      const node = transcriptItem(v, item);
+      v.dirtyItems.delete(id);
+      v.deltaItems.delete(id);
+      if (old && node !== old && old.parentNode === sc) old.replaceWith(node);
+    }
+    const transcriptInputs = [
+      v.listVersion,
+      v.info.hasMore,
+      pages.has(active),
+      online,
+    ];
+    const listKey = active + '\0list';
+    const listState = regions.get(listKey);
+    if (
+      !listState ||
+      transcriptInputs.some((x, n) => x !== listState.inputs[n])
+    ) {
+      const children: HTMLElement[] = [];
+      if (v.info.hasMore)
+        children.push(
+          region(active + '\0earlier', [pages.has(active), online], () =>
+            button(
+              pages.has(active)
+                ? 'Loading earlier messages…'
+                : 'Load earlier messages',
+              () => void run(() => earlier(v)),
+              pages.has(active) || !online,
+            ),
+          ),
+        );
+      for (const i of v.items) children.push(transcriptItem(v, i));
+      if (
+        !v.items.some((i) =>
+          ['userMessage', 'agentMessage', 'commandExecution'].includes(i.type),
+        )
+      )
+        children.push(
+          region(active + '\0welcome', [], () => {
+            const welcome = el('div', null, 'conversation-empty');
+            welcome.append(
+              el('div', '✳', 'empty-mark'),
+              el('h2', 'Ready when you are'),
+              el(
+                'p',
+                'Ask a question, explore your project, or build something new.',
+              ),
+            );
+            return welcome;
+          }),
+        );
+      syncChildren(sc, children);
+      regions.set(listKey, { node: sc, inputs: transcriptInputs });
+      dom.listVersion = v.listVersion;
+      const loaded = new Set(v.items.map((i) => active + '\0' + i.id));
+      for (const key of itemDOM.keys())
+        if (key.startsWith(active + '\0') && !loaded.has(key))
+          itemDOM.delete(key);
+    }
+    if (dom.writable !== writable(v)) {
+      for (const node of sc.querySelectorAll<HTMLButtonElement>('.fork'))
+        node.disabled = !writable(v);
+      dom.writable = writable(v);
+    }
+    v.dirtyItems.clear();
+    v.deltaItems.clear();
     const instances = (v.info.ui?.instances || []).filter(
       (i: Data) =>
         i.site !== 'toast' ||
         !i.options?.expiresAt ||
         i.options.expiresAt > Date.now(),
     );
+    const siteInputs = [
+      v.listVersion,
+      v.uiVersion,
+      siteVersions(instances.filter((i: Data) => i.site === 'toast')),
+      context,
+    ];
+    if (
+      !dom.siteInputs ||
+      siteInputs.some((x, n) => x !== dom.siteInputs![n])
+    ) {
+      dom.siteInputs = siteInputs;
+      const scopes = new Set<string>(
+        instances.map((i: Data) => active + '\0' + i.site + '\0' + i.id),
+      );
+      for (const item of v.items) {
+        if (item.type === 'uiBlock')
+          scopes.add(active + '\0transcript\0' + item.uiId);
+        if (item.uiDisplay?.tree)
+          scopes.add(active + '\0' + itemSite(item) + '\0' + item.id);
+      }
+      if (context) scopes.add(active + '\0pane\0atto/context');
+      for (const key of treeDOM.keys())
+        if (key.startsWith(active + '\0') && !scopes.has(key))
+          treeDOM.delete(key);
+      const bands = new Set(
+        instances
+          .filter((i: Data) => i.site === 'band')
+          .map((i: Data) => active + '\0band\0' + i.id),
+      );
+      for (const key of regions.keys())
+        if (key.startsWith(active + '\0band\0') && !bands.has(key))
+          regions.delete(key);
+    }
+    for (const [scope, cached] of treeDOM)
+      if (scope.startsWith(active + '\0')) {
+        const item = cached.item;
+        const enabled =
+          writable(v) &&
+          (!item ||
+            !!item.uiDisplay?.actionsEnabled ||
+            (item.type === 'uiBlock' && !!item.actionsEnabled));
+        if (cached.context.enabled !== enabled) {
+          cached.context.enabled = enabled;
+          syncEnabled(cached.node, enabled);
+        }
+      }
     const panes = instances.filter((i: Data) => i.site === 'pane');
     const picked =
       panes.find((i: Data) => i.id === paneTab.get(active)) || panes[0];
     const side =
-      columns() >= 120 &&
-      contentWidth() >= 120 &&
-      picked?.options?.placement !== 'abovePrompt';
-    conversation.append(composer(v, instances, !side));
-    content.append(conversation);
-    if (side && panes.length) content.append(pane(v, panes, false));
-    workspace.append(content);
-    const toasts = el('div', null, 'toasts');
-    for (const i of instances.filter((i: Data) => i.site === 'toast')) {
-      const t = el('div', null, 'toast');
-      t.setAttribute('role', 'status');
-      t.append(uiTree(v, i));
-      toasts.append(t);
-    }
-    layout.append(toasts);
-    const dialogs = instances.filter((i: Data) => i.site === 'dialog');
-    if (dialogs.length) {
-      const i = dialogs[0];
-      const card = el('section', null, 'approval-card');
-      card.setAttribute('role', 'dialog');
-      card.setAttribute('aria-modal', 'true');
-      card.setAttribute('aria-label', i.options?.title || 'Question');
-      card.append(
-        el('h2', i.options?.title || 'Question'),
-        uiTree(v, i),
-        button(
-          'Cancel',
-          () =>
-            void run(() =>
-              call('ui/event', {
-                site: 'dialog',
-                id: i.id,
-                key: '$site',
-                type: 'close',
-                rev: i.rev,
-              }),
-            ),
-          !writable(v),
-        ),
-      );
-      const backdrop = el('div', null, 'dialog-backdrop');
-      backdrop.append(card);
-      layout.append(backdrop);
-    } else {
-      const card = promptDialog(v);
-      if (card) {
-        const backdrop = el('div', null, 'dialog-backdrop');
-        backdrop.append(card);
-        layout.append(backdrop);
-      }
-    }
-  }
-  layout.append(workspace);
-  if (notice) {
-    const toast = el('div', notice, 'toasts toast');
-    toast.setAttribute('role', 'alert');
-    layout.append(toast);
-  }
-  if (localModal) {
-    const backdrop = el('div', null, 'dialog-backdrop');
-    backdrop.append(localModal);
-    layout.append(backdrop);
-  }
-  root.replaceChildren(layout);
-  const promptInput = document.getElementById('prompt') as HTMLTextAreaElement;
-  if (promptInput) growPrompt(promptInput);
-  const newPane = root.querySelector<HTMLElement>('.pane-dock,.pane-above');
-  if (newPane?.dataset.thread)
-    newPane.scrollTop = paneStates.get(newPane.dataset.thread)?.scroll || 0;
-  const status = root.querySelector<HTMLElement>('.status');
-  if (status) {
-    const rows = Array.from(
-      status.querySelectorAll<HTMLElement>('.ui-tree'),
-    ).sort(
-      (a, b) =>
-        Number(a.dataset.priority) - Number(b.dataset.priority) ||
-        Number(b.dataset.registration) - Number(a.dataset.registration),
+      contentWidth() >= 120 && picked?.options?.placement !== 'abovePrompt';
+    composer(v, instances, !side);
+    syncChildren(dom.content, [
+      dom.conversation,
+      ...(side && panes.length ? [paneRegion(v, panes, false)] : []),
+    ]);
+    workspaceParts.push(dom.content);
+    layoutParts.push(
+      region(
+        active + '\0toasts',
+        [siteVersions(instances.filter((i: Data) => i.site === 'toast'))],
+        () => {
+          const toasts = el('div', null, 'toasts');
+          for (const i of instances.filter((i: Data) => i.site === 'toast')) {
+            const t = el('div', null, 'toast');
+            t.setAttribute('role', 'status');
+            t.append(uiTree(v, i));
+            toasts.append(t);
+          }
+          return toasts;
+        },
+      ),
     );
-    while (status.scrollWidth > status.clientWidth && rows.length > 1)
-      rows.shift()!.remove();
+    const dialogs = instances.filter((i: Data) => i.site === 'dialog');
+    const dialogNode = region(
+      active + '\0dialogs',
+      [siteVersions(dialogs), v.info.prompt, writable(v)],
+      () => {
+        const dialogs = instances.filter((i: Data) => i.site === 'dialog');
+        if (dialogs.length) {
+          const i = dialogs[0];
+          const card = el('section', null, 'approval-card');
+          card.setAttribute('role', 'dialog');
+          card.setAttribute('aria-modal', 'true');
+          card.setAttribute('aria-label', i.options?.title || 'Question');
+          card.append(
+            el('h2', i.options?.title || 'Question'),
+            uiTree(v, i),
+            button(
+              'Cancel',
+              () =>
+                void run(() =>
+                  call('ui/event', {
+                    site: 'dialog',
+                    id: i.id,
+                    key: '$site',
+                    type: 'close',
+                    rev: i.rev,
+                  }),
+                ),
+              !writable(v),
+            ),
+          );
+          const backdrop = el('div', null, 'dialog-backdrop');
+          backdrop.append(card);
+          return backdrop;
+        } else {
+          const card = promptDialog(v);
+          if (card) {
+            const backdrop = el('div', null, 'dialog-backdrop');
+            backdrop.append(card);
+            return backdrop;
+          }
+        }
+        return el('div');
+      },
+    );
+    if (dialogNode.className === 'dialog-backdrop')
+      layoutParts.push(dialogNode);
+    // Paging uses the height difference; live text follows only if already near
+    // the bottom. Never jump a reader inspecting older messages to the tail.
+    const prepended = structural && oldFirst && v.items[0]?.id !== oldFirst;
+    if (prepended) sc.scrollTop = oldTop + sc.scrollHeight - oldHeight;
+    else if (bottom || firstPaint) {
+      sc.scrollTop = sc.scrollHeight;
+      stick = sc;
+    }
+    scrolls.set(active, sc.scrollTop);
+    const status = dom.area.querySelector<HTMLElement>('.status');
+    const fitKey = JSON.stringify([
+      siteVersions(instances.filter((i: Data) => i.site === 'status')),
+      v.info.contextTokens,
+      v.info.usage?.cost,
+      innerWidth,
+      status?.clientWidth,
+    ]);
+    if (status && dom.statusFit !== fitKey) {
+      dom.statusFit = fitKey;
+      const rows = Array.from(
+        status.querySelectorAll<HTMLElement>('.ui-tree'),
+      ).sort(
+        (a, b) =>
+          Number(a.dataset.priority) - Number(b.dataset.priority) ||
+          Number(b.dataset.registration) - Number(a.dataset.registration),
+      );
+      for (const row of rows) row.style.display = '';
+      while (status.scrollWidth > status.clientWidth && rows.length > 1)
+        rows.shift()!.style.display = 'none';
+    }
   }
-  const sc = document.getElementById('transcript');
-  if (sc) {
-    sc.scrollTop =
-      oldId === active && oldBottom
-        ? sc.scrollHeight
-        : (scrolls.get(active) ?? sc.scrollHeight);
+  layoutParts.push(workspace);
+  if (notice)
+    layoutParts.push(
+      region('notice', [notice], () => {
+        const toast = el('div', notice, 'toasts toast');
+        toast.setAttribute('role', 'alert');
+        return toast;
+      }),
+    );
+  if (localModal)
+    layoutParts.push(
+      region('modal', [localModal], () => {
+        const backdrop = el('div', null, 'dialog-backdrop');
+        backdrop.append(localModal!);
+        return backdrop;
+      }),
+    );
+  syncChildren(workspace, workspaceParts);
+  syncChildren(layout, layoutParts);
+  if (v) {
+    const dom = threadDOM(v);
+    const size = innerWidth + 'x' + innerHeight + ':' + dom.input.clientWidth;
+    // Measure the editor after attachment: phone field metrics differ from a
+    // detached textarea. Subsequent growth happens on input/value/resize only.
+    if (dom.promptSize !== size) {
+      dom.promptSize = size;
+      growPrompt(dom.input);
+    }
+  }
+  if (v && switching) {
+    if (restoreThreadScroll != null)
+      threadDOM(v).transcript.scrollTop = restoreThreadScroll;
+    const pane = root.querySelector<HTMLElement>('.pane-dock,.pane-above');
+    if (pane?.dataset.thread === active)
+      pane.scrollTop = paneStates.get(active)?.scroll || 0;
+  }
+  if (stick) {
+    stick.scrollTop = stick.scrollHeight;
+    scrolls.set(active, stick.scrollTop);
   }
   const controls = Array.from(
     root.querySelectorAll<HTMLElement>('[data-focus-id],[data-key]'),
   );
-  const restore = controls.find((n) =>
-    focusId
-      ? n.dataset.focusId === focusId
-      : n.dataset.key === focusKey &&
-        n.closest('[data-scope]')?.getAttribute('data-scope') === focusScope,
-  );
+  const restore =
+    focus?.isConnected && root.contains(focus)
+      ? focus
+      : focusId || focusKey
+        ? controls.find((n) =>
+            focusId
+              ? n.dataset.focusId === focusId
+              : n.dataset.key === focusKey &&
+                n.closest('[data-scope]')?.getAttribute('data-scope') ===
+                  focusScope,
+          )
+        : newThreadInput;
   const dialog = root.querySelector<HTMLElement>('[role=dialog]');
   if (dialog && (!restore || !dialog.contains(restore))) {
     dialog.querySelector<HTMLElement>('input,button,select,summary')?.focus();
-  } else if (restore) {
+  } else if (restore && restore !== document.activeElement) {
     restore.focus({ preventScroll: true });
     if (
       start != null &&
       end != null &&
       (restore instanceof HTMLTextAreaElement ||
         restore instanceof HTMLInputElement) &&
-      restore.type !== 'checkbox'
+      restore.type !== 'checkbox' &&
+      (restore.dataset.focusId !== 'prompt' || focus?.dataset.thread === active)
     )
       try {
         restore.setSelectionRange(start, end);
@@ -1933,6 +2504,11 @@ function paint() {
       ?.focus();
   }
   focusHint = '';
+  performance.measure('atto-paint', 'atto-paint-start');
+  performance.clearMarks('atto-paint-start');
+  // Avoid accumulating timing entries during day-long sessions.
+  if (performance.getEntriesByName('atto-paint').length > 600)
+    performance.clearMeasures('atto-paint');
 }
 function contentWidth() {
   return Math.floor((innerWidth - (innerWidth > 700 ? 260 : 0)) / 8);

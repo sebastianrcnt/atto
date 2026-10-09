@@ -34,23 +34,42 @@ function find(text: string) {
     ),
     'responsive pane site',
   );
+  const sidebar = document.querySelector<HTMLElement>('.sidebar')!;
+  sidebar.scrollTop = 180;
+  sidebar.querySelector<HTMLElement>('.inventory')!.scrollTop = 90;
   find('All').click();
   (globalThis as any).flush();
+  assert(
+    document.querySelector('.sidebar') === sidebar &&
+      sidebar.scrollTop === 180 &&
+      sidebar.querySelector<HTMLElement>('.inventory')!.scrollTop === 90,
+    'inventory repaint preserves sidebar node and scroll',
+  );
   const prompt = document.getElementById('prompt') as HTMLTextAreaElement;
   prompt.value = 'hello';
   prompt.oninput!({} as any);
   (globalThis as any).flush();
-  assert(document.getElementById('prompt') === prompt, 'typing repaints nothing');
+  assert(
+    document.getElementById('prompt') === prompt,
+    'typing repaints nothing',
+  );
   prompt.oncompositionstart!({} as any);
   find('Active').click();
   (globalThis as any).flush();
-  assert(document.getElementById('prompt') === prompt, 'no repaint while composing');
+  assert(
+    document.getElementById('prompt') === prompt,
+    'no repaint while composing',
+  );
   prompt.oncompositionend!({} as any);
   (globalThis as any).flush();
-  assert(document.getElementById('prompt') !== prompt, 'held repaint after composing');
+  assert(
+    document.getElementById('prompt') === prompt,
+    'held repaint keeps editor after composing',
+  );
   find('All').click();
   (globalThis as any).flush();
   const typed = document.getElementById('prompt') as HTMLTextAreaElement;
+  (globalThis as any).turnEditor = typed;
   assert(typed.value === 'hello', 'draft kept');
   typed.onkeydown!({
     key: 'Enter',
@@ -61,6 +80,80 @@ function find(text: string) {
   } as any);
 };
 (globalThis as any).checkTurn = () => {
+  assert(
+    document.getElementById('prompt') === (globalThis as any).turnEditor,
+    'editor identical across streamed turn',
+  );
+  const sc = document.getElementById('transcript')!;
+  const item = document.querySelector<HTMLElement>('[data-item=t-i3]')!;
+  const body = item.querySelector<HTMLElement>('.stream-body')!;
+  const sidebar = document.querySelector<HTMLElement>('.sidebar')!;
+  const sidebarChildren = Array.from(sidebar.childNodes);
+  const untouched = document.querySelector('[data-item=t-i1]');
+  const band = document.querySelector<HTMLElement>('.band')!;
+  const tree = band.querySelector('.ui-tree');
+  ws.onmessage({
+    data: JSON.stringify({
+      method: 'item/delta',
+      params: { threadId: 't', itemId: 't-i3', delta: ' incremental' },
+    }),
+  });
+  (globalThis as any).flush();
+  assert(
+    document.getElementById('transcript') === sc &&
+      document.querySelector('[data-item=t-i3]') === item &&
+      item.querySelector('.stream-body') === body &&
+      body.textContent?.includes('incremental'),
+    'delta updates only streaming body in place',
+  );
+  assert(
+    document.querySelector('[data-item=t-i1]') === untouched,
+    'delta leaves other items alone',
+  );
+  assert(
+    document.querySelector('.sidebar') === sidebar &&
+      Array.from(sidebar.childNodes).every((n, i) => n === sidebarChildren[i]),
+    'delta leaves sidebar node and children untouched',
+  );
+  assert(
+    band.querySelector('.ui-tree') === tree,
+    'delta leaves tree untouched',
+  );
+  ws.onmessage({
+    data: JSON.stringify({
+      method: 'ui/render',
+      params: {
+        threadId: 't',
+        site: 'band',
+        id: 'ext/band',
+        rev: 3,
+        tree: { type: 'Text', props: { text: 'Ignored' } },
+      },
+    }),
+  });
+  (globalThis as any).flush();
+  assert(
+    band.querySelector('.ui-tree') === tree,
+    'same revision does not rerender tree',
+  );
+  ws.onmessage({
+    data: JSON.stringify({
+      method: 'ui/render',
+      params: {
+        threadId: 't',
+        site: 'band',
+        id: 'ext/band',
+        rev: 4,
+        tree: { type: 'Text', props: { text: 'Above prompt updated' } },
+      },
+    }),
+  });
+  (globalThis as any).flush();
+  assert(
+    document.querySelector('.band') === band &&
+      band.querySelector('.ui-tree') !== tree,
+    'new revision rerenders only that site in stable band',
+  );
   assert(
     sent.some(
       (m) =>
@@ -113,6 +206,96 @@ function find(text: string) {
       document.getElementById('effort')!.querySelectorAll('option'),
     ).some((o) => o.textContent === 'stale-effort'),
     'catalog efforts selected model only',
+  );
+  const oldBlock = document.querySelector('[data-item=t-i2]');
+  const reboundBlock = {
+    id: 't-i2',
+    type: 'uiBlock',
+    uiId: 'ext/rebound',
+    rev: 4,
+    tree: { type: 'Text', props: { text: 'Rebound block' } },
+  };
+  ws.onmessage({
+    data: JSON.stringify({
+      method: 'item/updated',
+      params: { threadId: 't', item: reboundBlock },
+    }),
+  });
+  (globalThis as any).flush();
+  const newBlock = document.querySelector('[data-item=t-i2]');
+  assert(
+    newBlock !== oldBlock && newBlock?.textContent?.includes('Rebound block'),
+    'different uiBlock instance renders even at the same revision',
+  );
+  ws.onmessage({
+    data: JSON.stringify({
+      method: 'item/updated',
+      params: {
+        threadId: 't',
+        item: {
+          ...reboundBlock,
+          tree: { type: 'Text', props: { text: 'Same revision ignored' } },
+        },
+      },
+    }),
+  });
+  (globalThis as any).flush();
+  assert(
+    document.querySelector('[data-item=t-i2]') === newBlock &&
+      newBlock?.textContent?.includes('Rebound block'),
+    'same uiBlock instance/revision retains row and drawing',
+  );
+  // Identical provider-local keys in different pane instances are independent.
+  for (const name of ['first', 'second']) {
+    ws.onmessage({
+      data: JSON.stringify({
+        method: 'ui/open',
+        params: {
+          threadId: 't',
+          site: 'pane',
+          id: 'ext/' + name,
+          rev: 1,
+          options: { title: name + ' pane' },
+        },
+      }),
+    });
+    ws.onmessage({
+      data: JSON.stringify({
+        method: 'ui/render',
+        params: {
+          threadId: 't',
+          site: 'pane',
+          id: 'ext/' + name,
+          rev: 2,
+          tree: {
+            type: 'Collapse',
+            key: 'fold',
+            props: { title: name + ' disclosure' },
+            children: [{ type: 'Text', props: { text: 'body' } }],
+          },
+        },
+      }),
+    });
+  }
+  (globalThis as any).flush();
+  find('first pane').click();
+  (globalThis as any).flush();
+  const firstDisclosure =
+    document.querySelector<HTMLDetailsElement>('[data-key=fold]')!;
+  firstDisclosure.open = true;
+  firstDisclosure.ontoggle!({} as any);
+  find('second pane').click();
+  (globalThis as any).flush();
+  assert(
+    !document.querySelector<HTMLDetailsElement>('[data-key=fold]')!.open,
+    'pane switch does not copy another site disclosure state',
+  );
+  find('first pane').click();
+  (globalThis as any).flush();
+  assert(
+    document.querySelector('[data-key=fold]') === firstDisclosure &&
+      firstDisclosure.open,
+    'returning pane retains its own tree node and disclosure state',
   );
   const emit = (method: string, item: any, eventId: number) =>
     ws.onmessage({
@@ -290,13 +473,46 @@ function find(text: string) {
     !find('Queue') && document.querySelector('[aria-label=Send]'),
     'idle composer actions',
   );
+  const thinking = document.querySelector<HTMLDetailsElement>('.thinking')!;
+  thinking.open = true;
+  (globalThis as any).openThinking = thinking;
+  const more = document.querySelector<HTMLDetailsElement>('.composer-more');
+  if (more) more.open = true;
   (globalThis as any).unchangedItem =
     document.querySelector('[data-item=t-i1]');
+  // Deltas inside a disclosure retain that disclosure itself and its state.
+  const thinkingBody = thinking.querySelector('.stream-body');
+  ws.onmessage({
+    data: JSON.stringify({
+      method: 'item/delta',
+      params: {
+        threadId: 't',
+        itemId: 'thinking',
+        delta: ' more reasoning',
+      },
+    }),
+  });
+  (globalThis as any).flush();
+  assert(
+    document.querySelector('.thinking') === thinking &&
+      thinking.open &&
+      thinking.querySelector('.stream-body') === thinkingBody,
+    'streaming reasoning preserves open disclosure and body node',
+  );
   const effort = document.getElementById('effort') as HTMLSelectElement;
   effort.value = 'high';
   effort.onchange!({} as any);
 };
 (globalThis as any).checkMutation = () => {
+  assert(
+    document.querySelector('.thinking') === (globalThis as any).openThinking &&
+      (globalThis as any).openThinking.open,
+    'open details survive unrelated settings updates',
+  );
+  (globalThis as any).pageItems = Array.from(
+    document.querySelectorAll('[data-item]'),
+  );
+  (globalThis as any).pageEditor = document.getElementById('prompt');
   assert(
     document.querySelector('[data-item=t-i1]') ===
       (globalThis as any).unchangedItem,
@@ -310,9 +526,33 @@ function find(text: string) {
     document.body.textContent?.includes('Above prompt'),
     'mutation preserves UI',
   );
+  const sc = document.getElementById('transcript')!;
+  Object.defineProperty(sc, 'scrollHeight', {
+    get: () =>
+      Array.from(sc.childNodes).reduce(
+        (n, x) => n + ((x as HTMLElement).dataset.item ? 100 : 20),
+        0,
+      ),
+  });
+  sc.scrollTop = 80;
+  (globalThis as any).pageHeight = sc.scrollHeight;
   find('Load earlier messages').click();
 };
 (globalThis as any).checkPageMerge = () => {
+  const sc = document.getElementById('transcript')!;
+  assert(
+    sc.scrollTop === 80 + sc.scrollHeight - (globalThis as any).pageHeight,
+    'paging preserves scroll anchor',
+  );
+  for (const node of (globalThis as any).pageItems)
+    assert(
+      document.querySelector('[data-item=' + node.dataset.item + ']') === node,
+      'older insertion keeps every existing item node',
+    );
+  assert(
+    document.getElementById('prompt') === (globalThis as any).pageEditor,
+    'paging keeps composer node',
+  );
   assert(
     document.getElementById('transcript')?.textContent?.includes('Earlier'),
     'paging',
@@ -407,8 +647,100 @@ function find(text: string) {
       ?.textContent?.includes('Extension footer') && find('Show original'),
     'original available outside drawing',
   );
+  const input = document.getElementById('prompt') as HTMLTextAreaElement;
+  input.value = 'primary draft';
+  input.oninput!({} as any);
+  input.setSelectionRange(2, 5);
+  (globalThis as any).primaryEditor = input;
+  (globalThis as any).primaryTranscript = document.getElementById('transcript');
+  (globalThis as any).primaryTranscript.scrollTop = 100;
+  (globalThis as any).clearDetachedScroll = true;
+  find('+ New').click();
+};
+(globalThis as any).checkSecondTab = () => {
+  const input = document.getElementById('prompt') as HTMLTextAreaElement;
+  assert(
+    input !== (globalThis as any).primaryEditor,
+    'one editor per thread view',
+  );
+  input.value = 'second draft';
+  input.oninput!({} as any);
+  const sc = document.getElementById('transcript')!;
+  assert(
+    sc.querySelector('[data-item=empty-first]'),
+    'empty uiBlock placeholder has an item key',
+  );
+  Object.defineProperty(sc, 'scrollHeight', {
+    get: () => 1000 + sc.childNodes.length * 100,
+  });
+  sc.scrollTop = 80;
+  ws.onmessage({
+    data: JSON.stringify({
+      method: 'item/started',
+      eventId: 1000,
+      params: {
+        threadId: 't2',
+        item: {
+          id: 'background-tail',
+          type: 'agentMessage',
+          text: 'Tail append',
+        },
+      },
+    }),
+  });
+  (globalThis as any).flush();
+  assert(
+    sc.scrollTop === 80,
+    'tail append after an empty first block preserves reader position',
+  );
+  (globalThis as any).secondaryEditor = input;
+  find('Test').click();
+};
+(globalThis as any).checkTabBack = () => {
+  const input = document.getElementById('prompt') as HTMLTextAreaElement;
+  assert(
+    input === (globalThis as any).primaryEditor &&
+      input.value === 'primary draft' &&
+      input.selectionStart === 2 &&
+      input.selectionEnd === 5,
+    'tab restores existing editor with draft and cursor',
+  );
+  assert(
+    document.getElementById('transcript') ===
+      (globalThis as any).primaryTranscript,
+    'tab restores existing transcript container',
+  );
+  assert(
+    (globalThis as any).primaryTranscript.scrollTop === 100,
+    'tab restores detached transcript scroll offset',
+  );
+  find('Second').click();
+  (globalThis as any).flush();
+  assert(
+    document.getElementById('prompt') === (globalThis as any).secondaryEditor &&
+      (document.getElementById('prompt') as HTMLTextAreaElement).value ===
+        'second draft',
+    'second thread editor retained',
+  );
+  find('Test').click();
+  (globalThis as any).flush();
+  (globalThis as any).reconnectEditor = document.getElementById('prompt');
+  (globalThis as any).reconnectItem =
+    document.querySelector('[data-item=t-i1]');
   const before = sent.length;
   ws.close();
   assert(sent.length === before, 'disconnect never resends');
+  (globalThis as any).flushTimers();
+};
+(globalThis as any).checkReconnect = () => {
+  assert(
+    document.getElementById('prompt') === (globalThis as any).reconnectEditor,
+    'reconnect hydration retains composer',
+  );
+  assert(
+    document.querySelector('[data-item=t-i1]') ===
+      (globalThis as any).reconnectItem,
+    'reconnect keeps identical snapshot row',
+  );
   (globalThis as any).testDone = true;
 };

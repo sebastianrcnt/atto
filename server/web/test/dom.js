@@ -3,9 +3,16 @@
 class FakeNode {
  constructor(tag='',text=''){this.tagName=tag.toUpperCase();this.data=text;this.children=[];this.parentNode=null;this.dataset={};this.style={};this.attributes={};this.className='';this.value='';this.disabled=false;this.open=false;this.scrollTop=0;this.scrollHeight=600;this.clientHeight=400;this.clientWidth=800;this.scrollWidth=0;this.type='';this.id='';this.selectionStart=0;this.selectionEnd=0;this.classList={contains:c=>this.className.split(' ').includes(c),add:(...c)=>{this.className=[this.className,...c].join(' ');},remove:c=>{this.className=this.className.split(' ').filter(x=>x!==c).join(' ');}};}
  append(...nodes){for(let n of nodes){if(typeof n==='string')n=new FakeNode('',n);if(n.parentNode)n.remove();n.parentNode=this;this.children.push(n);}}
+ addEventListener(type,fn){this['on'+type]=fn;}
+ appendChild(n){this.append(n);return n;}
+ insertBefore(n,c){if(n===c)return n;if(n.parentNode)n.remove();n.parentNode=this;const i=c?this.children.indexOf(c):-1;if(i<0)this.children.push(n);else this.children.splice(i,0,n);return n;}
+ removeChild(n){n.remove();return n;}
+ get childNodes(){return this.children;}
+ get firstChild(){return this.children[0]||null;}
+ get nextSibling(){if(!this.parentNode)return null;const a=this.parentNode.children;return a[a.indexOf(this)+1]||null;}
  prepend(...nodes){for(const n of nodes.reverse()){if(n.parentNode)n.remove();n.parentNode=this;this.children.unshift(n);}}
  replaceChildren(...nodes){for(const n of this.children)n.parentNode=null;this.children=[];this.append(...nodes);}
- remove(){if(this.parentNode){const a=this.parentNode.children;const i=a.indexOf(this);if(i>=0)a.splice(i,1);this.parentNode=null;}}
+ remove(){if(this.parentNode){const a=this.parentNode.children;const i=a.indexOf(this);if(i>=0)a.splice(i,1);this.parentNode=null;if(globalThis.clearDetachedScroll){const reset=n=>{if(n.classList.contains('transcript'))n.scrollTop=0;for(const c of n.children)reset(c);};reset(this);}}}
  replaceWith(n){if(this.parentNode){const p=this.parentNode;const i=p.children.indexOf(this);p.children[i]=n;n.parentNode=p;this.parentNode=null;}}
  setAttribute(k,v){if(k.startsWith('data-'))this.dataset[k.slice(5).replace(/-([a-z])/g,(_,c)=>c.toUpperCase())]=v;else this.attributes[k]=String(v);}
  getAttribute(k){if(k.startsWith('data-'))return this.dataset[k.slice(5).replace(/-([a-z])/g,(_,c)=>c.toUpperCase())]??null;return this.attributes[k]??null;}
@@ -38,3 +45,5 @@ globalThis.window=globalThis;globalThis.innerWidth=1400;globalThis.innerHeight=9
 globalThis.location={protocol:'http:',host:'127.0.0.1:1234',hash:'',pathname:'/',search:''};
 const storage=new Map();globalThis.sessionStorage={setItem:(k,v)=>storage.set(k,v),getItem:k=>storage.get(k)||null};globalThis.history={replaceState(a,b,url){location.hash='';}};globalThis.navigator={};globalThis.confirm=()=>true;globalThis.prompt=()=>null;
 globalThis.testDone=false;
+
+globalThis.performance={mark(){},measure(){},clearMarks(){},clearMeasures(){},getEntriesByName(){return [];}};

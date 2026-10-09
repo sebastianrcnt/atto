@@ -77,12 +77,38 @@ export class View {
   generation = 0;
   reset = false;
   revs = new Map<string, number>();
+  // Dirty item IDs are consumed by the attached thread view, not by events.
+  // Multiple deltas coalesce into one body update in the next animation frame.
+  dirtyItems = new Set<string>();
+  deltaItems = new Set<string>();
+  listVersion = 0;
+  inventoryVersion = 0;
+  uiVersion = 0;
+  tabVersion = 0;
+  dirtyItem(id: string, delta = false) {
+    if (delta && !this.dirtyItems.has(id)) this.deltaItems.add(id);
+    if (!delta) this.deltaItems.delete(id);
+    this.dirtyItems.add(id);
+  }
   snapshot(s: Data) {
     this.info = { ...s };
-    this.items = s.items || [];
+    const previous = new Map(this.items.map((i) => [i.id, i]));
+    this.items = (s.items || []).map((i: Data) => {
+      const old = previous.get(i.id);
+      // Snapshot-only comparison: keep identical loaded rows across reconnect.
+      // Never fingerprint the whole transcript during a streaming frame.
+      if (old && JSON.stringify(old) === JSON.stringify(i)) return old;
+      this.dirtyItem(i.id);
+      return i;
+    });
     this.cursor = s.eventId || 0;
     this.reset = false;
     this.generation++;
+    this.listVersion++;
+    this.inventoryVersion++;
+    this.tabVersion++;
+    this.uiVersion++;
+    this.deltaItems.clear();
     this.revs.clear();
     for (const i of s.ui?.instances || [])
       this.revs.set(i.site + '\0' + i.id, i.rev);
@@ -94,6 +120,9 @@ export class View {
       ...p.items.filter((i: Data) => !seen.has(i.id)),
       ...this.items,
     ];
+    this.listVersion++;
+    this.inventoryVersion++;
+    this.tabVersion++;
     this.info.hasMore = p.hasMore;
     this.info.before = p.before;
     return true;
@@ -116,13 +145,25 @@ export class View {
       case 'item/updated':
       case 'item/completed': {
         const n = this.items.findIndex((i) => i.id === p.item.id);
-        if (n < 0) this.items.push(p.item);
-        else this.items[n] = p.item;
+        if (n < 0) {
+          this.items.push(p.item);
+          this.listVersion++;
+        } else this.items[n] = p.item;
+        this.dirtyItem(p.item.id);
+        if (p.item.type === 'userMessage') this.tabVersion++;
+        if (
+          ['userMessage', 'agentMessage', 'commandExecution'].includes(
+            p.item.type,
+          )
+        )
+          this.inventoryVersion++;
+        if (p.item.type === 'uiBlock' || p.item.uiDisplay) this.uiVersion++;
         break;
       }
       case 'item/delta': {
         const i = find();
         if (!i) return false;
+        this.dirtyItem(i.id, true);
         const k = i.type === 'commandExecution' ? 'output' : 'text';
         i[k] = (i[k] || '') + p.delta;
         if (k === 'output' && i[k].length > 131072) i[k] = i[k].slice(-65536);
@@ -184,6 +225,7 @@ export class View {
         const key = p.site + '\0' + p.id;
         if (p.rev <= (this.revs.get(key) || 0)) return false;
         this.revs.set(key, p.rev);
+        this.uiVersion++;
         if (!this.info.ui) this.info.ui = { version: 1, instances: [] };
         const a = this.info.ui.instances;
         const n = a.findIndex((i: Data) => i.site === p.site && i.id === p.id);
@@ -216,20 +258,34 @@ export class View {
             block.tree = p.tree;
             block.rev = p.rev;
             block.actionsEnabled = p.actionsEnabled;
+            this.dirtyItem(block.id);
           }
           const i = this.items.find((i) => i.id === p.id);
-          if (i)
+          if (i) {
+            this.dirtyItem(i.id);
             i.uiDisplay = {
               rev: p.rev,
               tree: p.tree,
               actionsEnabled: p.actionsEnabled,
             };
+          }
         }
         break;
       }
       default:
         return false;
     }
+    if (
+      [
+        'thread/updated',
+        'turn/started',
+        'turn/completed',
+        'prompt/open',
+        'prompt/closed',
+        'goal/updated',
+      ].includes(m.method)
+    )
+      this.inventoryVersion++;
     if (m.eventId) this.cursor = m.eventId;
     return true;
   }
