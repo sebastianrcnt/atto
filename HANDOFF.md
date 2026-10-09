@@ -1,124 +1,61 @@
-# Handoff — 2026-10-09 (evening)
+# Handoff — 2026-10-10
 
-State when this was written: `main` = `0036514` + this handoff, pushed; the locally installed `atto` (`go install -ldflags="-s -w"`,
-26 MB) is built from it, and `win` runs the same build. One implementation is running: the agent model (below), in a Claude
-Code Sonnet worktree. CI is nightly (03:00 KST): today's changes get their first Windows/Linux run tonight.
+State: `main` is released as **v0.1.0** (the first release since v0.0.3). The local `atto` (`go install -ldflags="-s -w"`) and `win`
+(`scripts/deploy.sh win`) run it. CI is green on all three systems.
 
-A picture of the whole structure (concepts, processes, memory, agents, commands, status): https://claude.ai/artifact/3KkHWQiWTpwHshzVh2oxMc
-
-## Stage 4 browser UI — this worktree (2026-10-09)
-
-Implemented on `atto/4c72966a`, **not pushed or installed**. See
-`docs/ui-stage-4-report.md` for architecture, test scope and the real local-model
-check. Start `atto serve` (0.0.0.0:7879) or
-`atto app-server --listen ws://HOST:PORT --web`; open the stdout bootstrap link,
-substituting a LAN/Tailscale host for wildcard binds. Page at `/`, revision-3
-protocol at `/ws`; token fragment is consumed into sessionStorage and then a WS
-subprotocol auth offer, never a query token. `/remote` starts this against the
-running TUI runtime/workers; `/remote off` stops transport only. No QR dependency.
-
-`server/web/src/{core,elements,main}.ts` is a new plain TypeScript DOM client,
-not the frozen HTTP/SSE client. Embedded committed dist is generated with Go
-esbuild and a pinned/checksum-verified Tailwind standalone CLI (`go generate
-./server/web`, no Node). Staleness/DOM-shim TS tests live in server/web; real CLI
-e2e also fetches static assets and drives the page's socket protocol. The element
-catalog covers all v1 types/sites, native engine refs and rev-bound events. Queue
-previews and context cards now have shared Go trees. Additive protocol metadata:
-`thread/context.tree`, uiBlock/transcript `actionsEnabled`; image resources use
-`ui.ImageResource(itemId,index)` and authenticated item/image, no file endpoint.
-
-Local-model-only live check: isolated ATTO_DIR/HOME with only llama-cpp/orca-local
-(no auth.json), revision-3 web connection, four streaming deltas to
-`WEB_STAGE4_OK`, paging, context/jobs tree, distinct daemon worker PID, and the
-same worker/transcript after gateway restart. The expanded check also verified
-an extension press received surface web (one callback, stale duplicate refused),
-an actual PNG model turn plus authenticated item/image, and Go goal/diff/jobs trees. Actual browser paint, mobile touch,
-image paste/drop, CSP enforcement and LAN/Tailscale access from another device
-remain manual QA (no headless browser available). Web intentionally draws one
-command disclosure per tool rather than TUI tool grouping; Markdown is a safe
-semantic subset. Clipboard on HTTP falls back to selectable text. Login/trust
-and private diagnostic workflows remain local CLI, never shared trees.
-
-The old state below is historical; stage 4 supersedes its rebuilt-web stubs.
+A picture of the whole structure (concepts, processes, memory, agents, commands): https://claude.ai/artifact/3KkHWQiWTpwHshzVh2oxMc
 
 ## Structure in one paragraph
 
 Five concepts. A **session** is a JSONL file (the source of truth). A **worker** (`atto _session-server`) executes one session.
-The **daemon** (`atto _daemon`) only starts, lists and retires workers; it holds no screens. **Clients** (TUI,
-`app-server`, `-p`, scripts) attach to workers over JSON-RPC and only render. An **agent** is a session started by another
-session; its identity is its session ID and its tree position is metadata. Without the daemon (`ATTO_NO_DAEMON=1`, `"daemon": false`)
-the worker runs inside the client process; Windows has the daemon too (below). Keep this separation strict: clients never read `~/.atto` or the daemon directly.
-The Swing and web clients are gone (tags `archive/swing` and `archive/web-frozen`); protocol revision 3 is the only one
-served, and `atto app-server --listen stdio:// | unix:// | ws://` is how other clients attach. `/remote` and `atto serve`
-now serve the browser UI (stage 4 above).
+The **daemon** (`atto _daemon`) only starts, lists and retires workers; it holds no screens (protocol 4). **Clients** (TUI,
+browser, `app-server`, `-p`, scripts) attach to workers over JSON-RPC revision 3 and only render. An **agent** is a session
+started by another session or a shell; its identity is its session ID, its tree position is header metadata. Without the daemon
+(`ATTO_NO_DAEMON=1`, `"daemon": false`) the worker runs inside the client. Windows has the same daemon (AF_UNIX + token file + DACL).
+Keep this separation strict: clients never read `~/.atto` or the daemon directly.
 
-## Done today (2026-10-09)
+## UI layer (docs/ui.md)
 
-| What | Commits | Notes |
-|---|---|---|
-| Engine/front-end split (overnight) | `177199d` … `a59521f` | runtime owns execution, workers, `app-server --listen stdio/unix/ws`; `docs/tui-as-client.md`, `docs/protocol.md` |
-| Swing client, then removed | `7098497` … `ec9a016` | `clients/swing`, JDK 21 only; deleted the same day, tag `archive/swing` |
-| Web and Swing removal | the commits after `9dd33fa` | `clients/swing`, `server/web`, the HTTP/SSE gateway, `server.Scope` and `/remote` plumbing, `subagent/*` aliases, protocol revisions 1 and 2 with full snapshots, `remote.port`; tags `archive/swing`, `archive/web-frozen`; `/remote` and `atto serve` print a one-line pointer to `app-server` |
-| PTY panes removed | `c39c0f9`, `90e5da7`, `8eaba18` | daemon protocol 4, workers only; commands are `atto` and `atto resume [ID\|name]`; `attach`, `connect`, `/detach`, `-c`, `-resume` removed (pointer message); `atto daemon kill SESSION` |
-| Archived sessions zstd | `f258d85`, `9879a0b`, `2013169` | `archived_sessions/*.jsonl.zst`; `atto sessions compress` migrated 24 → 8.4 MB here |
-| Agent `@ID` addresses, no shared outside parent | `fb92f37` … `a8b4023` | being superseded by the agent model work |
-| Command output to disk | `29df39a` … `0965dbd` | `outputs/<session>/*.log.zst`, head/tail 32 MB caps, 1 GB total, `atto output`; deleted with the session |
-| Test temp-home leak | `f97b033` | `internal/testhome`; tests had left 12 GB of read-only Go module caches in TMPDIR (cleaned) |
-| Backup / restore / clean / uninstall | `ffaca38`, `537c952` | `maint/`; backup excludes secrets unless `-with-secrets` |
-| `desktop.go` split, POSIX sh prompt | `27c2a25`, `61a6017` | bash prompt text byte-identical |
-| Slim build | `5b81abc`, `33c62e7`, `15b375d` | `-tags noext`, 16 MB vs 26 MB; `/diff` and `/autorename` ported to Go; releases ship `atto-slim_*`; `atto update -variant` |
-| Memory | `94298a8` … `83c8be2` | protocol 3 tail snapshots + `thread/items` paging; unattached workers hold no display items; real 62 MB session: worker 653 → 45 MB, TUI 295 → 27 MB; `docs/session-memory.md` |
-| Design docs | `6de440c`, `05aecea`, `5725da4`, `fb47b91`, `0036514` | `docs/agent-model.md` (decided), `docs/session-segments.md` (on hold) |
+Package `ui` (pure Go): 13 elements, sites (pane, band, status, toast, transcript, dialog, message/toolCall/notice overrides),
+`next()` middleware, `ui/open|render|close|event|capabilities`. The TUI and the browser draw the same trees; built-ins (/diff,
+status line, goal, jobs, dialogs, queue, context card) are Go trees. Extensions: `atto.ui` in goja, JSX, `atto.store`; the old
+string API is gone. Stages 1–4 are done (`docs/ui-stage-4-report.md`); **stage 5 (out-of-process UI providers) is not started**
+and needs the user's go-ahead.
 
-Every merge: full tests (both build tags), `-race`, Windows vet, `smoke.sh`, plus live checks of the change with a real model in
-an isolated `ATTO_DIR`.
+**Browser UI** (`server/web`): plain TypeScript DOM + Tailwind, built with Go only (`go generate ./server/web`, committed dist,
+staleness test, TS tests through goja). `atto serve` = `app-server --listen ws://0.0.0.0:7879 --web`; `/remote` starts it in the
+TUI. **No token** (user decision 2026-10-10: the LAN or Tailscale decide who reaches it); Origin check plus a Host check against
+DNS rebinding (IP, localhost, machine name, NAME.local, `*.ts.net`, `--allow-origin` hosts). Wildcard binds print one link per
+IPv4 address. WS-only app-server listeners keep the bearer token. Visual checks: `/tmp/atto-runs/w23/cdp.mjs` drives headless
+Chrome over CDP with the system node (a local tool only; Node is not part of the build; don't use Chrome's virtual time).
 
-## In progress
+## Next
 
-**Agent model** (Sonnet worktree under `.claude/worktrees/`, brief `/tmp/atto-runs/w18_agentmodel_impl.txt`, spec
-`docs/agent-model.md`): agent = session ID, metadata in the session header (parent, root, depth, `/root/…` path label, name, role,
-`spawnedBy` {session, model, effort, turn, tool call id}); state `agent-state/<id>.json`; outside spawns are parentless roots;
-new worktrees `atto/<id>`; **no on/off setting, no depth limit, no concurrency limit** (user: "완전 자유"); every model shell
-command gets `ATTO_TOOL_CALL_ID`; migration = refuse while agent work runs → automatic backup → one-pass conversion → marker
-last (on error: `atto restore`); agent turns run in session workers (phase H). Verify before merging: live spawn + attach a TUI
-mid-turn, migration on a copy of the real `agent-state/`, send/interrupt/queued tasks unchanged.
-
-## Next, in order
-
-1. **`thread/list` extension** (brief `/tmp/atto-runs/w18b_overview.txt`): the command center and `atto resume` picker get
-   agent metadata and needs-you flags from `thread/list`; remove `scanCenter`'s direct disk/daemon reads.
-   No new overview method, no push notifications (decided).
-2. **Command center tidy-up:** `a` archive/unarchive, `d` delete, finished agent trees folded by default, no `/root/` prefix.
-3. **New web UI: implemented in this worktree**, revision 3 and shared element catalog;
-   `/remote` and `atto serve` are restored. Manual browser QA is still needed (above).
-4. **Windows daemon: implemented, not yet verified on `win`.** Same daemon and workers as Unix over AF_UNIX sockets: `run` dir with a
-   protected DACL plus a per-socket token file instead of peer credentials (`daemon/socket_windows.go`), daemon/workers on a hidden
-   console via `shell.Isolate` (`daemon/process_windows.go`), workers stopped through their stdin, the TUI detaches on
-   CTRL_CLOSE (SIGTERM in Go). Run the live checks on `win` (list in the commit/PR report: attach/detach, close the window, ssh drop,
-   `atto resume`, two clients, one-minute retirement, agent turn in a worker, `daemon stop -force`). Left: `atto agents` on Windows
-   starts the chosen session as a child process, so its first keystroke may go to the parent's still-blocked console reader; the new
-   `cli` worker tests and the Windows daemon tests have only been compiled (`GOOS=windows`), their first run is the next nightly.
-5. Small: the startup Config line lists `~\.atto\settings.json` twice on Windows; a `cli` test failed once under full load (not reproduced in 6 reruns).
+1. Real-device check of the browser UI (phone touch, soft keyboard, LAN/Tailscale from another device): the user's.
+2. Small: when a model's shell command is interrupted on Windows, the tree kill also ends descendants that `shell.Isolate`
+   detached (e.g. a daemon first started by that command); exclude them if it ever matters.
+3. Offered, not approved: UI stage 5; OAuth tokens outside `ATTO_DIR` (test copies rotating refresh tokens logged the real
+   install out once); OSC 7501 progress reporting. Session segmentation stays on hold (`docs/session-segments.md`).
+4. `~/.atto/extensions/translate.ts` (disabled) still uses the removed UI API; rewrite from `examples/extensions/` if wanted.
 
 ## Decisions and things to know
 
-- **Translate extension disabled** (`settings.json` `extensions.disabled`): it saved every translation twice and made sessions grow; no cache API needed.
-- **Session segmentation on hold**; revisit only if several sessions get large (see the doc's status note).
-- **Env vars are tracking, not security:** `ATTO_SESSION_ID`, `ATTO_AGENT`, `ATTO_TOOL_CALL_ID` can be changed by the model.
-- **Machines:** this Mac (macOS arm64) is the main test host. `win` (coolguy-w13, AMD64) runs atto with the local model only
-  (`llama-cpp/orca-local` at 192.168.0.235:8081, no API keys); deploy with `scripts/deploy.sh win` after Windows-relevant changes.
-  linuxvm/winvm are down.
-- A crashed worker restores only saved session state; the daemon's worker registry is in memory; no durable input journal; no full Codex-dialect adapter.
-- A fresh `ATTO_DIR` picks the first available model until the catalog cache exists (copy `~/.atto/cache` for live tests).
-- Live tests on copies of real sessions: pause their goal first; resuming a copy with an active goal starts goal work in the real project directory.
+- **Translate extension disabled** in the user's settings (it doubled session growth).
+- **Env vars are tracking, not security:** `ATTO_SESSION_ID`, `ATTO_AGENT`, `ATTO_TOOL_CALL_ID`.
+- **Agents:** no on/off setting, no depth or concurrency limit; `spawnedBy` {session, model, effort, turn, toolCallId, origin, cwd}.
+- **Machines:** this Mac (macOS arm64) is the main host. `win` (AMD64, Korean locale, Go 1.27.1) runs atto with the local model
+  only (`llama-cpp/orca-local`: Strata on `linux`, 192.168.0.235:8081, Docker in `~/ml/strata/deploy/docker`, one request at a
+  time, shared with the user). linuxvm/winvm are down.
+- A crashed worker restores only saved session state; the daemon's worker registry is in memory.
+- Live tests on copies of real sessions: pause their goal first. Never copy `auth.json` into a test `ATTO_DIR`.
 
 ## How the work is done
 
-- Implementation goes to `atto agent spawn NAME "<brief>" -worktree -m openai/gpt-6.1-sol -effort high` (from a plain shell) or
-  to Claude Code Sonnet subagents in worktrees (the user rates them about equal). Briefs live in `/tmp/atto-runs/`. End briefs
-  with "you alone do all of it in this turn"; gpt-6.1-sol still sometimes stops after the groundwork, so send it back with a
-  list of what is left.
-- Before merging: rebase on main, full checks (`gofmt`, vet with and without `-tags noext`, `GOOS=windows go vet`, `go test ./...`
-  with `ATTO_SESSION_ID`/`ATTO_AGENT`/`ATTO_SUBAGENT`/`ATTO_TOOL_CALL_ID` unset, `-race` on touched packages), `scratchpad/smoke.sh BINARY`, live checks of what changed;
-  then merge, `go install -ldflags="-s -w" ./cmd/atto`, push, close the agent and delete its branch.
-- Sources of truth: the GitHub issues and the memory directory `~/.claude/projects/-Volumes-t5-atto/memory/`.
+- Implementation goes to `atto agent spawn NAME "<brief>" -worktree -m openai/gpt-6.1-sol -effort high` or Claude Code Sonnet
+  worktree agents. Briefs live in `/tmp/atto-runs/`; end them with "you alone do all of it in this turn".
+- Before merging: rebase on main; `gofmt`; vet with and without `-tags noext` and `GOOS=windows`; `go test ./...` (both tags) with
+  `ATTO_SESSION_ID`/`ATTO_AGENT`/`ATTO_TOOL_CALL_ID` unset; `-race` on touched packages; `scratchpad/smoke.sh BINARY`;
+  **`scripts/wintest.sh win [args]`** for Windows-relevant changes (tests the committed HEAD on `win`; put `-run` patterns
+  containing `|` in literal double quotes); live checks of what changed. Then merge, install, push, close the agent, delete its branch.
+- CI runs nightly (03:00 KST) and by hand (`gh workflow run ci`). Releases: push a `v*` tag; the release workflow tests, builds
+  full and slim binaries and publishes with generated notes, which are then replaced with hand-written ones.
