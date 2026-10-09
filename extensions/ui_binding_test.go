@@ -113,7 +113,7 @@ func TestUIConstructorsJSXFragmentAndCallbacks(t *testing.T) {
 func TestRenderNextOverrideAndIndividualDisposal(t *testing.T) {
 	dir, cwd := env(t)
 	write(t, filepath.Join(dir, "wrap.ts"), `export default function(atto:any){
- const dispose=atto.ui.render({site:"toolCall"},async(e:any,next:any)=>{const{Box,Text}=atto.ui.resolve(e);return Box({children:[await next({...e,props:{...e.props,description:"Checking…"}}),Text({text:"reviewed"})]})});
+ const dispose=atto.ui.render({site:"toolCall"},async(e:any,next:any)=>{const{Box,Text}=atto.ui.resolve(e);const original=await next({...e,props:{...e.props,description:"Checking…"}});if(original.props!==undefined)throw Error("next exposed wire data");return Box({children:[original,Text({text:"reviewed"})]})});
  atto.registerCommand("dispose",{handler:()=>dispose()});}`)
 	h := newHost(true)
 	m := load(t, cwd, h)
@@ -176,7 +176,7 @@ func TestUIOpenCloseInvalidateToastAndStore(t *testing.T) {
 	})
 }
 func TestRenderTimeoutAndSideEffectsFallback(t *testing.T) {
-	for _, body := range []string{`while(true){}`, `atto.store.set("x",1);return null`, `return Promise.resolve().then(()=>atto.store.set("x",1))`, `atto.fs.readFile("x");return null`, `return {type:"engine",props:{}}`, `return new Promise(()=>{})`} {
+	for _, body := range []string{`while(true){}`, `atto.store.set("x",1);return null`, `return Promise.resolve().then(()=>atto.store.set("x",1))`, `atto.fs.readFile("x");return null`, `return {type:"engine",props:{}}`, `const a:any[]=[];a.push(a);return atto.ui.resolve({}).Box({children:a})`, `return new Promise(()=>{})`} {
 		t.Run(body, func(t *testing.T) {
 			dir, cwd := env(t)
 			write(t, filepath.Join(dir, "bad.ts"), `export default (atto:any)=>{atto.ui.render({site:"toolCall"},()=>{`+body+`});atto.registerCommand("alive",{handler:()=>atto.ui.notify("alive")})}`)

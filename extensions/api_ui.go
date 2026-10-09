@@ -110,6 +110,7 @@ func (e *ext) uiObject() *goja.Object {
 			}
 		})
 		return vm.ToValue(func() {
+			e.readOnlyRender()
 			if disposed.CompareAndSwap(false, true) {
 				UIWork(e.m.host(), func(r *ui.Registry) error {
 					if dispose != nil {
@@ -258,6 +259,9 @@ func (e *ext) construct(name string, props goja.Value, children []goja.Value) *d
 			v := o.Get(key)
 			switch key {
 			case "key":
+				if _, ok := v.Export().(string); !ok {
+					panic(e.vm.NewTypeError("key must be a string"))
+				}
 				d.node.Key = v.String()
 				if strings.Contains(d.node.Key, "/") {
 					panic(e.vm.NewTypeError("keys must be provider-local"))
@@ -265,6 +269,9 @@ func (e *ext) construct(name string, props goja.Value, children []goja.Value) *d
 			case "children":
 				e.addChildren(d, v)
 			case "onPress", "onInput", "onSubmit", "onSelect":
+				if goja.IsUndefined(v) {
+					continue
+				}
 				fn, ok := goja.AssertFunction(v)
 				if !ok {
 					panic(e.vm.NewTypeError("%s must be a function", key))
@@ -284,28 +291,37 @@ func (e *ext) construct(name string, props goja.Value, children []goja.Value) *d
 	}
 	return d
 }
-func (e *ext) addChildren(d *drawing, v goja.Value) {
+func (e *ext) addChildren(d *drawing, v goja.Value) { e.addChild(d, v, 0, map[*goja.Object]bool{}) }
+func (e *ext) addChild(d *drawing, v goja.Value, depth int, seen map[*goja.Object]bool) {
+	if depth > ui.MaxDepth || len(d.children) >= ui.MaxNodes {
+		panic(e.vm.NewTypeError("UI child limits exceeded"))
+	}
 	if v == nil || goja.IsUndefined(v) || goja.IsNull(v) {
 		return
 	}
-	if child, ok := v.Export().(*drawing); ok {
-		d.children = append(d.children, child)
-		return
-	}
-	if child, ok := v.Export().(*ui.Node); ok {
-		d.children = append(d.children, &drawing{node: *child})
-		return
-	}
 	if o, ok := v.(*goja.Object); ok && o.ClassName() == "Array" {
-		for i := 0; i < int(o.Get("length").ToInteger()); i++ {
-			e.addChildren(d, o.Get(fmt.Sprint(i)))
+		if seen[o] {
+			panic(e.vm.NewTypeError("cyclic UI children"))
+		}
+		seen[o] = true
+		defer delete(seen, o)
+		length := o.Get("length").ToInteger()
+		if length > ui.MaxNodes {
+			panic(e.vm.NewTypeError("UI child limits exceeded"))
+		}
+		for i := range length {
+			e.addChild(d, o.Get(fmt.Sprint(i)), depth+1, seen)
 		}
 		return
 	}
-	if _, ok := v.Export().(string); !ok {
+	switch child := v.Export().(type) {
+	case *drawing:
+		d.children = append(d.children, child)
+	case string:
+		d.children = append(d.children, &drawing{node: ui.Text(ui.TextProps{Text: child})})
+	default:
 		panic(e.vm.NewTypeError("children must be elements or strings"))
 	}
-	d.children = append(d.children, &drawing{node: ui.Text(ui.TextProps{Text: v.String()})})
 }
 func (e *ext) renderUI(r *ui.Registry, ev ui.Event, next ui.Next, fn goja.Callable) (*ui.Node, error) {
 	ctx := ev.Context
@@ -346,7 +362,12 @@ func (e *ext) renderUI(r *ui.Registry, ev ui.Event, next ui.Next, fn goja.Callab
 			}
 			return e.async(func() (func() goja.Value, error) {
 				n, err := next(modified)
-				return func() goja.Value { return e.vm.ToValue(n) }, err
+				return func() goja.Value {
+					if n == nil {
+						return goja.Null()
+					}
+					return e.vm.ToValue(&drawing{node: *n})
+				}, err
 			})
 		})
 		v, err := fn(goja.Undefined(), event, nextValue)
