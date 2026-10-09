@@ -2,8 +2,12 @@ package outputs
 
 import (
 	"bytes"
+	"fmt"
 	"io"
 	"os"
+	"path/filepath"
+	"strings"
+	"time"
 
 	"github.com/klauspost/compress/zstd"
 )
@@ -45,4 +49,34 @@ func Open(path string) (io.ReadCloser, error) {
 		return nil, err
 	}
 	return &zreader{dec, f}, nil
+}
+
+// Resolve finds the saved output arg names: a path of an existing file, or
+// the name (a tool call's id) of a file in the session's directory or, failing
+// that, in any session's.
+func Resolve(arg, session string) (string, error) {
+	if info, err := os.Stat(arg); err == nil && info.Mode().IsRegular() {
+		return arg, nil
+	}
+	name := safeName(strings.TrimSuffix(filepath.Base(arg), ".log.zst"))
+	if name == "" {
+		return "", fmt.Errorf("%s: no such file", arg)
+	}
+	var found []string
+	if session != "" {
+		found, _ = filepath.Glob(filepath.Join(SessionDir(session), name+".log.zst"))
+	}
+	if len(found) == 0 {
+		found, _ = filepath.Glob(filepath.Join(Root(), "*", name+".log.zst"))
+	}
+	best, bestMod := "", time.Time{}
+	for _, p := range found {
+		if info, err := os.Stat(p); err == nil && (best == "" || info.ModTime().After(bestMod)) {
+			best, bestMod = p, info.ModTime()
+		}
+	}
+	if best == "" {
+		return "", fmt.Errorf("%s: no such file or saved output", arg)
+	}
+	return best, nil
 }

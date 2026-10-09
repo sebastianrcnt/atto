@@ -46,6 +46,8 @@ usage:
   atto job|monitor|timer|sleep ...  background jobs and wake-ups (atto job for details)
   atto goal [status|set|complete|...]  the session goal (or /goal, -goal)
   atto view <image>...              from the agent's shell: show the model an image file
+  atto output <path|call-id> [-head N|-tail N|-grep RE]
+                                    read the full output of a cut command result
   atto agent start|steer|next|wait|report|list|stop ...
                                     agents: background child sessions (atto agent -h)
   atto context [-json]              what a session here loads: AGENTS.md, skills,
@@ -110,6 +112,7 @@ func subcommands() map[string]func([]string, io.Writer) error {
 		"sleep":       cli.RunSleep,
 		"goal":        cli.RunGoal,
 		"view":        cli.RunView,
+		"output":      cli.RunOutput,
 		"agent":       cli.RunAgent,
 		"_agent-turn": cli.RunAgentTurn,
 		"context":     cli.RunContext,
