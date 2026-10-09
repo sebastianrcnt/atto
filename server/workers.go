@@ -23,16 +23,17 @@ type WorkerRoutes struct {
 }
 
 type WorkerSummary struct {
-	ID          string `json:"threadId"`
-	Cwd         string `json:"cwd"`
-	Busy        bool   `json:"busy"`
-	Clients     int    `json:"clients"`
-	Version     string `json:"version"`
-	PID         int    `json:"pid"`
-	Name        string `json:"name"`
-	OpenPrompt  bool   `json:"openPrompt"`
-	GoalWaiting bool   `json:"goalWaiting"`
-	State       string `json:"state"`
+	Updated     time.Time `json:"updatedAt"`
+	ID          string    `json:"threadId"`
+	Cwd         string    `json:"cwd"`
+	Busy        bool      `json:"busy"`
+	Clients     int       `json:"clients"`
+	Version     string    `json:"version"`
+	PID         int       `json:"pid"`
+	Name        string    `json:"name"`
+	OpenPrompt  bool      `json:"openPrompt"`
+	GoalWaiting bool      `json:"goalWaiting"`
+	State       string    `json:"state"`
 }
 
 type workerRoute struct {
@@ -82,6 +83,9 @@ func (s *Server) routeCall(ctx context.Context, method string, raw json.RawMessa
 					if w.Name != "" {
 						row["name"] = w.Name
 					}
+					if row["updatedAt"] == nil {
+						row["updatedAt"] = w.Updated
+					}
 					seen[id] = true
 				}
 			}
@@ -101,7 +105,7 @@ func (s *Server) routeCall(ctx context.Context, method string, raw json.RawMessa
 				}
 			}
 			if !seen[w.ID] && (p.Cwd == "" || session.SameDir(p.Cwd, w.Cwd)) && !p.Archived {
-				rows = append(rows, map[string]any{"threadId": w.ID, "cwd": w.Cwd, "loaded": true, "busy": w.Busy, "clients": w.Clients, "version": w.Version, "pid": w.PID, "name": w.Name, "openPrompt": w.OpenPrompt, "goalWaiting": w.GoalWaiting})
+				rows = append(rows, map[string]any{"threadId": w.ID, "updatedAt": w.Updated, "cwd": w.Cwd, "loaded": true, "busy": w.Busy, "clients": w.Clients, "version": w.Version, "pid": w.PID, "name": w.Name, "openPrompt": w.OpenPrompt || w.State == "waiting" && !w.GoalWaiting, "goalWaiting": w.GoalWaiting})
 			}
 		}
 		return map[string]any{"threads": rows}, nil, true

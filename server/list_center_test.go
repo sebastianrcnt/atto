@@ -365,3 +365,25 @@ func TestAgentArchiveWorktreeCloseRules(t *testing.T) {
 	}
 	git("rev-parse", "--verify", "refs/heads/"+branch)
 }
+
+func TestThreadListIncludesUnsavedWorkerTimestampWithoutOpening(t *testing.T) {
+	h := newHarness(t)
+	gateway := New("facade", h.s.Cwd)
+	defer gateway.Close()
+	started := time.Now().Add(-time.Minute).UTC()
+	gateway.Workers = &WorkerRoutes{
+		List: func() ([]WorkerSummary, error) {
+			return []WorkerSummary{{ID: "unsaved-worker", Name: "Empty live workspace", Cwd: "/workspace", Updated: started, OpenPrompt: true}}, nil
+		},
+		Open: func(context.Context, string, string, string, string, bool) (*Client, string, error) {
+			t.Error("inventory opened worker")
+			return nil, "", nil
+		},
+	}
+	c := Connect(context.Background(), gateway)
+	defer c.Close()
+	row := findInventory(inventory(t, c, nil), "unsaved-worker")
+	if row == nil || row.Name != "Empty live workspace" || !row.Updated.Equal(started) || !row.Loaded || !row.OpenPrompt {
+		t.Fatalf("unsaved worker metadata: %+v", row)
+	}
+}

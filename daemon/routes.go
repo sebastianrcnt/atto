@@ -112,7 +112,7 @@ func Routes() *server.WorkerRoutes {
 			}
 			out := make([]server.WorkerSummary, 0, len(workers))
 			for _, w := range workers {
-				out = append(out, server.WorkerSummary{ID: w.Session, OpenPrompt: w.OpenPrompt, GoalWaiting: w.GoalWaiting, Name: w.Name, State: w.State, Cwd: w.Cwd, PID: w.PID, Version: w.Version, Busy: w.Busy, Clients: w.Clients})
+				out = append(out, server.WorkerSummary{ID: w.Session, Updated: w.Started, OpenPrompt: w.OpenPrompt, GoalWaiting: w.GoalWaiting, Name: w.Name, State: w.State, Cwd: w.Cwd, PID: w.PID, Version: w.Version, Busy: w.Busy, Clients: w.Clients})
 			}
 			return out, nil
 		},
