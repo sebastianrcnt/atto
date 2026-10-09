@@ -8,9 +8,12 @@ import (
 	"image/png"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
+	"github.com/sebastianrcnt/atto/config"
 	"github.com/sebastianrcnt/atto/images"
+	"github.com/sebastianrcnt/atto/outputs"
 	"github.com/sebastianrcnt/atto/provider"
 )
 
@@ -67,6 +70,42 @@ func TestThreadResources(t *testing.T) {
 	cancel()
 	if _, err := threadFiles(ctx, root, "", 10); err != context.Canceled {
 		t.Fatalf("cancellation: %v", err)
+	}
+}
+
+// The full output of a command is a zstd file under ~/.atto/outputs; a
+// plain file from an older session reads the same (TestThreadResources).
+func TestCompressedFullOutputResource(t *testing.T) {
+	t.Setenv(config.EnvDir, t.TempDir())
+	text := strings.Repeat("a saved line of output\n", 1000)
+	w := outputs.New(outputs.Options{Session: "resource-session", Name: "call", Keep: 100, Limits: &outputs.Limits{MinFree: -1}})
+	w.Write([]byte(text))
+	saved, err := w.Save()
+	if err != nil || !strings.HasSuffix(saved.Path, ".log.zst") {
+		t.Fatalf("%+v %v", saved, err)
+	}
+	got, err := readResource(resourceRequest{path: saved.Path, kind: "output"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out := got.(map[string]any); out["output"] != text || out["truncated"] != false {
+		t.Fatalf("output: %v bytes, truncated %v", len(out["output"].(string)), out["truncated"])
+	}
+
+	// Past the 10 MiB a client is given, the rest is cut.
+	big := strings.Repeat("0123456789abcdef", 1<<20) // 16 MiB
+	w = outputs.New(outputs.Options{Session: "resource-session", Name: "big", Keep: 100, Limits: &outputs.Limits{MinFree: -1}})
+	w.Write([]byte(big))
+	saved, _ = w.Save()
+	got, err = readResource(resourceRequest{path: saved.Path, kind: "output"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out := got.(map[string]any); out["output"] != big[:10<<20] || out["truncated"] != true {
+		t.Fatalf("big output: %v bytes, truncated %v", len(out["output"].(string)), out["truncated"])
+	}
+	if _, err := readResource(resourceRequest{path: filepath.Join(t.TempDir(), "gone.log.zst"), kind: "output"}); err == nil {
+		t.Fatal("missing file")
 	}
 }
 

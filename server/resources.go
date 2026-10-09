@@ -14,6 +14,7 @@ import (
 
 	"github.com/sebastianrcnt/atto/fsutil"
 	"github.com/sebastianrcnt/atto/images"
+	"github.com/sebastianrcnt/atto/outputs"
 )
 
 // resourceRequest is resolved on the lane, then read off it. Clients can
@@ -77,7 +78,13 @@ func itemResource(items []Item, p threadParams, kind string) (any, error) {
 }
 
 func readResource(r resourceRequest) (any, error) {
-	f, err := os.Open(r.path)
+	var f io.ReadCloser
+	var err error
+	if r.kind == "image" {
+		f, err = os.Open(r.path)
+	} else {
+		f, err = outputs.Open(r.path) // saved output is compressed
+	}
 	if err != nil {
 		return nil, err
 	}
