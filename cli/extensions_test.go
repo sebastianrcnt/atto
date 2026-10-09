@@ -136,7 +136,6 @@ func TestRunPrintBlockEvents(t *testing.T) {
 	}
 	src := `export default function (atto: any) {
   atto.on("message_end", async (e: any, ctx: any) => {
-    ctx.ui.setBlockDisplay(e.blockId, "ignored");
     atto.fs.writeFile("ev.txt", [e.blockId, e.text, e.model].join("|"));
     await new Promise((r) => setTimeout(r, 50));
     atto.fs.writeFile("ev2.txt", "after");

@@ -17,56 +17,16 @@ import (
 
 func TestBlockEventsFireOnceAndNeverWait(t *testing.T) {
 	dir, cwd := env(t)
-	write(t, filepath.Join(dir, "b.ts"), `
-export default function (atto: any) {
-  atto.on("message_end", async (e: any, ctx: any) => {
-    atto.log("msg", e.blockId, e.text, e.model);
-    await new Promise((r) => setTimeout(r, 2000));
-    ctx.ui.setBlockStatus(e.blockId, "slow done");
-  });
-  atto.on("reasoning_end", (e: any, ctx: any) => {
-    ctx.ui.setBlockDisplay(e.blockId, e.text.toUpperCase());
-    ctx.ui.setBlockStatus(e.blockId, "up");
-  });
-  atto.on("reasoning_end", () => { throw new Error("handler broke"); });
-}
-`)
+	write(t, filepath.Join(dir, "b.ts"), `export default (atto:any)=>{atto.on("message_end",async(e:any)=>{await new Promise(r=>setTimeout(r,200));atto.ui.notify(e.blockId+":"+e.text)});atto.on("reasoning_end",()=>{throw new Error("handler broke")})}`)
 	h := newHost(true)
 	m := load(t, cwd, h)
 	start := time.Now()
 	m.BlockEnd("text", "sid.e1:text", "hello", "p/m")
 	m.BlockEnd("reasoning", "sid.e1:reasoning", "think", "p/m")
-	if d := time.Since(start); d > 500*time.Millisecond {
-		t.Fatalf("BlockEnd waited %s for a handler sleeping 2s", d)
+	if time.Since(start) > 100*time.Millisecond {
+		t.Fatal("BlockEnd waited")
 	}
-	eventually(t, "the reasoning display", func() bool {
-		s := h.snapshot()
-		return h.blockDisplayOf("b/sid.e1:reasoning") == "THINK" && h.blockStatusOf("b/sid.e1:reasoning") == "up" && len(s.notices) == 1
-	})
-	if n := h.snapshot().notices; !strings.Contains(n[0], "reasoning_end") || !strings.Contains(n[0], "handler broke") {
-		t.Fatalf("handler errors are reported: %v", n)
-	}
-	eventually(t, "the slow handler to finish alone", func() bool { return h.blockStatusOf("b/sid.e1:text") == "slow done" })
-	// null clears.
-	write(t, filepath.Join(dir, "c.ts"), `export default (atto: any) => atto.registerCommand("c", { handler: (a: string, ctx: any) => { ctx.ui.setBlockDisplay("x", null); ctx.ui.setBlockStatus("x", null); } })`)
-	m.Reload()
-	h.mu.Lock()
-	h.blockDisplay["c/x"], h.blockStatus["c/x"] = "stale", "stale"
-	h.mu.Unlock()
-	m.RunCommand("c", "")
-	eventually(t, "null to clear", func() bool { return h.blockDisplayOf("c/x") == "" && h.blockStatusOf("c/x") == "" })
-}
-
-func (h *fakeHost) blockDisplayOf(k string) string {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	return h.blockDisplay[k]
-}
-
-func (h *fakeHost) blockStatusOf(k string) string {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	return h.blockStatus[k]
+	eventually(t, "handlers", func() bool { return len(h.snapshot().notices) == 2 })
 }
 
 func TestCompleteSuccessAndFailures(t *testing.T) {

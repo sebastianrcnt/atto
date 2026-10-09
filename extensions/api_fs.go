@@ -17,6 +17,7 @@ func (e *ext) fsObject() *goja.Object {
 	o := vm.NewObject()
 	throw := func(err error) { panic(vm.NewGoError(err)) }
 	_ = o.Set("readFile", func(path string) string {
+		e.readOnlyRender()
 		b, err := os.ReadFile(e.resolve(path))
 		if err != nil {
 			throw(err)
@@ -24,6 +25,7 @@ func (e *ext) fsObject() *goja.Object {
 		return string(b)
 	})
 	_ = o.Set("writeFile", func(path, text string) {
+		e.readOnlyRender()
 		p := e.resolve(path)
 		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
 			throw(err)
@@ -33,11 +35,13 @@ func (e *ext) fsObject() *goja.Object {
 		}
 	})
 	_ = o.Set("exists", func(path string) bool {
+		e.readOnlyRender()
 		_, err := os.Stat(e.resolve(path))
 		return err == nil
 	})
 	// list returns the names in a directory, sorted; directories end in /.
 	_ = o.Set("list", func(path string) []string {
+		e.readOnlyRender()
 		entries, err := os.ReadDir(e.resolve(path))
 		if err != nil {
 			throw(err)

@@ -1,6 +1,8 @@
 package extensions
 
 import (
+	"context"
+	"encoding/json"
 	"fmt"
 	"github.com/sebastianrcnt/atto/config"
 	"github.com/sebastianrcnt/atto/ui"
@@ -16,15 +18,18 @@ import (
 
 // fakeHost records what extensions ask of the front end.
 type fakeHost struct {
-	mu      sync.Mutex
-	ui      bool
-	notices []string
-	status  map[string]string // ext/key
-	widgets map[string][]string
-	asked   []Question
-	answers []any // given in order; then the default
-	sent    []string
-	cleared []string
+	mu       sync.Mutex
+	lane     UIQueue
+	registry *ui.Registry
+	store    MemoryStore
+	ui       bool
+	notices  []string
+	status   map[string]string // ext/key
+	widgets  map[string][]string
+	asked    []Question
+	answers  []any // given in order; then the default
+	sent     []string
+	cleared  []string
 	// block status and display text, by ext/blockID.
 	blockStatus  map[string]string
 	blockDisplay map[string]string
@@ -39,10 +44,14 @@ func (h *fakeHost) SetSessionName(ext, name string) error {
 	return nil
 }
 
-// shownText is a call of ctx.ui.showText.
+// shownText is a passive native diff trace, only for the comparison corpus.
+type shownOptions struct {
+	Lang    string
+	Preview int
+}
 type shownText struct {
 	ext, title, text string
-	opts             TextOptions
+	opts             shownOptions
 }
 
 func (h *fakeHost) shown() []shownText {
@@ -51,7 +60,7 @@ func (h *fakeHost) shown() []shownText {
 	return slices.Clone(h.texts)
 }
 
-func (h *fakeHost) ShowText(ext, title, text string, o TextOptions) {
+func (h *fakeHost) recordText(ext, title, text string, o shownOptions) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.texts = append(h.texts, shownText{ext, title, text, o})
@@ -63,48 +72,10 @@ func newHost(ui bool) *fakeHost {
 
 func (h *fakeHost) HasUI() bool { return h.ui }
 
-func (h *fakeHost) SetBlockStatus(ext, id, text string) {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	if h.blockStatus == nil {
-		h.blockStatus = map[string]string{}
-	}
-	h.blockStatus[ext+"/"+id] = text
-}
-
-func (h *fakeHost) SetBlockDisplay(ext, id, text string) {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	if h.blockDisplay == nil {
-		h.blockDisplay = map[string]string{}
-	}
-	h.blockDisplay[ext+"/"+id] = text
-}
-
 func (h *fakeHost) Notify(ext, text, level string) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.notices = append(h.notices, fmt.Sprintf("%s %s: %s", level, ext, text))
-}
-
-func (h *fakeHost) SetStatus(ext, key, text string) {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	if text == "" {
-		delete(h.status, ext+"/"+key)
-		return
-	}
-	h.status[ext+"/"+key] = text
-}
-
-func (h *fakeHost) SetWidget(ext, key string, lines []string) {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	if lines == nil {
-		delete(h.widgets, ext+"/"+key)
-		return
-	}
-	h.widgets[ext+"/"+key] = lines
 }
 
 func (h *fakeHost) Ask(ext string, q Question, answer func(any)) {
@@ -120,7 +91,8 @@ func (h *fakeHost) Ask(ext string, q Question, answer func(any)) {
 	go answer(v) // from another goroutine, as a front end does
 }
 
-func (h *fakeHost) ClearUI(ext string) {
+func (h *fakeHost) DisposeUI(ext string) {
+	h.UIWork(func(r *ui.Registry) error { r.Unload(ext); return nil }, func(error) {})
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.cleared = append(h.cleared, ext)
@@ -225,12 +197,48 @@ func eventually(t *testing.T, what string, cond func() bool) {
 }
 
 // Keep the old command comparison corpus: decode the new tree to the old
-// passive trace in tests only. Production native commands never call ShowText.
+// passive trace in tests only. Production native commands never call recordText.
 func (h *fakeHost) UIBlock(title string, tree ui.Node) {
 	var parts []string
 	for _, child := range tree.Children {
 		parts = append(parts, ui.PlainText(child))
 	}
 	preview := int(tree.Props["previewLines"].(float64))
-	h.ShowText("diff", title, strings.TrimRight(strings.Join(parts, "\n"), "\n"), TextOptions{Lang: "diff", Preview: preview})
+	h.recordText("diff", title, strings.TrimRight(strings.Join(parts, "\n"), "\n"), shownOptions{Lang: "diff", Preview: preview})
+}
+
+func (h *fakeHost) UIWork(work func(*ui.Registry) error, done func(error)) {
+	h.lane.Post(func() { done(work(h.uiRegistry())) })
+}
+func (h *fakeHost) uiRegistry() *ui.Registry {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.registry == nil {
+		h.registry = ui.NewRegistry(func(m ui.Mutation) {
+			h.mu.Lock()
+			defer h.mu.Unlock()
+			i := m.Instance
+			if m.Method == "ui/close" {
+				delete(h.status, i.ID)
+				delete(h.widgets, i.ID)
+				return
+			}
+			if m.Method == "ui/render" {
+				text := ""
+				if i.Tree != nil {
+					text = ui.PlainText(*i.Tree)
+				}
+				if i.Site == ui.Status {
+					h.status[i.ID] = text
+				}
+				if i.Site == ui.Band {
+					h.widgets[i.ID] = strings.Split(text, "\n")
+				}
+			}
+		}, func(fn func()) { h.lane.Post(fn) })
+	}
+	return h.registry
+}
+func (h *fakeHost) Store(_ context.Context, owner, op, key string, v json.RawMessage) (json.RawMessage, error) {
+	return h.store.Do(owner, op, key, v)
 }

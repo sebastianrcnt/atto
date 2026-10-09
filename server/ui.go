@@ -9,6 +9,7 @@ import (
 	"github.com/sebastianrcnt/atto/session"
 	"github.com/sebastianrcnt/atto/ui"
 	"log"
+	"slices"
 	"strings"
 	"time"
 )
@@ -66,6 +67,24 @@ func (t *thread) publishUI(m ui.Mutation) {
 		t.persistUIBlock(m)
 	}
 	t.publish(m.Method, p)
+	if i.Site == ui.Dialog && uiOwner(i.ID) != "atto" {
+		switch m.Method {
+		case "ui/open":
+			exists := t.prompt != nil && t.prompt.wire.UIID == i.ID
+			for _, pending := range t.prompts {
+				exists = exists || pending.wire.UIID == i.ID
+			}
+			if !exists {
+				t.ask(&openPrompt{wire: Prompt{ID: i.ID, Kind: PromptCustom, UIID: i.ID, Title: i.Options.Title}, origin: "extension", ext: uiOwner(i.ID), cancel: func() {}})
+			}
+		case "ui/close":
+			if t.prompt != nil && t.prompt.wire.UIID == i.ID {
+				t.closePrompt("closed", "")
+				t.afterPrompt()
+			}
+			t.prompts = slices.DeleteFunc(t.prompts, func(p *openPrompt) bool { return p.wire.UIID == i.ID })
+		}
+	}
 }
 func (t *thread) routeUI(client string, p threadParams) (any, error) {
 	if t.readOnly != "" {
@@ -107,6 +126,8 @@ func (t *thread) persistUIBlock(m ui.Mutation) {
 		if entry == "" {
 			t.sess.Append(session.Entry{Type: session.TypeUIBlock, Ext: uiOwner(i.ID), Title: i.Options.Title, UISite: i.Site, UIID: i.ID, UIRev: i.Rev})
 			t.uiEntries[i.ID] = t.sess.Leaf()
+			// Persisted identity is available before the initial transcript drawing.
+			t.elements.SetProps(ui.Match{Site: ui.Transcript, ID: i.ID}, map[string]any{"title": i.Options.Title, "entryId": t.uiEntries[i.ID]})
 		}
 		return
 	}

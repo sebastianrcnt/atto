@@ -175,7 +175,7 @@ func ForkFile(src, cwd, leaf string) (*Writer, error) {
 			return nil
 		}
 		old := e.ID
-		if e.Type == TypeBlockDisplay {
+		if e.Type == TypeBlockDisplay || e.Type == TypeUIItemDisplay || e.Type == TypeUIBlockUpdate {
 			e.TargetID = newIDs[e.TargetID]
 			if e.TargetID == "" {
 				return nil

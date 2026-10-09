@@ -170,7 +170,7 @@ func toolCommand(args string) string {
 // settingsEntry reports bookkeeping entries that the default view hides.
 func settingsEntry(e session.Entry) bool {
 	switch e.Type {
-	case session.TypeLabel, session.TypeModel, session.TypeEffort, session.TypeName, session.TypeGoal, session.TypeBranch, session.TypeBlockDisplay, session.TypeExtText:
+	case session.TypeLabel, session.TypeModel, session.TypeEffort, session.TypeName, session.TypeGoal, session.TypeBranch, session.TypeBlockDisplay, session.TypeExtText, session.TypeUIStore, session.TypeUIBlockUpdate, session.TypeUIItemDisplay:
 		return true
 	}
 	return false

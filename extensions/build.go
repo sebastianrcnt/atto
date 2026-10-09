@@ -32,6 +32,8 @@ func Bundle(entry string) (string, error) {
 // the same for every extension.
 func bundle(o api.BuildOptions, entry string) (string, error) {
 	dir := o.AbsWorkingDir
+	o.JSXFactory = "atto.ui.jsx"
+	o.JSXFragment = "atto.ui.Fragment"
 	o.Bundle = true
 	o.Write = false
 	o.Format = api.FormatCommonJS

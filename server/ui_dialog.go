@@ -25,7 +25,7 @@ func promptTree(p Prompt) ui.Node {
 	return ui.Box(ui.BoxProps{Gap: 1}, children...)
 }
 func portablePrompt(p *openPrompt) bool {
-	return p != nil && p.origin != "mcp" && p.origin != "client" && p.wire.Kind != PromptMultiSelect && (p.wire.Kind != PromptSelect || len(p.wire.Options) > 0)
+	return p != nil && p.wire.Kind != PromptCustom && p.origin != "mcp" && p.origin != "client" && p.wire.Kind != PromptMultiSelect && (p.wire.Kind != PromptSelect || len(p.wire.Options) > 0)
 }
 func (t *thread) openUIDialog(p *openPrompt) {
 	if !portablePrompt(p) {
@@ -55,9 +55,25 @@ func (t *thread) openUIDialog(p *openPrompt) {
 		return t.answerPrompt(a.ClientID, p.wire.ID, PromptAnswer{Cancel: true})
 	})
 	tree := promptTree(p.wire)
-	_ = r.OpenDefault("atto", ui.OpenOptions{Site: ui.Dialog, ID: m.ID, Title: p.wire.Title, CloseOnEscape: true}, nil, &tree)
+	kindName := "select"
+	if p.wire.Confirm {
+		kindName = "confirm"
+	}
+	if p.wire.Kind == PromptInput {
+		kindName = "input"
+	}
+	options := make([]map[string]any, 0, len(p.wire.Options))
+	for index, opt := range p.wire.Options {
+		options = append(options, map[string]any{"value": strconv.Itoa(index), "label": opt.Label})
+	}
+	props := map[string]any{"kind": kindName, "title": p.wire.Title, "options": options, "initialValue": p.wire.Text}
+	_ = r.OpenDefault("atto", ui.OpenOptions{Site: ui.Dialog, ID: m.ID, Title: p.wire.Title, CloseOnEscape: true}, props, &tree)
 }
 func (t *thread) closeUIDialog(p *openPrompt, how string) {
+	if p != nil && p.wire.UIID != "" && t.elements != nil {
+		_ = t.elements.CloseReason(p.ext, ui.Dialog, p.wire.UIID, "provider")
+		return
+	}
 	if !portablePrompt(p) || t.elements == nil {
 		return
 	}

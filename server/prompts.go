@@ -75,6 +75,8 @@ func (t *thread) answerPrompt(client, id string, ans PromptAnswer) error {
 			t.publish("prompt/clientAnswered", map[string]any{"clientId": p.wire.ClientID, "requestId": p.wire.RequestID, "answer": PromptAnswer{Cancel: true}})
 		}
 		p.cancel()
+	case p.wire.Kind == PromptCustom:
+		return invalid("custom dialogs are answered through their ui/event controls")
 	case p.wire.Kind == PromptMultiSelect:
 		if ans.Indexes == nil {
 			return invalid("indexes are required for a multiSelect prompt")
@@ -240,15 +242,16 @@ func (t *thread) askMCPApproval(in mcp.Info) {
 
 // cancelExtensionPrompts disposes questions whose extension is being reloaded.
 // Other runtime questions keep their place and cannot be auto-answered.
-func (t *thread) cancelExtensionPrompts() {
+func (t *thread) cancelExtensionPrompts() { t.cancelExtensionPromptsFor("") }
+func (t *thread) cancelExtensionPromptsFor(ext string) {
 	t.prompts = slices.DeleteFunc(t.prompts, func(p *openPrompt) bool {
-		if p.origin != "extension" {
+		if p.origin != "extension" || ext != "" && p.ext != ext {
 			return false
 		}
 		p.cancel()
 		return true
 	})
-	if p := t.prompt; p != nil && p.origin == "extension" {
+	if p := t.prompt; p != nil && p.origin == "extension" && (ext == "" || p.ext == ext) {
 		t.closePrompt("closed", "")
 		p.cancel()
 		if len(t.prompts) > 0 {

@@ -110,7 +110,7 @@ func (m *Manager) closeNative() {
 	n.mu.Unlock()
 	n.wg.Wait()
 	for _, in := range n.infos {
-		m.host().ClearUI(in.Name)
+		m.host().DisposeUI(in.Name)
 	}
 }
 func (n *nativeState) count(model string, failed bool) {

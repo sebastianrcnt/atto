@@ -50,32 +50,6 @@ func diffApp(t *testing.T, script ...providertest.Reply) (*App, *providertest.Mo
 	return startApp(t, cwd), m
 }
 
-// textBlocks are the transcript's blocks of extension text.
-func textBlocks(a *App) []*extTextBlock {
-	var out []*extTextBlock
-	for _, c := range a.ui.Body.Children {
-		if g, ok := c.(gap); ok {
-			if b, ok := g.Component.(*extTextBlock); ok {
-				out = append(out, b)
-			}
-		}
-	}
-	return out
-}
-
-func lastText(t *testing.T, a *App, n int) *extTextBlock {
-	t.Helper()
-	var b *extTextBlock
-	within(t, a, "the diff block", func() bool {
-		if bs := textBlocks(a); len(bs) == n {
-			b = bs[n-1]
-			return true
-		}
-		return false
-	})
-	return b
-}
-
 func portableDiff(t *testing.T, a *App, n int) *tui.Elements {
 	t.Helper()
 	var e *tui.Elements
@@ -112,13 +86,6 @@ func TestDiffCommandShowsABlock(t *testing.T) {
 				t.Errorf("missing %q: %s", want, shown)
 			}
 		}
-		// Preserve a concrete before screenshot using the retired renderer, only in tests.
-		var parts []string
-		for _, c := range e.Tree.Children {
-			parts = append(parts, ui.PlainText(c))
-		}
-		old := &extTextBlock{ext: "diff", title: "git diff", text: strings.Join(parts, "\n"), lang: "diff", preview: int(e.Tree.Props["previewLines"].(float64))}
-		builtinGolden(t, "diff-before", 80, old.Render(80))
 		e.Click(0)
 		expanded := plainLines(e.Render(80))
 		if !strings.Contains(expanded, `+   println("hello")`) {
@@ -197,36 +164,5 @@ func TestDiffBlockIsDisplayOnlyAndSurvivesResume(t *testing.T) {
 	}
 	if fmt.Sprint(order) != "[user diff user]" {
 		t.Fatal(order)
-	}
-}
-
-func TestExtTextRenderingIsGenericAndCached(t *testing.T) {
-	d := &details{}
-	b := &extTextBlock{d: d, ext: "demo", title: "Report", text: "plain\n+not green\n\ttabbed\x1b[31m\n", lang: ""}
-	got := plainLines(b.Render(40))
-	if got != "± Report · demo\n  plain\n  +not green\n     tabbed" {
-		t.Errorf("plain text:\n%s", got)
-	}
-	if strings.Contains(strings.Join(b.Render(40), ""), tui.FG(2, "")) {
-		t.Error("only lang diff colours")
-	}
-	if b.Click(0) {
-		t.Error("short text does not collapse")
-	}
-	// A preview of 2 of 5 lines.
-	b = &extTextBlock{d: d, ext: "demo", title: "T", text: "1\n2\n3\n4\n5", preview: 2}
-	if got := plainLines(b.Render(40)); !strings.Contains(got, "  2\n    + 3 lines (click or ctrl+t to expand)") {
-		t.Errorf("preview:\n%s", got)
-	}
-	d.on, d.gen = true, d.gen+1 // ctrl+t
-	if got := plainLines(b.Render(40)); !strings.Contains(got, "  5\n    − Show less") {
-		t.Errorf("expanded by ctrl+t:\n%s", got)
-	}
-	// A narrow width truncates lines.
-	long := &extTextBlock{d: d, ext: "demo", title: "T", text: strings.Repeat("x", 100)}
-	for _, l := range long.Render(30) {
-		if tui.VisibleWidth(l) > 30 {
-			t.Errorf("too wide: %q", l)
-		}
 	}
 }

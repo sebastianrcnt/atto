@@ -255,7 +255,11 @@ func RunPrint(o PrintOptions) error {
 	ag.Worker = o.Worker
 	// Extensions have no UI here: notices go to stderr, dialogs get their
 	// default answers, and sendMessage steers the run.
-	ext := core.LoadExtensions(ag, &extensions.Headless{Out: os.Stderr, Send: ag.Steer})
+	host := &extensions.Headless{Out: os.Stderr, Send: ag.Steer}
+	if !o.NoSave {
+		host.StoreJSON = extensions.SessionStore(sess)
+	}
+	ext := core.LoadExtensions(ag, host)
 	defer ext.Close()
 	mc := core.LoadMCP(ag) // servers start on first use and end with the run
 	defer mc.Close()

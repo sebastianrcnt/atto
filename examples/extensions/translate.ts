@@ -102,7 +102,11 @@ export default function (atto: Atto) {
   let dir = ""; // ~/.atto
   let settings: Settings = { ...DEFAULTS };
   const save = () => atto.fs.writeFile(`${dir}/translate.json`, JSON.stringify(settings, null, 2) + "\n");
-  const showStatus = () => atto.ui.setStatus("translate", settings.enabled ? `⇄ ${settings.lang}` : null);
+  atto.ui.render({site:"status",id:"translate"},e=>atto.ui.resolve(e).Text({text:settings.enabled ? `⇄ ${settings.lang}` : ""}));
+ const showStatus = () => {
+ if(settings.enabled) void atto.ui.open({site:"status",id:"translate"});
+ else void atto.ui.close({site:"status",id:"translate"});
+ };
   const ready = (async () => {
     const r = await atto.exec(`printf %s "\${ATTO_DIR:-$HOME/.atto}"`);
     dir = r.stdout.trim();
@@ -143,7 +147,7 @@ export default function (atto: Atto) {
     })().finally(() => {
       building = null;
     });
-    return building;
+    return building!;
   };
 
   let reqN = 0;
@@ -253,20 +257,33 @@ export default function (atto: Atto) {
 
   // --- the blocks ---
 
+  const drawings = new Map<string, {text?: string; status?: string}>();
+  const update = (id: string, value: {text?: string; status?: string}) => {
+    drawings.set(id, value);
+    while (drawings.size > 200) drawings.delete(drawings.keys().next().value!);
+    atto.ui.invalidate({site:"assistantMessage"});
+  };
+  atto.ui.render({site:"assistantMessage"},async(e,next)=>{
+    const drawing = e.props.blockId ? drawings.get(e.props.blockId) : undefined;
+    if (!settings.enabled || !drawing) return next(e);
+    const original = await next({...e,props:{...e.props,text:drawing.text ?? e.props.text}});
+    if (!drawing.status) return original;
+    const {Box,Text}=atto.ui.resolve(e);
+    return Box({children:[original,Text({text:drawing.status,color:"muted"})]});
+  });
   let warned = "";
   const translateBlock = (blockId: string, text: string) => {
     text = text.trim();
     if (!text || inLanguage(text, settings.lang) === true) return;
     enqueue(async () => {
       if (!settings.enabled) return;
-      atto.ui.setBlockStatus(blockId, "translating…");
+      update(blockId, {status:"translating…"});
       try {
         const out = settings.engine === "apple" ? await translateMarkdown(text) : await modelTranslate(text);
-        if (out) atto.ui.setBlockDisplay(blockId, out);
-        atto.ui.setBlockStatus(blockId, null);
+        update(blockId, {text:out || undefined});
       } catch (err) {
         const msg = String(err instanceof Error ? err.message : err);
-        atto.ui.setBlockStatus(blockId, "translation failed");
+        update(blockId, {status:"translation failed"});
         atto.log(`translate: ${msg}`);
         if (msg !== warned) {
           warned = msg;

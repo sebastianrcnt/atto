@@ -58,14 +58,12 @@ func (v *ThreadView) Apply(n Notification) bool {
 		Item      *Item           `json:"item"`
 		ItemID    string          `json:"itemId"`
 		Delta     string          `json:"delta"`
-		Display   *BlockDisplay   `json:"display"`
 		Thread    *ThreadInfo     `json:"thread"`
 		TurnID    string          `json:"turnId"`
 		Usage     *Usage          `json:"usage"`
 		Context   *int            `json:"contextTokens"`
 		Pending   *PendingInput   `json:"pending"`
 		Goal      *GoalInfo       `json:"goal"`
-		UI        *ExtensionUI    `json:"ui"`
 		Prompt    *Prompt         `json:"prompt"`
 		ID        string          `json:"id"`
 		Activity  json.RawMessage `json:"activity"`
@@ -157,12 +155,6 @@ func (v *ThreadView) Apply(n Notification) bool {
 		} else {
 			v.Items[i].Text += p.Delta
 		}
-	case "item/display":
-		i, ok := v.index[p.ItemID]
-		if !ok {
-			return false
-		}
-		v.Items[i].Display = p.Display
 	case "thread/updated":
 		if p.Thread == nil {
 			return false
@@ -203,8 +195,6 @@ func (v *ThreadView) Apply(n Notification) bool {
 		v.Info.Pending = p.Pending
 	case "goal/updated":
 		v.Info.Goal = p.Goal
-	case "extension/ui":
-		v.Info.ExtensionUI = p.UI
 	case "prompt/open":
 		v.Info.Prompt = p.Prompt
 	case "prompt/closed":

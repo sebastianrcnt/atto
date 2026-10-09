@@ -115,7 +115,7 @@ func (a *App) renderUIStatus(width int) []string {
 			out[0] += strings.Repeat(" ", max(1, width-1-tui.VisibleWidth(out[0])-tui.VisibleWidth(ind))) + ind
 		}
 	}
-	flags := a.extensionStatus()
+	var flags []string
 	if ind != "" && own {
 		flags = append(flags, ind)
 	}

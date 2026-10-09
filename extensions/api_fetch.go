@@ -23,6 +23,7 @@ const (
 // (up to 10 MiB). headers has lower-case names. It rejects on network
 // errors, not on HTTP error statuses, like fetch.
 func (e *ext) jsFetch(url string, opts *goja.Object) goja.Value {
+	e.readOnlyRender()
 	method := strings.ToUpper(optString(opts, "method"))
 	if method == "" {
 		method = "GET"

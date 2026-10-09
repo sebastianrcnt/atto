@@ -34,7 +34,6 @@ export default function (atto: Atto) {
       const prompt =
         (current ? `The conversation is named "${current}" now.\n\n` : "") +
         `The conversation so far (latest last):\n\n${convo}\n\nTitle:`;
-      ctx.ui.setStatus("autorename", "naming…");
       try {
         const ask = (reasoningEffort?: string) =>
           atto.complete({ model, system: SYSTEM, prompt, maxTokens: 64, timeoutMs: 60000, reasoningEffort });
@@ -51,7 +50,6 @@ export default function (atto: Atto) {
       } catch (err) {
         ctx.ui.notify(`autorename: ${err instanceof Error ? err.message : err}`, "error");
       } finally {
-        ctx.ui.setStatus("autorename", null);
       }
     },
   });

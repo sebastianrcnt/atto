@@ -25,6 +25,7 @@ const defaultExecTimeout = 60 * time.Second
 // the timeout (ms) is killed with everything it started; code is then -1
 // and killed true.
 func (e *ext) jsExec(command string, opts *goja.Object) goja.Value {
+	e.readOnlyRender()
 	dir := e.m.cwd
 	if d := optString(opts, "cwd"); d != "" {
 		dir = e.resolve(d)

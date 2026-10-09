@@ -153,8 +153,6 @@
 //	event          {title}  (inbox event delivered to the thread)
 //	thread/reloaded {context, changes, promptChanged, error?}  (atto reload run by the agent)
 //	extension/notify {extension, message, level}  (ctx.ui.notify)
-//	item/display   {itemId, blockId, display}  (what extensions show on a reasoning or agentMessage item changed; display null: shown as it is)
-//	extension/ui   {ui}  (the extensions' status items or widgets changed; see ExtensionUI)
 //	thread/usage   {usage, step, contextTokens}  (after each model response: the session's totals and that response's)
 //	turn/pending   {pending}  (pending steers or queued follow-ups changed; see PendingInput)
 //	turn/completed {turnId, status, error?, usage, contextTokens}
@@ -164,16 +162,8 @@
 // totals (Usage), and while a turn runs the turn (TurnInfo), with the
 // pending input.
 //
-// Extensions shape what the client shows, as data only (text and a few
-// tokens such as lang: "diff"; never markup or code): a reasoning or
-// agentMessage item carries blockId and, when an extension set any,
-// display {statuses, ext, text} (ctx.ui.setBlockStatus, setBlockDisplay;
-// text replaces the item's own, which stays the original); ctx.ui.showText
-// adds an extText item {title, ext, text, lang, preview}; and thread/read
-// and thread/resume carry extensionUi {status, widgets}. Item displays
-// and extText items are saved in the session (block_display and ext_text
-// entries), so a resumed thread shows them again; the model never sees
-// them.
+// Portable UI trees travel through ui/render and uiDisplay/uiBlock items.
+// Callbacks stay in the worker; replayed drawings are passive.
 //
 // thread/start, thread/resume and thread/read results carry eventId: the
 // items are as of that event (those still streaming included), so follow
@@ -197,7 +187,6 @@
 // timeout, cancellation and error, the user's images, a user command's
 // shell fields, the full goal state of a goalStatus. When a reasoning or
 // agentMessage item that already completed is saved, item/updated
-// brings its blockId, before any item/display names it.
 //
 // Two more notifications:
 //
@@ -330,7 +319,6 @@ const (
 	ItemNotice     = "notice"
 	ItemGoalStatus = "goalStatus"
 	ItemUIBlock    = "uiBlock"
-	ItemExtText    = "extText" // text an extension showed (ctx.ui.showText): display only
 
 	// ItemBranchSummary is a summary of a branch the session went back
 	// from in atto's /tree; threads show it when they resume such a session.
@@ -386,17 +374,12 @@ type Item struct {
 	GoalStatus string `json:"goalStatus,omitempty"`
 
 	// reasoning, agentMessage: BlockID names the block for extensions (set
-	// once the response is saved), and Display is what they show on it.
-	BlockID string        `json:"blockId,omitempty"`
-	Display *BlockDisplay `json:"display,omitempty"`
+	// once the response is saved). UI overlays are separate portable trees.
+	BlockID string `json:"blockId,omitempty"`
 
-	// extText: text (under title) that extension ext showed; lang says
-	// how to colour it ("diff", or plain text) and preview how many lines
-	// show while it is collapsed (0: the client's default).
-	Title   string `json:"title,omitempty"`
-	Ext     string `json:"ext,omitempty"`
-	Lang    string `json:"lang,omitempty"`
-	Preview int    `json:"preview,omitempty"`
+	// UIBlock title and provider.
+	Title string `json:"title,omitempty"`
+	Ext   string `json:"ext,omitempty"`
 	// what a client needs to show an item as the terminal
 	// does (see TranscriptItem). EntryID is the session entry the item
 	// belongs to, when recorded.
@@ -447,40 +430,6 @@ type ItemImage struct {
 	MIME   string `json:"mimeType,omitempty"`
 }
 
-// BlockDisplay is what extensions show on a reasoning or agentMessage item
-// (ctx.ui.setBlockStatus, ctx.ui.setBlockDisplay): display only, the model
-// never sees it. Text, when set, is shown in place of the item's own text
-// (which stays the original, for a client to offer); it is Markdown, as
-// the item's is.
-type BlockDisplay struct {
-	Statuses []BlockStatus `json:"statuses,omitempty"` // short labels for the header, in order
-	Ext      string        `json:"ext,omitempty"`      // the extension whose text is shown
-	Text     string        `json:"text,omitempty"`
-}
-
-type BlockStatus struct {
-	Ext  string `json:"ext"`
-	Text string `json:"text"`
-}
-
-// ExtensionUI is what extensions show around the input: status line items
-// (ctx.ui.setStatus) and widgets, lines above the input (ctx.ui.setWidget).
-// Keys are "<extension>/<key>"; both lists are in the order first set.
-type ExtensionUI struct {
-	Status  []ExtensionStatus `json:"status"`
-	Widgets []ExtensionWidget `json:"widgets"`
-}
-
-type ExtensionStatus struct {
-	Key  string `json:"key"`
-	Text string `json:"text"`
-}
-
-type ExtensionWidget struct {
-	Key   string   `json:"key"`
-	Lines []string `json:"lines"`
-}
-
 // ThreadInfo describes a thread to clients.
 type ThreadInfo struct {
 	UI            *ui.Snapshot `json:"ui,omitempty"`
@@ -520,9 +469,6 @@ type ThreadInfo struct {
 	// Prompt is the session's open picker or input, and Goal its goal.
 	Prompt *Prompt   `json:"prompt,omitempty"`
 	Goal   *GoalInfo `json:"goal,omitempty"`
-	// ExtensionUI, in thread/read and thread/resume results, is what the
-	// extensions show around the input (nil when nothing).
-	ExtensionUI *ExtensionUI `json:"extensionUi,omitempty"`
 
 	// RunKind is what runs (turn, compact, branchSummary) and
 	// Activity what it does; Jobs and Timers count the session's running
@@ -707,6 +653,7 @@ type Agent struct {
 
 // Prompt kinds.
 const (
+	PromptCustom      = "custom"
 	PromptSelect      = "select"
 	PromptInput       = "input"
 	PromptMultiSelect = "multiSelect"
@@ -716,6 +663,7 @@ const (
 // or a client picker registered with prompt/clientOpen). Every attached client can
 // answer it; the first valid answer wins.
 type Prompt struct {
+	UIID      string `json:"uiId,omitempty"`
 	ClientID  string `json:"clientId,omitempty"`  // owner of a front-end picker
 	RequestID string `json:"requestId,omitempty"` // owner correlation token
 	ID        string `json:"id"`

@@ -44,7 +44,6 @@ func (a *App) onNotification(n server.Notification) {
 		ItemID    string               `json:"itemId"`
 		Delta     string               `json:"delta"`
 		BlockID   string               `json:"blockId"`
-		Display   *server.BlockDisplay `json:"display"`
 		Thread    *server.ThreadInfo   `json:"thread"`
 		TurnID    string               `json:"turnId"`
 		RunKind   string               `json:"runKind"`
@@ -56,7 +55,6 @@ func (a *App) onNotification(n server.Notification) {
 		Context   *int                 `json:"contextTokens"`
 		Pending   *server.PendingInput `json:"pending"`
 		Goal      *server.GoalInfo     `json:"goal"`
-		UI        *server.ExtensionUI  `json:"ui"`
 		Prompt    *server.Prompt       `json:"prompt"`
 		ID        string               `json:"id"`
 		Title     string               `json:"title"`
@@ -96,8 +94,6 @@ func (a *App) onNotification(n server.Notification) {
 		if p.Item != nil {
 			a.wireCompleted(*p.Item)
 		}
-	case "item/display":
-		a.wireDisplay(p.BlockID, p.Display)
 	case "turn/started":
 		a.turnStarted(p.RunKind, p.Started, p.Activity)
 	case "turn/activity":
@@ -133,8 +129,6 @@ func (a *App) onNotification(n server.Notification) {
 		}
 	case "goal/retry":
 		a.goalRetryAt = time.UnixMilli(p.At)
-	case "extension/ui":
-		a.info.ExtensionUI = p.UI
 	case "event":
 		title := p.Title
 		a.add(&eventBlock{title: title})
@@ -218,7 +212,7 @@ func (a *App) applySnapshot(info server.ThreadInfo) {
 	if info.Pending != nil {
 		a.pending = *info.Pending
 	}
-	a.info.Prompt, a.info.ExtensionUI = info.Prompt, info.ExtensionUI
+	a.info.Prompt = info.Prompt
 	if info.Busy {
 		started := time.Now()
 		if info.Turn != nil {
@@ -302,9 +296,6 @@ func (a *App) wireStarted(w server.Item) {
 	case transcript.Shell:
 		a.rememberNative(w, a.shellBlk)
 	}
-	if w.BlockID != "" {
-		a.bindBlock(w)
-	}
 	if !streamed {
 		return
 	}
@@ -353,9 +344,6 @@ func (a *App) wireUpdated(w server.Item) {
 	if w.Shell {
 		a.shellPendingContext(w)
 	}
-	if w.BlockID != "" {
-		a.bindBlock(w)
-	}
 	a.itemUpdated(&it)
 }
 
@@ -375,16 +363,10 @@ func (a *App) wireCompleted(w server.Item) {
 	if it.Kind == transcript.User {
 		return
 	}
-	if w.BlockID != "" {
-		a.bindBlock(w)
-	}
 	if w.Shell {
 		a.shellPendingContext(w)
 	}
 	a.itemCompleted(&it)
-	if w.Display != nil {
-		a.wireDisplay(w.BlockID, w.Display)
-	}
 }
 
 // noticeItem shows a notice of the runtime.

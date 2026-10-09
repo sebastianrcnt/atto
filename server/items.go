@@ -4,7 +4,6 @@ import (
 	"time"
 
 	"github.com/sebastianrcnt/atto/core/transcript"
-	"github.com/sebastianrcnt/atto/extensions"
 	"github.com/sebastianrcnt/atto/provider"
 	"github.com/sebastianrcnt/atto/session"
 )
@@ -59,8 +58,6 @@ func wireItem(sid string, it *transcript.Item) Item {
 		}
 	case transcript.UIBlock:
 		w.Type, w.Title, w.Ext, w.UITree, w.UIRev, w.UIID = ItemUIBlock, it.Title, it.Ext, it.UITree, it.UIRevision, it.UIID
-	case transcript.ExtText:
-		w.Type, w.Title, w.Ext, w.Lang, w.Preview = ItemExtText, it.Title, it.Ext, it.Lang, it.Preview
 	case transcript.BranchSummary:
 		w.Type, w.DurationMs = ItemBranchSummary, it.Duration.Milliseconds()
 	case transcript.Compaction:
@@ -132,8 +129,6 @@ func TranscriptItem(w Item) transcript.Item {
 		it.Kind = transcript.BranchSummary
 	case ItemUIBlock:
 		it.Kind, it.Title, it.Ext, it.UITree, it.UIRevision, it.UIID = transcript.UIBlock, w.Title, w.Ext, w.UITree, w.UIRev, w.UIID
-	case ItemExtText:
-		it.Kind, it.Title, it.Ext, it.Lang, it.Preview = transcript.ExtText, w.Title, w.Ext, w.Lang, w.Preview
 	}
 	return it
 }
@@ -149,32 +144,6 @@ func blockID(sid string, it *transcript.Item) string {
 		kind = session.BlockReasoning
 	}
 	return session.BlockID(sid, it.EntryID, kind)
-}
-
-// WireDisplay is the protocol form of what extensions show on a block:
-// nil when nothing.
-func WireDisplay(d *transcript.BlockDisplay) *BlockDisplay {
-	if d == nil || d.IsZero() {
-		return nil
-	}
-	w := &BlockDisplay{Ext: d.Owner, Text: d.Text}
-	for _, s := range d.Statuses {
-		w.Statuses = append(w.Statuses, BlockStatus{Ext: s.Ext, Text: s.Text})
-	}
-	return w
-}
-
-// WireExtensionUI is the protocol form of the extensions' status items and
-// widgets (empty lists when none).
-func WireExtensionUI(u *extensions.UIState) *ExtensionUI {
-	w := &ExtensionUI{Status: []ExtensionStatus{}, Widgets: []ExtensionWidget{}}
-	for _, s := range u.Status() {
-		w.Status = append(w.Status, ExtensionStatus{Key: s.Key, Text: s.Text})
-	}
-	for _, x := range u.Widgets() {
-		w.Widgets = append(w.Widgets, ExtensionWidget{Key: x.Key, Lines: x.Lines})
-	}
-	return w
 }
 
 // ItemsFromEntries rebuilds a thread's items from its session file, with

@@ -181,7 +181,7 @@ func (t *thread) runCommand(client, text string) {
 		return
 	}
 	if c.Origin == "extension" {
-		if t.ext == nil || !t.ext.RunCommand(c.Name, arg) {
+		if t.ext == nil || !t.ext.RunCommandFrom(c.Name, arg, client) {
 			t.notice("", "The extension command /%s is gone (reloaded?).", c.Name)
 		}
 		return
@@ -189,7 +189,7 @@ func (t *thread) runCommand(client, text string) {
 	switch c.Name {
 	case "diff", "autorename":
 		if t.ext != nil {
-			t.ext.RunCommand(c.Name, arg)
+			t.ext.RunCommandFrom(c.Name, arg, client)
 		}
 	case "model":
 		t.cmdModel(arg)

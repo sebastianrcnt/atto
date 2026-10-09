@@ -1,6 +1,8 @@
 package extensions
 
 import (
+	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"github.com/sebastianrcnt/atto/ui"
@@ -18,41 +20,17 @@ type Host interface {
 	HasUI() bool
 	// Notify shows text; level is "info", "warning" or "error".
 	Notify(ext, text, level string)
-	// SetStatus sets the status line item key ("" removes it).
-	SetStatus(ext, key, text string)
-	// SetWidget sets the band of lines key above the input (nil removes it).
-	SetWidget(ext, key string, lines []string)
 	// Ask shows q and calls answer once, from any goroutine, with the
 	// choice (a string, nil when canceled) for "select" and "input", or a
 	// bool for "confirm".
 	Ask(ext string, q Question, answer func(any))
-	// SetBlockStatus sets (text "" removes) the short status ext shows on
-	// the header of the block id: display only. A block that does not exist
-	// is ignored.
-	SetBlockStatus(ext, id, text string)
-	// SetBlockDisplay sets (text "" restores) what the block id shows in
-	// place of its own text: display only, the model and the session's
-	// messages never change. A block that does not exist is ignored.
-	SetBlockDisplay(ext, id, text string)
-	// ShowText adds a display-only block with title and text to the
-	// transcript, saved in the session; see TextOptions.
-	ShowText(ext, title, text string, o TextOptions)
-	// ClearUI removes every status item and widget of ext.
-	ClearUI(ext string)
+	// DisposeUI retires portable registrations and pending dialogs.
+	DisposeUI(ext string)
 	// SendMessage queues text as a user message for the model.
 	SendMessage(text string)
 	// SetSessionName names the session, as /name does. A front end that
 	// cannot (atto -p) returns an error.
 	SetSessionName(ext, name string) error
-}
-
-// TextOptions shape the block ShowText adds.
-type TextOptions struct {
-	// Lang says how to colour the text: "diff", or "" for plain text.
-	Lang string
-	// Preview is how many lines show while the block is collapsed; 0 is the
-	// front end's default.
-	Preview int
 }
 
 // Question is a dialog an extension asks: Kind is "select" (Options),
@@ -69,9 +47,13 @@ type Question struct {
 // answer at once: select and input undefined, confirm false. Messages go
 // to Send.
 type Headless struct {
-	mu   sync.Mutex
-	Out  io.Writer
-	Send func(text string)
+	queue     UIQueue
+	mu        sync.Mutex
+	elements  *ui.Registry
+	store     MemoryStore
+	Out       io.Writer
+	Send      func(text string)
+	StoreJSON func(context.Context, string, string, string, json.RawMessage) (json.RawMessage, error)
 	// OnNotify, if set, receives notices instead of Out.
 	OnNotify func(ext, text, level string)
 }
@@ -95,19 +77,6 @@ func (h *Headless) Notify(ext, text, level string) {
 	fmt.Fprintf(h.Out, "[%s] %s%s\n", ext, prefix, text)
 }
 
-func (h *Headless) SetStatus(string, string, string)   {}
-func (h *Headless) SetWidget(string, string, []string) {}
-
-// Blocks are for front ends that show them (the TUI, the server).
-func (h *Headless) SetBlockStatus(string, string, string)  {}
-func (h *Headless) SetBlockDisplay(string, string, string) {}
-func (h *Headless) ClearUI(string)                         {}
-
-// ShowText prints the text as a notice, under its title.
-func (h *Headless) ShowText(ext, title, text string, _ TextOptions) {
-	h.Notify(ext, title+"\n"+text, "info")
-}
-
 func (h *Headless) Ask(_ string, q Question, answer func(any)) {
 	if q.Kind == "confirm" {
 		answer(false)
@@ -129,3 +98,23 @@ func (h *Headless) SendMessage(text string) {
 
 // UIBlock prints native portable blocks for noninteractive frontends.
 func (h *Headless) UIBlock(title string, tree ui.Node) { h.Notify("atto", ui.PlainText(tree), "info") }
+
+func (h *Headless) UIWork(work func(*ui.Registry) error, done func(error)) {
+	h.mu.Lock()
+	if h.elements == nil {
+		h.elements = ui.NewRegistry(nil, nil)
+	}
+	r := h.elements
+	h.mu.Unlock()
+	h.queue.Post(func() { done(work(r)) })
+}
+func (h *Headless) Store(ctx context.Context, owner, op, key string, value json.RawMessage) (json.RawMessage, error) {
+	if h.StoreJSON != nil {
+		return h.StoreJSON(ctx, owner, op, key, value)
+	}
+	return h.store.Do(owner, op, key, value)
+}
+
+func (h *Headless) DisposeUI(ext string) {
+	h.UIWork(func(r *ui.Registry) error { r.Unload(ext); return nil }, func(error) {})
+}

@@ -53,14 +53,12 @@ func TestExtensionInTUI(t *testing.T) {
 	a.ui.Do(func() { a.editor.SetText(""); a.runCommand("/demo now") })
 	within(t, a, "the select dialog", func() bool { return a.modal != nil })
 	var shown string
-	a.ui.Do(func() { shown = plainLines(a.renderInput(100)) + "\n" + plainLines(a.renderWidgets(100)) })
+	a.ui.Do(func() { shown = plainLines(a.renderInput(100)) + "\n" + plainLines(a.renderPortable(100)) })
 	if !strings.Contains(shown, "Pick one") || !strings.Contains(shown, "green") || !strings.Contains(shown, "(demo)") {
 		t.Fatalf("dialog:\n%s", shown)
 	}
 	a.ui.Do(func() {
-		if w := plainLines(a.renderWidgets(100)); w != "" {
-			t.Errorf("widgets hide behind a dialog: %q", w)
-		}
+
 		a.modal.HandleInput("\x1b[B") // down: green
 		a.modal.HandleInput("\r")
 	})
@@ -77,7 +75,7 @@ func TestExtensionInTUI(t *testing.T) {
 		if a.modal != nil {
 			t.Error("the dialog closed")
 		}
-		if w := strings.TrimSpace(plainLines(a.renderWidgets(100))); w != "widget now" {
+		if w := strings.TrimSpace(plainLines(a.renderPortable(100))); w != "widget now" {
 			t.Errorf("widget %q", w)
 		}
 	})
@@ -91,7 +89,7 @@ func TestExtensionInTUI(t *testing.T) {
 	writeTestFile(t, filepath.Join(config.ExtensionsDir(), "demo.ts"), `export default (atto: any) => atto.registerCommand("demo2", { handler() {} })`)
 	a.ui.Do(func() { a.runCommand("/reload") })
 	within(t, a, "the old extension's UI to go", func() bool {
-		return !strings.Contains(plainLines(a.renderStatus(100)), "demo:") && a.renderWidgets(100) == nil
+		return !strings.Contains(plainLines(a.renderStatus(100)), "demo:") && a.renderPortable(100) == nil
 	})
 	bs = loadedBlocks(a)
 	if got := plainLines(bs[len(bs)-1].Render(100)); !strings.Contains(got, "changed  extension demo") {

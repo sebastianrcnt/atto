@@ -5,6 +5,8 @@ import (
 	"testing"
 
 	"github.com/sebastianrcnt/atto/agent"
+	"github.com/sebastianrcnt/atto/tui"
+	"github.com/sebastianrcnt/atto/ui"
 )
 
 func TestToolHeadersDoNotEmitUntrustedMarkers(t *testing.T) {
@@ -28,7 +30,7 @@ func TestShellAndExtensionTitlesDoNotEmitMarkers(t *testing.T) {
 	marker := "\x1b]7337;detach\x07"
 	for _, component := range []interface{ Render(int) []string }{
 		&shellBlock{cmd: "echo " + marker},
-		&extTextBlock{title: marker, ext: marker, text: marker},
+		&tui.Elements{Tree: func() *ui.Node { n := ui.Text(ui.TextProps{Text: marker}); return &n }()},
 		&userBlock{text: marker},
 	} {
 		for _, line := range component.Render(120) {

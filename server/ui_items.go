@@ -1,7 +1,6 @@
 package server
 
 import (
-	"encoding/json"
 	"github.com/sebastianrcnt/atto/session"
 	"github.com/sebastianrcnt/atto/ui"
 	"strings"
@@ -25,16 +24,50 @@ func (t *thread) drawUIItem(w Item) Item {
 	if site == "" || t.elements == nil || !t.elements.HasRenderer(ui.Match{Site: site, ID: w.ID}) {
 		return w
 	}
-	b, _ := json.Marshal(w)
-	var props map[string]any
-	_ = json.Unmarshal(b, &props)
-	props["itemId"] = w.ID
-	if site == ui.AssistantMessage {
+	props := map[string]any{"itemId": w.ID, "status": w.Status}
+	if w.EntryID != "" {
+		props["entryId"] = w.EntryID
+	}
+	switch site {
+	case ui.UserMessage:
+		props["text"] = w.Text
+		props["images"] = w.Images
+		if w.ClientID != "" {
+			props["clientId"] = w.ClientID
+		}
+		if w.InputID != "" {
+			props["inputId"] = w.InputID
+		}
+	case ui.AssistantMessage:
+		props["text"] = w.Text
 		kind := "answer"
 		if w.Type == ItemReasoning {
 			kind = "reasoning"
 		}
 		props["kind"] = kind
+		if w.BlockID != "" {
+			props["blockId"] = w.BlockID
+		}
+	case ui.ToolCall:
+		props["command"], props["description"], props["output"] = w.Command, w.Description, w.Output
+		props["durationMs"], props["background"], props["shell"], props["images"] = w.DurationMs, w.Background, w.Shell, w.Images
+		if w.CallID != "" {
+			props["callId"] = w.CallID
+		}
+		if w.ExitCode != nil {
+			props["exitCode"] = *w.ExitCode
+		}
+		if w.Job > 0 {
+			props["job"] = w.Job
+		}
+	case ui.Notice:
+		props["text"], props["level"] = w.Text, w.Level
+		if w.Title != "" {
+			props["title"] = w.Title
+		}
+	}
+	if (site == ui.UserMessage || site == ui.ToolCall) && len(w.Images) == 0 {
+		props["images"] = []any{}
 	}
 	tree, rev, err := t.elements.DrawItem(site, w.ID, props)
 	if err != nil {

@@ -565,7 +565,8 @@ func (b *Builder) ReplayEntry(e session.Entry) {
 		b.add(Item{Kind: UIBlock, Ext: e.Ext, Title: e.Title, EntryID: e.ID, UITree: e.UITree, UIRevision: e.UIRev, UIID: e.UIID})
 	case session.TypeExtText:
 		// Like block_display, it leaves the calls waiting for results alone.
-		b.add(Item{Kind: ExtText, Ext: e.Ext, Title: e.Title, Text: e.Display, Lang: e.Lang, Preview: e.Preview})
+		tree := session.LegacyTextTree(e)
+		b.add(Item{Kind: UIBlock, Ext: e.Ext, Title: e.Title, EntryID: e.ID, UITree: &tree, UIID: "legacy/" + e.ID})
 	case session.TypeError:
 		// The turn ended here: the same notice the user saw live.
 		b.interruptCalls()

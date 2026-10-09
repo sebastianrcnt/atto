@@ -115,7 +115,7 @@ export default function (atto: any) {
   atto.registerCommand("demo", {
     description: "Demo things",
     handler: async (args: string, ctx: any) => {
-      ctx.ui.setWidget("w", ["widget " + args]);
+      atto.ui.render({site:"band",id:"w"},e=>atto.ui.resolve(e).Text({text:"widget "+args})); await atto.ui.open({site:"band",id:"w"});
       const pick = await ctx.ui.select("Pick one", ["red", "green"]);
       const ok = await ctx.ui.confirm("Sure?");
       const name = await ctx.ui.input("Name?");

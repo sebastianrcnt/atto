@@ -91,3 +91,5 @@ func (m *Manager) ToolResult(_ context.Context, _ agent.BashArgs, _ agent.BashRe
 	return output, agent.HookOutcome{}
 }
 func Bundle(string) (string, error) { return "", fmt.Errorf("%s", UnsupportedMessage(0)) }
+
+func (m *Manager) RunCommandFrom(name, args, client string) bool { return m.RunCommand(name, args) }

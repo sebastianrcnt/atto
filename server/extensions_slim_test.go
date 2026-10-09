@@ -5,6 +5,7 @@ package server
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/sebastianrcnt/atto/config"
@@ -36,8 +37,10 @@ func TestSlimHasNativeCommandsButNoExtensionCommands(t *testing.T) {
 		if !seen["diff"] || !seen["autorename"] {
 			t.Errorf("missing native commands: %+v", seen)
 		}
-		if !th.ui.Empty() {
-			t.Error("extension UI present")
+		for _, i := range th.uiRegistry().Snapshot().Instances {
+			if !strings.HasPrefix(i.ID, "atto/") {
+				t.Errorf("extension UI present: %+v", i)
+			}
 		}
 		if len(th.ext.Report()) != 1 || th.ext.Report()[0].Status != "ignored (slim)" {
 			t.Errorf("ignored files missing: %+v", th.ext.Report())

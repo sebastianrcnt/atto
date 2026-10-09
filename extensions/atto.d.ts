@@ -9,7 +9,7 @@
 /** What atto passes to handlers and commands as their second argument. */
 interface AttoContext {
   ui: AttoUI;
-  /** True in the interactive TUI; false in atto -p and the server. */
+  /** True while an interactive client is attached; false in standalone atto -p. */
   hasUI: boolean;
   /** The session's working directory. */
   cwd: string;
@@ -34,55 +34,141 @@ interface AttoSession {
   setName(name: string): void;
 }
 
+/** Portable UI: one shared drawing per session, never model-context data. */
+type UISite = "pane" | "band" | "status" | "toast" | "transcript" | "dialog"
+  | "userMessage" | "assistantMessage" | "toolCall" | "notice";
+type UIMatch = { site: UISite; id?: string };
+type UIThemeKey = "text" | "muted" | "accent" | "success" | "warning" | "error"
+  | "border" | "surface" | "diffAdd" | "diffRemove" | "diffHunk";
+interface UIEvent { clientId: string; surface: string; rev: number }
+type UIEventType = "press" | "input" | "submit" | "select" | "close";
+interface UIElement { readonly __uiElement: unique symbol }
+interface UIEngineRef { readonly __uiEngineRef: unique symbol }
+type UITree = UIElement | UIEngineRef | null;
+type UIChild = UIElement | UIEngineRef | string | null | UIChild[];
+interface UICommonProps { key?: string; color?: UIThemeKey; backgroundColor?: UIThemeKey }
+interface UIControlProps extends UICommonProps { key: string; disabled?: boolean; autoFocus?: boolean }
+interface UIBoxProps extends UICommonProps {
+  flexDirection?: "column" | "row"; gap?: number; padding?: number;
+  width?: number | "fill"; height?: number; grow?: number;
+  align?: "start" | "center" | "end";
+  borderStyle?: "none" | "single" | "round" | "double" | "ascii";
+  children?: UIChild[];
+}
+interface UITextProps extends UICommonProps {
+  text?: string; bold?: boolean; italic?: boolean; underline?: boolean;
+  wrap?: "wrap" | "truncate"; maxLines?: number; children?: (string | UIElement)[];
+}
+interface UIMarkdownProps extends UICommonProps { text: string; maxLines?: number }
+interface UICodeProps extends UICommonProps {
+  source: string; language?: string; path?: string; startLine?: number;
+  lineNumbers?: boolean; wrap?: "wrap" | "truncate";
+}
+interface UIDiffProps extends UICommonProps { source: string; path?: string; lineNumbers?: boolean; wrap?: "wrap" | "truncate" }
+interface UILinkProps extends UICommonProps { href: string; label?: string }
+interface UIButtonProps extends UIControlProps {
+  label: string; plain?: boolean; hotkey?: string;
+  onPress(e: UIEvent): Awaitable<void>;
+}
+interface UIInputProps extends UIControlProps {
+  label?: string; value?: string; placeholder?: string; submitLabel?: string;
+  maxLength?: number; onInput?(value: string, e: UIEvent): Awaitable<void>;
+  onSubmit(value: string, e: UIEvent): Awaitable<void>;
+}
+interface UISelectOption { value: string; label: string; description?: string; disabled?: boolean }
+interface UISelectProps extends UIControlProps {
+  options: UISelectOption[]; label?: string; value?: string;
+  onSelect(value: string, e: UIEvent): Awaitable<void>;
+}
+interface UIListRow { key: string; cells: string[] }
+interface UIListColumn { label: string; width?: number; align?: "start" | "end" }
+interface UIListProps extends UICommonProps {
+  mode?: "list" | "table"; rows: UIListRow[]; columns?: UIListColumn[]; emptyText?: string;
+}
+interface UITableProps extends UIListProps { columns: UIListColumn[] }
+interface UIProgressProps extends UICommonProps { value?: number; label?: string; width?: number }
+interface UICollapseProps extends UICommonProps {
+  key: string; title: string; defaultOpen?: boolean; previewLines?: number; children?: UIChild[];
+}
+interface UIImageProps extends UICommonProps { resource: string; alt: string; columns?: number; rows?: number; fit?: "contain" | "cover" }
+type UIConstructor<P = object> = (props: P, ...children: UIChild[]) => UIElement;
+interface UIConstructors {
+  Box: (props?: UIBoxProps, ...children: UIChild[]) => UIElement;
+  Text: (props?: UITextProps, ...children: (string | UIElement)[]) => UIElement;
+  Markdown: UIConstructor<UIMarkdownProps>; Code: UIConstructor<UICodeProps>;
+  Diff: UIConstructor<UIDiffProps>; Link: UIConstructor<UILinkProps>;
+  Button: UIConstructor<UIButtonProps>; Input: UIConstructor<UIInputProps>;
+  Select: UIConstructor<UISelectProps>; List: UIConstructor<UIListProps>;
+  Table: UIConstructor<UITableProps>;
+  Progress: (props?: UIProgressProps) => UIElement;
+  Collapse: UIConstructor<UICollapseProps>; Image: UIConstructor<UIImageProps>;
+}
+interface UIPaneSiteProps { title: string; placement: "auto" | "side" | "abovePrompt"; columns: number; rows: number; closeOnEscape: boolean }
+interface UIBandSiteProps { busy: boolean }
+interface UIStatusSiteProps { busy: boolean; priority: number; align: "start" | "end" }
+interface UIToastSiteProps { level: "info" | "warning" | "error"; expiresAt: number }
+interface UITranscriptSiteProps { title: string; entryId: string }
+interface UIDialogSiteProps { kind: "select" | "confirm" | "input" | "custom"; title: string; options?: {value: string; label: string}[]; initialValue?: string }
+interface UIItemSiteProps { itemId: string; entryId?: string; status: string }
+interface UIUserMessageSiteProps extends UIItemSiteProps { text: string; images: UIItemImage[]; clientId?: string; inputId?: string }
+interface UIAssistantMessageSiteProps extends UIItemSiteProps { blockId?: string; text: string; kind: "answer" | "reasoning"; model?: string }
+interface UIToolCallSiteProps extends UIItemSiteProps {
+  callId?: string; command: string; description: string; output: string; exitCode?: number;
+  durationMs: number; job?: number; background: boolean; shell: boolean; images: UIItemImage[];
+}
+interface UINoticeSiteProps extends UIItemSiteProps { text: string; level: string; title?: string; origin?: string }
+interface UIItemImage { name?: string; width?: number; height?: number; file?: string; mimeType?: string }
+interface UISitePropsMap {
+  pane: UIPaneSiteProps; band: UIBandSiteProps; status: UIStatusSiteProps;
+  toast: UIToastSiteProps; transcript: UITranscriptSiteProps; dialog: UIDialogSiteProps;
+  userMessage: UIUserMessageSiteProps; assistantMessage: UIAssistantMessageSiteProps;
+  toolCall: UIToolCallSiteProps; notice: UINoticeSiteProps;
+}
+type UISiteProps = UISitePropsMap[UISite];
+type UIRenderEvent<S extends UISite = UISite> = {
+  [K in S]: { site: K; id: string; surface: "shared"; props: UISitePropsMap[K] }
+}[S];
+type UINext<S extends UISite = UISite> = (e?: UIRenderEvent<S>) => Awaitable<UITree>;
+interface UIOpenOptions {
+  site: "pane" | "band" | "status" | "transcript" | "dialog";
+  id: string; title?: string; focus?: boolean; closeOnEscape?: boolean;
+  placement?: "auto" | "side" | "abovePrompt"; columns?: number; rows?: number;
+  priority?: number; align?: "start" | "end";
+}
 interface AttoUI {
-  /**
-   * A short dim suffix on the header of an assistant block ("translating…"),
-   * or null to remove yours. Display only; TUI only (a no-op in atto -p and
-   * the server). A block that no longer exists is ignored.
-   */
-  setBlockStatus(blockId: string, text: string | null): void;
-  /**
-   * Show text (Markdown) in place of an assistant block's own, or null to
-   * restore it. atto adds a line to flip to the original (click or ctrl+o).
-   * Display only: the model's context and the session's messages never
-   * change. Saved in the session file; TUI only.
-   */
-  setBlockDisplay(blockId: string, text: string | null): void;
-  /**
-   * Add a collapsible block to the transcript that shows text under a title.
-   * Display only: the model never sees it, and it is saved in the session
-   * file, so a resumed session shows it again. Long text shows its first
-   * `preview` lines and a "+N lines" row that expands it (click or ctrl+t).
-   * The TUI shows a block; atto -p prints the title and text as a notice.
-   * See the native /diff command (extensions/native_diff.go).
-   */
-  showText(title: string, text: string, options?: AttoShowTextOptions): void;
-  /** Show a notice in the transcript (stderr in atto -p). */
+  /** Middleware; IDs and keys are provider-local. Dispose removes this registration. */
+  render<S extends UISite>(match: { site: S; id?: string },
+    fn: (e: UIRenderEvent<S>, next: UINext<S>) => Awaitable<UITree>): () => void;
+  resolve(e: UIRenderEvent): UIConstructors;
+  jsx<P>(factory: UIConstructor<P>, props: P | null, ...children: UIChild[]): UIElement;
+  Fragment: (props: { children?: UIChild[] } | null, ...children: UIChild[]) => UIElement;
+  open(options: UIOpenOptions): Promise<void>;
+  close(options: { site: UISite; id: string }): Promise<void>;
+  /** No argument invalidates this provider's live sites; writes never redraw implicitly. */
+  invalidate(match?: UIMatch): void;
+  toast(text: string, options?: { level?: "info" | "warning" | "error"; timeoutMs?: number }): Promise<void>;
+  /** Typed transcript notice, not a transient toast. */
   notify(text: string, level?: "info" | "warning" | "error"): void;
-  /** Set (or with null, remove) an item of the status line. TUI only. */
-  setStatus(key: string, text: string | null): void;
-  /** Set (or with null, remove) a band of lines above the input. TUI only. */
-  setWidget(key: string, lines: string[] | null): void;
-  /** Let the user pick one option; undefined when canceled, and always without a UI. */
   select(title: string, options: string[]): Promise<string | undefined>;
-  /** Ask yes or no; false when canceled, and always without a UI. */
   confirm(text: string): Promise<boolean>;
-  /** Ask for a line of text; undefined when canceled, and always without a UI. */
   input(prompt: string): Promise<string | undefined>;
 }
-
-interface AttoShowTextOptions {
-  /**
-   * How to colour the text: "diff" (+ green, - red, @@ cyan, file headers
-   * dim). Anything else, or nothing, is plain text.
-   */
-  lang?: string;
-  /** Lines shown while collapsed (default 10). */
-  preview?: number;
+type JSONValue = null | boolean | number | string | JSONValue[] | { [key: string]: JSONValue };
+interface AttoStore {
+  /** JSON only: 64 KiB/value, 1 MiB/provider/session. Reload and branch aware. */
+  get<T extends JSONValue>(key: string): Promise<T | undefined>;
+  set(key: string, value: JSONValue): Promise<void>;
+  delete(key: string): Promise<void>;
+  keys(): Promise<string[]>;
+}
+declare namespace JSX {
+  type Element = UIElement;
+  interface ElementChildrenAttribute { children: {} }
+  interface IntrinsicElements {} // No DOM/HTML catalog; resolve() supplies factories.
 }
 
 interface AttoSessionEvent {
-  /** session_start: "startup" | "resume" | "clear"; session_end: "exit" | "clear" | "resume" | "other". */
+  /** session_start: "startup" | "resume" | "clear" | "reload"; session_end: "exit" | "clear" | "resume" | "other". */
   reason: string;
 }
 
@@ -250,6 +336,7 @@ interface AttoMcpTool {
 }
 
 interface Atto {
+ readonly store: AttoStore;
   /** The extension's name (its file or folder name). */
   readonly name: string;
   readonly cwd: string;

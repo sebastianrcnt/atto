@@ -105,7 +105,7 @@ func (m *Manager) fireWait(event string, fields map[string]any, d time.Duration)
 }
 
 // SessionStart fires session_start; reason is "startup", "resume",
-// "clear" or "other".
+// "clear", "reload" or "other".
 func (m *Manager) SessionStart(reason string) {
 	m.fire("session_start", map[string]any{"reason": reason})
 }

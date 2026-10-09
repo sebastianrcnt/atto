@@ -38,9 +38,6 @@ const (
 	// Shell is a command the user ran with "!" or "!!" in the prompt.
 	Shell Kind = "shell"
 
-	// ExtText is a block of text an extension showed (ctx.ui.showText):
-	// display only, never sent to the model.
-	ExtText Kind = "extText"
 	UIBlock Kind = "uiBlock"
 )
 
@@ -112,12 +109,9 @@ type Item struct {
 	Truncated  bool
 	FullOutput string
 
-	// ExtText: Text under Title, shown by extension Ext; Lang says how to
-	// colour it and Preview how many lines show collapsed (0: default).
-	Ext     string
-	Title   string
-	Lang    string
-	Preview int
+	// UIBlock title and provider.
+	Ext   string
+	Title string
 
 	// Notice: "error" for the failure that ended a turn, which a session
 	// keeps and replays; "" for the rest.

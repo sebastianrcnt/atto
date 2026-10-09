@@ -71,43 +71,28 @@ type textBlock struct {
 	text strings.Builder
 	// disp is what extensions changed about how the block shows (see
 	// blockdisplay.go): a status and a replacement text.
-	disp  blockDisplay
+	// native text has no extension display state
 	cache tui.RenderCache[textKey]
 }
 
-func (t *textBlock) Click(line int) bool { return t.disp.click(line) }
-
 func (t *textBlock) Render(width int) []string {
-	ver, orig := t.disp.key()
-	return t.cache.Render(width, textKey{t.text.String(), ver, orig}, func() []string { return t.render(width) })
+	return t.cache.Render(width, textKey{t.text.String()}, func() []string { return t.render(width) })
 }
 
 // textKey is what a text block's lines depend on: its text, and what
 // extensions changed (see blockDisplay.key).
 type textKey struct {
 	text string
-	ver  int
-	orig bool
 }
 
 func (t *textBlock) render(width int) []string {
-	lines := tui.Markdown(strings.TrimSpace(tui.StripControls(t.disp.shown(t.text.String()))), max(1, width-2))
+	lines := tui.Markdown(strings.TrimSpace(tui.StripControls(t.text.String())), max(1, width-2))
 	for i, l := range lines {
 		if i == 0 && !startsWithMarker(l) {
 			lines[i] = tui.Dim("• ") + l
 		} else {
 			lines[i] = "  " + l
 		}
-	}
-	// The status and the toggle share a line under the text.
-	t.disp.metaLine = -1
-	if toggle, status := t.disp.toggleLine(width), t.disp.header(); toggle != "" || status != "" {
-		t.disp.metaLine = len(lines)
-		if toggle == "" {
-			t.disp.metaLine = -1
-			toggle = tui.Dim("  ·")
-		}
-		lines = append(lines, tui.Truncate(toggle+status, width, "…"))
 	}
 	return lines
 }
@@ -196,7 +181,8 @@ func (g gap) Click(line int) bool {
 type thinkingBlock struct {
 	expander
 	clickable
-	disp  blockDisplay // see blockdisplay.go
+	// native text has no extension display state
+
 	text  strings.Builder
 	start time.Time
 	dur   time.Duration
@@ -209,8 +195,6 @@ type thinkingKey struct {
 	text           string
 	dur            time.Duration
 	done, expanded bool
-	dver           int  // blockDisplay.key: what extensions changed
-	orig           bool //
 }
 
 func (t *thinkingBlock) finish() {
@@ -221,9 +205,6 @@ func (t *thinkingBlock) finish() {
 }
 
 func (t *thinkingBlock) Click(line int) bool {
-	if t.disp.click(line) {
-		return true
-	}
 	if !t.hit(line) {
 		return false
 	}
@@ -232,29 +213,15 @@ func (t *thinkingBlock) Click(line int) bool {
 }
 
 func (t *thinkingBlock) Render(width int) []string {
-	ver, orig := t.disp.key()
-	key := thinkingKey{text: t.text.String(), dur: t.dur, done: t.done, expanded: t.expanded(), dver: ver, orig: orig}
+	key := thinkingKey{text: t.text.String(), dur: t.dur, done: t.done, expanded: t.expanded()}
 	return t.cache.Render(width, key, func() []string { return t.render(width) })
 }
 
 // render adds what extensions changed to the block: statuses on the
 // header and a line under it to flip to the original.
-func (t *thinkingBlock) render(width int) []string {
-	out := t.renderText(width)
-	if h := t.disp.header(); h != "" {
-		out[0] = tui.Truncate(out[0]+h, width, "…")
-	}
-	t.disp.metaLine = -1
-	if toggle := t.disp.toggleLine(width); toggle != "" {
-		t.disp.metaLine = 1
-		out = append(out[:1:1], append([]string{toggle}, out[1:]...)...)
-		t.lines++
-	}
-	return out
-}
 
-func (t *thinkingBlock) renderText(width int) []string {
-	text := strings.TrimSpace(tui.StripControls(t.disp.shown(t.text.String())))
+func (t *thinkingBlock) render(width int) []string {
+	text := strings.TrimSpace(tui.StripControls(t.text.String()))
 	has := text != "" // Wrap("") is one empty line
 	body := tui.Wrap(text, max(1, width-4))
 	style := func(s string) string { return tui.Dim(tui.Italic(s)) }

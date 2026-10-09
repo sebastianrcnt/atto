@@ -532,7 +532,13 @@ func (r *Registry) render(m Match, force bool) {
 			tree = nil
 		}
 	}
-	if !force && s.bindings != nil && equalTrees(s.Tree, tree) {
+	external := false
+	for _, reg := range regs {
+		if reg.owner != "atto" {
+			external = true
+		}
+	}
+	if !force && !external && s.bindings != nil && equalTrees(s.Tree, tree) {
 		s.last = time.Now()
 		r.mu.Unlock()
 		return
@@ -713,6 +719,13 @@ func (r *Registry) Unload(owner string) {
 			ms = append(ms, m)
 		}
 	}
+	for _, s := range r.sites {
+		for key, b := range s.bindings {
+			if b.owner == owner {
+				delete(s.bindings, key)
+			}
+		}
+	}
 	for m, bs := range r.binds {
 		for key, b := range bs {
 			if b.owner == owner {
@@ -733,6 +746,15 @@ func (r *Registry) Unload(owner string) {
 	r.mu.Unlock()
 	for _, m := range ms {
 		_ = r.CloseReason(owner, m.Site, m.ID, "unload")
+	}
+	r.mu.Lock()
+	var remaining []Match
+	for m := range r.sites {
+		remaining = append(remaining, m)
+	}
+	r.mu.Unlock()
+	for _, m := range remaining {
+		r.render(m, true)
 	}
 }
 func findNode(n *Node, key string) *Node {
@@ -1023,5 +1045,49 @@ func deadlineRender(reg *registration, e Event, next Next, site context.Context)
 		return out.tree, out.err
 	case <-ctx.Done():
 		return nil, fmt.Errorf("provider render deadline exceeded")
+	}
+}
+
+// ReplaceBindings retires the provider's previous callback set for this site.
+// Published revisions keep their own immutable snapshot until the next render.
+func (r *Registry) ReplaceBindings(owner string, match Match, handlers map[string]map[EventType]Handler) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	bs := r.binds[match]
+	if bs == nil {
+		bs = map[string]binding{}
+		r.binds[match] = bs
+	}
+	for key, b := range bs {
+		if b.owner == owner {
+			delete(bs, key)
+		}
+	}
+	for key, events := range handlers {
+		for kind, fn := range events {
+			bs[bindKey(owner+"/"+key, kind)] = binding{owner, fn}
+		}
+	}
+}
+func (r *Registry) InvalidateOwner(owner string, match Match) {
+	r.mu.Lock()
+	var ms []Match
+	for m, s := range r.sites {
+		if matches(match, m) && (s.owner == owner || IsItem(m.Site)) {
+			ms = append(ms, m)
+		}
+	}
+	r.mu.Unlock()
+	for _, m := range ms {
+		r.Invalidate(m)
+	}
+}
+
+// SetProps supplies worker-owned identity during open publication, before render.
+func (r *Registry) SetProps(match Match, props map[string]any) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if s := r.sites[match]; s != nil {
+		s.props = copyMap(props)
 	}
 }

@@ -31,10 +31,13 @@ type ext struct {
 	stopOnce sync.Once
 
 	// Only touched on the loop.
-	handlers  map[string][]goja.Callable
-	disposers []goja.Callable
-	cmdFns    map[string]goja.Callable
-	ctxObj    *goja.Object
+	handlers      map[string][]goja.Callable
+	disposers     []goja.Callable
+	cmdFns        map[string]goja.Callable
+	ctxObj        *goja.Object
+	renderContext context.Context
+	actionClient  string
+	toastSeq      int64
 
 	// interrupted is set by the watchdog when a job ran too long; busy
 	// while a job runs.
@@ -71,6 +74,7 @@ func newExt(m *Manager, s Spec, code string) *ext {
 		handlers: map[string][]goja.Callable{}, cmdFns: map[string]goja.Callable{},
 		timers: map[int64]*time.Timer{}, status: Loaded,
 	}
+	e.vm.SetAsyncContextTracker(&uiContextTracker{e: e})
 	e.q.wake = make(chan struct{}, 1)
 	return e
 }
@@ -371,7 +375,7 @@ func (e *ext) halt() {
 			delete(e.timers, id)
 		}
 		e.mu.Unlock()
-		e.m.host().ClearUI(e.spec.Name)
+		e.m.host().DisposeUI(e.spec.Name)
 	})
 }
 

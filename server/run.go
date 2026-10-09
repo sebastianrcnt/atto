@@ -76,26 +76,14 @@ func (t *thread) handler() transcript.Handler {
 				}
 			}
 			if len(t.attached) == 0 {
-				if t.headlessBlocks == nil {
-					t.headlessBlocks = blocks{}
-				}
-				t.headlessBlocks.saved(t.id, it)
-				if len(t.headlessBlocks) > 4 {
-					for id, b := range t.headlessBlocks {
-						if b.entryID != it.EntryID {
-							delete(t.headlessBlocks, id)
-						}
-					}
-				}
 				if it.Status != transcript.InProgress {
 					t.publish("item/updated", map[string]any{"turnId": t.turnID, "item": t.wire(it)})
 				}
 				return
 			}
-			t.blocks.saved(t.id, it)
 			// Reasoning completes when the text starts, before the response
 			// is saved: the kept item learns its block ID now, and clients
-			// that have it too (item/updated), before any item/display.
+			// that have it too (item/updated), before any portable item overlay.
 			for i := len(t.items) - 1; i >= 0; i-- {
 				if t.items[i].ID == it.ID {
 					t.items[i].BlockID, t.items[i].EntryID = blockID(t.id, it), it.EntryID

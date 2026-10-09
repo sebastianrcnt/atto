@@ -78,7 +78,7 @@ func scan(d Dir) []Spec {
 		}
 		path := filepath.Join(d.Path, name)
 		if e.IsDir() || isDirLink(path, e) {
-			for _, index := range []string{"index.ts", "index.js"} {
+			for _, index := range []string{"index.ts", "index.tsx", "index.js", "index.jsx"} {
 				if st, err := os.Stat(filepath.Join(path, index)); err == nil && !st.IsDir() {
 					out = append(out, Spec{Name: name, Path: filepath.Join(path, index), Source: d.Source})
 					break
@@ -89,7 +89,7 @@ func scan(d Dir) []Spec {
 		if strings.HasSuffix(name, ".d.ts") {
 			continue
 		}
-		if ext := filepath.Ext(name); ext == ".ts" || ext == ".js" {
+		if ext := filepath.Ext(name); ext == ".ts" || ext == ".js" || ext == ".tsx" || ext == ".jsx" {
 			out = append(out, Spec{Name: strings.TrimSuffix(name, ext), Path: path, Source: d.Source})
 		}
 	}

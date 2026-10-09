@@ -67,6 +67,7 @@ func (e *ext) mcpObject() *goja.Object {
 		return vm.ToValue(plain), nil
 	}
 	_ = o.Set("call", func(server, tool string, args goja.Value) goja.Value {
+		e.readOnlyRender()
 		var raw json.RawMessage
 		if args != nil && !goja.IsUndefined(args) && !goja.IsNull(args) {
 			data, err := json.Marshal(args.Export())
@@ -96,6 +97,7 @@ func (e *ext) mcpObject() *goja.Object {
 		})
 	})
 	_ = o.Set("tools", func(c goja.FunctionCall) goja.Value {
+		e.readOnlyRender()
 		server := ""
 		if a := c.Argument(0); !goja.IsUndefined(a) && !goja.IsNull(a) {
 			server = a.String()

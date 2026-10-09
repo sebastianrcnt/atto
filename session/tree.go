@@ -202,7 +202,7 @@ func Fork(src, cwd string, entries []Entry, leaf string) *Writer {
 			continue
 		}
 		old := e.ID
-		if e.Type == TypeBlockDisplay { // follows its message to its new ID
+		if e.Type == TypeBlockDisplay || e.Type == TypeUIItemDisplay || e.Type == TypeUIBlockUpdate { // follows its message to its new ID
 			if e.TargetID = newID[e.TargetID]; e.TargetID == "" {
 				continue
 			}

@@ -59,7 +59,11 @@ func (a *App) promptClosed(id string) {
 }
 
 func (a *App) showPrompt(p server.Prompt) {
-	if e := a.elements[ui.Match{Site: ui.Dialog, ID: "atto/" + p.ID}]; e != nil {
+	id := "atto/" + p.ID
+	if p.UIID != "" {
+		id = p.UIID
+	}
+	if e := a.elements[ui.Match{Site: ui.Dialog, ID: id}]; e != nil {
 		e.OnEscape = func() {
 			a.uiAction(ui.Action{Site: ui.Dialog, ID: e.ID, Rev: e.Rev, Key: "$site", Type: ui.CloseEvent})
 		}

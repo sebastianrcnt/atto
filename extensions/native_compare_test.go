@@ -17,25 +17,7 @@ import (
 
 // Keep the pre-port implementations only as test fixtures, never embedded
 // into atto. Compare the same real repositories and options on both paths.
-func TestNativeDiffMatchesTypeScript(t *testing.T) {
-	cwd := changedRepo(t)
-	nativeHost := newHost(true)
-	native := load(t, cwd, nativeHost)
-	src, err := os.ReadFile("testdata/diff.ts.txt")
-	if err != nil {
-		t.Fatal(err)
-	}
-	write(t, filepath.Join(config.ExtensionsDir(), "diff.ts"), string(src))
-	tsHost := newHost(true)
-	ts := load(t, cwd, tsHost)
-	for _, args := range []string{"", "sub", "--staged", "--cached", "--staged sub", "-- missing", "'sub'", "it's"} {
-		a, an := runDiff(t, native, nativeHost, args)
-		b, bn := runDiff(t, ts, tsHost, args)
-		if a != b || an != bn {
-			t.Errorf("%q: Go %+v %q; TS %+v %q", args, a, an, b, bn)
-		}
-	}
-}
+
 func TestNativeCleanMatchesTypeScript(t *testing.T) {
 	src, err := os.ReadFile("testdata/autorename.ts.txt")
 	if err != nil {

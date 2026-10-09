@@ -25,10 +25,15 @@ const SYSTEM =
 export default function (atto: Atto) {
   atto.setCompleteConcurrency(1); // the local server answers one request at a time
 
+  const translated = new Map<string, string>();
+  atto.ui.render({site:"assistantMessage"}, (e,next) => {
+    const text = e.props.blockId ? translated.get(e.props.blockId) : undefined;
+    return text && e.props.kind === "reasoning"
+      ? next({...e,props:{...e.props,text}}) : next(e);
+  });
   atto.on("reasoning_end", async (e, ctx) => {
     const text = e.text.trim();
     if (!text) return;
-    ctx.ui.setBlockStatus(e.blockId, "translating…");
     try {
       const { text: out } = await atto.complete({
         model: MODEL,
@@ -38,10 +43,11 @@ export default function (atto: Atto) {
         maxTokens: Math.min(1000, Math.ceil(text.length / 2) + 64),
         timeoutMs: 60000,
       });
-      ctx.ui.setBlockDisplay(e.blockId, out.trim());
-      ctx.ui.setBlockStatus(e.blockId, null);
+      translated.set(e.blockId, out.trim());
+ while (translated.size > 200) translated.delete(translated.keys().next().value!);
+ atto.ui.invalidate({site:"assistantMessage"});
     } catch (err) {
-      ctx.ui.setBlockStatus(e.blockId, "translation failed");
+      ctx.ui.notify("Translation failed", "warning");
       atto.log(`translate-thinking: ${err}`);
     }
   });

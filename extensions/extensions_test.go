@@ -286,8 +286,8 @@ export default function (atto: any) {
       const ok = await ctx.ui.confirm("Sure?");
       const text = await ctx.ui.input("Name?");
       ctx.ui.notify(args + ":" + pick + ":" + ok + ":" + text + ":" + ctx.hasUI, "warning");
-      ctx.ui.setStatus("state", "ready");
-      ctx.ui.setWidget("w", ["line 1", "line 2"]);
+      atto.ui.render({site:"status",id:"state"},e=>atto.ui.resolve(e).Text({text:"ready"})); await atto.ui.open({site:"status",id:"state"});
+      atto.ui.render({site:"band",id:"w"},e=>atto.ui.resolve(e).Text({text:"line 1\nline 2"})); await atto.ui.open({site:"band",id:"w"});
     },
   });
   atto.registerCommand("fail", { handler: () => { throw new Error("nope") } });
@@ -329,7 +329,7 @@ func TestHeadlessUI(t *testing.T) {
 export default function (atto: any) {
   atto.on("user_prompt", async (_e: any, ctx: any) => {
     const r = [await ctx.ui.select("Pick", ["a"]), await ctx.ui.confirm("Sure?"), await ctx.ui.input("Name?"), ctx.hasUI];
-    ctx.ui.setStatus("k", "v");
+    atto.ui.render({site:"status",id:"k"},e=>atto.ui.resolve(e).Text({text:"v"})); await atto.ui.open({site:"status",id:"k"});
     ctx.ui.notify("hi");
     return JSON.stringify(r);
   });
@@ -528,9 +528,9 @@ func TestReload(t *testing.T) {
 	dir, cwd := env(t)
 	path := filepath.Join(dir, "w.ts")
 	write(t, path, `
-export default function (atto: any) {
-  atto.ui.setWidget("w", ["v1"]);
-  atto.ui.setStatus("s", "on");
+export default async function (atto: any) {
+  atto.ui.render({site:"band",id:"w"},e=>atto.ui.resolve(e).Text({text:"v1"})); await atto.ui.open({site:"band",id:"w"});
+  atto.ui.render({site:"status",id:"s"},e=>atto.ui.resolve(e).Text({text:"on"})); await atto.ui.open({site:"status",id:"s"});
   setInterval(() => {}, 5);
   atto.onDispose(async () => { await null; atto.fs.writeFile("disposed.txt", "v1"); });
 }

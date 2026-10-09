@@ -26,8 +26,6 @@ func (a *App) resetItems() {
 	a.steerGroup, a.steerBlock = "", nil
 	clear(a.tools)
 	clear(a.kinds)
-	clear(a.itemBlocks)
-	clear(a.blocks) // late results for blocks of the old transcript find nothing
 }
 
 func (a *App) itemStarted(it *transcript.Item) {
@@ -61,8 +59,6 @@ func (a *App) itemStarted(it *transcript.Item) {
 		a.add(&noticeBlock{text: it.Text, style: tui.Dim})
 	case transcript.Reasoning:
 		a.thinking = &thinkingBlock{start: itemStart(it), d: &a.details}
-		a.thinking.disp.orig.d = &a.origView
-		a.trackBlock(it, a.thinking)
 		if r := a.openRun(); r != nil { // between two calls, or after the last
 			r.add(a.thinking)
 		} else {
@@ -70,8 +66,6 @@ func (a *App) itemStarted(it *transcript.Item) {
 		}
 	case transcript.Assistant:
 		a.text = &textBlock{}
-		a.text.disp.orig.d = &a.origView
-		a.trackBlock(it, a.text)
 		a.add(a.text)
 	case transcript.Tool:
 		b := &toolBlock{args: agent.BashArgs{Description: it.Description, Command: it.Command},
@@ -93,8 +87,6 @@ func (a *App) itemStarted(it *transcript.Item) {
 		a.summaryItem(it, true, "")
 	case transcript.Shell:
 		a.shellItemStarted(it)
-	case transcript.ExtText:
-		a.extTextStarted(it)
 	}
 }
 
@@ -113,12 +105,6 @@ func (a *App) openRun() *toolRun {
 
 // trackBlock remembers the block of an item until the item is saved and
 // has its block ID (item/updated).
-func (a *App) trackBlock(it *transcript.Item, b displayBlock) {
-	if a.itemBlocks == nil {
-		a.itemBlocks = map[string]displayBlock{}
-	}
-	a.itemBlocks[it.ID] = b
-}
 
 func (a *App) itemDelta(it *transcript.Item, d string) {
 	switch it.Kind {

@@ -142,7 +142,6 @@ func TestTranscriptItemRoundTrip(t *testing.T) {
 		{ID: "5", Kind: transcript.GoalStatus, Status: transcript.Completed, GoalState: g},
 		{ID: "6", Kind: transcript.Compaction, Status: transcript.Completed, Auto: true, Reason: "priceTier", Cap: 500, TokensBefore: 10, TokensAfter: 3, Duration: time.Second, Text: "notes"},
 		{ID: "7", Kind: transcript.Hook, Status: transcript.Completed, HookEvent: "Stop", Blocked: true, Text: "no"},
-		{ID: "8", Kind: transcript.ExtText, Status: transcript.Completed, Title: "t", Ext: "e", Lang: "diff", Preview: 4, Text: "+x"},
 		{ID: "9", Kind: transcript.Tool, Status: transcript.Completed, Command: "sleep 9", Result: &transcript.ToolResult{Job: 3, Background: "user"}},
 	}
 	for _, it := range items {

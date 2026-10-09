@@ -70,22 +70,19 @@ type thread struct {
 	effortFrom  core.Origin
 	readOnly    string // why the session cannot be written ("": it can)
 
-	tr             transcript.Builder
-	items          []Item // completed items, notices included
-	headlessBlocks blocks
-	hasMore        bool
-	before         string
-	itemOrder      map[string]int // start order, including items still open
-	itemSeq        int
-	blocks         blocks
-	elements       *ui.Registry
-	uiEntries      map[string]string
-	uiSeq          int
-	ui             extensions.UIState
-	extTexts       int
-	notices        int
-	steerSeq       int    // numbers committed steers (Item.SteerGroup)
-	steerNext      string // the group of the user items being committed
+	tr        transcript.Builder
+	items     []Item // completed items, notices included
+	hasMore   bool
+	before    string
+	itemOrder map[string]int // start order, including items still open
+	itemSeq   int
+	blocks    blocks
+	elements  *ui.Registry
+	uiEntries map[string]string
+	uiSeq     int
+	notices   int
+	steerSeq  int    // numbers committed steers (Item.SteerGroup)
+	steerNext string // the group of the user items being committed
 
 	turns    core.TurnRunner[*pendingInput]
 	runKind  string // turn, compact or branchSummary while busy
@@ -291,9 +288,6 @@ func (t *thread) snapshot() ThreadInfo {
 	slices.SortStableFunc(info.Items, func(a, b Item) int {
 		return cmp.Compare(t.itemOrder[a.ID], t.itemOrder[b.ID])
 	})
-	if !t.ui.Empty() {
-		info.ExtensionUI = WireExtensionUI(&t.ui)
-	}
 	if p := t.prompt; p != nil {
 		w := p.wire
 		info.Prompt = &w

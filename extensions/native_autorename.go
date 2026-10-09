@@ -3,6 +3,7 @@ package extensions
 import (
 	"context"
 	"fmt"
+	"github.com/sebastianrcnt/atto/ui"
 	"regexp"
 	"strings"
 	"time"
@@ -70,8 +71,11 @@ func (m *Manager) nativeAutorename(ctx context.Context, h Host, n *nativeState) 
 		prompt = "The conversation is named \"" + current + "\" now.\n\n"
 	}
 	prompt += "The conversation so far (latest last):\n\n" + strings.Join(convo, "\n\n") + "\n\nTitle:"
-	h.SetStatus("autorename", "autorename", "naming…")
-	defer h.SetStatus("autorename", "autorename", "")
+	naming := ui.Text(ui.TextProps{Text: "naming…", Color: ui.Muted})
+	UIWork(h, func(r *ui.Registry) error {
+		return r.OpenDefault("autorename", ui.OpenOptions{Site: ui.Status, ID: "autorename/naming"}, nil, &naming)
+	}, func(error) {})
+	defer UIWork(h, func(r *ui.Registry) error { return r.Close("autorename", ui.Status, "autorename/naming") }, func(error) {})
 	ask := func(effort string) (string, error) {
 		select {
 		case n.slots <- struct{}{}:

@@ -26,6 +26,7 @@ const (
 // streaming and no part of the conversation. It resolves to {text}.
 // The timeout covers the request, not the wait for a free slot.
 func (e *ext) jsComplete(opts *goja.Object) goja.Value {
+	e.readOnlyRender()
 	model := strings.TrimSpace(optString(opts, "model"))
 	prompt := optString(opts, "prompt")
 	system := optString(opts, "system")

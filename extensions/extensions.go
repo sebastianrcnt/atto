@@ -237,6 +237,7 @@ func writeTypes(dir string) {
 func (m *Manager) Reload() {
 	m.Close()
 	m.load()
+	m.SessionStart("reload")
 }
 
 // Close disposes of every extension.
@@ -326,7 +327,8 @@ func (m *Manager) Commands() []Command {
 // RunCommand runs the extension command name with args in the background;
 // what it does shows through the host. It reports whether there is such
 // a command.
-func (m *Manager) RunCommand(name, args string) bool {
+func (m *Manager) RunCommand(name, args string) bool { return m.RunCommandFrom(name, args, "") }
+func (m *Manager) RunCommandFrom(name, args, client string) bool {
 	for _, e := range m.running() {
 		e.mu.Lock()
 		has := slices.ContainsFunc(e.commands, func(c Command) bool { return c.Name == name })
@@ -334,7 +336,9 @@ func (m *Manager) RunCommand(name, args string) bool {
 		if has {
 			e.post(func() {
 				if fn := e.cmdFns[name]; fn != nil {
+					e.actionClient = client
 					e.call("/"+name, fn, e.vm.ToValue(args), e.ctxObj)
+					e.actionClient = ""
 				}
 			})
 			return true

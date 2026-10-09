@@ -266,7 +266,7 @@ func (a *App) renderStatus(width int) []string {
 		}
 	}
 	// Transient indicators go on their own line so custom output is untouched.
-	flags := a.extensionStatus()
+	var flags []string
 	if ind != "" && own {
 		flags = append(flags, ind)
 	}

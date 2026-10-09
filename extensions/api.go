@@ -71,10 +71,11 @@ func (e *ext) install() *goja.Object {
 	_ = atto.Set("complete", e.jsComplete)
 	_ = atto.Set("setCompleteConcurrency", e.jsSetCompleteConcurrency)
 	_ = atto.Set("mcp", e.mcpObject())
-	_ = atto.Set("sendMessage", func(text string) { e.m.host().SendMessage(text) })
+	_ = atto.Set("sendMessage", func(text string) { e.readOnlyRender(); e.m.host().SendMessage(text) })
 	_ = atto.Set("log", e.jsLog)
 	_ = atto.Set("session", session)
 	_ = atto.Set("ui", ui)
+	_ = atto.Set("store", e.storeObject())
 	_ = atto.Set("cwd", e.m.cwd)
 	_ = atto.Set("name", e.spec.Name)
 
@@ -184,6 +185,7 @@ func (e *ext) sessionObject() *goja.Object {
 		return vm.ToValue(out)
 	})
 	_ = o.Set("setName", func(name string) {
+		e.readOnlyRender()
 		name = strings.Join(strings.Fields(name), " ")
 		if name == "" {
 			panic(vm.NewTypeError("the name is empty"))
@@ -201,6 +203,7 @@ func (e *ext) installTimers() {
 	vm := e.vm
 	add := func(repeat bool) func(goja.FunctionCall) goja.Value {
 		return func(c goja.FunctionCall) goja.Value {
+			e.readOnlyRender()
 			fn, ok := goja.AssertFunction(c.Argument(0))
 			if !ok {
 				panic(vm.NewTypeError("the callback must be a function"))
