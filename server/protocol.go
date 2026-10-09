@@ -15,7 +15,7 @@
 // minute, but turns, jobs, timers, active unheld goals and prompts retain them.
 // app-server/serve -in-process, ATTO_NO_DAEMON and Windows retain the
 // in-process runtime. A routing facade translates event cursors and client
-// provenance; its protocol revision is distinct from daemon control revision 3.
+// provenance; its protocol revision is distinct from daemon control revision 4.
 // Worker crashes recover saved sessions, not durable in-flight inputs/promises.
 //
 // Transports: atto app-server --listen stdio:// (default) and
@@ -28,6 +28,11 @@
 // also expose GET /ws alongside POST /rpc and GET /events. WS reconnect
 // hydrates a fresh thread snapshot, not an arbitrary cursor replay.
 // See docs/protocol.md for the client-author reference and example clients.
+//
+// Native protocol revision 3 adds bounded post-compaction snapshots and disk
+// pages. Revisions 1/2 and an omitted handshake retain full snapshots. Unattached
+// workers keep no completed display items; event IDs and snapshot fences remain
+// unchanged. Earlier pages are oldest-first and never advance eventId.
 //
 // Requests:
 //
@@ -42,11 +47,15 @@
 //	               ({toolGroups}: false shows every command on its own)
 //	models/list                                    → {models: [{id, name, contextWindow, efforts, hasKey, images}]}
 //	thread/start   {cwd?, model?, effort?, deferStart?}         → thread + context
-//	thread/resume  {threadId, deferStart?}                      → thread + items + context
+//	thread/resume  {threadId, deferStart?, limit?}                      → thread + items + context
 //	               context: what the thread loaded (AGENTS files, skills,
 //	               hooks, configuration, model and effort and where they
 //	               came from), as stream-json's init event has it
-//	thread/read    {threadId}                      → thread + items
+//	thread/read    {threadId, limit?}              → thread + items
+//	thread/items   {threadId, before, limit?}       → {items,hasMore,before}
+//	               Revision 3 snapshots are post-compaction tails (default 200).
+//	               Revision 2 snapshots remain full; page cursors do not change event IDs.
+//	thread/entry   {threadId,entryId,offline?}      → complete saved entry
 //	thread/list    {cwd?, archived?}               → {threads: [...]}
 //	thread/setModel {threadId, model}              → thread
 //	thread/setEffort {threadId, effort}            → thread
@@ -90,7 +99,7 @@
 //	               back instead of going out)
 //	queue/resume   {threadId}
 //	shell/start    {threadId, command, exclude?}; shell/interrupt {threadId}
-//	thread/attach  {threadId}  → thread + items (the client follows it)
+//	thread/attach  {threadId,limit?}  → thread + items (the client follows it)
 //	thread/detach  {threadId, reason?}  → {closed, stoppedJobs?, notices?}
 //	               the thread goes on; one with retention 0 that is left
 //	               idle closes (reason: clear, resume, exit). Jobs, timers, goals
@@ -102,7 +111,8 @@
 //	thread/setModel, thread/setEffort  {..., saveDefault?}
 //	thread/setContextMode {threadId, contextMode: normal|long}
 //	thread/setName {threadId, name}; thread/setLabel {threadId, entryId, label}
-//	thread/tree    {threadId}  → {entries, leaf} (all branches, entry IDs and labels)
+//	thread/tree    {threadId,query?,offline?} → {entries,leaf}; query → {matches}
+//	               Revision 3 uses bounded previews; thread/entry reads full text.
 //	thread/navigate {threadId, entryId, summary?: {mode: none|auto|custom, instructions?}}
 //	thread/fork    {threadId, entryId}  → {threadId, path, input, images}
 //	thread/archive {threadId} → {threadId,path}; idle, close then archive
@@ -241,14 +251,16 @@ import (
 	"github.com/sebastianrcnt/atto/session"
 )
 
-// ProtocolVersion is the protocol revision this server speaks. Revision 2
+// ProtocolVersion is the protocol revision this server speaks. Revision 3
+// adds bounded tail snapshots and thread/items disk-backed earlier pages.
+// Revision 2
 // adds connections with client IDs and event cursors, input IDs, the
 // session runtime's scheduling (queue, send-now, goals, user shell),
 // server-owned prompts and commands; revision 1 clients keep working
 // with the methods they know. A client lists the revisions it speaks in
 // initialize's protocolVersions; a server that shares none refuses it
 // with reason unsupportedProtocol.
-const ProtocolVersion = 2
+const ProtocolVersion = 3
 
 // MinProtocolVersion is the oldest revision still served.
 const MinProtocolVersion = 1
@@ -490,6 +502,9 @@ type ThreadInfo struct {
 	Busy          bool     `json:"busy"`
 	TurnID        string   `json:"turnId,omitempty"`
 	Items         []Item   `json:"items,omitempty"`
+	HasMore       bool     `json:"hasMore,omitempty"`
+	Paged         bool     `json:"-"`
+	Before        string   `json:"before,omitempty"`
 	// What the status line shows of the model (see SetModel): its name,
 	// the context size auto-compaction starts at, and whether it has
 	// prices (a cost) and is on a subscription (the cost only estimates).

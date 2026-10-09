@@ -63,16 +63,19 @@ type thread struct {
 	effortFrom  core.Origin
 	readOnly    string // why the session cannot be written ("": it can)
 
-	tr        transcript.Builder
-	items     []Item         // completed items, notices included
-	itemOrder map[string]int // start order, including items still open
-	itemSeq   int
-	blocks    blocks
-	ui        extensions.UIState
-	extTexts  int
-	notices   int
-	steerSeq  int    // numbers committed steers (Item.SteerGroup)
-	steerNext string // the group of the user items being committed
+	tr             transcript.Builder
+	items          []Item // completed items, notices included
+	headlessBlocks blocks
+	hasMore        bool
+	before         string
+	itemOrder      map[string]int // start order, including items still open
+	itemSeq        int
+	blocks         blocks
+	ui             extensions.UIState
+	extTexts       int
+	notices        int
+	steerSeq       int    // numbers committed steers (Item.SteerGroup)
+	steerNext      string // the group of the user items being committed
 
 	turns    core.TurnRunner[*pendingInput]
 	runKind  string // turn, compact or branchSummary while busy
@@ -251,6 +254,7 @@ func (t *thread) info() ThreadInfo {
 // stand, and the event to follow it from. Lane only.
 func (t *thread) snapshot() ThreadInfo {
 	info := t.info()
+	info.HasMore, info.Before = t.hasMore, t.before
 	info.Items = make([]Item, 0, len(t.items))
 	for _, it := range t.items {
 		info.Items = append(info.Items, t.blocks.attach(it))
@@ -327,8 +331,11 @@ func (t *thread) addNotice(it Item) {
 	t.notices++
 	it.ID = fmt.Sprintf("%s-n%d", t.id, t.notices)
 	it.Type, it.Status = ItemNotice, string(transcript.Completed)
-	t.startedItem(it.ID)
-	t.items = append(t.items, it)
+	if len(t.attached) > 0 {
+		t.startedItem(it.ID)
+		t.items = append(t.items, it)
+		t.trimItems()
+	}
 	if n := t.countNotices(); n > maxNotices {
 		i := slices.IndexFunc(t.items, func(x Item) bool { return x.Type == ItemNotice && x.Title == "" && x.Level != "info" })
 		if i >= 0 {

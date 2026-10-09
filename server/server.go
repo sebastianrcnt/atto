@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/sebastianrcnt/atto/config"
 	"github.com/sebastianrcnt/atto/core"
+	"github.com/sebastianrcnt/atto/core/transcript"
 	"github.com/sebastianrcnt/atto/events"
 	"github.com/sebastianrcnt/atto/jobs"
 	"github.com/sebastianrcnt/atto/session"
@@ -62,6 +64,7 @@ type Server struct {
 const DefaultSessionRetention = time.Minute
 
 func New(version, cwd string) *Server {
+	core.ConfigureMemoryBudget()
 	s := &Server{Version: version, Cwd: cwd, threads: map[string]*thread{}, stop: make(chan struct{}), instance: newInstanceID(), events: newBroker(10000)}
 	s.memory = core.NewIdleMemory()
 	go s.watchInbox()
@@ -154,21 +157,23 @@ func decode[T any](raw json.RawMessage) (T, error) {
 }
 
 type threadParams struct {
-	ThreadID   string `json:"threadId"`
-	ItemID     string `json:"itemId"`
-	Query      string `json:"query"`
-	Limit      int    `json:"limit"`
-	Preview    bool   `json:"preview"`
-	DeferStart bool   `json:"deferStart"` // TUI waits for its startup project-trust decision
-	Cwd        string `json:"cwd"`
-	Model      string `json:"model"`
-	Provider   string `json:"provider"`
-	APIKey     string `json:"apiKey"`
-	OAuth      bool   `json:"oauth"`
-	Effort     string `json:"effort"`
-	Input      string `json:"input"`
-	Archived   bool   `json:"archived"`
-	NumTurns   int    `json:"numTurns"`
+	ThreadID        string `json:"threadId"`
+	ItemID          string `json:"itemId"`
+	Query           string `json:"query"`
+	Limit           int    `json:"limit"`
+	Before          string `json:"before"`
+	SnapshotVersion int    `json:"snapshotVersion,omitempty"`
+	Preview         bool   `json:"preview"`
+	DeferStart      bool   `json:"deferStart"` // TUI waits for its startup project-trust decision
+	Cwd             string `json:"cwd"`
+	Model           string `json:"model"`
+	Provider        string `json:"provider"`
+	APIKey          string `json:"apiKey"`
+	OAuth           bool   `json:"oauth"`
+	Effort          string `json:"effort"`
+	Input           string `json:"input"`
+	Archived        bool   `json:"archived"`
+	NumTurns        int    `json:"numTurns"`
 	// Images go with turn/start's and input/submit's input (see images.go).
 	Images []ImageInput `json:"images"`
 	// input/submit: auto, queue, replace or steer.
@@ -219,7 +224,7 @@ type summaryParams struct {
 	Instructions string `json:"instructions"`
 }
 
-func (s *Server) call(ctx context.Context, method string, raw json.RawMessage) (any, error) {
+func (s *Server) call(ctx context.Context, method string, raw json.RawMessage) (out any, callErr error) {
 	select {
 	case <-s.stop:
 		return nil, errThreadClosed
@@ -236,6 +241,18 @@ func (s *Server) call(ctx context.Context, method string, raw json.RawMessage) (
 	if err != nil {
 		return nil, err
 	}
+	version := protocolOf(ctx)
+	if p.SnapshotVersion <= 0 || version < 3 {
+		p.SnapshotVersion = version
+	}
+	if method == "thread/items" && version < 3 {
+		return nil, failure(ReasonUnsupported, "thread/items requires protocol 3")
+	}
+	defer func() {
+		if callErr == nil {
+			out, callErr = s.snapshotResult(ctx, method, p, out)
+		}
+	}()
 	if sc := scopeOf(ctx); sc != nil {
 		if s.Workers != nil {
 			return s.routedScope(ctx, sc, method, p)
@@ -249,6 +266,9 @@ func (s *Server) call(ctx context.Context, method string, raw json.RawMessage) (
 		return out, err
 	}
 	client := clientOf(ctx)
+	if connOf(ctx) == nil {
+		client = "legacy"
+	}
 	switch method {
 	case "initialize":
 		return s.initialize(ctx, p, nil)
@@ -282,9 +302,36 @@ func (s *Server) call(ctx context.Context, method string, raw json.RawMessage) (
 			reason = "other"
 		}
 		return s.closeThread(t, closeMode{reason: reason}), nil
+	case "thread/items", "thread/entry":
+		if p.Offline {
+			path, err := session.Find(p.ThreadID)
+			if err != nil {
+				return nil, err
+			}
+			if method == "thread/entry" {
+				e, ok, err := session.ReadEntry(path, p.EntryID)
+				if !ok && err == nil {
+					err = failure(ReasonNotFound, "entry not found")
+				}
+				return e, err
+			}
+			b := transcript.Builder{IDPrefix: itemPrefix(p.ThreadID)}
+			page, _, err := replayFile(&b, p.ThreadID, path, p.Before, p.Limit)
+			return page, err
+		}
+
 	case "item/image", "item/output":
 		if p.Offline {
-			info, err := readOffline(p.ThreadID)
+			path, err := session.Find(p.ThreadID)
+			if err != nil {
+				return nil, err
+			}
+			n := itemNumber(p.ThreadID, p.ItemID)
+			if n < 1 {
+				return nil, invalid("itemId is not in this thread's transcript")
+			}
+			b := transcript.Builder{IDPrefix: itemPrefix(p.ThreadID)}
+			page, _, err := replayFile(&b, p.ThreadID, path, itemPrefix(p.ThreadID)+strconv.Itoa(n+1), 1)
 			if err != nil {
 				return nil, err
 			}
@@ -292,7 +339,7 @@ func (s *Server) call(ctx context.Context, method string, raw json.RawMessage) (
 			if method == "item/image" {
 				kind = "image"
 			}
-			out, err := itemResource(info.Items, p, kind)
+			out, err := itemResource(page.Items, p, kind)
 			if err != nil {
 				return nil, err
 			}
@@ -318,8 +365,21 @@ func (s *Server) call(ctx context.Context, method string, raw json.RawMessage) (
 			if err != nil {
 				return nil, err
 			}
+			if p.Query != "" {
+				matches, err := session.SearchTree(path, p.Query)
+				return map[string]any{"matches": matches}, err
+			}
+			if p.SnapshotVersion >= 3 {
+				rows, err := session.ReadTreeRows(path)
+				leaf := ""
+				if len(rows) > 0 {
+					leaf = rows[len(rows)-1].ID
+				}
+				return map[string]any{"entries": rows, "leaf": leaf}, err
+			}
 			_, entries, err := session.Load(path)
 			return map[string]any{"entries": entries, "leaf": session.Leaf(entries)}, err
+
 		}
 	case "thread/list":
 		return s.listThreads(p)
@@ -390,6 +450,7 @@ func (s *Server) newThread(o threadOptions) (*thread, error) {
 	t.laneWake = make(chan struct{}, 1)
 	t.done = make(chan struct{})
 	t.tr.IDPrefix = itemPrefix(t.id)
+	t.tr.MaxItems = DefaultItemLimit
 	t.tr.Handler = t.handler()
 	t.resetGoal()
 	ag.SteerNote = t.goal.SteerNote // a message sent while the goal runs says so
@@ -558,7 +619,7 @@ func (s *Server) resumeThread(client string, p threadParams) (any, error) {
 			release()
 		}
 	}()
-	saved, file, err := core.OpenDisplay(path)
+	saved, file, err := core.Open(path)
 	if err != nil {
 		return nil, err
 	}
@@ -610,7 +671,12 @@ func (s *Server) resumeThread(client string, p threadParams) (any, error) {
 			t.sessionStart("resume")
 		}
 		t.showLoaded(false, nil, "")
-		t.replayKeepNotices(branch)
+		kept := t.items
+		if err := t.replayDisk(); err != nil {
+			return err
+		}
+		t.items = append(kept, t.items...)
+		t.resetItemOrder()
 		t.restoreGoal(saved.Snapshots())
 		if h := saved.Header; h.Cwd != t.cwd {
 			t.notice("", "Resumed a session from %s; commands run in %s.", core.ShortPath(h.Cwd), core.ShortPath(t.cwd))
@@ -649,7 +715,7 @@ func readOffline(id string) (ThreadInfo, error) {
 	if err != nil {
 		return ThreadInfo{}, &rpcError{Code: codeInvalidParams, Message: err.Error(), Data: &ErrorData{Reason: ReasonNotFound}}
 	}
-	loaded, err := session.ReadActive(path)
+	loaded, err := session.ReadContext(path)
 	saved := core.Saved{Header: loaded.Header, Entries: loaded.Entries, State: loaded.State}
 	for _, e := range loaded.State {
 		switch e.Type {
@@ -667,7 +733,12 @@ func readOffline(id string) (ThreadInfo, error) {
 		return ThreadInfo{}, err
 	}
 	info := ThreadInfo{ID: saved.Header.ID, Cwd: saved.Header.Cwd, Name: saved.Name, Model: saved.Model, Effort: saved.Effort, Offline: true, SessionPath: path, LongContext: saved.LongContext}
-	info.Items = ItemsFromEntries(saved.Header.ID, session.Active(saved.Entries))
+	b := transcript.Builder{IDPrefix: itemPrefix(info.ID)}
+	page, _, pageErr := replayFile(&b, info.ID, path, "", DefaultItemLimit)
+	if pageErr != nil {
+		return ThreadInfo{}, pageErr
+	}
+	info.Items, info.HasMore, info.Before = page.Items, page.HasMore, page.Before
 	var u Usage
 	u.Add(loaded.Usage)
 	last := loaded.LastUsage
@@ -744,6 +815,11 @@ func (t *thread) attach(client string) (ThreadInfo, error) {
 	var info ThreadInfo
 	err := t.call(func() error {
 		t.attachClient(client)
+		if len(t.items) == 0 {
+			if err := t.loadDisplay(); err != nil {
+				return err
+			}
+		}
 		info = t.snapshot()
 		loaded := t.loaded
 		info.Context = &loaded
@@ -775,6 +851,9 @@ func (s *Server) detach(t *thread, client, reason string) detachResult {
 	now := false
 	_ = t.call(func() error {
 		delete(t.attached, client)
+		if len(t.attached) == 0 {
+			t.dropDisplay()
+		}
 		delete(t.gates, client)
 		if reason != "" {
 			t.leaveReason = reason
@@ -809,6 +888,9 @@ func (s *Server) clientGone(id string) {
 				return
 			}
 			delete(t.attached, id)
+			if len(t.attached) == 0 {
+				t.dropDisplay()
+			}
 			delete(t.gates, id)
 			t.withdrawClientPrompt(id, "")
 			t.deliverEvents()

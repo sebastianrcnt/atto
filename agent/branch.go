@@ -51,13 +51,19 @@ func BranchSummaryMessage(summary string) provider.Message {
 // writes the summary entry (session.Writer.BranchSummary) and restores the
 // new branch. A canceled ctx stops it with ctx.Err().
 func (a *Agent) SummarizeBranch(ctx context.Context, branch []session.Entry, instructions string, emit func(any)) (string, error) {
+	return a.SummarizeBranchFrom(ctx, branchStart(branch), instructions, emit)
+}
+
+// SummarizeBranchFrom accepts the bounded origin description of a disk-streamed
+// branch; the model already owns the context to be summarized.
+func (a *Agent) SummarizeBranchFrom(ctx context.Context, origin, instructions string, emit func(any)) (string, error) {
 	if len(a.messages) == 0 {
 		return "", fmt.Errorf("nothing to summarize")
 	}
 	start := time.Now()
 	emit(BranchSummaryStart{})
 	prompt := prompts.Render("branch_summary", map[string]any{
-		"Start": branchStart(branch), "Words": BranchSummaryWords, "Focus": strings.TrimSpace(instructions),
+		"Start": origin, "Words": BranchSummaryWords, "Focus": strings.TrimSpace(instructions),
 	})
 	client, req := a.request(provider.Message{Role: "user", Content: prompt})
 	req.ToolChoice = "none"
@@ -140,4 +146,11 @@ func branchStart(branch []session.Entry) string {
 		}
 	}
 	return "the last message"
+}
+
+// BranchOrigin identifies an entry that determines the summary's start, without
+// retaining the other entries on an abandoned branch.
+func BranchOrigin(e session.Entry) (string, bool) {
+	origin := branchStart([]session.Entry{e})
+	return origin, origin != "the last message"
 }

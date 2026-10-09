@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"runtime/debug"
 	"slices"
 	"strings"
 	"time"
@@ -33,7 +34,9 @@ type userMeta struct {
 func (t *thread) handler() transcript.Handler {
 	return transcript.Handler{
 		Started: func(it *transcript.Item) {
-			t.startedItem(it.ID)
+			if len(t.attached) > 0 {
+				t.startedItem(it.ID)
+			}
 			w := t.wire(it)
 			if len(t.metas) > 0 {
 				m := t.metas[0]
@@ -55,10 +58,30 @@ func (t *thread) handler() transcript.Handler {
 				w.ClientID, w.InputID, w.SteerGroup = m.client, m.input, m.group
 				delete(t.itemMeta, it.ID)
 			}
-			t.items = append(t.items, w)
+			if len(t.attached) > 0 {
+				t.items = append(t.items, w)
+				t.trimItems()
+			}
 			t.publish("item/completed", map[string]any{"turnId": t.turnID, "item": w})
 		},
 		Saved: func(it *transcript.Item) {
+			if len(t.attached) == 0 {
+				if t.headlessBlocks == nil {
+					t.headlessBlocks = blocks{}
+				}
+				t.headlessBlocks.saved(t.id, it)
+				if len(t.headlessBlocks) > 4 {
+					for id, b := range t.headlessBlocks {
+						if b.entryID != it.EntryID {
+							delete(t.headlessBlocks, id)
+						}
+					}
+				}
+				if it.Status != transcript.InProgress {
+					t.publish("item/updated", map[string]any{"turnId": t.turnID, "item": t.wire(it)})
+				}
+				return
+			}
 			t.blocks.saved(t.id, it)
 			// Reasoning completes when the text starts, before the response
 			// is saved: the kept item learns its block ID now, and clients
@@ -78,6 +101,9 @@ func (t *thread) handler() transcript.Handler {
 func (t *thread) feed(ev any, metas ...userMeta) {
 	t.metas = metas
 	t.tr.Event(ev)
+	if len(t.attached) == 0 {
+		t.tr.ForgetCompleted()
+	}
 	t.metas = nil
 }
 
@@ -141,7 +167,10 @@ func (t *thread) start(kind, activity string, fn func(context.Context, func(any)
 // finish ends a run on the lane.
 func (t *thread) finish(err error, ctxTokens int, reported []events.Event) {
 	t.turns.PendingEvents = append(t.turns.PendingEvents, reported...)
-	t.tr.EndTurn() // user shells run independently of the model
+	t.tr.EndTurn()
+	if len(t.attached) == 0 {
+		t.dropDisplay()
+	} // user shells run independently of the model
 	t.ctx = ctxTokens
 	t.turns.End()
 	if t.s.memory != nil {
@@ -287,6 +316,9 @@ func (t *thread) commitSteers(e agent.SteerCommitted) {
 
 // afterRun settles pending input once a run finishes.
 func (t *thread) afterRun(err error) {
+	if t.runKind == "compact" {
+		defer debug.FreeOSMemory()
+	}
 	t.flushShell()
 	if t.closing {
 		return

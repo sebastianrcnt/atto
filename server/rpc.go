@@ -10,11 +10,13 @@ import (
 	"github.com/sebastianrcnt/atto/ai"
 	"github.com/sebastianrcnt/atto/config"
 	"github.com/sebastianrcnt/atto/core"
+	"github.com/sebastianrcnt/atto/core/transcript"
 	"github.com/sebastianrcnt/atto/events"
 	"github.com/sebastianrcnt/atto/images"
 	"github.com/sebastianrcnt/atto/jobs"
 	"github.com/sebastianrcnt/atto/provider"
 	"github.com/sebastianrcnt/atto/session"
+	"runtime/debug"
 )
 
 // archiveRequest asks threadCall to close the thread and move its transcript
@@ -64,6 +66,22 @@ func (s *Server) threadCall(ctx context.Context, client, method string, p thread
 
 // threadMethods are the requests on a thread; they run on its lane.
 var threadMethods = map[string]func(t *thread, client string, p threadParams) (any, error){
+	"thread/entry": func(t *thread, client string, p threadParams) (any, error) {
+		e, ok, err := session.ReadEntry(t.sess.Path, p.EntryID)
+		if err != nil {
+			return nil, err
+		}
+		if !ok {
+			return nil, failure(ReasonNotFound, "entry not found")
+		}
+		return e, nil
+	},
+	"thread/items": func(t *thread, client string, p threadParams) (any, error) {
+		b := transcript.Builder{IDPrefix: itemPrefix(t.id)}
+		page, _, err := replayFile(&b, t.id, t.sess.Path, p.Before, p.Limit, t.pageAnchor(p.Before)...)
+		debug.FreeOSMemory()
+		return page, err
+	},
 	"thread/archive": func(t *thread, client string, p threadParams) (any, error) {
 		if t.readOnly != "" {
 			return nil, failure(ReasonReadOnly, "%s", t.readOnly)
@@ -299,8 +317,7 @@ var threadMethods = map[string]func(t *thread, client string, p threadParams) (a
 		if p.EntryID == "" {
 			return nil, invalid("entryId is required")
 		}
-		entries := t.loadEntries()
-		if _, _, ok := session.BranchPoint(entries, p.EntryID); !ok {
+		if _, _, ok, err := session.BranchPointFile(t.sess.Path, p.EntryID); err != nil || !ok {
 			return nil, failure(ReasonNotFound, "that entry is no longer in the session")
 		}
 		if p.Summary != nil && p.Summary.Mode != "" && p.Summary.Mode != "none" && p.Summary.Mode != "auto" && p.Summary.Mode != "custom" {
@@ -324,8 +341,18 @@ var threadMethods = map[string]func(t *thread, client string, p threadParams) (a
 		return map[string]any{"path": path, "threadId": id, "input": text, "images": wireImages(imgs)}, nil
 	},
 	"thread/tree": func(t *thread, client string, p threadParams) (any, error) {
-		entries := t.loadEntries()
-		return map[string]any{"entries": entries, "leaf": session.Leaf(entries)}, nil
+		if p.Query != "" {
+			matches, err := session.SearchTree(t.sess.Path, p.Query)
+			return map[string]any{"matches": matches}, err
+		}
+		if p.SnapshotVersion >= 3 {
+			rows, err := session.ReadTreeRows(t.sess.Path)
+			debug.FreeOSMemory()
+			return map[string]any{"entries": rows, "leaf": t.sess.Leaf()}, err
+		}
+		_, entries, err := session.Load(t.sess.Path)
+		return map[string]any{"entries": entries, "leaf": session.Leaf(entries)}, err
+
 	},
 	"thread/context": func(t *thread, client string, p threadParams) (any, error) {
 		return t.contextInfo(p.View), nil
@@ -506,13 +533,23 @@ func (t *thread) rollback(client string, n int) (any, error) {
 	if t.turns.Busy {
 		return nil, failure(ReasonBusy, "a turn is running; turn/interrupt first")
 	}
-	entries := t.loadEntries()
-	users := UserMessages(session.Active(entries))
+	var users []session.Entry
+	if err := session.VisitActive(t.sess.Path, func(e session.Entry) error {
+		if len(UserMessages([]session.Entry{e})) > 0 {
+			users = append(users, session.Entry{ID: e.ID})
+		}
+		return nil
+	}); err != nil {
+		return nil, err
+	}
 	if n > len(users) {
 		return nil, invalid("only %d user messages to roll back", len(users))
 	}
 	target := users[len(users)-n]
-	leaf, text, ok := session.BranchPoint(entries, target.ID)
+	leaf, text, ok, readErr := session.BranchPointFile(t.sess.Path, target.ID)
+	if readErr != nil {
+		return nil, readErr
+	}
 	if !ok {
 		return nil, invalid("that message is no longer in the session")
 	}
@@ -521,12 +558,9 @@ func (t *thread) rollback(client string, n int) (any, error) {
 	if err := t.sess.Err(); err != nil {
 		return nil, err
 	}
-	t.showBranch(t.loadEntries())
+	t.showBranchDisk()
 	info := t.snapshot()
-	return struct {
-		ThreadInfo
-		Input string `json:"input"`
-	}{info, text}, nil
+	return rollbackResult{rollbackInfo(info), text}, nil
 }
 
 func (t *thread) reloadModels() error {
@@ -542,4 +576,11 @@ func (t *thread) reloadModels() error {
 	}
 	t.updated()
 	return nil
+}
+
+// Named alias prevents a snapshot marshaler from swallowing rollback input.
+type rollbackInfo ThreadInfo
+type rollbackResult struct {
+	rollbackInfo
+	Input string `json:"input"`
 }

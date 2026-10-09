@@ -688,3 +688,22 @@ func retryNotice(e agent.StreamRetry) string {
 	return fmt.Sprintf("Model request failed (%s); retrying in %s (%d/%d). Any reply cut off above is not kept.",
 		e.Err, e.Wait.Round(100*time.Millisecond), e.Attempt, e.Of)
 }
+
+// ForgetCompleted releases display-only references without changing the ID
+// sequence or the active streaming state. Headless runtimes call it at event
+// boundaries; the model context and session file remain the source of history.
+func (b *Builder) ForgetCompleted() {
+	kept := b.items[:0]
+	for _, it := range b.items {
+		if it.Status == InProgress || it.Pending {
+			kept = append(kept, it)
+		}
+	}
+	clear(b.items[len(kept):])
+	b.items = kept
+}
+
+// AdvanceSequence preserves a running worker's item IDs when a disk replay
+// reconstructs its display, without replacing the active streaming state.
+func (b *Builder) AdvanceSequence(sequence int) { b.seq = max(b.seq, sequence) }
+func (b *Builder) Sequence() int                { return b.seq }

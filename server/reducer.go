@@ -116,6 +116,7 @@ func (v *ThreadView) Apply(n Notification) bool {
 		}
 		t := *p.Thread
 		t.Items = nil
+		t.HasMore, t.Before = v.Info.HasMore, v.Info.Before
 		v.Info = t
 	case "turn/started":
 		v.Info.Busy, v.Info.TurnID, v.Info.RunKind = true, p.TurnID, p.RunKind
@@ -163,4 +164,22 @@ func (v *ThreadView) Apply(n Notification) bool {
 		v.EventID = n.EventID
 	}
 	return true
+}
+
+// Prepend merges an earlier page without moving the live-event boundary or
+// replacing an item already updated by live notifications.
+func (v *ThreadView) Prepend(page ItemPage) []Item {
+	var added []Item
+	for _, it := range page.Items {
+		if _, ok := v.index[it.ID]; !ok {
+			added = append(added, it)
+		}
+	}
+	v.Items = append(added, v.Items...)
+	v.index = make(map[string]int, len(v.Items))
+	for i, it := range v.Items {
+		v.index[it.ID] = i
+	}
+	v.Info.HasMore, v.Info.Before = page.HasMore, page.Before
+	return added
 }

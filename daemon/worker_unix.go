@@ -466,5 +466,8 @@ func RunWorker(version string, args []string) error {
 func callServer(ctx context.Context, srv *server.Server, method string, params, result any) error {
 	c := server.Connect(ctx, srv)
 	defer c.Close()
+	if err := c.Call(ctx, "initialize", map[string]any{"protocolVersions": []int{3}}, nil); err != nil {
+		return err
+	}
 	return c.Call(ctx, method, params, result)
 }

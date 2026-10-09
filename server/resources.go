@@ -4,12 +4,14 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"github.com/sebastianrcnt/atto/core/transcript"
 	"golang.org/x/image/draw"
 	"image"
 	"image/png"
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/sebastianrcnt/atto/fsutil"
@@ -51,7 +53,22 @@ func threadFiles(ctx context.Context, root, query string, limit int) (any, error
 }
 
 func (t *thread) itemResource(p threadParams, kind string) (any, error) {
-	return itemResource(t.snapshot().Items, p, kind)
+	items := t.snapshot().Items
+	for _, it := range items {
+		if it.ID == p.ItemID {
+			return itemResource(items, p, kind)
+		}
+	}
+	n := itemNumber(t.id, p.ItemID)
+	if n < 1 {
+		return nil, invalid("itemId is not in this thread’s transcript")
+	}
+	b := transcript.Builder{IDPrefix: itemPrefix(t.id)}
+	page, _, err := replayFile(&b, t.id, t.sess.Path, itemPrefix(t.id)+strconv.Itoa(n+1), 1)
+	if err != nil {
+		return nil, err
+	}
+	return itemResource(page.Items, p, kind)
 }
 
 func itemResource(items []Item, p threadParams, kind string) (any, error) {

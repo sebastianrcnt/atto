@@ -85,7 +85,7 @@ func (s *Server) routeCall(ctx context.Context, method string, raw json.RawMessa
 	if method == "initialize" || method == "initialized" || method == "ping" || method == "models/list" {
 		return nil, nil, false
 	}
-	if method != "thread/start" && method != "thread/resume" && method != "thread/read" && method != "thread/attach" && method != "thread/detach" && method != "thread/close" {
+	if method != "thread/start" && method != "thread/resume" && method != "thread/items" && method != "thread/read" && method != "thread/attach" && method != "thread/detach" && method != "thread/close" {
 		if _, ok := threadMethods[method]; !ok {
 			return nil, nil, false
 		}
@@ -100,6 +100,7 @@ func (s *Server) routeCall(ctx context.Context, method string, raw json.RawMessa
 		params = map[string]any{}
 	}
 	params["threadId"] = r.thread
+	params["snapshotVersion"] = protocolOf(ctx)
 	if method == "thread/start" || method == "thread/resume" {
 		method = "thread/attach"
 	}

@@ -151,7 +151,7 @@ func forgetExternalParent(parent string) error {
 	if err != nil {
 		return nil
 	} // explicit parents need not have a session file
-	h, _, err := session.Load(p)
+	h, err := session.ReadHeader(p)
 	if err != nil {
 		return err
 	}

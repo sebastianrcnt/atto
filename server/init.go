@@ -24,10 +24,10 @@ type Capabilities struct {
 
 // negotiate picks the protocol revision for a client that speaks
 // versions: the newest both speak. A client that lists none gets the
-// server's own (revision 1 clients did not list them).
+// legacy revision 2 (revision 1 clients did not list them).
 func negotiate(versions []int) (int, error) {
 	if len(versions) == 0 {
-		return ProtocolVersion, nil
+		return 2, nil
 	}
 	best := 0
 	for _, v := range versions {
@@ -61,6 +61,7 @@ func (s *Server) initialize(ctx context.Context, p threadParams, extra map[strin
 		if p.Client != nil {
 			c.name = p.Client.Name
 		}
+		c.protocol.Store(int32(v))
 		c.interactive = p.Capabilities != nil && p.Capabilities.Interactive
 		s.mu.Unlock()
 		extra = maps.Clone(extra)

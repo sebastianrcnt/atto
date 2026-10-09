@@ -14,8 +14,8 @@ func TestNegotiate(t *testing.T) {
 		versions []int
 		want     int
 	}{
-		{nil, ProtocolVersion}, {[]int{}, ProtocolVersion}, {[]int{1}, 1},
-		{[]int{1, 2, 9}, 2}, {[]int{2, 1, 2}, 2},
+		{nil, 2}, {[]int{}, 2}, {[]int{1}, 1},
+		{[]int{1, 2, 9}, 2}, {[]int{3, 2}, 3}, {[]int{2, 1, 2}, 2},
 	} {
 		if got, err := negotiate(c.versions); err != nil || got != c.want {
 			t.Fatalf("negotiate(%v) = %d, %v; want %d", c.versions, got, err, c.want)

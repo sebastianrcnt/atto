@@ -1,6 +1,6 @@
 # atto native protocol: a client author's reference
 
-Protocol revision **2** (revision 1 remains accepted). This is atto's native
+Protocol revision **3** (revisions 1 and 2 remain accepted). This is atto's native
 JSON-RPC API, inspired by Codex app-server, **not a Codex wire adapter**. See
 [the detailed Codex v2 comparison](codex-app-server-compat.md) and
 [implementation status](tui-as-client.md#8-implementation-status-on-main).
@@ -65,19 +65,19 @@ order: notifications may appear before a response. Use distinct integer or
 string IDs. Requests on a connection are handled in order; `ping` is a fence.
 
 ```json
-{"id":1,"method":"initialize","params":{"protocolVersions":[1,2],"clientInfo":{"name":"my-client","title":"My client","version":"1"},"capabilities":{"interactive":true,"images":true}}}
+{"id":1,"method":"initialize","params":{"protocolVersions":[3,2],"clientInfo":{"name":"my-client","title":"My client","version":"1"},"capabilities":{"interactive":true,"images":true}}}
 ```
 
 ```json
-{"jsonrpc":"2.0","id":1,"result":{"clientId":"c1","eventId":0,"name":"atto","protocolVersion":2,"serverInstanceId":"7e07d7f89fa33b3c","settings":{"toolGroups":true},"version":"test"}}
+{"jsonrpc":"2.0","id":1,"result":{"clientId":"c1","eventId":0,"name":"atto","protocolVersion":3,"serverInstanceId":"7e07d7f89fa33b3c","settings":{"toolGroups":true},"version":"test"}}
 ```
 
 ```json
 {"method":"initialized"}
 ```
 
-The newest shared revision is selected; no version list selects today's
-revision for legacy clients. No overlap returns `unsupportedProtocol`.
+The newest shared revision is selected; no version list selects revision 2
+so legacy clients retain full snapshots. No overlap returns `unsupportedProtocol`.
 `clientInfo` uses Codex's name/title/version shape; capabilities currently use
 `interactive` (can answer prompts) and `images`. Unknown capability fields,
 such as Codex's `experimentalApi`, are tolerated, not a promise to implement
@@ -150,7 +150,8 @@ the redundant `jsonrpc` field on notifications.
 `priced`, `subscription`, `turnId`, `items`, `usage`, `turn`, `pending`, `context`,
 `eventId`, `serverInstanceId`, `prompt`, `goal`, `extensionUi`, `runKind`,
 `activity`, `jobs`, `timers`, `readOnly`, `offline`, `sessionPath`, `longContext`,
-`live`. `context` is the loaded AGENTS/skills/hooks/extensions/MCP/config report.
+`live`, `hasMore`, `before`. Revision 3 snapshot replies always include `items`,
+`hasMore` and `before`, even for an empty tail. `context` is the loaded AGENTS/skills/hooks/extensions/MCP/config report.
 A read-only/offline snapshot is not an execution owner. Use resume before writes.
 
 - **Item:** `id`, `type`, optional `status` (inProgress/completed/failed), `text`.
@@ -229,9 +230,11 @@ by `TestProtocolReferenceMethods`; adding a method without documenting it fails.
 | Method | Params | Result / semantics |
 | --- | --- | --- |
 | `thread/start` | `{cwd?,model?,effort?,deferStart?}` | Snapshot + loaded context; starts/attaches a worker when available |
-| `thread/resume` | T + `cwd?,deferStart?` | Snapshot + context, items; joins owner, ID/prefix resolution |
-| `thread/attach` | T | Snapshot + items; follows a loaded thread |
-| `thread/read` | T + `offline?` | Snapshot + items, cursor; offline reads file without loading |
+| `thread/resume` | T + `cwd?,deferStart?,limit?` | Snapshot + context, items; joins owner, ID/prefix resolution |
+| `thread/attach` | T + `limit?` | Snapshot + items; follows a loaded thread |
+| `thread/read` | T + `offline?,limit?` | Snapshot + items, cursor; offline reads file without loading |
+| `thread/items` | `{threadId,before,limit?,offline?}` | Revision 3: earlier transcript page `{items,hasMore,before}`, oldest first; does not change the live event cursor. |
+| `thread/entry` | `{threadId,entryId,offline?}` | Read one complete session entry from disk, including unloaded or off-branch messages (tree copy/edit). |
 | `thread/list` | `{cwd?,archived?}` | `{threads:[{threadId,name?,preview?,cwd?,updatedAt?,messages?,loaded?,live?,busy?,clients?,version?,pid?}]}`; includes active workers |
 | `thread/detach` | T + `reason?` | `{closed,stoppedJobs?,notices?}`; releases client, not work |
 | `thread/close` | T + `reason?` | `{closed,stoppedJobs?,notices?}`; explicit session end, stops jobs/turns |
@@ -242,7 +245,7 @@ by `TestProtocolReferenceMethods`; adding a method without documenting it fails.
 | `thread/setLabel` | T + `entryId,label` | `{}`; label session tree entry |
 | `thread/compact` | T | `{turnId}`; idle only, asynchronous compaction |
 | `thread/rollback` | T + `numTurns?` | Snapshot + `{input}`; idle only, default 1 user message |
-| `thread/tree` | T + `offline?` | `{entries,leaf}`; all saved branches, entry IDs and labels |
+| `thread/tree` | T + `offline?,query?` | `{entries,leaf}`; all saved branches, entry IDs and labels. Revision 3 rows contain bounded display previews; use thread/entry for full text. A nonempty query searches full text on disk and returns `{matches:[entryId]}`. |
 | `thread/navigate` | T + `entryId,summary?:{mode:none|auto|custom,instructions?}` | `{}`; branch movement, optional async summary; follow branchChanged |
 | `thread/fork` | T + `entryId` | `{threadId,path,input,images}`; new saved branch (even before the first message); resume using threadId, no access to the server filesystem required |
 | `thread/files` | T + `query?,limit?` | `{files:[{path,directory}],truncated}`; workspace-relative paths, case-insensitive substring filter, default 100/max 1000 matches; gitignore-aware walk capped at 50,000 entries/20 levels; cancellation supported |
@@ -517,3 +520,40 @@ attachment. Only `status`/`stop` downgrade to revisions 2/3 for upgrades; execut
 falls back in-process until an incompatible old daemon is stopped. No JSON-RPC
 method was removed; worker/state adds name and state diagnostics. Worker retention defaults to one minute;
 `ATTO_WORKER_RETENTION` accepts a duration override for process tests/deployments.
+
+## Revision 3: lazy transcript loading
+
+Clients negotiating revision 3 receive only the transcript after the last active
+compaction, capped to the latest `limit` items (default 200), on `thread/resume`,
+`thread/attach` and `thread/read`. Results carry `hasMore` and an exclusive
+`before` cursor. Pass that cursor to `thread/items` to prepend an earlier page;
+continue with its returned cursor while `hasMore` is true. Pages cross compaction
+boundaries but stay on the current active branch. Discard in-flight pages when
+a branch change or replacement snapshot arrives. Items are always oldest-first.
+
+Paging does not replace a snapshot or advance `eventId`: merge by item ID,
+preferring an already loaded live item. Events retain their existing IDs and
+exactly-once snapshot boundary. Clients negotiating revision 2 (including the
+frozen web client), or scripts with no handshake, retain full snapshots.
+
+```json
+{"jsonrpc":"2.0","id":5,"method":"thread/items","params":{"threadId":"example","before":"example-i201","limit":200}}
+```
+
+The TUI and Swing negotiate revision 3 and request older pages at the top of
+loaded content. Prepending preserves the visible anchor and does not reset the
+live reducer. The TUI shows a temporary `loading earlier messages` line; Swing
+also offers a Load earlier messages button. Tree search/copy/fork and saved
+output/image access resolve unloaded entries from disk. Example clients remain
+revision 2 intentionally: their full-snapshot reducers need no paging support.
+
+An unattached worker retains no completed transcript items, including the tail.
+It keeps the active model context and fixed runtime state; session entries and
+live events are still recorded/emitted. Attaching reconstructs a tail from disk;
+the last detach drops it again. Archived JSONL.zst reads stream without a temporary
+decompressed file. Shared opens for print, workers, app-server, serve and /remote
+use the same context-only reader. A default 32 MiB **soft** Go memory budget
+bounds transient allocations (not large model contexts); `GOMEMLIMIT` or an
+embedded application's explicit limit takes precedence. Rare large reads,
+pages and compactions release unused heap pages with `debug.FreeOSMemory`.
+See [the synthetic memory measurements](session-memory.md) for methodology.

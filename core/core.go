@@ -35,6 +35,7 @@ const DefaultEffort = "medium"
 
 // Load creates ~/.atto if needed and reads settings.json and models.json.
 func Load() (config.Settings, config.ModelsFile, error) {
+	ConfigureMemoryBudget()
 	if err := config.Ensure(); err != nil {
 		return config.Settings{}, config.ModelsFile{}, err
 	}
@@ -228,6 +229,7 @@ func Open(path string) (Saved, *session.Writer, error) {
 func OpenDisplay(path string) (Saved, *session.Writer, error) { return openSaved(path, true) }
 
 func openSaved(path string, display bool) (Saved, *session.Writer, error) {
+	ConfigureMemoryBudget()
 	s, err := read(path, display)
 	if err != nil {
 		return Saved{}, nil, err

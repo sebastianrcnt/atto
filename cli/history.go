@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -47,20 +48,6 @@ func RunHistory(args []string, out io.Writer) error {
 	if err != nil {
 		return err
 	}
-	_, entries, err := session.Load(path)
-	if err != nil {
-		return err
-	}
-	items := session.Items(entries)
-	if *activeOnly {
-		var on []session.Item
-		for _, it := range items {
-			if !it.OffBranch {
-				on = append(on, it)
-			}
-		}
-		items = on
-	}
 
 	switch sub {
 	case "grep":
@@ -75,7 +62,7 @@ func RunHistory(args []string, out io.Writer) error {
 		if err != nil {
 			return err
 		}
-		return historyGrep(out, items, re, *maxHits)
+		return historyGrepFile(out, path, re, *maxHits, *activeOnly)
 	case "show":
 		var n int
 		if fs.NArg() != 1 {
@@ -83,6 +70,27 @@ func RunHistory(args []string, out io.Writer) error {
 		}
 		if _, err := fmt.Sscan(strings.TrimPrefix(fs.Arg(0), "#"), &n); err != nil {
 			return fmt.Errorf("bad entry number %q", fs.Arg(0))
+		}
+		var items []session.Item
+		lastN := 0
+		err := session.VisitItems(path, func(it session.Item) error {
+			if *activeOnly && it.OffBranch {
+				return nil
+			}
+			lastN = it.N
+			if it.N >= n-*ctxN && it.N <= n+*ctxN {
+				items = append(items, it)
+			}
+			return nil
+		})
+		if err != nil {
+			return err
+		}
+		if len(items) == 0 {
+			if lastN == 0 {
+				return fmt.Errorf("no entry #%d (the session has no messages)", n)
+			}
+			return fmt.Errorf("no entry #%d (entries are numbered 1..%d)", n, lastN)
 		}
 		return historyShow(out, items, n, *ctxN, *full)
 	}
@@ -180,4 +188,44 @@ func itemLabel(it session.Item) string {
 		return it.Label + " (other branch)"
 	}
 	return it.Label
+}
+
+func historyGrepFile(out io.Writer, path string, re *regexp.Regexp, maxHits int, activeOnly bool) error {
+	hits, entries := 0, 0
+	stopped := errors.New("enough matches")
+	err := session.VisitItems(path, func(it session.Item) error {
+		if activeOnly && it.OffBranch {
+			return nil
+		}
+		matched := false
+		for line := range strings.SplitSeq(it.Text, "\n") {
+			loc := re.FindStringIndex(line)
+			if loc == nil {
+				continue
+			}
+			if maxHits > 0 && hits >= maxHits {
+				fmt.Fprintf(out, "[stopped after %d matching lines; narrow the pattern or raise -max]\n", maxHits)
+				return stopped
+			}
+			fmt.Fprintf(out, "#%d %s: %s\n", it.N, itemLabel(it), strings.TrimSpace(snippet(line, loc)))
+			hits++
+			matched = true
+		}
+		if matched {
+			entries++
+		}
+		return nil
+	})
+	if errors.Is(err, stopped) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if hits == 0 {
+		fmt.Fprintln(out, "no matches")
+		return nil
+	}
+	fmt.Fprintf(out, "[%d matching lines in %d entries; read one with: atto history show <n>]\n", hits, entries)
+	return nil
 }

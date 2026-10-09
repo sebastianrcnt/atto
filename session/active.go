@@ -68,6 +68,10 @@ func readActive(path string, display bool) (ActiveFile, error) {
 }
 
 func scanActive(path string, display bool) (ActiveFile, []summaryNode, error) {
+	return scanPath(path, display, "")
+}
+
+func scanPath(path string, display bool, leaf string) (ActiveFile, []summaryNode, error) {
 	f, err := Open(path)
 	if err != nil {
 		return ActiveFile{}, nil, err
@@ -160,7 +164,10 @@ func scanActive(path string, display bool) (ActiveFile, []summaryNode, error) {
 	}
 	var reverse []int
 	seen := map[string]bool{}
-	for id := nodes[len(nodes)-1].ID; id != "" && !seen[id]; {
+	if leaf == "" {
+		leaf = nodes[len(nodes)-1].ID
+	}
+	for id := leaf; id != "" && !seen[id]; {
 		i, ok := byID[id]
 		if !ok {
 			break

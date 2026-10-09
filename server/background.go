@@ -3,8 +3,10 @@ package server
 import (
 	"github.com/sebastianrcnt/atto/agentstate"
 	"github.com/sebastianrcnt/atto/config"
+	"github.com/sebastianrcnt/atto/core/transcript"
 	"github.com/sebastianrcnt/atto/jobs"
 	"github.com/sebastianrcnt/atto/session"
+	"strconv"
 	"strings"
 )
 
@@ -102,12 +104,19 @@ func background(method, sid string, p threadParams) (any, error) {
 		}
 		items := []Item{}
 		if path, err := session.Find(st.Session); err == nil {
-			if _, entries, err := session.Load(path); err == nil {
-				items = ItemsFromEntries(st.Session, session.Active(entries))
+			b := transcript.Builder{IDPrefix: itemPrefix(st.Session)}
+			before := ""
+			limit := p.Limit
+			if p.SnapshotVersion < 3 {
+				before = itemPrefix(st.Session) + strconv.Itoa(int(^uint(0)>>1))
+				limit = int(^uint(0) >> 1)
+			}
+			if page, _, err := replayFile(&b, st.Session, path, before, limit); err == nil {
+				items = page.Items
 			}
 		}
 		// Its report is its last message, as atto agent report prints it.
-		msg := ""
+		msg := session.LastAssistant(st.Session)
 		for i := len(items) - 1; i >= 0 && msg == ""; i-- {
 			if items[i].Type == ItemAgent {
 				msg = items[i].Text

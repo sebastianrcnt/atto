@@ -214,14 +214,14 @@ func sessionsList(out io.Writer, all, archived, asJSON bool, limit int) error {
 const showUserMessages = 5
 
 func sessionsShow(out io.Writer, path string) error {
-	h, entries, err := session.Load(path)
+	h, err := session.ReadHeader(path)
 	if err != nil {
 		return err
 	}
 	sum := session.Summary{ID: h.ID, Created: h.Time, Updated: h.Time}
 	var model string
 	branches := 0
-	for _, e := range entries {
+	err = session.Visit(path, func(_ int, e session.Entry) error {
 		sum.Updated = e.Time
 		switch e.Type {
 		case session.TypeName:
@@ -231,20 +231,32 @@ func sessionsShow(out io.Writer, path string) error {
 		case session.TypeBranch:
 			branches++
 		}
+		return nil
+	})
+	if err != nil {
+		return err
 	}
 	var users []string
-	msgs := 0
-	for _, e := range session.Active(entries) {
+	msgs, userCount := 0, 0
+	err = session.VisitActive(path, func(e session.Entry) error {
 		if e.Type != session.TypeMessage || e.Message == nil {
-			continue
+			return nil
 		}
 		switch e.Message.Role {
 		case "user":
 			msgs++
-			users = append(users, e.Message.Content)
+			userCount++
+			users = append(users, oneLine(e.Message.Content, 200))
+			if len(users) > showUserMessages {
+				users = users[1:]
+			}
 		case "assistant":
 			msgs++
 		}
+		return nil
+	})
+	if err != nil {
+		return err
 	}
 	status := "active"
 	if !strings.HasPrefix(path, config.SessionsDir()) {
@@ -276,7 +288,7 @@ func sessionsShow(out io.Writer, path string) error {
 	f("file", path)
 	if len(users) > 0 {
 		last := users[max(0, len(users)-showUserMessages):]
-		fmt.Fprintf(out, "\nlast %d of %d user messages:\n", len(last), len(users))
+		fmt.Fprintf(out, "\nlast %d of %d user messages:\n", len(last), userCount)
 		for _, m := range last {
 			fmt.Fprintf(out, "  > %s\n", oneLine(m, 200))
 		}
@@ -348,15 +360,19 @@ func sessionsDelete(out io.Writer, path string, yes bool) error {
 	defer release()
 	active := jobs.ActiveCount(id)
 
-	h, entries, err := session.Load(path)
+	h, err := session.ReadHeader(path)
 	if err != nil {
 		return err
 	}
 	msgs := 0
-	for _, e := range session.Active(entries) {
+	err = session.VisitActive(path, func(e session.Entry) error {
 		if e.Type == session.TypeMessage && e.Message != nil && (e.Message.Role == "user" || e.Message.Role == "assistant") {
 			msgs++
 		}
+		return nil
+	})
+	if err != nil {
+		return err
 	}
 	if !yes {
 		if !sessionsIsTTY() {

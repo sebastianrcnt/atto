@@ -3,7 +3,7 @@ package server
 import (
 	"context"
 	"errors"
-	"os"
+	"runtime/debug"
 	"time"
 
 	"github.com/sebastianrcnt/atto/agent"
@@ -34,16 +34,6 @@ type summaryRun struct {
 	summary        string
 }
 
-// loadEntries reads the session file; a session with no entries yet has
-// no file.
-func (t *thread) loadEntries() []session.Entry {
-	_, entries, err := session.Load(t.sess.Path)
-	if err != nil && !os.IsNotExist(err) {
-		t.errorNotice(err)
-	}
-	return entries
-}
-
 // moveTo moves the leaf to entry id for client, first summarizing the
 // branch being left when sum is set. While a run goes on it is
 // interrupted first, and the move happens when it has stopped.
@@ -56,23 +46,44 @@ func (t *thread) moveTo(id string, sum *summaryRequest, client string) {
 		t.turns.Cancel(nil)
 		return
 	}
-	entries := t.loadEntries()
-	if id == session.Leaf(entries) {
+	if id == t.sess.Leaf() {
 		t.notice("", "Already at this point.")
 		return
 	}
-	leaf, text, ok := session.BranchPoint(entries, id)
+	leaf, text, ok, err := session.BranchPointFile(t.sess.Path, id)
+	if err != nil {
+		t.errorNotice(err)
+		return
+	}
 	if !ok {
 		t.notice("", "That entry is no longer in the session.")
 		return
 	}
 	if sum != nil {
-		if left := session.Abandoned(entries, session.Leaf(entries), leaf); agent.HasBranchContent(left) {
-			t.summarizeBranch(id, leaf, text, left, sum.instructions, client)
+		origin, content := "", false
+		err := session.VisitAbandoned(t.sess.Path, t.sess.Leaf(), leaf, func(e session.Entry) error {
+			content = content || agent.HasBranchContent([]session.Entry{e})
+			if origin == "" {
+				if text, ok := agent.BranchOrigin(e); ok {
+					origin = text
+				}
+			}
+			return nil
+		})
+		if err != nil {
+			t.errorNotice(err)
+			return
+		}
+		if content {
+			if origin == "" {
+				origin = "the last message"
+			}
+			t.summarizeBranch(id, leaf, text, origin, sum.instructions, client)
 			return
 		}
 	}
-	t.finishMove(entries, id, leaf, text, nil, client)
+	entry, _, _ := session.ReadEntry(t.sess.Path, id)
+	t.finishMove([]session.Entry{entry}, id, leaf, text, nil, client)
 }
 
 // finishMove moves the leaf to leaf, recording summary (if any) there,
@@ -89,7 +100,7 @@ func (t *thread) finishMove(entries []session.Entry, id, leaf, text string, summ
 		t.errorNotice(err)
 		return
 	}
-	t.showBranch(t.loadEntries())
+	t.showBranchDisk()
 	if text != "" {
 		t.recover(client, true, []string{text}, entryImages(entries, id))
 	}
@@ -150,17 +161,25 @@ func entryImages(entries []session.Entry, id string) []provider.Image {
 	return out
 }
 
-// showBranch loads the active branch into the agent and the items, like a
-// resume. The agent gets the branch's messages exactly as recorded, so
-// the next request repeats the old prefix byte for byte and hits the
-// cache.
-func (t *thread) showBranch(entries []session.Entry) {
-	branch := session.Active(entries)
-	t.agent.Restore(session.Context(branch))
+// showBranchDisk restores only model context and a bounded display tail.
+func (t *thread) showBranchDisk() {
+	loaded, err := session.ReadContext(t.sess.Path)
+	if err != nil {
+		t.errorNotice(err)
+		return
+	}
+	t.agent.Restore(loaded.Entries)
 	t.ctx = t.agent.ContextTokens()
-	t.replay(branch)
+	if err := t.replayDisk(); err != nil {
+		t.errorNotice(err)
+		return
+	}
 	t.publish("thread/branchChanged", map[string]any{})
 	t.updated()
+	if len(t.attached) == 0 {
+		t.dropDisplay()
+	}
+	debug.FreeOSMemory()
 }
 
 // replay makes the items again from the active branch.
@@ -187,11 +206,11 @@ func (t *thread) afterGoingBack() {
 
 // summarizeBranch has the model summarize left, the entries a move to
 // leaf leaves behind, then moves (afterBranchSummary).
-func (t *thread) summarizeBranch(id, leaf, text string, left []session.Entry, instructions, client string) {
+func (t *thread) summarizeBranch(id, leaf, text string, origin, instructions, client string) {
 	run := &summaryRun{id: id, leaf: leaf, text: text, client: client, start: time.Now()}
 	t.summary = run
 	t.start("branchSummary", "Summarizing branch", func(ctx context.Context, emit func(any)) error {
-		s, err := t.agent.SummarizeBranch(ctx, left, instructions, emit)
+		s, err := t.agent.SummarizeBranchFrom(ctx, origin, instructions, emit)
 		run.summary = s // read on the lane once the run is over
 		return err
 	})
@@ -205,7 +224,8 @@ func (t *thread) afterBranchSummary(err error) bool {
 	if run == nil || err != nil {
 		return false
 	}
-	t.finishMove(t.loadEntries(), run.id, run.leaf, run.text, &session.Entry{
+	entry, _, _ := session.ReadEntry(t.sess.Path, run.id)
+	t.finishMove([]session.Entry{entry}, run.id, run.leaf, run.text, &session.Entry{
 		Summary:   run.summary,
 		ElapsedMs: time.Since(run.start).Milliseconds(),
 	}, run.client)
@@ -215,12 +235,17 @@ func (t *thread) afterBranchSummary(err error) bool {
 // fork writes a new session holding the path to just before user message
 // id, and returns it with the message's text and images.
 func (t *thread) fork(id string) (path, threadID, text string, imgs []provider.Image, err error) {
-	entries := t.loadEntries()
-	leaf, text, ok := session.BranchPoint(entries, id)
+	leaf, text, ok, readErr := session.BranchPointFile(t.sess.Path, id)
+	if readErr != nil {
+		return "", "", "", nil, readErr
+	}
 	if !ok {
 		return "", "", "", nil, errors.New("that entry is no longer in the session")
 	}
-	w := session.Fork(t.sess.Path, t.cwd, entries, leaf)
+	w, forkErr := session.ForkFile(t.sess.Path, t.cwd, leaf)
+	if forkErr != nil {
+		return "", "", "", nil, forkErr
+	}
 	// Even a fork before the first message must be resumable by a remote
 	// client; an empty branch marker forces the lazy writer's header out.
 	if w.Leaf() == "" {
@@ -230,5 +255,7 @@ func (t *thread) fork(id string) (path, threadID, text string, imgs []provider.I
 	if err := w.Err(); err != nil {
 		return "", "", "", nil, err
 	}
-	return w.Path, w.ID, text, entryImages(entries, id), nil
+	entry, _, _ := session.ReadEntry(t.sess.Path, id)
+	debug.FreeOSMemory()
+	return w.Path, w.ID, text, entryImages([]session.Entry{entry}, id), nil
 }

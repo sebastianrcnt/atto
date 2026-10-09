@@ -20,6 +20,11 @@ func TestProtocolReferenceMethods(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	for _, required := range []string{"Protocol revision **3**", "`hasMore`", "`before`", "Revision 3: lazy transcript loading"} {
+		if !strings.Contains(string(doc), required) {
+			t.Errorf("protocol paging contract missing from docs: %s", required)
+		}
+	}
 	methods := map[string]bool{}
 	for name := range threadMethods {
 		methods[name] = true

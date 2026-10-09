@@ -58,3 +58,7 @@ bypass. Same-host and HTTP(S) loopback origins are allowed by default.
 Both examples use daemon worker routing by default when available. On Windows,
 with `ATTO_NO_DAEMON=1`, or with `--in-process`, runtime lifetime is the server
 process's lifetime rather than a detached worker's.
+
+Both examples intentionally negotiate revision 2, preserving their full-snapshot
+reducers. New clients can negotiate revision 3 for cheap tail snapshots and use
+`thread/items` with `before` to load older messages; see the protocol reference.

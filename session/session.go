@@ -322,8 +322,12 @@ func (w *Writer) open() error {
 			}
 		}
 		if !w.hasLeaf {
-			if _, entries, err := Load(w.Path); err == nil {
-				w.leaf, w.hasLeaf = Leaf(entries), true
+			if _, nodes, err := scanActive(w.Path, true); err == nil {
+				w.leaf = ""
+				if len(nodes) > 0 {
+					w.leaf = nodes[len(nodes)-1].ID
+				}
+				w.hasLeaf = true
 			}
 		}
 	}
@@ -559,7 +563,7 @@ func Rename(path, name string) error {
 	if name == "" {
 		return fmt.Errorf("name is empty")
 	}
-	h, _, err := Load(path)
+	h, err := ReadHeader(path)
 	if err != nil {
 		return err
 	}

@@ -110,52 +110,79 @@ type Item struct {
 // tool calls are rendered as "$ command" lines so commands can be found too.
 func Items(entries []Entry) []Item {
 	var out []Item
-	calls := map[string]string{} // tool call ID -> description
+	calls := map[string]string{}
 	for i, e := range entries {
-		n := i + 1
-		switch e.Type {
-		case TypeCompaction:
-			out = append(out, Item{N: n, Label: "compaction notes", Text: e.Notes})
-		case TypeBranchSummary:
-			out = append(out, Item{N: n, Label: "branch summary", Text: e.Summary})
-		case TypeBashExecution:
-			if b := e.Bash; b != nil {
-				out = append(out, Item{N: n, Label: "user shell", Text: "! " + b.Command + "\n" + b.Output})
-			}
-		case TypeMessage:
-			m := e.Message
-			if m == nil {
-				continue
-			}
-			switch m.Role {
-			case "user":
-				out = append(out, Item{N: n, Label: "user", Text: m.Content})
-			case "assistant":
-				var b strings.Builder
-				if m.ReasoningContent != "" {
-					b.WriteString("[thinking]\n" + strings.TrimSpace(m.ReasoningContent) + "\n")
-				}
-				if m.Content != "" {
-					b.WriteString(strings.TrimSpace(m.Content) + "\n")
-				}
-				for _, tc := range m.ToolCalls {
-					desc, cmd := toolCallText(tc.Function.Arguments)
-					calls[tc.ID] = desc
-					fmt.Fprintf(&b, "[%s] $ %s\n", desc, cmd)
-				}
-				out = append(out, Item{N: n, Label: "assistant", Text: strings.TrimSpace(b.String())})
-			case "tool":
-				label := "tool output"
-				if d := calls[m.ToolCallID]; d != "" {
-					label += ": " + d
-				}
-				out = append(out, Item{N: n, Label: label, Text: m.Content})
-			}
-		}
+		out = append(out, historyItems(e, i+1, calls)...)
 	}
 	active := OnActivePath(entries)
 	for i := range out {
 		out[i].OffBranch = !active[out[i].N-1]
+	}
+	return out
+}
+
+// VisitItems searches all branches without retaining their message strings.
+func VisitItems(path string, visit func(Item) error) error {
+	_, active, err := scanActive(path, true)
+	if err != nil {
+		return err
+	}
+	on := make(map[string]bool, len(active))
+	for _, n := range active {
+		on[n.ID] = true
+	}
+	calls := map[string]string{}
+	return Visit(path, func(n int, e Entry) error {
+		for _, it := range historyItems(e, n, calls) {
+			it.OffBranch = !on[e.ID]
+			if err := visit(it); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
+func historyItems(e Entry, n int, calls map[string]string) []Item {
+	var out []Item
+	switch e.Type {
+	case TypeCompaction:
+		out = append(out, Item{N: n, Label: "compaction notes", Text: e.Notes})
+	case TypeBranchSummary:
+		out = append(out, Item{N: n, Label: "branch summary", Text: e.Summary})
+	case TypeBashExecution:
+		if b := e.Bash; b != nil {
+			out = append(out, Item{N: n, Label: "user shell", Text: "! " + b.Command + "\n" + b.Output})
+		}
+	case TypeMessage:
+		m := e.Message
+		if m == nil {
+			return nil
+		}
+		switch m.Role {
+		case "user":
+			out = append(out, Item{N: n, Label: "user", Text: m.Content})
+		case "assistant":
+			var b strings.Builder
+			if m.ReasoningContent != "" {
+				b.WriteString("[thinking]\n" + strings.TrimSpace(m.ReasoningContent) + "\n")
+			}
+			if m.Content != "" {
+				b.WriteString(strings.TrimSpace(m.Content) + "\n")
+			}
+			for _, tc := range m.ToolCalls {
+				desc, cmd := toolCallText(tc.Function.Arguments)
+				calls[tc.ID] = desc
+				fmt.Fprintf(&b, "[%s] $ %s\n", desc, cmd)
+			}
+			out = append(out, Item{N: n, Label: "assistant", Text: strings.TrimSpace(b.String())})
+		case "tool":
+			label := "tool output"
+			if d := calls[m.ToolCallID]; d != "" {
+				label += ": " + d
+			}
+			out = append(out, Item{N: n, Label: label, Text: m.Content})
+		}
 	}
 	return out
 }

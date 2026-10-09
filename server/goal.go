@@ -54,6 +54,9 @@ func (t *thread) announceGoal(g *goal.Goal) {
 	}
 	c := *g
 	t.tr.Add(transcript.Item{Kind: transcript.GoalStatus, GoalState: &c})
+	if len(t.attached) == 0 {
+		t.tr.ForgetCompleted()
+	}
 	if g.Status == goal.Blocked {
 		msg := "The goal is blocked"
 		if g.Note != "" {

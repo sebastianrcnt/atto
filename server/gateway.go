@@ -117,10 +117,7 @@ func (s *Server) scopedCall(ctx context.Context, sc *Scope, method string, p thr
 			return err
 		})
 		if err == nil {
-			r := out.(struct {
-				ThreadInfo
-				Input string `json:"input"`
-			})
+			r := out.(rollbackResult)
 			r.Live = true
 			out = r
 			s.Switched(id, id) // the web client reads the branch again

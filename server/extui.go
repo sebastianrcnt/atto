@@ -102,6 +102,19 @@ func (h threadHost) block(ext, id string, change func(*transcript.BlockDisplay) 
 	h.do(func() {
 		t := h.t
 		b := t.blocks[id]
+		headless := len(t.attached) == 0
+		if headless {
+			b = t.headlessBlocks[id]
+			if b != nil {
+				b.disp = transcript.BlockDisplay{}
+				_ = session.VisitActive(t.sess.Path, func(e session.Entry) error {
+					if e.Type == session.TypeBlockDisplay && e.TargetID == b.entryID && e.Block == b.kind {
+						b.disp.Apply(transcript.Display{EntryID: e.TargetID, Block: e.Block, Ext: e.Ext, Status: e.Status, Text: e.Display})
+					}
+					return nil
+				})
+			}
+		}
 		if b == nil || !change(&b.disp) {
 			return
 		}
@@ -110,6 +123,9 @@ func (h threadHost) block(ext, id string, change func(*transcript.BlockDisplay) 
 			t.sess.Append(session.Entry{Type: session.TypeBlockDisplay, TargetID: b.entryID, Block: b.kind, Ext: ext, Status: status, Display: display})
 		}
 		t.publish("item/display", map[string]any{"itemId": b.item, "blockId": id, "display": WireDisplay(&b.disp)})
+		if headless {
+			b.disp = transcript.BlockDisplay{}
+		}
 	})
 }
 
@@ -130,6 +146,9 @@ func (h threadHost) SetSessionName(ext, name string) error {
 func (h threadHost) ShowText(ext, title, text string, o extensions.TextOptions) {
 	h.do(func() {
 		h.t.tr.Add(transcript.Item{Kind: transcript.ExtText, Ext: ext, Title: title, Text: text, Lang: o.Lang, Preview: o.Preview})
+		if len(h.t.attached) == 0 {
+			h.t.tr.ForgetCompleted()
+		}
 		h.t.sess.Append(session.Entry{Type: session.TypeExtText, Ext: ext, Title: title, Display: text, Lang: o.Lang, Preview: o.Preview})
 	})
 }

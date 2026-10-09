@@ -143,13 +143,18 @@ type wsConn struct {
 	mu      sync.Mutex // writes of notifications, replies and control frames
 }
 
-func (c *wsConn) frame(op byte, p []byte) error {
+func (c *wsConn) frame(op byte, p []byte) error { return c.frameFragment(op, p, true) }
+
+func (c *wsConn) frameFragment(op byte, p []byte, fin bool) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	_ = c.SetWriteDeadline(time.Now().Add(10 * time.Second))
 	defer c.SetWriteDeadline(time.Time{})
 	var h [10]byte
-	h[0] = 0x80 | op
+	h[0] = op
+	if fin {
+		h[0] |= 0x80
+	}
 	n := 2
 	switch {
 	case len(p) < 126:

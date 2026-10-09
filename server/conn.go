@@ -3,7 +3,6 @@ package server
 import (
 	"bufio"
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"strings"
@@ -23,6 +22,7 @@ type clientConn struct {
 	id          string
 	name        string
 	interactive bool
+	protocol    atomic.Int32
 }
 
 type clientKey struct{}
@@ -89,8 +89,10 @@ func (s *Server) ServeConn(ctx context.Context, rw io.ReadWriter) error {
 			continue
 		}
 		if resp := s.Handle(ctx, []byte(line)); resp != nil {
-			b, _ := json.Marshal(resp)
-			if write(b) != nil {
+			mu.Lock()
+			err := encodeJSON(rw, resp)
+			mu.Unlock()
+			if err != nil {
 				break
 			}
 		}
