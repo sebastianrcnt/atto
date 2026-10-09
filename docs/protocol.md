@@ -311,10 +311,24 @@ client, not every client's editor.
 | `timer/cancel` | T + `id` | `{}` |
 | `agent/list` | T | `{agents:[Agent]}`; direct children |
 | `agent/tree` | T | `{rootThreadId,agents:[Agent]}`; observational tree (up to 1,000 sessions), including descendants; Agent adds parentThreadId and absolute `/root/…` path |
-| `agent/read` | T + `name` (child name or `/root/…` address) | `{agent:Agent,message,items:[Item]}`; read-only transcript/report |
+| `agent/read` | T + `name` (name/path, `..`, or `@<session id>`) | `{agent:Agent,message,items:[Item]}`; read-only transcript/report |
 | `subagent/list` | T | `{agents,subagents}`; frozen web alias |
 | `subagent/read` | T + `name` | `{agent,subagent,message,items}`; frozen web alias |
 | `mcp/list` | T | `{servers:[ServerInfo]}`; configured MCP servers/status/tool counts |
+
+For `agent/read` and its `subagent/read` alias, a `name` beginning with `@`
+addresses the agent's **own** session (`Agent.threadId`), not its parent's.
+Accepts a full ID or a unique prefix of at least 6 characters. Resolution is
+limited to the tree rooted at `threadId`'s root: another tree's agent is
+indistinguishable from an unknown ID. Ambiguous prefixes return an invalid-params
+error listing matching candidates in that tree; too-short prefixes are rejected,
+and not-found errors suggest `atto agent list`. Closed/removed agents return a
+clear closed error; their archived transcripts remain readable through the
+existing session/thread transcript APIs. Name/path behavior and the alias's
+response fields are unchanged. `agent/list` and `agent/tree` already return
+`Agent.threadId`, usable as `@<threadId>`, and have no address parameter. The CLI's
+outside-caller, cross-tree `@ID` scope and `list -all` do not apply to these
+thread-scoped protocol methods.
 
 Live session listings include started/forked runtimes before their first message
 is saved, with `loaded` and `busy` state. Cwd filtering and archived listings do
