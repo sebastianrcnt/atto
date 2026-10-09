@@ -10,7 +10,7 @@ import (
 // files return an error and never expose a partially decoded value.
 func ReadJSON[T any](path string) (T, error) {
 	var value T
-	data, err := os.ReadFile(path)
+	data, err := ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return value, nil
 	}
