@@ -36,10 +36,14 @@ const (
 var ErrLocked = errors.New("session is running in the background")
 
 // LockPath is the lock file of the session at path.
-func LockPath(path string) string { return strings.TrimSuffix(path, ".jsonl") + ".lock" }
+func LockPath(path string) string {
+	return strings.TrimSuffix(strings.TrimSuffix(path, ".zst"), ".jsonl") + ".lock"
+}
 
 // LogPath is where a background run of the session at path logs.
-func LogPath(path string) string { return strings.TrimSuffix(path, ".jsonl") + ".bg.log" }
+func LogPath(path string) string {
+	return strings.TrimSuffix(strings.TrimSuffix(path, ".zst"), ".jsonl") + ".bg.log"
+}
 
 // heldLocks tracks compatible same-process acquisitions. Every release is
 // idempotent and refers to its own lease, so an old release cannot drop a

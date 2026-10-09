@@ -47,8 +47,9 @@ var summaryReads atomic.Int64
 // summaryNode is one entry, as much of it as a summary needs.
 type summaryNode struct {
 	ID, Parent string
-	Role       byte  // 'u' user message, 'a' assistant message with text, 't' assistant without text, 0 other
-	Off, Len   int64 // where its line starts, and its length
+	Role       byte   // 'u' user message, 'a' assistant message with text, 't' assistant without text, 0 other
+	Text       string // bounded text for a streaming compressed summary
+	Off, Len   int64  // where its line starts, and its length
 }
 
 // summaryState is the incremental parse of one file.
@@ -200,7 +201,7 @@ func cachedSummaryOf(path string, st os.FileInfo, agents bool) (Summary, error) 
 // that only the rest needs reading: it is not shorter, and the last line
 // read still ends where it did. A rewritten file is read from the start.
 func (s *summaryState) appendedTo(path string, st os.FileInfo) bool {
-	if s.Offset == 0 || st.Size() < s.Offset {
+	if strings.HasSuffix(path, ".zst") || s.Offset == 0 || st.Size() < s.Offset {
 		return false
 	}
 	f, err := os.Open(path)
@@ -221,11 +222,16 @@ func (s *summaryState) appendedTo(path string, st os.FileInfo) bool {
 // all that is read, as listings leave those out.
 func (s *summaryState) update(path string, st os.FileInfo, agents bool) error {
 	summaryReads.Add(1)
-	f, err := os.Open(path)
+	stream, err := Open(path)
 	if err != nil {
 		return err
 	}
-	defer f.Close()
+	defer stream.Close()
+	sr := stream.(*sessionReader)
+	if sr.decoder != nil {
+		return s.updateCompressed(path, st, stream, agents)
+	}
+	f := sr.file
 	if s.Offset == 0 {
 		h, n, err := readHeader(path, f)
 		if err != nil {
@@ -279,6 +285,51 @@ func (s *summaryState) update(path string, st os.FileInfo, agents bool) error {
 		return nil
 	}
 	s.summary = s.summarize(path, f)
+	return nil
+}
+
+// Compressed archives are immutable: cache by compressed path/mtime/size,
+// and stream once on a cache miss. Retain only bounded previews, not tool text
+// or the decompressed transcript, and stop after the header for hidden agents.
+func (s *summaryState) updateCompressed(path string, st os.FileInfo, stream io.Reader, agents bool) error {
+	*s = summaryState{Size: st.Size(), Modified: st.ModTime(), byID: map[string]int{}}
+	r := bufio.NewReaderSize(stream, 64*1024)
+	line, err := r.ReadBytes('\n')
+	if err != nil && err != io.EOF {
+		return err
+	}
+	if err := json.Unmarshal(line, &s.Header); err != nil {
+		return fmt.Errorf("%s: invalid session header: %w", path, err)
+	}
+	if s.Header.Type != TypeSession {
+		return fmt.Errorf("%s: not an atto session", path)
+	}
+	s.Updated = s.Header.Time
+	if s.Header.AgentOf != "" && !agents {
+		s.summary = s.summarize(path, nil)
+		return nil
+	}
+	for {
+		line, err = r.ReadBytes('\n')
+		if err != nil && err != io.EOF {
+			return err
+		}
+		if len(line) > 0 {
+			var l summaryLine
+			if json.Unmarshal(line, &l) == nil {
+				s.add(l, 0, 0)
+				n := &s.Nodes[len(s.Nodes)-1]
+				if n.Role == 'u' || n.Role == 'a' {
+					n.Text = messageText(line, n.Role == 'a')
+				}
+			}
+		}
+		if err == io.EOF {
+			break
+		}
+	}
+	s.complete = true
+	s.summary = s.summarize(path, nil)
 	return nil
 }
 
@@ -406,10 +457,17 @@ func (s *summaryState) summarize(path string, f *os.File) Summary {
 // (trimmed first with trim). The line is read once and only the start of
 // the text is decoded, so a huge message is not copied again.
 func messageTextAt(f *os.File, n summaryNode, trim bool) string {
+	if f == nil {
+		return n.Text
+	}
 	line := make([]byte, n.Len)
 	if _, err := f.ReadAt(line, n.Off); err != nil && err != io.EOF {
 		return ""
 	}
+	return messageText(line, trim)
+}
+
+func messageText(line []byte, trim bool) string {
 	d := jsontext.NewDecoder(bytes.NewBuffer(line)) // decoded in place, not copied
 	if !member(d, "message") || !member(d, "content") {
 		return ""

@@ -285,6 +285,10 @@ func (w *Writer) Leaf() string {
 }
 
 func (w *Writer) open() error {
+	if underRoot(w.Path, config.ArchivedDir()) || strings.HasSuffix(w.Path, ".zst") {
+		w.err = fmt.Errorf("archived sessions are read-only; unarchive first")
+		return w.err
+	}
 	if w.f != nil || w.err != nil {
 		return w.err
 	}
@@ -429,7 +433,7 @@ func (w *Writer) Close() {
 // Load reads a session file: the header and the entries after it.
 // A truncated last line (from a crash mid-write) is ignored.
 func Load(path string) (Entry, []Entry, error) {
-	f, err := os.Open(path)
+	f, err := Open(path)
 	if err != nil {
 		return Entry{}, nil, err
 	}
@@ -511,7 +515,10 @@ func list(cwd string, archived, agents bool) ([]Summary, error) {
 	}
 	seen := make(map[string]bool)
 	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
-		if err != nil || d.IsDir() || !strings.HasSuffix(path, ".jsonl") {
+		if err != nil || d.IsDir() || !IsSessionFile(path) {
+			return nil
+		}
+		if archived && archiveShadowed(path) {
 			return nil
 		}
 		seen[path] = true
@@ -574,58 +581,4 @@ func Latest(cwd string) (Summary, bool) {
 		}
 	}
 	return Summary{}, false
-}
-
-// Archive moves an active session file into the archive, keeping its
-// date layout. It returns the new path.
-func Archive(path string) (string, error) {
-	return move(path, config.SessionsDir(), config.ArchivedDir())
-}
-
-// Unarchive moves an archived session back. It returns the new path.
-func Unarchive(path string) (string, error) {
-	return move(path, config.ArchivedDir(), config.SessionsDir())
-}
-
-func move(path, fromRoot, toRoot string) (string, error) {
-	rel, err := filepath.Rel(fromRoot, path)
-	if err != nil || strings.HasPrefix(rel, "..") {
-		return "", fmt.Errorf("%s is not under %s", path, fromRoot)
-	}
-	release, err := Lock(path)
-	if err != nil {
-		return "", err
-	}
-	defer release()
-	dst := filepath.Join(toRoot, rel)
-	if err := fsutil.PrivateDirs(config.Dir(), filepath.Dir(dst)); err != nil {
-		return "", err
-	}
-	dstRelease, err := Lock(dst)
-	if err != nil {
-		return "", err
-	}
-	defer dstRelease()
-	if _, err := os.Stat(dst); err == nil {
-		return "", fmt.Errorf("session already exists at %s", dst)
-	} else if !os.IsNotExist(err) {
-		return "", err
-	}
-	movedLog := false
-	if err := os.Rename(LogPath(path), LogPath(dst)); err == nil {
-		movedLog = true
-	} else if !os.IsNotExist(err) {
-		return "", err
-	}
-	if err := os.Rename(path, dst); err != nil {
-		if movedLog {
-			_ = os.Rename(LogPath(dst), LogPath(path))
-		}
-		return "", err
-	}
-	// Destination has its own held lock; never replace its locked inode.
-	if err := os.Remove(LockPath(path)); err != nil && !os.IsNotExist(err) {
-		return dst, err
-	}
-	return dst, nil
 }

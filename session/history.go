@@ -24,11 +24,14 @@ func Find(id string) (string, error) {
 	prefix := map[string]string{} // full ID -> path
 	for _, root := range []string{config.SessionsDir(), config.ArchivedDir()} {
 		_ = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
-			if err != nil || d.IsDir() || !strings.HasSuffix(path, ".jsonl") {
+			if err != nil || d.IsDir() || !IsSessionFile(path) {
 				return nil
 			}
 			// Files are <YYYYMMDD-HHMMSS>-<id>.jsonl.
-			base := strings.TrimSuffix(d.Name(), ".jsonl")
+			if root == config.ArchivedDir() && archiveShadowed(path) {
+				return nil
+			}
+			base := strings.TrimSuffix(strings.TrimSuffix(d.Name(), ".zst"), ".jsonl")
 			_, full, ok := strings.CutLast(base, "-")
 			if !ok {
 				return nil
@@ -38,7 +41,9 @@ func Find(id string) (string, error) {
 				exact = path
 				return fs.SkipAll
 			case strings.HasPrefix(full, id):
-				prefix[full] = path
+				if _, exists := prefix[full]; !exists {
+					prefix[full] = path
+				}
 			}
 			return nil
 		})

@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"encoding/json"
 	"io"
-	"os"
 	"slices"
 	"strconv"
 
@@ -48,11 +47,11 @@ func ReadActive(path string) (ActiveFile, error) { return readActive(path, true)
 func ReadContext(path string) (ActiveFile, error) { return readActive(path, false) }
 
 func readActive(path string, display bool) (ActiveFile, error) {
-	f, err := os.Open(path)
+	f, cleanup, err := openSeekable(path)
 	if err != nil {
 		return ActiveFile{}, err
 	}
-	defer f.Close()
+	defer cleanup()
 	h, off, err := readHeader(path, f)
 	if err != nil {
 		return ActiveFile{}, err
