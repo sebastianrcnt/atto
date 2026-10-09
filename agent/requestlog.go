@@ -33,6 +33,7 @@ type requestLogEntry struct {
 	Attempt   int          `json:"attempt"`
 	Error     string       `json:"error,omitempty"`
 	WaitMs    int64        `json:"waitMs,omitempty"`
+	Note      string       `json:"note,omitempty"`
 	ElapsedMs int64        `json:"elapsedMs"` // since this attempt was sent
 	Conn      *ai.ConnInfo `json:"conn,omitempty"`
 }

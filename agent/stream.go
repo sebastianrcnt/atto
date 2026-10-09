@@ -2,6 +2,8 @@ package agent
 
 import (
 	"context"
+	"regexp"
+	"strings"
 	"time"
 
 	"github.com/sebastianrcnt/atto/ai"
@@ -20,7 +22,9 @@ type StreamRetry struct {
 // streamRetries is how many times a failed model request is sent again
 // within a turn before the turn fails (codex's stream_max_retries).
 // ai.IsPermanent failures are not retried; context pressure is compacted
-// once per turn instead.
+// once per turn instead. A server that answers the same 5xx with the same
+// message twice in a row is not asked a third time
+// (ai.RepeatedServerError).
 const streamRetries = 5
 
 // maxRetryWait caps a provider's Retry-After for these retries.
@@ -72,7 +76,10 @@ func (a *Agent) streamStep(ctx context.Context, emit func(any), compacted *bool)
 	var timing stepTiming
 	var drafts *draftTracker
 	var res provider.Result
-	var err error
+	var err, prev error // prev: the failure of the attempt before
+	var req provider.Request
+	repeated := false   // err repeats prev: the server will say it again
+	fromRequest := true // err is the request's failure (not a compaction's)
 	for attempt := 1; ; {
 		thinkStart, thinkEnd = time.Time{}, time.Time{}
 		var first time.Time // first streamed output of this attempt
@@ -106,7 +113,8 @@ func (a *Agent) streamStep(ctx context.Context, emit func(any), compacted *bool)
 				emit(TextDelta{s})
 			},
 		}
-		client, req := a.request()
+		var client provider.Streamer
+		client, req = a.request()
 		sent := time.Now()
 		tctx, trace := ai.WithConnTrace(ctx)
 		res, err = client.Stream(tctx, req, h)
@@ -125,6 +133,9 @@ func (a *Agent) streamStep(ctx context.Context, emit func(any), compacted *bool)
 				Attempt: attempt, WaitMs: wait.Milliseconds(), ElapsedMs: time.Since(sent).Milliseconds()}
 			if err != nil {
 				e.Error = err.Error()
+			}
+			if repeated {
+				e.Note = "the same error twice in a row; not retrying"
 			}
 			if c, ok := trace.Last(); ok {
 				e.Conn = &c
@@ -149,11 +160,14 @@ func (a *Agent) streamStep(ctx context.Context, emit func(any), compacted *bool)
 				if err == nil {
 					err = cerr
 				}
+				fromRequest = false
 				break
 			}
+			prev = nil
 			continue
 		}
-		if err == nil || ai.IsContextOverflow(err) || ai.IsPermanent(err) || attempt > streamRetries {
+		repeated = ai.RepeatedServerError(prev, err)
+		if err == nil || ai.IsContextOverflow(err) || ai.IsPermanent(err) || repeated || attempt > streamRetries {
 			switch {
 			case err != nil:
 				logReq(requestFailed, 0)
@@ -182,7 +196,11 @@ func (a *Agent) streamStep(ctx context.Context, emit func(any), compacted *bool)
 		if ai.IsConnectionError(err) {
 			ai.ResetConnections()
 		}
+		prev = err
 		attempt++
+	}
+	if err != nil && fromRequest && ctx.Err() == nil {
+		err = explainFailure(err, req, repeated)
 	}
 	var thinkMs int64
 	if !thinkStart.IsZero() {
@@ -192,6 +210,47 @@ func (a *Agent) streamStep(ctx context.Context, emit func(any), compacted *bool)
 		thinkMs = thinkEnd.Sub(thinkStart).Milliseconds()
 	}
 	return res, drafts, thinkMs, timing, err
+}
+
+// imageText marks a failure that is about the image the request carried.
+var imageText = regexp.MustCompile(`(?i)vision|image|encoder|mmproj`)
+
+// failure is err with what the user can do about it added to its message;
+// the error it wraps still answers errors.As and ai.StatusOf.
+type failure struct {
+	err  error
+	hint string
+}
+
+func (f *failure) Error() string { return f.err.Error() + " (" + f.hint + ")" }
+func (f *failure) Unwrap() error { return f.err }
+
+// explainFailure says in err's message what a retry of the turn would hit:
+// that the server gave the same answer twice and was not asked again, and,
+// when the request carried images and the failure is about them, that the
+// server could not process the image. The image is never dropped for the
+// user: the message stays in the conversation to be sent again.
+func explainFailure(err error, req provider.Request, repeated bool) error {
+	var hints []string
+	if repeated {
+		hints = append(hints, "the server gave the same error twice in a row, so atto did not try again")
+	}
+	if imageText.MatchString(err.Error()) && requestHasImages(req) {
+		hints = append(hints, "the server could not process the image; send the message again without it")
+	}
+	if len(hints) == 0 {
+		return err
+	}
+	return &failure{err: err, hint: strings.Join(hints, "; ")}
+}
+
+func requestHasImages(req provider.Request) bool {
+	for _, m := range req.Messages {
+		if len(m.Images) > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 // stepTiming splits a response's time: TTFT from sending the request to its

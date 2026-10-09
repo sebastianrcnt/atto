@@ -86,3 +86,19 @@ func TestRequestLogRecordsFailures(t *testing.T) {
 		t.Fatalf("log %+v", log)
 	}
 }
+
+// The same 5xx twice is logged as one retry, then the failure with a note
+// saying why the request was not sent again.
+func TestRequestLogRecordsRepeatedServerError(t *testing.T) {
+	noWait(t)
+	resetRequestLog(t)
+	srv, _ := scriptedServer(t, status(503, visionDown))
+	if err := newTestAgent(srv.URL).Run(context.Background(), "go", func(any) {}); err == nil {
+		t.Fatal("no error")
+	}
+	log := readRequestLog(t)
+	if len(log) != 2 || log[0].Event != requestRetry || log[0].Note != "" || log[1].Event != requestFailed ||
+		log[1].Attempt != 2 || !strings.Contains(log[1].Note, "same error twice") || !strings.Contains(log[1].Error, "strata-vision") {
+		t.Fatalf("log %+v", log)
+	}
+}

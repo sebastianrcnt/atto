@@ -104,10 +104,14 @@ func TestTurnDoesNotRetryPermanentFailures(t *testing.T) {
 // Retries stop after streamRetries, and the turn fails with the last error.
 func TestTurnRetriesAreBounded(t *testing.T) {
 	noWait(t)
-	srv, count := scriptedServer(t, status(500, "boom"))
+	var replies []func(http.ResponseWriter)
+	for i := range streamRetries + 1 {
+		replies = append(replies, status(500, fmt.Sprintf("boom %d", i)))
+	}
+	srv, count := scriptedServer(t, replies...)
 	a := newTestAgent(srv.URL)
 	err := a.Run(context.Background(), "go", func(any) {})
-	if err == nil || !strings.Contains(err.Error(), "boom") || count() != streamRetries+1 {
+	if err == nil || !strings.Contains(err.Error(), fmt.Sprintf("boom %d", streamRetries)) || count() != streamRetries+1 {
 		t.Fatalf("err %v after %d requests", err, count())
 	}
 }
