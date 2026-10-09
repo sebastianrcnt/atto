@@ -14,7 +14,9 @@ import (
 // happen again, as codex does (CodexErr::retry_delay): an unknown error, a
 // stream cut off mid-reply or a 5xx passes by itself more often than not,
 // and a retry costs little next to a turn (or a goal) that stops for it.
-// IsPermanent names what is not retried; everything else is.
+// IsPermanent names what is not retried; everything else is. A 5xx that
+// answers the same thing twice is the exception on the other side: see
+// RepeatedServerError.
 
 // usageLimit matches the errors that mean the account's usage or quota is
 // used up, as opposed to a rate limit that passes.
@@ -44,12 +46,6 @@ func IsContextOverflow(err error) bool {
 		strings.Contains(s, "maximum") || strings.Contains(s, "no room"))
 }
 
-// permanentText marks a request the provider rejected for what it is (a
-// bad parameter, an unsupported feature, a refused content), so sending it
-// again fails the same way. Only checked under a 400-class status: some
-// gateways answer a passing outage with a 400 too.
-var permanentText = regexp.MustCompile(`(?i)invalid|must (be|not|have)|required|not supported|unsupported|unknown (parameter|field|model)|unrecognized|malformed|schema|does not exist|not found|not allowed`)
-
 // policyText marks a reply refused by the provider's content policy.
 var policyText = regexp.MustCompile(`(?i)content.?(filter|policy|management)|safety (system|policy)|flagged`)
 
@@ -61,11 +57,20 @@ var passingText = regexp.MustCompile(`(?i)unavailable|overloaded|gateway|time-?d
 // help, though the provider did not refuse anything.
 var ErrNotRetryable = errors.New("retrying will not help")
 
+// clientError reports whether st is a 4xx that says the request itself is
+// wrong, as opposed to the ones that pass: a timeout (408), a conflict
+// (409), too early (425) and a rate limit (429).
+func clientError(st int) bool {
+	return st >= 400 && st < 500 && st != 408 && st != 409 && st != 425 && st != 429
+}
+
 // IsPermanent reports whether sending the request again would fail the
 // same way: an interrupt, a usage limit, a context overflow (compact
 // instead), an authentication or permission failure, a missing model or
-// endpoint, a request the provider rejected for its content or a content
-// policy refusal.
+// endpoint, a request the provider rejected for its content, a content
+// policy refusal or any other 4xx but 408, 409, 425 and 429. Only a 4xx
+// whose message says it passes (a gateway's outage under a 400, say) is
+// retried.
 func IsPermanent(err error) bool {
 	switch {
 	case err == nil:
@@ -80,13 +85,31 @@ func IsPermanent(err error) bool {
 	switch st := StatusOf(err); {
 	case st == 401 || st == 402 || st == 403 || st == 404 || st == 405 || st == 413:
 		return true
-	case st == 422:
+	case clientError(st):
 		return !passingText.MatchString(err.Error())
-	case st == 400:
-		msg := err.Error()
-		return permanentText.MatchString(msg) && !passingText.MatchString(msg)
 	}
 	return false
+}
+
+// genericText marks a 5xx body that says nothing about the cause.
+var genericText = regexp.MustCompile(`(?i)internal (server )?error|server error|unknown error|something went wrong`)
+
+// RepeatedServerError reports whether err is the same 5xx answer as prev,
+// the failure before it, and one that says something: the server gave the
+// same reason twice, so a third request would hear it again. A 5xx without
+// a message, a generic one or one that says it is overloaded or
+// unavailable passes by itself and is not repeated in this sense.
+func RepeatedServerError(prev, err error) bool {
+	a, ok := errors.AsType[*ProviderError](prev)
+	if !ok {
+		return false
+	}
+	b, ok := errors.AsType[*ProviderError](err)
+	if !ok || a.Status < 500 || a.Status != b.Status {
+		return false
+	}
+	x, y := strings.Join(strings.Fields(a.Body), " "), strings.Join(strings.Fields(b.Body), " ")
+	return x != "" && x == y && !passingText.MatchString(x) && !genericText.MatchString(x)
 }
 
 // statusText is the status atto's error messages start with ("503: ...",
