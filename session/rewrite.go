@@ -58,6 +58,11 @@ func RewriteHeader(path string, edit func(*Entry)) error {
 		tmp.Close()
 		return err
 	}
+	// Windows cannot replace a file that is still open.
+	if err := src.Close(); err != nil {
+		tmp.Close()
+		return err
+	}
 	if err := tmp.Sync(); err != nil {
 		tmp.Close()
 		return err

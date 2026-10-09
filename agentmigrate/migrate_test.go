@@ -195,13 +195,13 @@ func TestMigrateEveryLegacyShape(t *testing.T) {
 		}
 	}
 	// Per-spawn parents gave two roots the same name; both are addressable by ID.
-	if x, _ := agentstate.Load("xxxx0001"); x.Project != "/proj" {
+	if x, _ := agentstate.Load("xxxx0001"); x.Project != filepath.Clean("/proj") {
 		t.Fatalf("project: %+v", x)
 	}
-	if _, err := agentstate.ResolveOutside("/proj", "panes"); err == nil || !strings.Contains(err.Error(), "2 agents named panes") {
+	if _, err := agentstate.ResolveOutside(filepath.Clean("/proj"), "panes"); err == nil || !strings.Contains(err.Error(), "2 agents named panes") {
 		t.Fatalf("duplicate roots: %v", err)
 	}
-	if tg, err := agentstate.ResolveOutside("/shared", "s1"); err != nil || tg.Session != "ssss0001" {
+	if tg, err := agentstate.ResolveOutside(filepath.Clean("/shared"), "s1"); err != nil || tg.Session != "ssss0001" {
 		t.Fatalf("shared parent's agent: %+v %v", tg, err)
 	}
 	// Headers of children carry the metadata and keep agentOf.
