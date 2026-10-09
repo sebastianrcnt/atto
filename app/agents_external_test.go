@@ -71,7 +71,7 @@ func TestCenterFreshExternalParentsAndArchivedAgentsShareOneHeading(t *testing.T
 	c := &agentCenter{}
 	inventory := func() centerSnapshot {
 		snapshot := scanCenter()
-		snapshot.panes, snapshot.workers = nil, nil
+		snapshot.workers = nil
 		return snapshot
 	}
 	check := func(archived bool) {
