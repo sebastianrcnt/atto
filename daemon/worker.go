@@ -301,24 +301,39 @@ func workerSocketLocation() (string, string) {
 	return dir, fmt.Sprintf("%x-", h[:4])
 }
 
-func cleanWorkerSockets() {
+// workerSocketLocations are all the places workerSocket puts sockets of this
+// ATTO_DIR: beside the daemon's, and in the private temp directory, which a
+// worker's longer path may need although the daemon's own fits.
+func workerSocketLocations() [][2]string {
 	dir, prefix := workerSocketLocation()
-	paths, _ := filepath.Glob(filepath.Join(dir, prefix+"w-*.sock"))
-	for _, path := range paths {
-		st, err := os.Lstat(path)
-		if err != nil || st.Mode()&os.ModeSocket == 0 {
-			continue
-		}
-		c, err := trustedDial(path)
-		if err == nil {
-			c.Close()
-			continue
-		}
-		if staleSocket(err) {
-			removeSocket(path)
-		}
+	h := sha256.Sum256([]byte(config.Dir()))
+	temp := [2]string{filepath.Join(tempSocketBase(), privateTempName()), fmt.Sprintf("%x-", h[:4])}
+	if temp[0] == dir {
+		return [][2]string{{dir, prefix}}
 	}
-	cleanOrphanTokens(dir, prefix)
+	return [][2]string{{dir, prefix}, temp}
+}
+
+func cleanWorkerSockets() {
+	for _, loc := range workerSocketLocations() {
+		dir, prefix := loc[0], loc[1]
+		paths, _ := filepath.Glob(filepath.Join(dir, prefix+"w-*.sock"))
+		for _, path := range paths {
+			st, err := os.Lstat(path)
+			if err != nil || st.Mode()&os.ModeSocket == 0 {
+				continue
+			}
+			c, err := trustedDial(path)
+			if err == nil {
+				c.Close()
+				continue
+			}
+			if staleSocket(err) {
+				removeSocket(path)
+			}
+		}
+		cleanOrphanTokens(dir, prefix)
+	}
 }
 
 // StartWorker asks the daemon (started if need be) for the worker of
