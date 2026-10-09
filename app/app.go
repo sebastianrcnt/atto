@@ -23,6 +23,7 @@ import (
 	"github.com/sebastianrcnt/atto/server"
 	"github.com/sebastianrcnt/atto/session"
 	"github.com/sebastianrcnt/atto/tui"
+	"github.com/sebastianrcnt/atto/ui"
 	"github.com/sebastianrcnt/atto/update"
 )
 
@@ -45,8 +46,12 @@ type modal interface {
 }
 
 type App struct {
-	ui     *tui.TUI
-	models config.ModelsFile
+	elements    map[ui.Match]*tui.Elements
+	uiBlocks    map[string]*tui.Elements
+	focusedSite *tui.Elements
+	paneTab     int
+	ui          *tui.TUI
+	models      config.ModelsFile
 
 	// conn is the connection to the session runtime; threadID the thread
 	// this terminal shows and info its state as the runtime last said.
@@ -402,7 +407,7 @@ func (a *App) build() {
 
 	// The command list sits above the input, as in Claude Code, so the
 	// input and the status line keep their place as it opens and closes.
-	a.ui.Footer.Add(tui.Func(a.renderActivity), tui.Func(a.renderPending), jumpPill{a}, tui.Func(a.renderReadOnly), tui.Func(a.renderWidgets), tui.Func(a.renderSuggestions), tui.Func(a.renderInput), tui.Func(a.renderStatus))
+	a.ui.Footer.Add(tui.Func(a.renderActivity), tui.Func(a.renderPending), jumpPill{a}, tui.Func(a.renderReadOnly), tui.Func(a.renderWidgets), tui.Func(a.renderPortable), tui.Func(a.renderSuggestions), tui.Func(a.renderInput), tui.Func(a.renderStatus), tui.Func(a.renderUIStatus))
 	a.ui.SetFocus(a.editor)
 	a.ui.OnInput = a.onInput
 	a.ui.OnCopy = a.copySelection
@@ -494,6 +499,16 @@ func (a *App) doQuit() { a.quitOnce.Do(func() { close(a.quit) }) }
 // --- input ---
 
 func (a *App) onInput(data string) bool {
+	if a.focusedSite != nil {
+		if tui.Key(data) == "escape" {
+			a.focusedSite.HandleInput(data)
+			return true
+		}
+		return false
+	}
+	if tui.Key(data) == "tab" && a.modal == nil && a.editor.Text() == "" && a.focusFirstUI() {
+		return true
+	}
 	if a.modal != nil {
 		return false // the focused modal handles everything
 	}

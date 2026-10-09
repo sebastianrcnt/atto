@@ -65,6 +65,10 @@ type TUI struct {
 	// Screen, if set, takes the whole screen in fullscreen mode instead of
 	// the body and footer (input still goes to the focused component).
 	Screen Screen
+	// Side is a client-owned dock; narrow terminals render it above the prompt.
+	Side        Component
+	SideColumns int
+	sideLeft    int
 
 	// Pin, if set, may return a line to pin over the first visible body row
 	// in fullscreen mode, given the index of the first visible body line —
@@ -704,6 +708,13 @@ func (t *TUI) doRenderFullscreen() {
 		return
 	}
 	inner := t.fullscreenWidth(width)
+	dockWidth := 0
+	t.sideLeft = 0
+	if t.Side != nil && width >= 120 && width-max(32, t.SideColumns)-1-2*t.PaddingX >= 72 {
+		dockWidth = max(32, t.SideColumns)
+		inner -= dockWidth + 1
+		t.sideLeft = width - dockWidth
+	}
 	anchor, anchored := t.anchorBefore()
 	body := t.padBody(t.Body.Render(inner))
 
@@ -767,8 +778,20 @@ func (t *TUI) doRenderFullscreen() {
 	for len(frame) < avail+2*gap {
 		frame = append(frame, "")
 	}
-	t.decorate(frame, gap, start, end-start, len(body), width)
+	t.decorate(frame, gap, start, end-start, len(body), width-dockWidth)
 	frame = append(frame, footer...)
+	if dockWidth > 0 {
+		dock := t.Side.Render(dockWidth)
+		for i := range frame {
+			left := Truncate(frame[i], t.sideLeft-1, "")
+			left += strings.Repeat(" ", max(0, t.sideLeft-1-VisibleWidth(left)))
+			right := ""
+			if i < len(dock) {
+				right = dock[i]
+			}
+			frame[i] = left + Dim("│") + Truncate(right, dockWidth, "")
+		}
+	}
 	lines, cur := t.prepareLines(frame, width, height)
 	t.writeFrame(lines, cur, width, height)
 }
@@ -809,3 +832,6 @@ func (t *TUI) writeFrame(lines []string, cur *cursorPos, width, height int) {
 		t.term.Write(syncBegin + b.String() + syncEnd)
 	}
 }
+
+// Size returns logical terminal dimensions. Call under the UI lock.
+func (t *TUI) Size() (int, int) { return t.term.Size() }

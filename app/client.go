@@ -13,6 +13,7 @@ import (
 	"github.com/sebastianrcnt/atto/provider"
 	"github.com/sebastianrcnt/atto/server"
 	"github.com/sebastianrcnt/atto/tui"
+	"github.com/sebastianrcnt/atto/ui"
 )
 
 // The TUI is a client of atto's session runtime (package server): it
@@ -57,7 +58,7 @@ func dialConn(c *server.Client, own *server.Server) (*conn, error) {
 	err := c.Call(context.Background(), "initialize", map[string]any{
 		"protocolVersions": []int{server.ProtocolVersion},
 		"clientInfo":       map[string]string{"name": "atto-tui", "version": Version},
-		"capabilities":     map[string]bool{"interactive": true, "images": true},
+		"capabilities":     server.Capabilities{Interactive: true, Images: true, UI: &ui.Capabilities{Version: 1, Surface: "terminal", Elements: ui.Catalog()}},
 	}, &init)
 	if err != nil {
 		c.Close()

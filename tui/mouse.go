@@ -142,6 +142,12 @@ func (t *TUI) clock() time.Time {
 // exception: its components are buttons and act at once.
 func (t *TUI) press(x, y int) {
 	row := y - 1
+	if t.Side != nil && t.sideLeft > 0 && x > t.sideLeft {
+		if c, ok := t.Side.(Clickable); ok {
+			c.Click(row)
+		}
+		return
+	}
 	if row >= t.footerTop {
 		t.sel = selection{}
 		t.mouse.down = false

@@ -80,6 +80,8 @@ func (a *App) onNotification(n server.Notification) {
 		a.lastEvent = a.clock()
 	}
 	switch n.Method {
+	case "ui/open", "ui/render", "ui/close":
+		a.uiNotification(n)
 	case "item/started":
 		if p.Item != nil {
 			a.wireStarted(*p.Item)
@@ -208,6 +210,8 @@ func (a *App) applySnapshot(info server.ThreadInfo) {
 	a.addHeader()
 	a.resetItems()
 	a.setInfo(info)
+	a.uiBlocks = nil
+	a.applyUI(info.UI)
 	a.snapEvent = info.EventID
 	a.busy, a.runKind = info.Busy, info.RunKind
 	a.pending = server.PendingInput{}
@@ -240,6 +244,10 @@ func (a *App) applySnapshot(info server.ThreadInfo) {
 
 // wireStarted shows an item that started.
 func (a *App) wireStarted(w server.Item) {
+	if w.Type == server.ItemUIBlock {
+		a.portableBlock(w)
+		return
+	}
 	if w.Type == server.ItemNotice {
 		a.noticeItem(w)
 		return
@@ -313,6 +321,10 @@ func (a *App) wireDelta(id, d string) {
 }
 
 func (a *App) wireUpdated(w server.Item) {
+	if w.Type == server.ItemUIBlock {
+		a.portableBlock(w)
+		return
+	}
 	it := server.TranscriptItem(w)
 	if it.Kind == transcript.Tool && it.Pending {
 		a.draftChars[w.ID] = len(it.Command) + len(it.Description)
