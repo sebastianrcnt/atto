@@ -539,3 +539,36 @@ checks real headless Chrome at 1400×900, 1024×768 and 390×844 in both themes,
 including local-model turns, shared diff/dialog/context trees, image drafts and
 gateway reconnect. Physical touch keyboards and LAN access remain manual QA.
 See docs/ui-stage-4-report.md for verification and screenshot paths.
+
+### Incremental browser rendering (2026-10-10)
+
+The browser keeps one layout/sidebar/topbar/tabs shell and a detached, persistent
+thread view for every open tab. Each thread owns its transcript scroller,
+composer area/form and one textarea. Small metadata input tuples invalidate
+individual regions (pane, band, queue, suggestions, activity, attachments,
+toolbar, status, toasts and dialogs); transcript text is not part of those
+inputs. Inventory refreshes compare results, and thread inventory versions
+exclude deltas. Sidebar and per-thread scroller offsets survive region updates
+and tab detachment/reattachment.
+
+Transcript rows are keyed by thread ID + item ID. Views accumulate dirty item
+IDs until the next animation frame: full item events replace only that row,
+while deltas replace only the children of its native Markdown/output container.
+Rows and disclosures stay attached during deltas. Older pages insert before
+existing rows and restore the scroll-height anchor; live updates follow the
+tail only when the reader was already near it. Snapshot-only comparisons retain
+identical loaded rows across rehydration; reset generations still invalidate
+in-flight pages. Item/site caches are pruned when pages/sites/tabs disappear.
+
+Shared site trees are cached by thread/site/id/rev. Connectivity changes update
+control enablement and the callback gate without drawing the tree again; native
+engine references can update within a cached drawing. Existing local drafts,
+disclosures and revision-bound callbacks remain authoritative. The textarea is
+never replaced within a thread view: ordinary typing still schedules no paint
+(except changing slash suggestions), and all paints still wait for an IME
+composition to end. Initial/resize sizing is measured after DOM attachment;
+subsequent editor growth happens only on input, draft-value changes or resize.
+
+No framework, HTML parsing, new runtime dependency, CSP change or protocol
+change accompanies this renderer. The bounded `atto-paint` performance entries
+and the external CDP measurement procedure are documented in the stage-4 report.
