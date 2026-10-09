@@ -7,6 +7,30 @@ import (
 	"time"
 )
 
+func TestPendingReaderWait(t *testing.T) {
+	r, w := io.Pipe()
+	p := &pendingReader{r: r}
+	if !p.wait(0) {
+		t.Fatal("an unused reader should be idle")
+	}
+	got := make(chan struct{})
+	go func() {
+		p.Read(make([]byte, 8))
+		close(got)
+	}()
+	for i := 0; i < 1000 && p.wait(0); i++ {
+		time.Sleep(time.Millisecond)
+	}
+	if p.wait(10 * time.Millisecond) {
+		t.Fatal("a blocked Read should not be idle")
+	}
+	w.Close()
+	<-got
+	if !p.wait(time.Second) {
+		t.Fatal("a returned Read should be idle")
+	}
+}
+
 func TestReadInputDisambiguatesEscapeWithoutAnotherRead(t *testing.T) {
 	r, w := io.Pipe()
 	defer r.Close()

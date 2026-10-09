@@ -30,6 +30,7 @@ type ProcessTerminal struct {
 	oldState *term.State
 	console  consoleState // platform console modes to restore (Windows)
 	done     chan struct{}
+	reader   *pendingReader
 	wg       sync.WaitGroup
 	mu       sync.Mutex // serializes writes
 }
@@ -75,10 +76,57 @@ func (t *ProcessTerminal) Start(onInput func(string), onResize func()) error {
 	})
 
 	// The read loop is not joined on Stop: a blocking read on stdin cannot be
-	// interrupted portably, and the process exits shortly after anyway.
-	go readInput(t.in, t.done, runtime.GOOS == "windows", onInput)
+	// interrupted portably, and the process exits shortly after anyway. On
+	// Windows Stop does interrupt it (see releaseInput), because a process
+	// started afterwards on this console would otherwise lose its first keys
+	// to the read still pending here.
+	t.reader = &pendingReader{r: t.in}
+	go readInput(t.reader, t.done, runtime.GOOS == "windows", onInput)
 
 	return nil
+}
+
+// pendingReader records whether a Read is blocked in the underlying reader.
+type pendingReader struct {
+	r       io.Reader
+	mu      sync.Mutex
+	reading bool
+	idle    chan struct{} // closed when the blocked Read returns
+}
+
+func (p *pendingReader) Read(b []byte) (int, error) {
+	p.mu.Lock()
+	p.reading = true
+	p.mu.Unlock()
+	n, err := p.r.Read(b)
+	p.mu.Lock()
+	p.reading = false
+	if p.idle != nil {
+		close(p.idle)
+		p.idle = nil
+	}
+	p.mu.Unlock()
+	return n, err
+}
+
+// wait reports whether no Read is blocked, waiting at most d for it.
+func (p *pendingReader) wait(d time.Duration) bool {
+	p.mu.Lock()
+	if !p.reading {
+		p.mu.Unlock()
+		return true
+	}
+	if p.idle == nil {
+		p.idle = make(chan struct{})
+	}
+	idle := p.idle
+	p.mu.Unlock()
+	select {
+	case <-idle:
+		return true
+	case <-time.After(d):
+		return false
+	}
 }
 
 // readInput owns the parser while a separate reader may block on stdin.
@@ -148,6 +196,7 @@ func (t *ProcessTerminal) Stop() {
 	}
 	close(t.done)
 	t.wg.Wait()
+	t.releaseInput()
 	t.Write("\x1b[0m" + keyboardOff + "\x1b[?2004l\x1b[?25h") // plain text, plain keys, no paste mode, cursor on
 	_ = term.Restore(int(t.in.Fd()), t.oldState)
 	restoreVT(t.console)
