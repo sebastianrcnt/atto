@@ -3,6 +3,7 @@ package session
 import (
 	"bufio"
 	"encoding/json"
+	"fmt"
 	"io"
 	"slices"
 	"strconv"
@@ -46,18 +47,47 @@ func ReadActive(path string) (ActiveFile, error) { return readActive(path, true)
 // compaction, which only transcript display needs.
 func ReadContext(path string) (ActiveFile, error) { return readActive(path, false) }
 
+// VisitActive replays the active branch one entry at a time. It retains only
+// the lightweight tree index, not the message strings preceding compaction.
+// Returning an error from visit stops the scan immediately.
+func VisitActive(path string, visit func(Entry) error) error {
+	_, nodes, err := scanActive(path, true)
+	if err != nil {
+		return err
+	}
+	return visitSelected(path, nodes, visit)
+}
+
 func readActive(path string, display bool) (ActiveFile, error) {
-	f, cleanup, err := openSeekable(path)
+	out, nodes, err := scanActive(path, display)
 	if err != nil {
 		return ActiveFile{}, err
 	}
-	defer cleanup()
-	h, off, err := readHeader(path, f)
+	out.Entries, err = readSelected(path, nodes)
+	return out, err
+}
+
+func scanActive(path string, display bool) (ActiveFile, []summaryNode, error) {
+	f, err := Open(path)
 	if err != nil {
-		return ActiveFile{}, err
+		return ActiveFile{}, nil, err
 	}
-	if _, err := f.Seek(off, io.SeekStart); err != nil {
-		return ActiveFile{}, err
+	defer f.Close()
+	r := bufio.NewReaderSize(f, 64*1024)
+	line, err := readStreamLine(r)
+	var h Entry
+	if len(line) == 0 {
+		return ActiveFile{}, nil, fmt.Errorf("%s: missing session header", path)
+	}
+	if parseErr := json.Unmarshal(line, &h); parseErr != nil {
+		return ActiveFile{}, nil, fmt.Errorf("%s: invalid session header: %w", path, parseErr)
+	}
+	if h.Type != TypeSession {
+		return ActiveFile{}, nil, fmt.Errorf("%s: not an atto session", path)
+	}
+	off := int64(len(line))
+	if err != nil && err != io.EOF {
+		return ActiveFile{}, nil, err
 	}
 	out := ActiveFile{Header: h}
 	stateIndexes := map[string]int{}
@@ -65,11 +95,10 @@ func readActive(path string, display bool) (ActiveFile, error) {
 	var nodes []summaryNode
 	var compactions []bool
 	byID := map[string]int{}
-	r := bufio.NewReaderSize(f, 64*1024)
 	for {
-		line, err := readLineAt(f, r, off)
+		line, err := readStreamLine(r)
 		if err != nil && err != io.EOF {
-			return ActiveFile{}, err
+			return ActiveFile{}, nil, err
 		}
 		if len(line) != 0 {
 			var l activeLine
@@ -127,7 +156,7 @@ func readActive(path string, display bool) (ActiveFile, error) {
 		}
 	}
 	if len(nodes) == 0 {
-		return out, nil
+		return out, nil, nil
 	}
 	var reverse []int
 	seen := map[string]bool{}
@@ -155,20 +184,13 @@ func readActive(path string, display bool) (ActiveFile, error) {
 			}
 		}
 	}
+	// Decode only selected entries. Plain files use offsets; compressed files
+	// make a second streaming pass, never a decompressed temporary copy.
+	selected := make([]summaryNode, 0, start+1)
 	for j := start; j >= 0; j-- {
-		n := nodes[reverse[j]]
-		line := make([]byte, n.Len)
-		if _, err := f.ReadAt(line, n.Off); err != nil && err != io.EOF {
-			return ActiveFile{}, err
-		}
-		var e Entry
-		if err := json.Unmarshal(line, &e); err != nil {
-			continue
-		}
-		e.ID, e.Parent = n.ID, n.Parent
-		out.Entries = append(out.Entries, e)
+		selected = append(selected, nodes[reverse[j]])
 	}
-	return out, nil
+	return out, selected, nil
 }
 
 // Context is the part of an active branch the agent needs to restore: its

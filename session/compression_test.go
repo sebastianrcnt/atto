@@ -481,3 +481,38 @@ func TestArchiveRestoreWithOpenReaders(t *testing.T) {
 		t.Fatal("archive reader interrupted", err)
 	}
 }
+
+func TestCompressedActiveStreamingWithoutTemporaryFile(t *testing.T) {
+	t.Setenv("ATTO_DIR", t.TempDir())
+	w := compressionSession(t, false)
+	w = Resume(w.Path, Entry{ID: w.ID})
+	w.Append(Entry{Type: TypeCompaction, Notes: "notes", Replacement: []provider.Message{{Role: "user", Content: "notes"}}})
+	w.Append(smsg("assistant", "current answer"))
+	w.Close()
+	want, err := ReadActive(w.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dst, err := Archive(w.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A non-existent temp directory makes the old archive spooling path fail.
+	t.Setenv("TMPDIR", filepath.Join(t.TempDir(), "must-not-create"))
+	t.Setenv("TMP", os.Getenv("TMPDIR"))
+	t.Setenv("TEMP", os.Getenv("TMPDIR"))
+	var entries []Entry
+	if err := VisitActive(dst, func(e Entry) error { entries = append(entries, e); return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(entries, want.Entries) {
+		t.Fatal("streamed archived path changed")
+	}
+	context, err := ReadContext(dst)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(context.Entries, Context(want.Entries)) {
+		t.Fatal("streamed context changed")
+	}
+}

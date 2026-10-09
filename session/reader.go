@@ -48,31 +48,18 @@ func (r *sessionReader) Close() error {
 	return r.file.Close()
 }
 
-// openSeekable is used by the offset-based active-branch reader. Compressed
-// transcripts are spooled to a private temporary file, not held in memory.
-// Listing uses a streaming summary instead and never needs this spool.
-func openSeekable(path string) (*os.File, func(), error) {
-	r, err := Open(path)
-	if err != nil {
-		return nil, nil, err
+// readStreamLine returns one JSONL entry. Most lines borrow the reader's
+// buffer; exceptionally long entries allocate only their own bytes, never the
+// rest of the transcript. It works identically for plain and zstd streams.
+func readStreamLine(r *bufio.Reader) ([]byte, error) {
+	line, err := r.ReadSlice('\n')
+	if err != bufio.ErrBufferFull {
+		return line, err
 	}
-	sr := r.(*sessionReader)
-	if sr.decoder == nil {
-		return sr.file, func() { _ = r.Close() }, nil
+	out := append([]byte(nil), line...)
+	for err == bufio.ErrBufferFull {
+		line, err = r.ReadSlice('\n')
+		out = append(out, line...)
 	}
-	defer r.Close()
-	f, err := os.CreateTemp("", "atto-transcript-*")
-	if err != nil {
-		return nil, nil, err
-	}
-	cleanup := func() { _ = f.Close(); _ = os.Remove(f.Name()) }
-	if _, err := io.Copy(f, r); err != nil {
-		cleanup()
-		return nil, nil, err
-	}
-	if _, err := f.Seek(0, io.SeekStart); err != nil {
-		cleanup()
-		return nil, nil, err
-	}
-	return f, cleanup, nil
+	return out, err
 }
