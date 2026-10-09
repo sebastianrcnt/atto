@@ -203,7 +203,7 @@ func TestLoadedBlockConfigDedupeHomeProject(t *testing.T) {
 			configRow = tui.StripEscapes(line)
 		}
 	}
-	if strings.Count(configRow, "~/.atto/settings.json") != 1 {
+	if strings.Count(configRow, filepath.Join("~", ".atto", "settings.json")) != 1 {
 		t.Fatalf("duplicate Config settings: %s", configRow)
 	}
 	// Verify this really used the same user and project file.

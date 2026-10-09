@@ -22,6 +22,10 @@ func treeIDs(items []centerItem) []string {
 	return ids
 }
 
+// shellHeading is the ID of the heading over the agents started from a shell
+// in project, a slash-separated path as the fixtures write it.
+func shellHeading(project string) string { return "shell:" + filepath.FromSlash(project) }
+
 func smallCenter() *agentCenter {
 	c := &agentCenter{flat: true, onClose: func() {}}
 	c.applyFixture(centerSnapshot{
@@ -46,7 +50,7 @@ func smallCenter() *agentCenter {
 func TestCenterTree(t *testing.T) {
 	c := smallCenter()
 	tree := c.shown()
-	want := []string{"root", "tests", "lint", "docs", "shell:/shell", "check", "orphan"}
+	want := []string{"root", "tests", "lint", "docs", shellHeading("/shell"), "check", "orphan"}
 	if got := treeIDs(tree); !reflect.DeepEqual(got, want) {
 		t.Fatalf("tree %v", got)
 	}
@@ -63,7 +67,7 @@ func TestCenterTree(t *testing.T) {
 		{0, "", "/root/orphan", "/other"},
 	} {
 		it := tree[i]
-		if it.depth != want.depth || it.prefix != want.prefix || it.agentPath != want.path || it.project != want.project {
+		if it.depth != want.depth || it.prefix != want.prefix || it.agentPath != want.path || filepath.ToSlash(it.project) != want.project {
 			t.Fatalf("row %d: %+v", i, it)
 		}
 	}
@@ -80,7 +84,7 @@ func TestCenterTree(t *testing.T) {
 func TestCenterFoldAndFilter(t *testing.T) {
 	c := smallCenter()
 	c.HandleInput(" ")
-	if got := treeIDs(c.shown()); !reflect.DeepEqual(got, []string{"root", "shell:/shell", "check", "orphan"}) {
+	if got := treeIDs(c.shown()); !reflect.DeepEqual(got, []string{"root", shellHeading("/shell"), "check", "orphan"}) {
 		t.Fatalf("fold %v", got)
 	}
 	// Refresh keeps folds and selection, and tabs reveal working descendants.
@@ -240,7 +244,7 @@ func TestCenterScanIncludesShellNestedAndClosedAgents(t *testing.T) {
 	c := &agentCenter{}
 	c.reload()
 	sh := c.shown()
-	heading := "shell:/project"
+	heading := shellHeading("/project")
 	if got := treeIDs(sh); !reflect.DeepEqual(got, []string{heading, root.ID, nested.ID}) {
 		t.Fatalf("inventory %v", got)
 	}

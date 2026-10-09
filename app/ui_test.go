@@ -78,7 +78,12 @@ func TestPortableJobsPaneStop(t *testing.T) {
 		t.Fatal(err)
 	}
 	typeLine(a, "/jobs")
-	within(t, a, "jobs pane", func() bool { return a.elements[ui.Match{Site: ui.Pane, ID: "atto/jobs"}] != nil })
+	// ui/open announces the pane before its first render; the tree and the stop
+	// binding arrive together with that render.
+	within(t, a, "jobs pane", func() bool {
+		e := a.elements[ui.Match{Site: ui.Pane, ID: "atto/jobs"}]
+		return e != nil && e.Tree != nil
+	})
 	a.ui.Do(func() {
 		e := a.elements[ui.Match{Site: ui.Pane, ID: "atto/jobs"}]
 		for _, w := range []int{40, 80, 120, 160} {

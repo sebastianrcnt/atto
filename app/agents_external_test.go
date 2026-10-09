@@ -1,6 +1,7 @@
 package app
 
 import (
+	"path/filepath"
 	"reflect"
 	"testing"
 	"time"
@@ -26,17 +27,17 @@ func TestCenterShowsShellAgentsUnderOneVirtualHeadingPerProject(t *testing.T) {
 		t.Fatal("display grouping modified original items")
 	}
 	// The headings have no session behind them; the agents keep their IDs.
-	if got := treeIDs(tree); !reflect.DeepEqual(got, []string{"shell:/project", "agent-b", "agent-a", "nested", "shell:/other", "other", "model-parent", "model-agent"}) {
+	if got := treeIDs(tree); !reflect.DeepEqual(got, []string{shellHeading("/project"), "agent-b", "agent-a", "nested", shellHeading("/other"), "other", "model-parent", "model-agent"}) {
 		t.Fatalf("tree: %v", got)
 	}
 	for _, it := range tree {
 		switch it.id {
-		case "shell:/project", "shell:/other":
+		case shellHeading("/project"), shellHeading("/other"):
 			if !it.virtual || it.title != "agents started from a shell" || it.depth != 0 {
 				t.Fatalf("heading: %+v", it)
 			}
 		case "agent-a", "agent-b":
-			if it.depth != 1 || it.parent != "shell:/project" || it.project != "/project" || it.agentPath != "/root/panes" {
+			if it.depth != 1 || it.parent != shellHeading("/project") || filepath.ToSlash(it.project) != "/project" || it.agentPath != "/root/panes" {
 				t.Fatalf("shell agent: %+v", it)
 			}
 		case "nested":
@@ -45,12 +46,12 @@ func TestCenterShowsShellAgentsUnderOneVirtualHeadingPerProject(t *testing.T) {
 			}
 		}
 	}
-	c := &agentCenter{items: items, collapsed: map[string]bool{"shell:/project": true}}
-	if got := treeIDs(c.shown()); !reflect.DeepEqual(got, []string{"shell:/project", "shell:/other", "other", "model-parent", "model-agent"}) {
+	c := &agentCenter{items: items, collapsed: map[string]bool{shellHeading("/project"): true}}
+	if got := treeIDs(c.shown()); !reflect.DeepEqual(got, []string{shellHeading("/project"), shellHeading("/other"), "other", "model-parent", "model-agent"}) {
 		t.Fatalf("shell group collapse: %v", got)
 	}
 	c.tab = tabWorking
-	if got := treeIDs(c.shown()); !reflect.DeepEqual(got, []string{"shell:/project", "agent-b"}) {
+	if got := treeIDs(c.shown()); !reflect.DeepEqual(got, []string{shellHeading("/project"), "agent-b"}) {
 		t.Fatalf("filter should retain the heading: %v", got)
 	}
 	// A heading is not a session: entering it opens nothing.
