@@ -3,10 +3,7 @@
 package app
 
 import (
-	"context"
 	"fmt"
-	"github.com/sebastianrcnt/atto/server"
-	"math"
 	"os"
 	"os/exec"
 	"runtime"
@@ -21,7 +18,7 @@ import (
 func TestTUILongSessionAttachMemory(t *testing.T) {
 	operation := os.Getenv("ATTO_TUI_MEMORY")
 	if operation == "" {
-		for _, mode := range []string{"baseline", "tail"} {
+		for _, mode := range []string{"tail"} {
 			cmd := exec.Command(os.Args[0], "-test.run=^TestTUILongSessionAttachMemory$", "-test.v")
 			cmd.Env = append(os.Environ(), "ATTO_TUI_MEMORY="+mode)
 			out, err := cmd.CombinedOutput()
@@ -39,17 +36,6 @@ func TestTUILongSessionAttachMemory(t *testing.T) {
 	var before runtime.MemStats
 	runtime.ReadMemStats(&before)
 	a := startAppRuntime(t, cwd, nullTerm{}, true, Options{Session: id})
-	if operation == "baseline" {
-		debug.SetMemoryLimit(math.MaxInt64)
-		if err := a.conn.c.Call(context.Background(), "initialize", map[string]any{"protocolVersions": []int{2}}, nil); err != nil {
-			t.Fatal(err)
-		}
-		var full server.ThreadInfo
-		if err := a.conn.c.Call(context.Background(), "thread/read", map[string]any{"threadId": id}, &full); err != nil {
-			t.Fatal(err)
-		}
-		a.ui.Do(func() { a.applySnapshot(full) })
-	}
 	a.ui.Do(func() { _ = a.ui.Body.Render(100) })
 	debug.FreeOSMemory()
 	var after runtime.MemStats
@@ -71,10 +57,10 @@ func TestTUILongSessionAttachMemory(t *testing.T) {
 	}
 	st, _ := os.Stat(path)
 	t.Logf("TUI %s file=%d loadedItems=%d HeapAlloc=%d HeapInuse=%d HeapSys=%d heap delta=%d RSS=%d (in-process runtime included)", operation, st.Size(), len(a.view.Items), after.HeapAlloc, after.HeapInuse, after.HeapSys, int64(after.HeapAlloc)-int64(before.HeapAlloc), rss)
-	if operation != "baseline" && after.HeapAlloc > 100<<20 {
+	if after.HeapAlloc > 100<<20 {
 		t.Fatal("TUI attach heap exceeds 100 MiB")
 	}
-	if operation != "baseline" && len(a.view.Items) > 200 {
+	if len(a.view.Items) > 200 {
 		t.Fatal("TUI attach loaded full transcript")
 	}
 	runtime.KeepAlive(a)

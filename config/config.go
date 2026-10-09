@@ -162,9 +162,6 @@ type Settings struct {
 	// BackgroundExit: false turns off the exit menu that offers "Run in
 	// background" while a turn is running (experimental; default on).
 	BackgroundExit *bool `json:"backgroundExit,omitempty"`
-	// Remote configures /remote, which serves the TUI's session to a
-	// phone or browser.
-	Remote *RemoteSettings `json:"remote,omitempty"`
 	// Agents configures atto agent: agents other agents start. "subagents",
 	// its old name, is read when "agents" is absent.
 	Agents       *AgentSettings `json:"agents,omitempty"`
@@ -221,12 +218,6 @@ type ToolOutputSettings struct {
 	// (1024); with less, the model gets the cut text and is told the rest
 	// was not saved. Negative: no check.
 	MinFreeMB int `json:"minFreeMB,omitempty"`
-}
-
-// RemoteSettings is settings.json's "remote".
-type RemoteSettings struct {
-	// Port is where /remote listens (all interfaces); default 7879.
-	Port int `json:"port,omitempty"`
 }
 
 // SkillSettings is settings.json's "skills".

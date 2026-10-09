@@ -57,7 +57,7 @@ func localCommands() map[string]func(a *App, arg string) bool {
 		"jobs":       func(a *App, arg string) bool { a.cmdJobs(arg); return true },
 		"timers":     func(a *App, arg string) bool { a.cmdTimers(arg); return true },
 		"tui":        func(a *App, arg string) bool { a.cmdTui(arg); return true },
-		"remote":     func(a *App, arg string) bool { a.cmdRemote(arg); return true },
+		"remote":     func(a *App, arg string) bool { a.notice("%s", server.WebUIMessage); return true },
 		"clear":      func(a *App, arg string) bool { a.cmdClear(arg); return true },
 		"new":        func(a *App, arg string) bool { a.cmdClear(arg); return true },
 		"agents":     func(a *App, arg string) bool { a.cmdAgents(arg); return true },
@@ -221,18 +221,15 @@ func (a *App) allCommands() []command {
 // terminal is open, the runtime holds automatic work (events, queued
 // input, goal turns), as the terminal always did (client/gate).
 func (a *App) openModal(m modal) {
-	a.withdrawModal()
 	if a.modal == nil {
 		a.rpc("client/gate", map[string]any{"open": true}, nil)
 	}
 	a.ui.Screen = nil
 	a.modal = m
 	a.ui.SetFocus(m)
-	a.advertiseModal(m)
 }
 
 func (a *App) closeModal() {
-	a.withdrawModal()
 	if a.modal == nil {
 		return
 	}

@@ -1,8 +1,6 @@
 package app
 
 import (
-	"strings"
-
 	"github.com/sebastianrcnt/atto/trust"
 	"github.com/sebastianrcnt/atto/tui"
 )
@@ -35,14 +33,6 @@ func (p projectTrustPrompt) Render(width int) []string {
 		}
 	}
 	return append(append(out, ""), p.list.Render(width)...)
-}
-
-func (p projectTrustPrompt) detail() string {
-	var labels []string
-	for _, in := range p.items {
-		labels = append(labels, in.Label())
-	}
-	return strings.Join(labels, "\n")
 }
 
 // askProjectApprovals asks once for every pending kind together. Content

@@ -49,7 +49,7 @@ func newHarness(t *testing.T, script ...providertest.Reply) *harness {
 func (h *harness) connect() *Client {
 	c := Connect(context.Background(), h.s)
 	h.t.Cleanup(func() { c.Close() })
-	if err := c.Call(context.Background(), "initialize", map[string]any{"protocolVersions": []int{2}, "capabilities": map[string]bool{"interactive": true}}, nil); err != nil {
+	if err := c.Call(context.Background(), "initialize", map[string]any{"protocolVersions": []int{3}, "capabilities": map[string]bool{"interactive": true}}, nil); err != nil {
 		h.t.Fatal(err)
 	}
 	if h.c == nil {
@@ -624,10 +624,10 @@ func TestCancelledSteersRecoverToTheirSendingClients(t *testing.T) {
 	var first, second struct {
 		ClientID string `json:"clientId"`
 	}
-	if err := h.c.Call(context.Background(), "initialize", nil, &first); err != nil {
+	if err := h.c.Call(context.Background(), "initialize", map[string]any{"protocolVersions": []int{3}}, &first); err != nil {
 		t.Fatal(err)
 	}
-	if err := other.Call(context.Background(), "initialize", nil, &second); err != nil {
+	if err := other.Call(context.Background(), "initialize", map[string]any{"protocolVersions": []int{3}}, &second); err != nil {
 		t.Fatal(err)
 	}
 	h.call("turn/start", map[string]any{"input": "work"})

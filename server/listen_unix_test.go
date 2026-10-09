@@ -39,7 +39,7 @@ func TestUnixListenLifecycle(t *testing.T) {
 	c := NewClient(conn)
 	defer c.Close()
 	var init map[string]any
-	if err := c.Call(ctx, "initialize", nil, &init); err != nil || init["clientId"] == nil {
+	if err := c.Call(ctx, "initialize", map[string]any{"protocolVersions": []int{3}}, &init); err != nil || init["clientId"] == nil {
 		t.Fatal(init, err)
 	}
 	// A second bind must fail, never unlink or replace the first socket.

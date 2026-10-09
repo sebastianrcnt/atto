@@ -191,7 +191,7 @@ var threadMethods = map[string]func(t *thread, client string, p threadParams) (a
 		return map[string]any{"inputId": in.ID}, nil
 	},
 	"turn/unsteer": func(t *thread, client string, p threadParams) (any, error) {
-		in, err := t.unsteer(client, p.InputID, p.Input, p.Queued)
+		in, err := t.unsteer(client, p.InputID)
 		if err != nil {
 			return nil, err
 		}
@@ -332,14 +332,9 @@ var threadMethods = map[string]func(t *thread, client string, p threadParams) (a
 			matches, err := session.SearchTree(t.sess.Path, p.Query)
 			return map[string]any{"matches": matches}, err
 		}
-		if p.SnapshotVersion >= 3 {
-			rows, err := session.ReadTreeRows(t.sess.Path)
-			debug.FreeOSMemory()
-			return map[string]any{"entries": rows, "leaf": t.sess.Leaf()}, err
-		}
-		_, entries, err := session.Load(t.sess.Path)
-		return map[string]any{"entries": entries, "leaf": session.Leaf(entries)}, err
-
+		rows, err := session.ReadTreeRows(t.sess.Path)
+		debug.FreeOSMemory()
+		return map[string]any{"entries": rows, "leaf": t.sess.Leaf()}, err
 	},
 	"thread/context": func(t *thread, client string, p threadParams) (any, error) {
 		return t.contextInfo(p.View), nil
@@ -434,14 +429,12 @@ var threadMethods = map[string]func(t *thread, client string, p threadParams) (a
 		}
 		return nil, nil
 	},
-	"job/list":      bg("job/list"),
-	"job/output":    bg("job/output"),
-	"job/stop":      bg("job/stop"),
-	"agent/list":    bg("agent/list"),
-	"agent/tree":    bg("agent/tree"),
-	"agent/read":    bg("agent/read"),
-	"subagent/list": bg("subagent/list"),
-	"subagent/read": bg("subagent/read"),
+	"job/list":   bg("job/list"),
+	"job/output": bg("job/output"),
+	"job/stop":   bg("job/stop"),
+	"agent/list": bg("agent/list"),
+	"agent/tree": bg("agent/tree"),
+	"agent/read": bg("agent/read"),
 	"job/stopAll": func(t *thread, client string, p threadParams) (any, error) {
 		n := jobs.KillAll(t.id)
 		t.setCounts(0, t.timerCount)

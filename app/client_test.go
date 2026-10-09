@@ -1,10 +1,8 @@
 package app
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
-	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -234,46 +232,15 @@ func TestReadOnlyProtocolSnapshot(t *testing.T) {
 	}
 }
 
-// /remote serves the session shown here to a browser: the web client's
-// requests reach the same runtime, and what it sends shows here.
-func TestRemoteGateway(t *testing.T) {
-	a, _ := liveApp(t, providertest.Reply{Text: "hi web"})
-	port := 0
-	a.ui.Do(func() {
-		a.remoteHost, a.remotePort = "127.0.0.1", &port
-		a.cmdRemote("on")
+// /remote only says that the web UI is being rebuilt and how to attach
+// other clients meanwhile.
+func TestRemoteCommandPointsToAppServer(t *testing.T) {
+	a, _ := liveApp(t)
+	typeLine(a, "/remote")
+	within(t, a, "the pointer", func() bool {
+		text := bodyText(a)
+		return strings.Contains(text, "web UI is being rebuilt") && strings.Contains(text, "atto app-server --listen ws://HOST:PORT")
 	})
-	var addr, token string
-	a.ui.Do(func() { addr, token = a.remote.addr, a.remote.token })
-	call := func(method string, params map[string]any) map[string]any {
-		t.Helper()
-		body, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": 1, "method": method, "params": params})
-		req, _ := http.NewRequest("POST", "http://"+addr+"/rpc", bytes.NewReader(body))
-		req.Header.Set("Authorization", "Bearer "+token)
-		resp, err := http.DefaultClient.Do(req)
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer resp.Body.Close()
-		var r struct {
-			Result map[string]any `json:"result"`
-			Error  *struct{ Message string }
-		}
-		json.NewDecoder(resp.Body).Decode(&r)
-		if r.Error != nil {
-			t.Fatalf("%s: %s", method, r.Error.Message)
-		}
-		return r.Result
-	}
-	init := call("initialize", nil)
-	if init["live"] != true || init["threadId"] != a.threadID {
-		t.Fatalf("initialize %v", init)
-	}
-	call("turn/start", map[string]any{"input": "hello from the phone"})
-	within(t, a, "the remote message", func() bool {
-		return strings.Contains(bodyText(a), "from remote") && strings.Contains(bodyText(a), "hi web")
-	})
-	a.ui.Do(func() { a.cmdRemote("off") })
 }
 
 // footerText and screenText draw without taking the UI lock: for

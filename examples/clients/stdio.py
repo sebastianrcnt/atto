@@ -91,7 +91,7 @@ def main():
             event(message)
 
     try:
-        call("initialize", {"protocolVersions": [2], "clientInfo": {"name": "python-example", "version": "1"},
+        call("initialize", {"protocolVersions": [3], "clientInfo": {"name": "python-example", "version": "1"},
                             "capabilities": {"interactive": True}})
         send("initialized", {})
         params = {"model": args.model} if args.model else {}

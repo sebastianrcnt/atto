@@ -50,7 +50,7 @@ func TestAgentReadSessionIDAddresses(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	for _, method := range []string{"agent/read", "subagent/read"} {
+	for _, method := range []string{"agent/read"} {
 		for _, tc := range []struct{ sid, addr, want string }{
 			{"root", "@abcdef12", "abcdef12"},
 			{"root", "@abcdef", "abcdef12"}, // another tree cannot cause ambiguity
@@ -60,9 +60,6 @@ func TestAgentReadSessionIDAddresses(t *testing.T) {
 			value, err := background(method, tc.sid, threadParams{Name: tc.addr})
 			if err != nil || value.(map[string]any)["agent"].(Agent).ThreadID != tc.want {
 				t.Fatalf("%s %s: %#v %v", method, tc.addr, value, err)
-			}
-			if method == "subagent/read" && value.(map[string]any)["subagent"].(Agent).ThreadID != tc.want {
-				t.Fatal("alias did not retain response fields")
 			}
 		}
 		for _, addr := range []string{"@abcdef34", "@fffffff", "@abcde"} {
@@ -85,7 +82,7 @@ func TestAgentReadSessionIDAddresses(t *testing.T) {
 	if err := agentstate.MarkClosed("abcdef12", ""); err != nil {
 		t.Fatal(err)
 	}
-	for _, method := range []string{"agent/read", "subagent/read"} {
+	for _, method := range []string{"agent/read"} {
 		_, err := background(method, "root", threadParams{Name: "@abcdef12"})
 		if err == nil || !strings.Contains(err.Error(), "closed") {
 			t.Fatalf("%s closed: %v", method, err)

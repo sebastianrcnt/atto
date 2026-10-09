@@ -83,7 +83,7 @@ func TestLongSessionProcessMemory(t *testing.T) {
 	}
 	operation := os.Getenv("ATTO_MEMORY_OPERATION")
 	if operation == "" {
-		for _, op := range []string{"baseline-open", "baseline-attach", "open", "attach", "page", "compact", "tree", "tree-unlimited"} {
+		for _, op := range []string{"open", "attach", "page", "compact", "tree", "tree-unlimited"} {
 			cmd := exec.Command(os.Args[0], "-test.run=^TestLongSessionProcessMemory$", "-test.v")
 			cmd.Env = append(os.Environ(), "ATTO_MEMORY_OPERATION="+op)
 			out, err := cmd.CombinedOutput()
@@ -99,7 +99,7 @@ func TestLongSessionProcessMemory(t *testing.T) {
 		return
 	}
 	s, _ := testServer(t, providertest.Reply{Text: "Compacted synthetic memory fixture notes."})
-	if strings.HasPrefix(operation, "baseline-") || strings.HasSuffix(operation, "-unlimited") {
+	if strings.HasSuffix(operation, "-unlimited") {
 		debug.SetMemoryLimit(math.MaxInt64)
 	}
 	path, id := sessionfixture.Write(t, s.Cwd)
@@ -113,26 +113,11 @@ func TestLongSessionProcessMemory(t *testing.T) {
 		}
 		info = out.(ThreadInfo)
 	}
-	if operation != "open" && operation != "baseline-open" {
+	if operation != "open" {
 		open()
 	}
-	baseline := strings.HasPrefix(operation, "baseline-")
-	rebuildFull := func() {
-		loaded, err := session.ReadActive(path)
-		if err != nil {
-			t.Fatal(err)
-		}
-		th, _ := s.thread(id)
-		if err := th.call(func() error { th.tr.MaxItems = 0; th.replayKeepNotices(loaded.Entries); th.hasMore = false; return nil }); err != nil {
-			t.Fatal(err)
-		}
-		loaded.Entries = nil
-	}
-	if operation == "baseline-attach" {
-		rebuildFull()
-	}
 	var listener net.Listener
-	if operation != "open" && operation != "baseline-open" {
+	if operation != "open" {
 		var err error
 		listener, err = net.Listen("tcp", "127.0.0.1:0")
 		if err != nil {
@@ -145,26 +130,7 @@ func TestLongSessionProcessMemory(t *testing.T) {
 				if err != nil {
 					return
 				}
-				if baseline {
-					// Reproduce the previous connection encoder's entire-value buffer.
-					go func() {
-						defer conn.Close()
-						dec, enc := json.NewDecoder(conn), json.NewEncoder(conn)
-						for {
-							var raw json.RawMessage
-							if dec.Decode(&raw) != nil {
-								return
-							}
-							if reply := s.Handle(ctx, raw); reply != nil {
-								if enc.Encode(reply) != nil {
-									return
-								}
-							}
-						}
-					}()
-				} else {
-					go s.ServeConn(ctx, conn)
-				}
+				go s.ServeConn(ctx, conn)
 			}
 		}()
 	}
@@ -174,11 +140,8 @@ func TestLongSessionProcessMemory(t *testing.T) {
 	var bytes byteCount
 	var child *exec.Cmd
 	var release io.WriteCloser
-	if operation == "open" || operation == "baseline-open" {
+	if operation == "open" {
 		open()
-		if baseline {
-			rebuildFull()
-		}
 		payload = info
 		if err := json.NewEncoder(&bytes).Encode(payload); err != nil {
 			t.Fatal(err)
@@ -234,7 +197,7 @@ func TestLongSessionProcessMemory(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if !baseline && !strings.HasSuffix(operation, "-unlimited") {
+	if !strings.HasSuffix(operation, "-unlimited") {
 		if result.PeakHeapInuse > 128<<20 {
 			t.Fatalf("worker peak heap exceeded 128 MiB: %+v", result)
 		}
@@ -256,11 +219,7 @@ func runMemoryClient(t *testing.T) {
 	c := NewClient(conn)
 	defer c.Close()
 	ctx := context.Background()
-	version := 3
-	if strings.HasPrefix(operation, "baseline-") {
-		version = 2
-	}
-	if err := c.Call(ctx, "initialize", map[string]any{"protocolVersions": []int{version}}, nil); err != nil {
+	if err := c.Call(ctx, "initialize", map[string]any{"protocolVersions": []int{ProtocolVersion}}, nil); err != nil {
 		t.Fatal(err)
 	}
 	id := os.Getenv("ATTO_MEMORY_THREAD")

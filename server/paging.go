@@ -233,13 +233,6 @@ func (t *thread) loadDisplay() error {
 	return nil
 }
 
-func protocolOf(ctx context.Context) int {
-	if c := connOf(ctx); c != nil && c.protocol.Load() != 0 {
-		return int(c.protocol.Load())
-	}
-	return 2 // Unnegotiated scripts keep their historical full snapshots.
-}
-
 func (s *Server) snapshotResult(ctx context.Context, method string, p threadParams, out any) (any, error) {
 	switch method {
 	case "thread/start", "thread/resume", "thread/read", "thread/attach":
@@ -250,34 +243,26 @@ func (s *Server) snapshotResult(ctx context.Context, method string, p threadPara
 	if !ok {
 		return out, nil
 	} // Worker routing has already shaped its response.
-	version := protocolOf(ctx)
-	if p.SnapshotVersion > 0 && version >= 3 {
-		version = p.SnapshotVersion
-	}
 	// Shape and capture the snapshot on the lane: events arriving while a
 	// disk page is reconstructed must not sneak past its exactly-once cursor.
 	if t, err := s.thread(info.ID); err == nil {
 		var shaped ThreadInfo
 		err = t.call(func() error {
 			fresh := t.snapshot()
-			fresh.Context, fresh.Live = info.Context, info.Live
+			fresh.Context = info.Context
 			var shapeErr error
-			shaped, shapeErr = shapeSnapshot(fresh, version, p.Limit)
+			shaped, shapeErr = shapeSnapshot(fresh, p.Limit)
 			return shapeErr
 		})
 		return shaped, err
 	}
-	return shapeSnapshot(info, version, p.Limit)
+	return shapeSnapshot(info, p.Limit)
 }
 
-func shapeSnapshot(info ThreadInfo, version, requestedLimit int) (ThreadInfo, error) {
-	if version < 3 && !info.HasMore && len(info.Items) > 0 {
-		info.Before = ""
-		return info, nil
-	}
-	info.Paged = version >= 3
+func shapeSnapshot(info ThreadInfo, requestedLimit int) (ThreadInfo, error) {
+	info.Paged = true
 	limit := requestedLimit
-	if version >= 3 && (len(info.Items) > 0 || info.SessionPath == "") && (limit <= 0 || limit <= DefaultItemLimit) {
+	if (len(info.Items) > 0 || info.SessionPath == "") && (limit <= 0 || limit <= DefaultItemLimit) {
 		if limit <= 0 {
 			limit = DefaultItemLimit
 		}
@@ -305,16 +290,9 @@ func shapeSnapshot(info ThreadInfo, version, requestedLimit int) (ThreadInfo, er
 		}
 		return info, nil
 	}
-	if version < 3 {
-		limit = int(^uint(0) >> 1)
-	}
 	var b transcript.Builder
 	b.IDPrefix = itemPrefix(info.ID)
-	before := ""
-	if version < 3 {
-		before = itemPrefix(info.ID) + strconv.Itoa(int(^uint(0)>>1))
-	}
-	page, _, err := replayFile(&b, info.ID, info.SessionPath, before, limit)
+	page, _, err := replayFile(&b, info.ID, info.SessionPath, "", limit)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return ThreadInfo{}, err
 	}
@@ -352,24 +330,18 @@ func shapeSnapshot(info ThreadInfo, version, requestedLimit int) (ThreadInfo, er
 		}
 	}
 	slices.SortStableFunc(info.Items, func(a, b Item) int { return cmp.Compare(ranks[a.ID], ranks[b.ID]) })
-	if version < 3 {
-		info.HasMore = false
-		info.Before = ""
+	if limit <= 0 {
+		limit = DefaultItemLimit
 	}
-	if version >= 3 {
-		if limit <= 0 {
-			limit = DefaultItemLimit
-		}
-		if len(info.Items) > limit {
-			info.Items = info.Items[len(info.Items)-limit:]
-			page.HasMore = true
-		}
-		info.HasMore, info.Before = page.HasMore, page.Before
-		for _, it := range info.Items {
-			if strings.HasPrefix(it.ID, itemPrefix(info.ID)) {
-				info.Before = it.ID
-				break
-			}
+	if len(info.Items) > limit {
+		info.Items = info.Items[len(info.Items)-limit:]
+		page.HasMore = true
+	}
+	info.HasMore, info.Before = page.HasMore, page.Before
+	for _, it := range info.Items {
+		if strings.HasPrefix(it.ID, itemPrefix(info.ID)) {
+			info.Before = it.ID
+			break
 		}
 	}
 	debug.FreeOSMemory()

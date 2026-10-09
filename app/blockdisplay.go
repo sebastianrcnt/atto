@@ -26,7 +26,6 @@ type blockDisplay struct {
 	orig expander // expanded() means: showing the original text
 
 	id      string // the block ID extensions use
-	item    string // the transcript item's ID, for /remote
 	entryID string // of the assistant message, for the session
 	kind    string // session.BlockText or session.BlockReasoning
 
@@ -125,7 +124,7 @@ func (a *App) bindBlock(w server.Item) {
 		kind = session.BlockReasoning
 	}
 	d := b.display()
-	d.entryID, d.kind, d.item, d.id = w.EntryID, kind, w.ID, w.BlockID
+	d.entryID, d.kind, d.id = w.EntryID, kind, w.BlockID
 	if a.blocks == nil {
 		a.blocks = map[string]displayBlock{}
 	}

@@ -261,25 +261,7 @@ func (t *thread) maybeSendNextQueued() {
 
 // unsteer takes back pending input id (or, with "", the last steer, else
 // the last queued message) and gives it to client.
-func (t *thread) unsteer(client, id, text string, queued bool) (*pendingInput, error) {
-	if id == "" && text != "" { // revision 1: by text
-		list := t.steers
-		if queued {
-			list = t.turns.Queued
-		}
-		for _, p := range slices.Backward(list) {
-			if p.Text == text {
-				id = p.ID
-				break
-			}
-		}
-		if id == "" {
-			if queued {
-				return nil, failure(ReasonAlreadyCommitted, "that message is no longer queued: it has started")
-			}
-			return nil, failure(ReasonAlreadyCommitted, "that message is no longer pending: the turn has taken it")
-		}
-	}
+func (t *thread) unsteer(client, id string) (*pendingInput, error) {
 	if id == "" {
 		switch {
 		case len(t.steers) > 0:

@@ -6,11 +6,10 @@ import (
 	"github.com/sebastianrcnt/atto/core/transcript"
 	"github.com/sebastianrcnt/atto/jobs"
 	"github.com/sebastianrcnt/atto/session"
-	"strconv"
 	"strings"
 )
 
-// What runs beside a thread's turns, for the web client's panels: the
+// What runs beside a thread's turns, for clients' panels: the
 // session's background jobs (atto job, like the TUI's /jobs) and its
 // agents (atto agent). Both live in files under ~/.atto keyed by the
 // session ID, so a live session reads them the same way.
@@ -22,7 +21,6 @@ func clientSettings() map[string]any {
 }
 
 // background serves job/* and agent/* for session sid.
-// The subagent/* aliases retain old fields for the frozen web client.
 func background(method, sid string, p threadParams) (any, error) {
 	switch method {
 	case "job/list":
@@ -71,17 +69,13 @@ func background(method, sid string, p threadParams) (any, error) {
 			out = append(out, wireAgent(st))
 		}
 		return map[string]any{"rootThreadId": root, "agents": out}, nil
-	case "agent/list", "subagent/list":
+	case "agent/list":
 		out := []Agent{}
 		for _, st := range agentstate.Children(sid) {
 			out = append(out, wireAgent(st))
 		}
-		result := map[string]any{"agents": out}
-		if method == "subagent/list" { // frozen web client compatibility
-			result["subagents"] = out
-		}
-		return result, nil
-	case "agent/read", "subagent/read":
+		return map[string]any{"agents": out}, nil
+	case "agent/read":
 		// An agent is named by its session ID (agentId, or "@<id>" as name) or by
 		// a name or path seen from this thread; either way it must be in this
 		// thread's tree.
@@ -109,13 +103,7 @@ func background(method, sid string, p threadParams) (any, error) {
 		items := []Item{}
 		if path, err := session.Find(st.Session); err == nil {
 			b := transcript.Builder{IDPrefix: itemPrefix(st.Session)}
-			before := ""
-			limit := p.Limit
-			if p.SnapshotVersion < 3 {
-				before = itemPrefix(st.Session) + strconv.Itoa(int(^uint(0)>>1))
-				limit = int(^uint(0) >> 1)
-			}
-			if page, _, err := replayFile(&b, st.Session, path, before, limit); err == nil {
+			if page, _, err := replayFile(&b, st.Session, path, "", p.Limit); err == nil {
 				items = page.Items
 			}
 		}
@@ -126,11 +114,7 @@ func background(method, sid string, p threadParams) (any, error) {
 				msg = items[i].Text
 			}
 		}
-		result := map[string]any{"agent": wireAgent(st), "message": msg, "items": items}
-		if method == "subagent/read" { // frozen web client compatibility
-			result["subagent"] = result["agent"]
-		}
-		return result, nil
+		return map[string]any{"agent": wireAgent(st), "message": msg, "items": items}, nil
 	}
 	return nil, &rpcError{Code: codeMethodNotFound, Message: "unknown method " + method}
 }

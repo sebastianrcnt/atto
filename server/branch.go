@@ -182,14 +182,6 @@ func (t *thread) showBranchDisk() {
 	debug.FreeOSMemory()
 }
 
-// replay makes the items again from the active branch.
-func (t *thread) replay(branch []session.Entry) {
-	t.items, t.blocks = replayItems(&t.tr, t.id, branch)
-	t.resetItemOrder()
-	t.tr.Handler = t.handler()
-	t.itemMeta = map[string]userMeta{}
-}
-
 // afterGoingBack pauses an active goal (its progress may be gone) and
 // points out background jobs, which keep running.
 func (t *thread) afterGoingBack() {

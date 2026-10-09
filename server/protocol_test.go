@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
@@ -10,70 +11,45 @@ import (
 )
 
 func TestNegotiate(t *testing.T) {
-	for _, c := range []struct {
-		versions []int
-		want     int
-	}{
-		{nil, 2}, {[]int{}, 2}, {[]int{1}, 1},
-		{[]int{1, 2, 9}, 2}, {[]int{3, 2}, 3}, {[]int{2, 1, 2}, 2},
-	} {
-		if got, err := negotiate(c.versions); err != nil || got != c.want {
-			t.Fatalf("negotiate(%v) = %d, %v; want %d", c.versions, got, err, c.want)
+	for _, versions := range [][]int{{3}, {3, 2}, {1, 2, 3}, {3, 99}} {
+		if got, err := negotiate(versions); err != nil || got != ProtocolVersion {
+			t.Fatalf("negotiate(%v) = %d, %v; want %d", versions, got, err, ProtocolVersion)
 		}
 	}
-	for _, versions := range [][]int{{99}, {0}, {-1}, {99, -1}} {
-		if _, err := negotiate(versions); err == nil {
+	for _, versions := range [][]int{nil, {}, {1}, {2}, {1, 2}, {99}, {0}, {-1}, {99, -1}} {
+		_, err := negotiate(versions)
+		if err == nil {
 			t.Fatalf("accepted unsupported revisions %v", versions)
+		}
+		if msg := err.Error(); !strings.Contains(msg, "revision 3") {
+			t.Fatalf("negotiate(%v) error does not name the supported revision: %v", versions, msg)
 		}
 	}
 }
 
 func TestInitializeContract(t *testing.T) {
-	for _, live := range []bool{false, true} {
-		t.Run(map[bool]string{false: "standalone", true: "live"}[live], func(t *testing.T) {
-			s := New("test", t.TempDir())
-			ctx := context.Background()
-			id := ""
-			if live {
-				info, err := s.startThread("", threadParams{})
-				if err != nil {
-					t.Fatal(err)
-				}
-				id = info.(ThreadInfo).ID
-				ctx = context.WithValue(ctx, scopeKey{}, &Scope{Thread: func() string { return id }})
-			}
-			t.Cleanup(s.Close)
-			for _, params := range []string{
-				`null`,
-				`{"protocolVersions":[1,2],"clientInfo":{"name":"test","title":"Test","version":"1"},"capabilities":{"experimentalApi":true,"interactive":true,"images":true}}`,
-			} {
-				r := s.Handle(ctx, []byte(`{"id":1,"method":"initialize","params":`+params+`}`))
-				if r.Error != nil {
-					t.Fatal(r.Error)
-				}
-				result := r.Result.(map[string]any)
-				if result["name"] != "atto" || result["version"] != "test" || result["protocolVersion"] != 2 || result["serverInstanceId"] != s.instance || len(s.instance) != 16 || result["settings"] == nil {
-					t.Fatalf("initialize: %+v", result)
-				}
-				if live && (result["live"] != true || result["threadId"] != id) {
-					t.Fatalf("lost live fields: %+v", result)
-				}
-			}
-			r := s.Handle(ctx, []byte(`{"id":2,"method":"initialize","params":{"protocolVersions":[1]}}`))
-			if r.Error != nil || r.Result.(map[string]any)["protocolVersion"] != 1 {
-				t.Fatalf("revision 1: %+v", r)
-			}
-			r = s.Handle(ctx, []byte(`{"id":3,"method":"initialize","params":{"protocolVersions":[99]}}`))
-			if r.Error == nil || r.Error.Data == nil || r.Error.Data.Reason != ReasonUnsupportedProtocol {
-				t.Fatalf("unsupported revision: %+v", r)
-			}
-			if r = s.Handle(ctx, []byte(`{"method":"initialized"}`)); r != nil {
-				t.Fatalf("notification returned a response: %+v", r)
-			}
-			if _, err := s.call(context.Background(), "initialized", nil); err != nil {
-				t.Fatalf("initialized not recognized: %v", err)
-			}
-		})
+	s := New("test", t.TempDir())
+	ctx := context.Background()
+	t.Cleanup(s.Close)
+	r := s.Handle(ctx, []byte(`{"id":1,"method":"initialize","params":{"protocolVersions":[2,3],"clientInfo":{"name":"test","title":"Test","version":"1"},"capabilities":{"experimentalApi":true,"interactive":true,"images":true}}}`))
+	if r.Error != nil {
+		t.Fatal(r.Error)
+	}
+	result := r.Result.(map[string]any)
+	if result["name"] != "atto" || result["version"] != "test" || result["protocolVersion"] != 3 || result["serverInstanceId"] != s.instance || len(s.instance) != 16 || result["settings"] == nil {
+		t.Fatalf("initialize: %+v", result)
+	}
+	for _, params := range []string{`null`, `{}`, `{"protocolVersions":[1]}`, `{"protocolVersions":[1,2]}`, `{"protocolVersions":[99]}`} {
+		r := s.Handle(ctx, []byte(`{"id":2,"method":"initialize","params":`+params+`}`))
+		if r.Error == nil || r.Error.Data == nil || r.Error.Data.Reason != ReasonUnsupportedProtocol || !strings.Contains(r.Error.Message, "revision 3") {
+			t.Fatalf("params %s: want unsupportedProtocol naming revision 3: %+v", params, r)
+		}
+	}
+	if r = s.Handle(ctx, []byte(`{"method":"initialized"}`)); r != nil {
+		t.Fatalf("notification returned a response: %+v", r)
+	}
+	if _, err := s.call(context.Background(), "initialized", nil); err != nil {
+		t.Fatalf("initialized not recognized: %v", err)
 	}
 }
 

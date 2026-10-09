@@ -1,5 +1,5 @@
 // Package server exposes atto's agent over JSON-RPC 2.0 so any frontend
-// (CLI, web, mobile, editor) can drive it. The model follows codex
+// (terminal, web, mobile, editor) can drive it. The model follows codex
 // app-server: threads (conversations, persisted as sessions) contain turns
 // (one user input and everything it causes), which produce items (user
 // messages, reasoning, assistant messages, command executions,
@@ -7,13 +7,13 @@
 // core/transcript). Items stream as started → delta* → completed
 // notifications.
 //
-// With the daemon available, interactive clients and the app-server/serve
-// frontends attach to per-session workers. thread/start starts a worker;
+// With the daemon available, interactive clients and the app-server
+// frontend attach to per-session workers. thread/start starts a worker;
 // thread/resume joins an existing one, never another writer. Transport EOF
 // and frontend shutdown detach; thread/close explicitly stops the session
 // (/close uses reason "close"). Unattended idle workers retire after one
 // minute, but turns, jobs, timers, active unheld goals and prompts retain them.
-// app-server/serve -in-process, ATTO_NO_DAEMON and Windows retain the
+// app-server -in-process, ATTO_NO_DAEMON and Windows retain the
 // in-process runtime. A routing facade translates event cursors and client
 // provenance; its protocol revision is distinct from daemon control revision 4.
 // Worker crashes recover saved sessions, not durable in-flight inputs/promises.
@@ -24,37 +24,38 @@
 // the same event hub and worker routing. Unix sockets are 0600 and removed
 // on exit; WS beyond loopback requires the persistent bearer token and
 // warns about TLS. HTTP Authorization and ?token= work; browser Origin is
-// same-host/loopback or explicitly --allow-origin. atto serve and /remote
-// also expose GET /ws alongside POST /rpc and GET /events. WS reconnect
-// hydrates a fresh thread snapshot, not an arbitrary cursor replay.
+// same-host/loopback or explicitly --allow-origin. WS reconnect hydrates a
+// fresh thread snapshot, not an arbitrary cursor replay.
 // See docs/protocol.md for the client-author reference and example clients.
 //
-// Native protocol revision 3 adds bounded post-compaction snapshots and disk
-// pages. Revisions 1/2 and an omitted handshake retain full snapshots. Unattached
-// workers keep no completed display items; event IDs and snapshot fences remain
-// unchanged. Earlier pages are oldest-first and never advance eventId.
+// Protocol revision 3 is the only one served: snapshots are bounded
+// post-compaction tails, with earlier pages read from disk. Unattached
+// workers keep no completed display items; event IDs and snapshot fences
+// are unchanged. Earlier pages are oldest-first and never advance eventId.
 //
 // Requests:
 //
-//	initialize     {protocolVersions?, clientInfo?, capabilities?}
+//	initialize     {protocolVersions, clientInfo?, capabilities?}
 //	               → {name, version, protocolVersion, serverInstanceId, clientId?, eventId, settings}
-//	               The newest common revision wins; no list keeps legacy clients working.
-//	               Unknown revisions fail with error data.reason unsupportedProtocol.
-//	initialized    notification: acknowledges the handshake (optional for legacy clients)
+//	               protocolVersions must include 3. A client that offers only
+//	               other revisions, or none, fails with error data.reason
+//	               unsupportedProtocol, naming the revision served.
+//	initialized    notification: acknowledges the handshake
 //	               clientInfo and capabilities accept the Codex handshake shape.
 //	               Errors carry data {reason, retryable?} for clients to act on.
 //	               settings: what of settings.json clients follow
 //	               ({toolGroups}: false shows every command on its own)
 //	models/list                                    → {models: [{id, name, contextWindow, efforts, hasKey, images}]}
 //	thread/start   {cwd?, model?, effort?, deferStart?}         → thread + context
-//	thread/resume  {threadId, deferStart?, limit?}                      → thread + items + context
+//	thread/resume  {threadId, deferStart?, limit?}                      → thread + items tail + context
 //	               context: what the thread loaded (AGENTS files, skills,
 //	               hooks, configuration, model and effort and where they
 //	               came from), as stream-json's init event has it
-//	thread/read    {threadId, limit?}              → thread + items
+//	thread/read    {threadId, limit?}              → thread + items tail
 //	thread/items   {threadId, before, limit?}       → {items,hasMore,before}
-//	               Revision 3 snapshots are post-compaction tails (default 200).
-//	               Revision 2 snapshots remain full; page cursors do not change event IDs.
+//	               Snapshots are post-compaction tails (default 200) with
+//	               hasMore and before; thread/items reads the earlier pages.
+//	               Page cursors do not change event IDs.
 //	thread/entry   {threadId,entryId,offline?}      → complete saved entry
 //	thread/list    {cwd?, archived?, includeAgents?, includeClosedAgents?, includeArchived?}               → {threads: [...]}
 //	thread/setModel {threadId, model}              → thread
@@ -68,9 +69,6 @@
 //	turn/steer     {threadId, input}               → {}
 //	turn/interrupt {threadId}                      → {}
 //	turn/background {threadId}                     → {}  (Ctrl+B: the running command becomes a job)
-//	turn/unsteer   {threadId, input, queued?}      → {}
-//	               takes back a pending steer (queued: a queued follow-up)
-//	               not delivered yet; refused once it was
 //	job/list       {threadId}                      → {jobs: [Job]}  (the session's background jobs)
 //	job/output     {threadId, job, lines?}         → {output}  (the last lines, 200 by default)
 //	job/stop       {threadId, job}                 → {job}
@@ -79,13 +77,10 @@
 //	agent/read     {threadId, name}                → {agent, message, items}
 //	               an agent's transcript (its own session), read only,
 //	               and its last message
-//	               Compatibility for the frozen web client:
-//	               subagent/list → {agents, subagents}
-//	               subagent/read → {agent, subagent, message, items}
 //
-// Revision 2 runs every thread in a session runtime with the terminal's
-// scheduling (see thread): steers, a queue, send-now, the goal, inbox
-// events, user shell commands, prompts and commands. More requests:
+// Every thread runs in a session runtime with the terminal's scheduling
+// (see thread): steers, a queue, send-now, the goal, inbox events, user
+// shell commands, prompts and commands. More requests:
 //
 //	input/submit   {threadId, input, images?, intent?}  → {inputId?, status, turnId?}
 //	               the input as typed: intent auto (Enter: a turn, a steer,
@@ -112,7 +107,7 @@
 //	thread/setContextMode {threadId, contextMode: normal|long}
 //	thread/setName {threadId, name}; thread/setLabel {threadId, entryId, label}
 //	thread/tree    {threadId,query?,offline?} → {entries,leaf}; query → {matches}
-//	               Revision 3 uses bounded previews; thread/entry reads full text.
+//	               entries are bounded previews; thread/entry reads full text.
 //	thread/navigate {threadId, entryId, summary?: {mode: none|auto|custom, instructions?}}
 //	thread/fork    {threadId, entryId}  → {threadId, path, input, images}
 //	thread/archive {threadId,stop?} → {threadId,path}; close then archive
@@ -181,46 +176,36 @@
 // entries), so a resumed thread shows them again; the model never sees
 // them.
 //
-// Over HTTP, thread/start, thread/resume and thread/read results carry
-// eventId: the items are as of that event (those still streaming
-// included), so follow the thread from there (GET /events?lastEventId=).
-// When the events after the one a client resumes from are not known any
-// more (the server restarted, or the client was away for longer than the
-// server keeps events), the stream starts with
+// thread/start, thread/resume and thread/read results carry eventId: the
+// items are as of that event (those still streaming included), so follow
+// the thread from there. A connection that falls behind the server is told
 //
 //	events/reset   {eventId, serverInstanceId}  (no threadId: read the thread again)
 //
+// and goes on from the newest event.
+//
 // Every transport goes through one event hub (hub.go): each notification
-// carries eventId, its number in the hub, and over SSE also as the
-// event's id. On a JSON-lines connection (stdio, a Unix socket, or a
-// client in the same process, see Client) the client gets a clientId in
-// initialize's result and every notification from then on; requests are
-// handled in the order sent. A client that reads a thread drops the
+// carries eventId, its number in the hub. On a connection (stdio, a Unix
+// socket, a WebSocket, or a client in the same process, see Client) the
+// client gets a clientId in initialize's result and every notification
+// from then on; requests are handled in the order sent. A client that reads a thread drops the
 // notifications whose eventId is at most the read's (see ThreadView), so
 // a snapshot taken while events arrive is applied exactly once. Event IDs
 // start from 1 in each server; serverInstanceId tells runs apart.
 //
-// Revision 2 items carry what a client needs to show them as the
+// Items carry what a client needs to show them as the
 // terminal does (see Item and TranscriptItem): entryId, the command's
 // timeout, cancellation and error, the user's images, a user command's
 // shell fields, the full goal state of a goalStatus. When a reasoning or
 // agentMessage item that already completed is saved, item/updated
 // brings its blockId, before any item/display names it.
 //
-// Live session (atto's /remote, a scoped gateway: see Scope): the web
-// client follows the session the terminal shows. initialize says {live:
-// true, threadId}; thread/start is refused (send /clear); thread/rollback
-// takes back the last turn as /tree does, idle only; turn/start and
-// turn/steer both send the input as if typed (input/submit auto: a turn,
-// a steer or a queued turn: {status, turnId}). Scoped HTTP links reject
-// requests naming any other thread and only expose the selected thread's
-// events, including replay. Stopping a gateway stops no session.
+// Two more notifications:
 //
-//	thread/switched {threadId, previousThreadId}  (/clear, /resume or /tree in the terminal: thread/read again)
 //	thread/updated  {thread}  (model, effort, name or busy changed)
 //	goal/updated    {goal}  (the goal changed; null when cleared; see GoalInfo)
 //
-// Every client, live or not, gets the runtime's prompts (prompt/open,
+// Every client gets the runtime's prompts (prompt/open,
 // prompt/closed {id, how, by}) and answers them with
 //
 //	prompt/answer  {threadId, id, index? | text? | cancel?}  → {}
@@ -228,9 +213,8 @@
 //	               input, cancel is Esc. The first answer wins; a prompt
 //	               that is no longer open is refused (reason stalePrompt).
 //
-// thread/read's result carries the open prompt and the goal as well. The
-// terminal's own pickers (/model, /resume, /tree) stay local without /remote.
-// With a link active their owner registers them with prompt/clientOpen
+// thread/read's result carries the open prompt and the goal as well. A
+// client's own pickers can be registered with prompt/clientOpen
 // {threadId, prompt: {requestId, kind, title, options?, ...}} → Prompt,
 // and withdraws with prompt/clientClose {threadId, id: requestId}.
 // Answers are arbitrated exactly like execution prompts; the owner gets
@@ -253,19 +237,14 @@ import (
 	"github.com/sebastianrcnt/atto/session"
 )
 
-// ProtocolVersion is the protocol revision this server speaks. Revision 3
-// adds bounded tail snapshots and thread/items disk-backed earlier pages.
-// Revision 2
-// adds connections with client IDs and event cursors, input IDs, the
-// session runtime's scheduling (queue, send-now, goals, user shell),
-// server-owned prompts and commands; revision 1 clients keep working
-// with the methods they know. A client lists the revisions it speaks in
-// initialize's protocolVersions; a server that shares none refuses it
-// with reason unsupportedProtocol.
+// ProtocolVersion is the protocol revision this server speaks, and the only
+// one it serves: connections with client IDs and event cursors, input IDs,
+// the session runtime's scheduling (queue, send-now, goals, user shell),
+// server-owned prompts and commands, bounded tail snapshots and
+// thread/items disk-backed earlier pages. A client lists the revisions it
+// speaks in initialize's protocolVersions; a server that lacks its revision
+// refuses it with reason unsupportedProtocol.
 const ProtocolVersion = 3
-
-// MinProtocolVersion is the oldest revision still served.
-const MinProtocolVersion = 1
 
 type rpcRequest struct {
 	JSONRPC string          `json:"jsonrpc,omitempty"`
@@ -407,7 +386,7 @@ type Item struct {
 	Ext     string `json:"ext,omitempty"`
 	Lang    string `json:"lang,omitempty"`
 	Preview int    `json:"preview,omitempty"`
-	// Revision 2: what a client needs to show an item as the terminal
+	// what a client needs to show an item as the terminal
 	// does (see TranscriptItem). EntryID is the session entry the item
 	// belongs to, when recorded.
 	EntryID   string `json:"entryId,omitempty"`
@@ -522,21 +501,18 @@ type ThreadInfo struct {
 	Pending *PendingInput `json:"pending,omitempty"`
 	// Context is set in thread/start and thread/resume results.
 	Context *core.Loaded `json:"context,omitempty"`
-	// EventID, in thread/read and thread/resume results over HTTP, is the
-	// latest event published when the items were read: follow the thread
-	// from there (GET /events?lastEventId=).
+	// EventID, in thread/read and thread/resume results, is the latest
+	// event published when the items were read: follow the thread from
+	// there, dropping notifications up to it.
 	EventID int64 `json:"eventId,omitempty"`
-	// Live marks the TUI's own session served by /remote.
-	Live bool `json:"live,omitempty"`
-	// Prompt is the live session's open picker or input, and Goal its
-	// goal (live sessions only).
+	// Prompt is the session's open picker or input, and Goal its goal.
 	Prompt *Prompt   `json:"prompt,omitempty"`
 	Goal   *GoalInfo `json:"goal,omitempty"`
 	// ExtensionUI, in thread/read and thread/resume results, is what the
 	// extensions show around the input (nil when nothing).
 	ExtensionUI *ExtensionUI `json:"extensionUi,omitempty"`
 
-	// Revision 2. RunKind is what runs (turn, compact, branchSummary) and
+	// RunKind is what runs (turn, compact, branchSummary) and
 	// Activity what it does; Jobs and Timers count the session's running
 	// jobs and pending timers. ReadOnly says why the session cannot be
 	// written (another process runs it); Offline marks a snapshot read
@@ -645,7 +621,7 @@ type TurnInfo struct {
 type PendingInput struct {
 	Steers []string `json:"steers"`
 	Queued []string `json:"queued,omitempty"`
-	// Revision 2: each pending input with its ID (turn/unsteer takes it),
+	// each pending input with its ID (turn/unsteer takes it),
 	// and whether the queue is paused (after a failed turn).
 	Items  []PendingItem `json:"items,omitempty"`
 	Paused bool          `json:"paused,omitempty"`
@@ -725,7 +701,7 @@ const (
 )
 
 // Prompt is a runtime-owned question (a confirmation, an extension dialog
-// or a client picker registered with /remote). Every attached client can
+// or a client picker registered with prompt/clientOpen). Every attached client can
 // answer it; the first valid answer wins.
 type Prompt struct {
 	ClientID  string `json:"clientId,omitempty"`  // owner of a front-end picker
@@ -748,7 +724,7 @@ type Prompt struct {
 	Text        string `json:"text,omitempty"`
 	Placeholder string `json:"placeholder,omitempty"`
 
-	// Revision 2: who asks (extension, mcp, goal), and a select that is a
+	// who asks (extension, mcp, goal), and a select that is a
 	// yes/no confirmation.
 	Origin  string `json:"origin,omitempty"`
 	Confirm bool   `json:"confirm,omitempty"`
@@ -787,8 +763,12 @@ type GoalInfo struct {
 	// Held: an active goal waiting for the user to continue it ("/goal
 	// resume"), after a turn that took their input.
 	Held bool `json:"held,omitempty"`
-	// Revision 2: the goal itself, and when the running turn started (a
+	// the goal itself, and when the running turn started (a
 	// client adds the time since to Seconds).
 	Goal          *goal.Goal `json:"state,omitempty"`
 	TurnStartedAt int64      `json:"turnStartedAt,omitempty"`
 }
+
+// WebUIMessage is what /remote and atto serve say while the web UI is
+// being rebuilt.
+const WebUIMessage = "The web UI is being rebuilt. Meanwhile, `atto app-server --listen ws://HOST:PORT` serves the protocol."

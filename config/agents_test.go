@@ -69,3 +69,22 @@ func TestAgentEnvironmentCompatibility(t *testing.T) {
 		}
 	}
 }
+
+// settings.json's "remote" belonged to /remote, which is gone: an old value
+// reads without error and survives a rewrite of other settings.
+func TestOldRemoteSettingIsIgnored(t *testing.T) {
+	t.Setenv(EnvDir, t.TempDir())
+	if err := os.WriteFile(SettingsPath(), []byte(`{"remote":{"port":9000},"toolGroups":false}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s, err := LoadSettings()
+	if err != nil || s.ToolGroups == nil || *s.ToolGroups {
+		t.Fatalf("settings: %+v %v", s, err)
+	}
+	if err := UpdateSettings(map[string]any{"updateCheck": false}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadSettings(); err != nil {
+		t.Fatal(err)
+	}
+}

@@ -1,6 +1,3 @@
 # Check out text files with LF everywhere: embedded docs and test
 # fixtures are compared byte for byte.
 * text=auto eol=lf
-
-# The web client's bundle is generated (go generate ./server/web).
-server/web/dist/** linguist-generated=true -diff

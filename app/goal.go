@@ -137,7 +137,7 @@ func (a *App) editGoal() {
 		a.add(&infoBlock{title: goalUsage, hint: "Create a goal before editing it."})
 		return
 	}
-	in := &labelInput{title: "Edit goal", hint: "Type a goal objective and press Enter · esc cancel", placeholder: "Type a goal objective", text: oneLine(g.Objective)}
+	in := &labelInput{title: "Edit goal", hint: "Type a goal objective and press Enter · esc cancel", text: oneLine(g.Objective)}
 	in.onDone = func(ok bool, text string) {
 		a.closeModal()
 		if ok && strings.TrimSpace(text) != "" && strings.TrimSpace(text) != g.Objective {

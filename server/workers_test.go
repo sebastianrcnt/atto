@@ -6,10 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net"
-	"net/http"
-	"net/http/httptest"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
@@ -54,7 +51,7 @@ func TestWorkerFacadeSharesTurnAndDetaches(t *testing.T) {
 	defer cancel()
 	c := Connect(ctx, gateway)
 	t.Cleanup(func() { c.Close() })
-	if err := c.Call(ctx, "initialize", map[string]any{"protocolVersions": []int{2}}, nil); err != nil {
+	if err := c.Call(ctx, "initialize", map[string]any{"protocolVersions": []int{3}}, nil); err != nil {
 		t.Fatal(err)
 	}
 	var info ThreadInfo
@@ -129,7 +126,7 @@ func TestWorkerFacadeAddressesRecoveryAndListsEmptySessions(t *testing.T) {
 	var init struct {
 		Client string `json:"clientId"`
 	}
-	if err := c.Call(ctx, "initialize", nil, &init); err != nil {
+	if err := c.Call(ctx, "initialize", map[string]any{"protocolVersions": []int{3}}, &init); err != nil {
 		t.Fatal(err)
 	}
 	var info ThreadInfo
@@ -169,53 +166,6 @@ func TestWorkerFacadeAddressesRecoveryAndListsEmptySessions(t *testing.T) {
 	}
 }
 
-func TestWorkerFacadeScopedGateway(t *testing.T) {
-	worker, _ := testServer(t, providertest.Reply{Text: "web answer"})
-	gateway := workerFacade(t, worker)
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	owner := Connect(ctx, gateway)
-	t.Cleanup(func() { owner.Close() })
-	var info ThreadInfo
-	if err := owner.Call(ctx, "thread/start", nil, &info); err != nil {
-		t.Fatal(err)
-	}
-	var mu sync.Mutex
-	local := false
-	web := httptest.NewServer(gateway.ScopedHandler("token", Scope{Thread: func() string { return info.ID }, Local: func(text string) bool { mu.Lock(); defer mu.Unlock(); local = text == "/clear"; return local }}))
-	defer web.Close()
-	call := func(method string, params any) map[string]any {
-		t.Helper()
-		body, _ := json.Marshal(map[string]any{"id": 1, "method": method, "params": params})
-		r, err := web.Client().Post(web.URL+"/rpc?token=token", "application/json", strings.NewReader(string(body)))
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer r.Body.Close()
-		var reply struct {
-			Result map[string]any `json:"result"`
-			Error  *RPCError      `json:"error"`
-		}
-		if err := json.NewDecoder(r.Body).Decode(&reply); err != nil || reply.Error != nil {
-			t.Fatalf("%s: %v %v", method, reply.Error, err)
-		}
-		return reply.Result
-	}
-	if init := call("initialize", nil); init["live"] != true || init["threadId"] != info.ID {
-		t.Fatalf("live init %v", init)
-	}
-	if read := call("thread/read", nil); read["live"] != true {
-		t.Fatalf("live read %v", read)
-	}
-	call("turn/start", map[string]any{"input": "/clear"})
-	mu.Lock()
-	got := local
-	mu.Unlock()
-	if !got {
-		t.Fatal("remote local command did not reach terminal")
-	}
-}
-
 func TestWorkerFacadeRefusesOlderProtocol(t *testing.T) {
 	gateway := New("frontend", t.TempDir())
 	defer gateway.Close()
@@ -242,46 +192,5 @@ func TestWorkerFacadeRefusesOlderProtocol(t *testing.T) {
 	var rpc *RPCError
 	if !errors.As(err, &rpc) || rpc.Data == nil || rpc.Data.Reason != ReasonUnsupportedProtocol || !strings.Contains(err.Error(), "atto daemon stop -force") {
 		t.Fatalf("unclear version refusal: %v", err)
-	}
-}
-
-func TestWorkerFacadeHTTPStreamIsInteractive(t *testing.T) {
-	worker, _ := testServer(t)
-	gateway := workerFacade(t, worker)
-	web := httptest.NewServer(gateway.HTTPHandler("token"))
-	defer web.Close()
-	body := `{"id":1,"method":"thread/start"}`
-	resp, err := web.Client().Post(web.URL+"/rpc?token=token", "application/json", strings.NewReader(body))
-	if err != nil {
-		t.Fatal(err)
-	}
-	resp.Body.Close()
-	if worker.interactiveClients() != 0 {
-		t.Fatal("bare HTTP request counted as interactive")
-	}
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	req, _ := http.NewRequestWithContext(ctx, "GET", web.URL+"/events?token=token", nil)
-	stream, err := web.Client().Do(req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer stream.Body.Close()
-	for until := time.Now().Add(5 * time.Second); ; time.Sleep(time.Millisecond) {
-		if worker.interactiveClients() == 1 {
-			break
-		}
-		if time.Now().After(until) {
-			t.Fatal("SSE capabilities did not reach worker")
-		}
-	}
-	cancel()
-	for until := time.Now().Add(5 * time.Second); ; time.Sleep(time.Millisecond) {
-		if worker.interactiveClients() == 0 {
-			break
-		}
-		if time.Now().After(until) {
-			t.Fatal("SSE disconnect did not detach worker client")
-		}
 	}
 }

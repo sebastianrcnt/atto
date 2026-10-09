@@ -89,7 +89,7 @@ func TestStdioTurn(t *testing.T) {
 		}
 	}
 
-	send(1, "initialize", nil)
+	send(1, "initialize", map[string]any{"protocolVersions": []int{3}})
 	if r := wait(func(m msg) bool { return string(m.ID) == "1" }); r.Result["name"] != "atto" {
 		t.Fatalf("initialize: %+v", r)
 	}
@@ -149,78 +149,5 @@ func TestStdioTurn(t *testing.T) {
 	}
 	if cmd.Command != "echo hi" || cmd.ExitCode == nil || *cmd.ExitCode != 0 || !strings.Contains(cmd.Output, "hi") {
 		t.Fatalf("resumed command %+v", cmd)
-	}
-}
-
-func TestHTTPAndSSE(t *testing.T) {
-	work := setup(t)
-	srv := New("test", work)
-	h := httptest.NewServer(srv.HTTPHandler("secret-token-1234"))
-	defer h.Close()
-	defer srv.Close()
-	call := func(method string, params any) map[string]any {
-		t.Helper()
-		b, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": 1, "method": method, "params": params})
-		req, _ := http.NewRequest("POST", h.URL+"/rpc", strings.NewReader(string(b)))
-		req.Header.Set("Authorization", "Bearer secret-token-1234")
-		resp, err := http.DefaultClient.Do(req)
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer resp.Body.Close()
-		var m msg
-		json.NewDecoder(resp.Body).Decode(&m)
-		if m.Error != nil {
-			t.Fatalf("%s: %s", method, m.Error.Message)
-		}
-		return m.Result
-	}
-
-	// Auth is required.
-	if r, _ := http.Post(h.URL+"/rpc", "application/json", strings.NewReader(`{}`)); r.StatusCode != 401 {
-		t.Fatalf("want 401, got %d", r.StatusCode)
-	}
-	if r, _ := http.Get(h.URL + "/"); r.StatusCode != 200 {
-		t.Fatalf("web client: %d", r.StatusCode)
-	}
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	req, _ := http.NewRequestWithContext(ctx, "GET", h.URL+"/events?token=secret-token-1234", nil)
-	events, err := http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	id := call("thread/start", map[string]any{})["threadId"].(string)
-	call("turn/start", map[string]any{"threadId": id, "input": "hello"})
-
-	sc := bufio.NewScanner(events.Body)
-	var lastID string
-	deadline := time.Now().Add(10 * time.Second)
-	for sc.Scan() && time.Now().Before(deadline) {
-		line := sc.Text()
-		if after, ok := strings.CutPrefix(line, "id: "); ok {
-			lastID = after
-		}
-		if strings.HasPrefix(line, "data: ") && strings.Contains(line, `"turn/completed"`) {
-			break
-		}
-	}
-	if lastID == "" {
-		t.Fatal("no events received")
-	}
-	cancel()
-
-	// Reconnecting with an earlier Last-Event-ID replays what was missed.
-	req2, _ := http.NewRequest("GET", h.URL+"/events?token=secret-token-1234&lastEventId=1", nil)
-	ctx2, cancel2 := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel2()
-	resp2, err := http.DefaultClient.Do(req2.WithContext(ctx2))
-	if err != nil {
-		t.Fatal(err)
-	}
-	replay, _ := bufio.NewReader(resp2.Body).ReadString('\n')
-	if !strings.HasPrefix(replay, "id: 2") {
-		t.Fatalf("replay should start after id 1, got %q", replay)
 	}
 }

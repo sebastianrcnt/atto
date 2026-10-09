@@ -70,7 +70,7 @@ usage:
   atto uninstall [-y] [-keep-data] [-no-backup]
                                     back up, stop processes, and remove atto
   atto channel [stable|edge]        show or switch the release channel this build follows
-  atto serve [-listen addr]         JSON-RPC over HTTP + SSE, with a web client
+  atto serve                        (the web UI is being rebuilt; use app-server)
   atto app-server [--listen URL]    JSON-RPC: stdio://, unix://, ws://
 
 flags:
@@ -147,12 +147,8 @@ func subcommands() map[string]func([]string, io.Writer) error {
 		"login":   cli.RunLogin,
 		"logout":  cli.RunLogout,
 		"serve": func(args []string, out io.Writer) error {
-			provider.UserAgent = "github.com/sebastianrcnt/atto/" + update.Current()
-			var routes *server.WorkerRoutes
-			if daemon.Usable() {
-				routes = daemon.Routes()
-			}
-			return server.RunHTTPWith(update.Current(), args, out, routes)
+			fmt.Fprintln(out, server.WebUIMessage)
+			return nil
 		},
 		"app-server": func(args []string, out io.Writer) error {
 			provider.UserAgent = "github.com/sebastianrcnt/atto/" + update.Current()

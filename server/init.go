@@ -4,7 +4,8 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
-	"maps"
+	"fmt"
+	"slices"
 )
 
 // ClientInfo names a client in initialize.
@@ -22,23 +23,17 @@ type Capabilities struct {
 	Images      bool `json:"images,omitempty"`
 }
 
-// negotiate picks the protocol revision for a client that speaks
-// versions: the newest both speak. A client that lists none gets the
-// legacy revision 2 (revision 1 clients did not list them).
+// negotiate checks that the client speaks the current protocol revision,
+// the only one served.
 func negotiate(versions []int) (int, error) {
-	if len(versions) == 0 {
-		return 2, nil
+	if slices.Contains(versions, ProtocolVersion) {
+		return ProtocolVersion, nil
 	}
-	best := 0
-	for _, v := range versions {
-		if v >= MinProtocolVersion && v <= ProtocolVersion && v > best {
-			best = v
-		}
+	offered := "none"
+	if len(versions) > 0 {
+		offered = fmt.Sprint(versions)
 	}
-	if best == 0 {
-		return 0, failure(ReasonUnsupportedProtocol, "this atto speaks protocol %d to %d, the client %v: update the older side", MinProtocolVersion, ProtocolVersion, versions)
-	}
-	return best, nil
+	return 0, failure(ReasonUnsupportedProtocol, "this atto speaks protocol revision %d only; the client offered %s: list %d in initialize's protocolVersions", ProtocolVersion, offered, ProtocolVersion)
 }
 
 // newInstanceID names one run of a server, so that event IDs of an
@@ -50,29 +45,23 @@ func newInstanceID() string {
 }
 
 // initialize answers initialize: the server, the revision agreed and what
-// the client follows events from; extra adds fields (a live session's).
-func (s *Server) initialize(ctx context.Context, p threadParams, extra map[string]any) (any, error) {
+// the client follows events from.
+func (s *Server) initialize(ctx context.Context, p threadParams) (any, error) {
 	v, err := negotiate(p.ProtocolVersions)
 	if err != nil {
 		return nil, err
 	}
+	out := map[string]any{"name": "atto", "version": s.Version, "protocolVersion": v,
+		"serverInstanceId": s.instance, "eventId": s.eventSeq(), "settings": clientSettings()}
 	if c := connOf(ctx); c != nil {
 		s.mu.Lock()
 		if p.Client != nil {
 			c.name = p.Client.Name
 		}
-		c.protocol.Store(int32(v))
 		c.interactive = p.Capabilities != nil && p.Capabilities.Interactive
 		s.mu.Unlock()
-		extra = maps.Clone(extra)
-		if extra == nil {
-			extra = map[string]any{}
-		}
-		extra["clientId"] = c.id
+		out["clientId"] = c.id
 	}
-	out := map[string]any{"name": "atto", "version": s.Version, "protocolVersion": v,
-		"serverInstanceId": s.instance, "eventId": s.eventSeq(), "settings": clientSettings()}
-	maps.Copy(out, extra)
 	return out, nil
 }
 

@@ -73,7 +73,7 @@ func (a *App) askSummary(id string) {
 // askSummaryInstructions reads the custom focus for the summary; Esc goes
 // back to the choice.
 func (a *App) askSummaryInstructions(id string) {
-	in := &labelInput{title: "Custom summarization instructions:", hint: "enter summarize  esc back", placeholder: "What the summary should focus on"}
+	in := &labelInput{title: "Custom summarization instructions:", hint: "enter summarize  esc back"}
 	in.onDone = func(ok bool, text string) {
 		a.closeModal()
 		if !ok {

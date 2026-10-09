@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
-	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -151,8 +150,8 @@ func TestPendingSteers(t *testing.T) {
 	n := record(s)
 	id := call(t, s, "thread/start", map[string]any{})["threadId"].(string)
 	call(t, s, "turn/start", map[string]any{"threadId": id, "input": "hi"})
-	call(t, s, "turn/steer", map[string]any{"threadId": id, "input": "first"})
-	call(t, s, "turn/steer", map[string]any{"threadId": id, "input": "second"})
+	first := call(t, s, "turn/steer", map[string]any{"threadId": id, "input": "first"})
+	second := call(t, s, "turn/steer", map[string]any{"threadId": id, "input": "second"})
 	read := call(t, s, "thread/read", map[string]any{"threadId": id})
 	if p := read["pending"].(map[string]any)["steers"].([]any); len(p) != 2 || p[1] != "second" {
 		t.Fatalf("pending %v", read["pending"])
@@ -160,7 +159,7 @@ func TestPendingSteers(t *testing.T) {
 	if read["turn"] == nil {
 		t.Fatal("no turn info while busy")
 	}
-	call(t, s, "turn/unsteer", map[string]any{"threadId": id, "input": "second"})
+	call(t, s, "turn/unsteer", map[string]any{"threadId": id, "inputId": second["inputId"]})
 	pend := func(want string) func(map[string]any) bool {
 		return func(p map[string]any) bool {
 			var got []string
@@ -174,7 +173,7 @@ func TestPendingSteers(t *testing.T) {
 	// The model stops, takes "first" and goes on.
 	n.wait(t, i, "turn/pending", pend(""))
 	n.wait(t, 0, "turn/completed", nil)
-	b, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": 1, "method": "turn/unsteer", "params": map[string]any{"threadId": id, "input": "first"}})
+	b, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": 1, "method": "turn/unsteer", "params": map[string]any{"threadId": id, "inputId": first["inputId"]}})
 	if resp := s.Handle(context.Background(), b); resp.Error == nil || !strings.Contains(resp.Error.Message, "no longer pending") {
 		t.Fatalf("unsteer of a taken steer: %+v", resp)
 	}
@@ -244,15 +243,11 @@ func TestJobsAndAgents(t *testing.T) {
 	if r["message"] != "found it" || itemTexts(r) != "look;found it;" {
 		t.Fatalf("agent/read %v", r)
 	}
-	// The frozen web client needs subagent/* and the older envelope fields.
-	oldList := call(t, s, "subagent/list", map[string]any{"threadId": id})
-	if !reflect.DeepEqual(oldList["agents"], subs) || !reflect.DeepEqual(oldList["subagents"], subs) {
-		t.Fatalf("legacy list envelopes: %v", oldList)
-	}
-	oldRead := call(t, s, "subagent/read", map[string]any{"threadId": id, "name": "scout"})
-	if !reflect.DeepEqual(oldRead["agent"], r["agent"]) || !reflect.DeepEqual(oldRead["subagent"], r["agent"]) ||
-		!reflect.DeepEqual(oldRead["items"], r["items"]) || oldRead["message"] != r["message"] {
-		t.Fatalf("legacy read envelopes/transcript: %v", oldRead)
+	for _, alias := range []string{"subagent/list", "subagent/read"} {
+		resp := s.Handle(context.Background(), []byte(`{"jsonrpc":"2.0","id":1,"method":"`+alias+`","params":{"threadId":"`+id+`"}}`))
+		if resp.Error == nil || resp.Error.Code != codeMethodNotFound {
+			t.Fatalf("%s still served: %+v", alias, resp)
+		}
 	}
 }
 

@@ -22,7 +22,6 @@ type clientConn struct {
 	id          string
 	name        string
 	interactive bool
-	protocol    atomic.Int32
 }
 
 type clientKey struct{}
@@ -67,14 +66,11 @@ func (s *Server) ServeConn(ctx context.Context, rw io.ReadWriter) error {
 	s.addClient(c)
 	defer s.removeClient(c)
 	// Subscribe before handling requests: a fast turn must not outrun its client.
-	_, ch, kick, _ := s.events.subscribe(s.events.last())
+	ch, kick := s.events.subscribe()
 	forwardDone := make(chan struct{})
 	go func() {
 		defer close(forwardDone)
 		s.forward(ctx, func(b []byte) error {
-			if sc := scopeOf(ctx); sc != nil && !sc.event(b) {
-				return nil
-			}
 			return write(b)
 		}, ch, kick)
 	}()
@@ -102,7 +98,7 @@ func (s *Server) ServeConn(ctx context.Context, rw io.ReadWriter) error {
 
 // forward writes the hub's events to a connection from now on. Fallen
 // behind, it says events/reset and goes on from the newest event.
-func (s *Server) forward(ctx context.Context, write func([]byte) error, ch chan sseEvent, kick chan struct{}) {
+func (s *Server) forward(ctx context.Context, write func([]byte) error, ch chan hubEvent, kick chan struct{}) {
 	for {
 		select {
 		case <-ctx.Done():
@@ -116,7 +112,7 @@ func (s *Server) forward(ctx context.Context, write func([]byte) error, ch chan 
 		case <-kick:
 			// A kicked stream needs a snapshot, not a partially replayed transcript.
 			// Subscribe first, so events racing the reset are still delivered.
-			_, ch, kick, _ = s.events.subscribe(s.events.last())
+			ch, kick = s.events.subscribe()
 			if write(s.resetNotification()) != nil {
 				s.events.unsubscribe(ch)
 				return
@@ -151,7 +147,7 @@ func (s *Server) removeClient(c *clientConn) {
 func (s *Server) interactiveClients() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	n := int(s.httpStreams.Load())
+	n := 0
 	for _, c := range s.clients {
 		if c.interactive {
 			n++

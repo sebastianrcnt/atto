@@ -154,7 +154,7 @@ func (c *wsTestClient) rpc(t *testing.T, id int, method string, params any) map[
 func TestWebSocketHandshakeAndSecurity(t *testing.T) {
 	s := New("test", t.TempDir())
 	t.Cleanup(s.Close)
-	h := httptest.NewServer(s.HTTPHandlerOrigins("secret", []string{"https://example.test"}))
+	h := httptest.NewServer(s.WebSocketHandler("secret", []string{"https://example.test"}))
 	t.Cleanup(h.Close)
 	for _, tc := range []struct {
 		name, token, origin string
@@ -218,7 +218,7 @@ func TestWebSocketFrames(t *testing.T) {
 		t.Fatalf("pong %d %s", op, p)
 	}
 	c.send(t, true, 10, []byte("ignored"))
-	c.send(t, true, 0, []byte("\"method\":\"initialize\",\"params\":{\"protocolVersions\":[2]}}"))
+	c.send(t, true, 0, []byte("\"method\":\"initialize\",\"params\":{\"protocolVersions\":[3]}}"))
 	op, p = c.receive(t)
 	var reply struct {
 		Result struct {
@@ -226,7 +226,7 @@ func TestWebSocketFrames(t *testing.T) {
 			Version  int    `json:"protocolVersion"`
 		} `json:"result"`
 	}
-	if op != 1 || json.Unmarshal(p, &reply) != nil || reply.Result.ClientID == "" || reply.Result.Version != 2 {
+	if op != 1 || json.Unmarshal(p, &reply) != nil || reply.Result.ClientID == "" || reply.Result.Version != 3 {
 		t.Fatalf("initialize: %d %s", op, p)
 	}
 	c.send(t, true, 1, []byte(`{"method":"initialized"}`))
@@ -335,10 +335,10 @@ func TestWebSocketWorkerDetachAndSnapshot(t *testing.T) {
 	}()
 	worker, m := testServer(t, providertest.Reply{Text: "WebSocket answer", Gate: gate})
 	gateway := workerFacade(t, worker)
-	h := httptest.NewServer(gateway.HTTPHandler("token"))
+	h := httptest.NewServer(gateway.WebSocketHandler("token", nil))
 	t.Cleanup(h.Close)
 	c := dialWS(t, h.URL+"/ws?token=token", nil, 101)
-	init := c.rpc(t, 1, "initialize", map[string]any{"protocolVersions": []int{2}, "capabilities": map[string]any{"interactive": true}})
+	init := c.rpc(t, 1, "initialize", map[string]any{"protocolVersions": []int{3}, "capabilities": map[string]any{"interactive": true}})
 	c.send(t, true, 1, []byte(`{"method":"initialized"}`))
 	thread := c.rpc(t, 2, "thread/start", nil)
 	id := thread["threadId"].(string)
@@ -348,7 +348,7 @@ func TestWebSocketWorkerDetachAndSnapshot(t *testing.T) {
 	}
 	c.Close() // transport detach must not cancel work
 	viewer := dialWS(t, h.URL+"/ws?token=token", nil, 101)
-	if other := viewer.rpc(t, 1, "initialize", nil); other["clientId"] == init["clientId"] {
+	if other := viewer.rpc(t, 1, "initialize", map[string]any{"protocolVersions": []int{3}}); other["clientId"] == init["clientId"] {
 		t.Fatal("shared identity")
 	}
 	snapshot := viewer.rpc(t, 2, "thread/resume", map[string]any{"threadId": id})
@@ -389,7 +389,7 @@ func TestWebSocketServerClose(t *testing.T) {
 	h := httptest.NewServer(s.WebSocketHandler("", nil))
 	defer h.Close()
 	c := dialWS(t, h.URL, nil, 101)
-	c.rpc(t, 1, "initialize", nil)
+	c.rpc(t, 1, "initialize", map[string]any{"protocolVersions": []int{3}})
 	s.Close()
 	if _, err := c.r.ReadByte(); err == nil {
 		t.Fatal("server close left upgraded connection open")
@@ -409,12 +409,12 @@ func TestServeListenInvalid(t *testing.T) {
 func TestWebSocketPromptFirstAnswerWins(t *testing.T) {
 	worker, _ := testServer(t)
 	gateway := workerFacade(t, worker)
-	h := httptest.NewServer(gateway.HTTPHandler("token"))
+	h := httptest.NewServer(gateway.WebSocketHandler("token", nil))
 	defer h.Close()
 	owner := dialWS(t, h.URL+"/ws?token=token", nil, 101)
 	other := dialWS(t, h.URL+"/ws?token=token", nil, 101)
-	owner.rpc(t, 1, "initialize", map[string]any{"capabilities": map[string]bool{"interactive": true}})
-	other.rpc(t, 1, "initialize", map[string]any{"capabilities": map[string]bool{"interactive": true}})
+	owner.rpc(t, 1, "initialize", map[string]any{"protocolVersions": []int{3}, "capabilities": map[string]bool{"interactive": true}})
+	other.rpc(t, 1, "initialize", map[string]any{"protocolVersions": []int{3}, "capabilities": map[string]bool{"interactive": true}})
 	id := owner.rpc(t, 2, "thread/start", nil)["threadId"].(string)
 	other.rpc(t, 2, "thread/attach", map[string]any{"threadId": id})
 	prompt := owner.rpc(t, 3, "prompt/clientOpen", map[string]any{"threadId": id, "prompt": Prompt{Kind: PromptSelect, RequestID: "ws-picker", Title: "Pick", Options: []PromptOption{{Label: "one"}, {Label: "two"}}}})
@@ -439,41 +439,6 @@ func TestWebSocketPromptFirstAnswerWins(t *testing.T) {
 	}
 	if snapshot := other.rpc(t, 4, "thread/read", map[string]any{"threadId": id}); snapshot["prompt"] != nil {
 		t.Fatal("answered prompt remains open")
-	}
-}
-
-func TestScopedWebSocketFiltersThreads(t *testing.T) {
-	s, _ := testServer(t)
-	info, err := s.startThread("", threadParams{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	id := info.(ThreadInfo).ID
-	h := httptest.NewServer(s.ScopedHandler("token", Scope{Thread: func() string { return id }}))
-	defer h.Close()
-	c := dialWS(t, h.URL+"/ws?token=token", nil, 101)
-	init := c.rpc(t, 1, "initialize", nil)
-	if init["live"] != true || init["threadId"] != id {
-		t.Fatal(init)
-	}
-	c.rpc(t, 2, "ping", nil)
-	s.Publish("thread/status", map[string]any{"threadId": "other", "jobs": 99, "timers": 0})
-	s.Publish("thread/status", map[string]any{"threadId": id, "jobs": 1, "timers": 0})
-	_, raw := c.receive(t)
-	var n Notification
-	if err := json.Unmarshal(raw, &n); err != nil {
-		t.Fatal(err)
-	}
-	if n.Method != "thread/status" || n.ThreadID() != id {
-		t.Fatalf("scope leaked: %s", raw)
-	}
-	c.send(t, true, 1, []byte(`{"id":3,"method":"thread/read","params":{"threadId":"other"}}`))
-	_, raw = c.receive(t)
-	var reply struct {
-		Error *RPCError `json:"error"`
-	}
-	if err := json.Unmarshal(raw, &reply); err != nil || reply.Error == nil {
-		t.Fatalf("unscoped request accepted: %s %v", raw, err)
 	}
 }
 

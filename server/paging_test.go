@@ -12,7 +12,7 @@ import (
 	"github.com/sebastianrcnt/atto/session"
 )
 
-func TestPagedSnapshotsPerProtocolAndAcrossBranches(t *testing.T) {
+func TestPagedSnapshotsAcrossBranches(t *testing.T) {
 	s, _ := testServer(t)
 	w := session.New(s.Cwd)
 	var old string
@@ -77,24 +77,6 @@ func TestPagedSnapshotsPerProtocolAndAcrossBranches(t *testing.T) {
 	if len(seen) != 501 {
 		t.Fatalf("paged history lost compaction or items: %d", len(seen))
 	}
-	legacy := Connect(ctx, s)
-	defer legacy.Close()
-	if err := legacy.Call(ctx, "initialize", map[string]any{"protocolVersions": []int{2}}, nil); err != nil {
-		t.Fatal(err)
-	}
-	var full ThreadInfo
-	if err := legacy.Call(ctx, "thread/read", map[string]any{"threadId": w.ID, "limit": 1}, &full); err != nil {
-		t.Fatal(err)
-	}
-	persisted := 0
-	for _, it := range full.Items {
-		if strings.HasPrefix(it.ID, itemPrefix(w.ID)) {
-			persisted++
-		}
-	}
-	if persisted != 501 || full.Before != "" || full.HasMore {
-		t.Fatalf("revision 2 snapshot changed: items=%d before=%s hasMore=%v", persisted, full.Before, full.HasMore)
-	}
 	if err := v3.Call(ctx, "thread/navigate", map[string]any{"threadId": w.ID, "entryId": old}, nil); err != nil {
 		t.Fatal(err)
 	}
@@ -129,27 +111,25 @@ func TestEarlierPageDoesNotAdvanceLiveBoundary(t *testing.T) {
 }
 
 func TestEmptyPagedSnapshotWireShape(t *testing.T) {
-	for _, version := range []int{2, 3} {
-		info, err := shapeSnapshot(ThreadInfo{ID: "empty", Items: []Item{}}, version, 200)
-		if err != nil {
-			t.Fatal(err)
+	info, err := shapeSnapshot(ThreadInfo{ID: "empty", Items: []Item{}}, 200)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out strings.Builder
+	if err := encodeJSON(&out, info); err != nil {
+		t.Fatal(err)
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(out.String()), &fields); err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"hasMore", "before"} {
+		if _, exists := fields[key]; !exists {
+			t.Fatalf("missing %s: %s", key, out.String())
 		}
-		var out strings.Builder
-		if err := encodeJSON(&out, info); err != nil {
-			t.Fatal(err)
-		}
-		var fields map[string]json.RawMessage
-		if err := json.Unmarshal([]byte(out.String()), &fields); err != nil {
-			t.Fatal(err)
-		}
-		for _, key := range []string{"hasMore", "before"} {
-			if _, exists := fields[key]; exists != (version == 3) {
-				t.Fatalf("revision %d: %s", version, out.String())
-			}
-		}
-		if version == 3 && string(fields["items"]) != "[]" {
-			t.Fatalf("empty items: %s", out.String())
-		}
+	}
+	if string(fields["items"]) != "[]" {
+		t.Fatalf("empty items: %s", out.String())
 	}
 }
 

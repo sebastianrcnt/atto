@@ -1,22 +1,14 @@
 package server
 
 import (
-	"context"
 	"crypto/rand"
 	"encoding/hex"
-	"fmt"
-	"io"
 	"net"
-	"net/http"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
-	"sync/atomic"
-	"time"
 
 	"github.com/sebastianrcnt/atto/config"
-	"github.com/sebastianrcnt/atto/server/web"
 )
 
 // TokenPath stores the HTTP server's bearer token.
@@ -44,157 +36,6 @@ func LoadOrCreateToken() (string, error) {
 		return "", err
 	}
 	return tok, os.WriteFile(TokenPath(), []byte(tok+"\n"), 0o600)
-}
-
-// webCSP is the web client's Content-Security-Policy: its own script
-// and styles, images it attaches (blob: and data: URLs), no frames.
-const webCSP = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'"
-
-// HTTPHandler serves the protocol over HTTP:
-//
-//	POST /rpc      one JSON-RPC request in the body, response in the reply
-//	GET  /ws       JSON-RPC over WebSocket (same token)
-//	GET  /events   notifications as Server-Sent Events (resumable)
-//	GET  /         the web client (server/web), and its assets
-//
-// Every request except the web client's files needs the token, as
-// "Authorization: Bearer" or ?token= (EventSource cannot set headers).
-func (s *Server) HTTPHandler(token string) http.Handler { return s.HTTPHandlerOrigins(token, nil) }
-
-// HTTPHandlerOrigins adds explicit browser origins for the WebSocket endpoint.
-func (s *Server) HTTPHandlerOrigins(token string, origins []string) http.Handler {
-	return s.httpHandlerOrigins(token, s.OnClients, origins)
-}
-
-func (s *Server) httpHandler(token string, onClients func(int)) http.Handler {
-	return s.httpHandlerOrigins(token, onClients, nil)
-}
-
-func (s *Server) httpHandlerOrigins(token string, onClients func(int), origins []string) http.Handler {
-	b := s.events
-	// Legacy HTTP clients share an anonymous transport identity; they need
-	// not echo a new field to keep working. JSON-lines connections have
-	// independent identities.
-	c := &clientConn{id: fmt.Sprintf("h%d", clientSeq.Add(1))}
-	var streams, sockets atomic.Int64 // this handler's streams share one client identity
-	clients := func() {
-		s.routeInteractive(c.id, streams.Load() > 0)
-		if onClients != nil {
-			onClients(int(streams.Load() + sockets.Load())) // outside the broker's lock: the hook may wait for a UI
-		}
-	}
-	authed := func(r *http.Request) bool { return bearerOK(r, token) }
-	mux := http.NewServeMux()
-	mux.Handle("GET /ws", s.webSocketHandler(token, origins, func(delta int) {
-		sockets.Add(int64(delta))
-		if onClients != nil {
-			onClients(int(streams.Load() + sockets.Load()))
-		}
-	}))
-	files := http.FileServerFS(web.FS())
-	mux.HandleFunc("GET /", func(w http.ResponseWriter, r *http.Request) {
-		// Revalidate: the files change with the binary, and the asset URLs
-		// carry their hash anyway.
-		w.Header().Set("Cache-Control", "no-cache")
-		// The client loads nothing from elsewhere, and no page may frame
-		// it or learn its URL (the token arrives in its fragment).
-		w.Header().Set("Content-Security-Policy", webCSP)
-		w.Header().Set("Referrer-Policy", "no-referrer")
-		w.Header().Set("X-Content-Type-Options", "nosniff")
-		files.ServeHTTP(w, r)
-	})
-	mux.HandleFunc("POST /rpc", func(w http.ResponseWriter, r *http.Request) {
-		if !authed(r) {
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
-			return
-		}
-		body, err := io.ReadAll(io.LimitReader(r.Body, 16<<20))
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
-			return
-		}
-		ctx := r.Context()
-		if connOf(ctx) == nil {
-			ctx = context.WithValue(ctx, clientKey{}, c)
-		}
-		resp := s.Handle(ctx, body)
-		w.Header().Set("Content-Type", "application/json")
-		if resp == nil {
-			w.WriteHeader(http.StatusNoContent)
-			return
-		}
-		_ = encodeJSON(w, resp)
-	})
-	mux.HandleFunc("GET /events", func(w http.ResponseWriter, r *http.Request) {
-		if !authed(r) {
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
-			return
-		}
-		fl, ok := w.(http.Flusher)
-		if !ok {
-			http.Error(w, "streaming unsupported", http.StatusInternalServerError)
-			return
-		}
-		// The query says where a client starts following; the header,
-		// which EventSource sends when it reconnects by itself (to the
-		// same URL), the last event it got since then, so it wins.
-		last, _ := strconv.ParseInt(r.URL.Query().Get("lastEventId"), 10, 64)
-		if h := r.Header.Get("Last-Event-ID"); h != "" {
-			last, _ = strconv.ParseInt(h, 10, 64)
-		}
-		backlog, ch, kick, gap := b.subscribe(last)
-		s.httpStreams.Add(1)
-		streams.Add(1)
-		client := c
-		if scoped := connOf(r.Context()); scoped != nil {
-			client = scoped
-		}
-		defer func() {
-			s.httpStreams.Add(-1)
-			if streams.Add(-1) == 0 {
-				s.clientGone(client.id)
-			}
-			clients()
-		}()
-		clients()
-		defer b.unsubscribe(ch)
-		w.Header().Set("Content-Type", "text/event-stream")
-		w.Header().Set("Cache-Control", "no-cache")
-		w.Header().Set("X-Accel-Buffering", "no")
-		write := func(ev sseEvent) {
-			if sc := scopeOf(r.Context()); sc != nil && !sc.event(ev.data) {
-				return
-			}
-			fmt.Fprintf(w, "id: %d\ndata: %s\n\n", ev.id, ev.data)
-		}
-		if gap {
-			// What happened since is not known: the client reads its
-			// thread again (events/reset, see protocol.go). No id, so
-			// it does not move the client's Last-Event-ID.
-			fmt.Fprintf(w, "data: %s\n\n", s.resetNotification())
-		}
-		for _, ev := range backlog {
-			write(ev)
-		}
-		fl.Flush()
-		heartbeat := time.NewTicker(15 * time.Second)
-		defer heartbeat.Stop()
-		for {
-			select {
-			case <-r.Context().Done():
-				return
-			case <-kick: // fell behind: reconnect and resume
-				return
-			case ev := <-ch:
-				write(ev)
-				fl.Flush()
-			case <-heartbeat.C:
-				fmt.Fprint(w, ": ping\n\n")
-				fl.Flush()
-			}
-		}
-	})
-	return mux
 }
 
 // IsLoopback reports whether addr only listens on the local machine.

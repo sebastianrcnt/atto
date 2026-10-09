@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -17,8 +16,8 @@ import (
 	"github.com/sebastianrcnt/atto/trust"
 )
 
-func TestStdioAndHTTPLeaveUnapprovedProjectCodeOffAndWarn(t *testing.T) {
-	for _, transport := range []string{"stdio", "http"} {
+func TestStdioAndConnectionLeaveUnapprovedProjectCodeOffAndWarn(t *testing.T) {
+	for _, transport := range []string{"stdio", "connection"} {
 		t.Run(transport, func(t *testing.T) {
 			work := setup(t)
 			userLog, projectLog := filepath.Join(work, "user.log"), filepath.Join(work, "project.log")
@@ -63,12 +62,11 @@ func TestStdioAndHTTPLeaveUnapprovedProjectCodeOffAndWarn(t *testing.T) {
 					t.Fatalf("thread did not start: %s", out.String())
 				}
 			} else {
-				req := httptest.NewRequest("POST", "/rpc", strings.NewReader(request))
-				req.Header.Set("Authorization", "Bearer test-token")
-				out := httptest.NewRecorder()
-				s.HTTPHandler("test-token").ServeHTTP(out, req)
-				if out.Code != 200 || !strings.Contains(out.Body.String(), `"threadId"`) {
-					t.Fatalf("thread did not start: %d %s", out.Code, out.Body.String())
+				c := Connect(context.Background(), s)
+				defer c.Close()
+				var started map[string]any
+				if err := c.Call(context.Background(), "thread/start", map[string]any{}, &started); err != nil || started["threadId"] == nil {
+					t.Fatalf("thread did not start: %v %v", started, err)
 				}
 			}
 			for _, path := range []string{projectLog, filepath.Join(work, "extension-ran")} {

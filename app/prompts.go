@@ -70,7 +70,7 @@ func (a *App) showPrompt(p server.Prompt) {
 		if p.Subtitle != "" {
 			title += tui.Dim("  " + tui.StripControls(p.Subtitle))
 		}
-		in := &labelInput{title: title, hint: "enter submit  esc cancel", text: p.Text, placeholder: p.Placeholder}
+		in := &labelInput{title: title, hint: "enter submit  esc cancel", text: p.Text}
 		in.onDone = func(ok bool, text string) {
 			if !ok {
 				answer(map[string]any{"cancel": true})

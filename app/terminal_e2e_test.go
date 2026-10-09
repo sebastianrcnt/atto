@@ -207,7 +207,7 @@ func terminalDaemonRoundtrip(t *testing.T, killView bool) {
 	defer client.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	if err := client.Call(ctx, "initialize", map[string]any{"protocolVersions": []int{2}, "capabilities": map[string]bool{"interactive": true}}, nil); err != nil {
+	if err := client.Call(ctx, "initialize", map[string]any{"protocolVersions": []int{3}, "capabilities": map[string]bool{"interactive": true}}, nil); err != nil {
 		t.Fatal(err)
 	}
 	if err := client.Call(ctx, "prompt/clientOpen", map[string]any{"threadId": w.Session, "prompt": server.Prompt{Kind: server.PromptSelect, RequestID: "pty-question", Title: "Daemon prompt question", Options: []server.PromptOption{{Label: "PTY chosen option"}}}}, nil); err != nil {
@@ -257,7 +257,7 @@ answered:
 			<-protocolDone
 		}
 	})
-	if err := protocol.Call(ctx, "initialize", map[string]any{"protocolVersions": []int{2}}, nil); err != nil {
+	if err := protocol.Call(ctx, "initialize", map[string]any{"protocolVersions": []int{3}}, nil); err != nil {
 		t.Fatal(err)
 	}
 	var shared server.ThreadInfo

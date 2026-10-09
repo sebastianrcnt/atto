@@ -5,43 +5,33 @@ import (
 	"sync"
 )
 
-// broker is the server's event hub: every notification is numbered,
-// kept in a ring of recent events, and fanned out to subscribers, whatever
-// transport they use (SSE, a stdio or socket connection, an in-process
-// client). A subscriber that falls behind is dropped rather than slowing
-// the server: it reconnects from the ring, or reads its thread again
-// (events/reset) when the ring no longer has what it missed. Event IDs
-// start from 1 with each server; the server's instance ID tells two runs
-// apart. The ring is bounded by count and by bytes.
+// broker is the server's event hub: every notification is numbered and
+// fanned out to subscribers, whatever transport they use (stdio, a socket,
+// a WebSocket, an in-process client). A subscriber that falls behind is
+// dropped rather than slowing the server: it is told events/reset and reads
+// its threads again. Event IDs start from 1 with each server; the server's
+// instance ID tells two runs apart.
 type broker struct {
-	mu    sync.Mutex
-	seq   int64
-	ring  []sseEvent
-	bytes int                             // in ring
-	subs  map[chan sseEvent]chan struct{} // each subscriber's kick channel
-	keep  int
+	mu   sync.Mutex
+	seq  int64
+	subs map[chan hubEvent]chan struct{} // each subscriber's kick channel
 }
-
-// keepBytes bounds the ring's events: completed items carry whole command
-// outputs, and 10,000 of them held megabytes for a resume that a thread
-// read does as well.
-const keepBytes = 2 << 20
 
 // subscriberBuffer is how many events a subscriber may fall behind.
 const subscriberBuffer = 4096
 
-type sseEvent struct {
+type hubEvent struct {
 	id   int64
 	data []byte
 }
 
-func newBroker(keep int) *broker {
-	return &broker{subs: map[chan sseEvent]chan struct{}{}, keep: keep}
+func newBroker() *broker {
+	return &broker{subs: map[chan hubEvent]chan struct{}{}}
 }
 
-// publish numbers v, keeps it and sends it to the subscribers. A
-// notification learns its event ID (rpcNotification.EventID) here, so
-// every transport carries the cursor.
+// publish numbers v and sends it to the subscribers. A notification learns
+// its event ID (rpcNotification.EventID) here, so every transport carries
+// the cursor.
 func (b *broker) publish(v any) int64 {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -51,22 +41,14 @@ func (b *broker) publish(v any) int64 {
 		v = n
 	}
 	data, _ := json.Marshal(v)
-	ev := sseEvent{b.seq, data}
-	b.ring = append(b.ring, ev)
-	b.bytes += len(data)
-	drop := 0
-	for len(b.ring)-drop > 1 && (len(b.ring)-drop > b.keep || b.bytes > keepBytes) {
-		b.bytes -= len(b.ring[drop].data)
-		drop++
-	}
-	b.ring = b.ring[drop:]
+	ev := hubEvent{b.seq, data}
 	for ch, kick := range b.subs {
 		select {
 		case ch <- ev:
 		default:
 			// A slow client: rather than skip events it would never know
-			// it missed, end its stream; it reconnects with Last-Event-ID
-			// and resumes from the ring.
+			// it missed, end its stream; the connection tells it to read
+			// its threads again.
 			delete(b.subs, ch)
 			close(kick)
 		}
@@ -74,33 +56,18 @@ func (b *broker) publish(v any) int64 {
 	return b.seq
 }
 
-// subscribe returns events after lastID (replayed from the ring), a
-// channel of new ones, and a channel closed when the subscriber fell
-// behind and must reconnect. gap is set when the events after lastID are
-// not known any more: lastID is from before the server started (it
-// restarted) or older than the ring keeps.
-func (b *broker) subscribe(lastID int64) (backlog []sseEvent, ch chan sseEvent, kick chan struct{}, gap bool) {
+// subscribe returns a channel of new events and a channel closed when the
+// subscriber fell behind.
+func (b *broker) subscribe() (ch chan hubEvent, kick chan struct{}) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	switch {
-	case lastID > b.seq:
-		gap = true
-	case lastID > 0 && len(b.ring) > 0 && lastID < b.ring[0].id-1:
-		gap = true
-	default:
-		for _, ev := range b.ring {
-			if ev.id > lastID {
-				backlog = append(backlog, ev)
-			}
-		}
-	}
-	ch = make(chan sseEvent, subscriberBuffer)
+	ch = make(chan hubEvent, subscriberBuffer)
 	kick = make(chan struct{})
 	b.subs[ch] = kick
-	return backlog, ch, kick, gap
+	return ch, kick
 }
 
-func (b *broker) unsubscribe(ch chan sseEvent) {
+func (b *broker) unsubscribe(ch chan hubEvent) {
 	b.mu.Lock()
 	delete(b.subs, ch)
 	b.mu.Unlock()

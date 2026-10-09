@@ -27,10 +27,6 @@ const maxWSMessage = 64 << 20
 // each socket has its own identity and closing it only detaches the client.
 // Empty token is for loopback-only listeners, never public listeners.
 func (s *Server) WebSocketHandler(token string, allowOrigins []string) http.Handler {
-	return s.webSocketHandler(token, allowOrigins, nil)
-}
-
-func (s *Server) webSocketHandler(token string, allowOrigins []string, clients func(int)) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if token != "" && !bearerOK(r, token) {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
@@ -45,10 +41,6 @@ func (s *Server) webSocketHandler(token string, allowOrigins []string, clients f
 			return
 		}
 		defer ws.Close()
-		if clients != nil {
-			clients(1)
-			defer clients(-1)
-		}
 		ctx, cancel := context.WithCancel(r.Context())
 		defer cancel()
 		go func() {

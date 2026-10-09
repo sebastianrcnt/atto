@@ -6,8 +6,9 @@ import (
 	jsonv2 "encoding/json/v2"
 )
 
-// MarshalJSONTo keeps revision-2 DTOs byte-shape compatible, while revision-3
-// snapshots always include items/hasMore/before, including an empty/false tail.
+// MarshalJSONTo writes a ThreadInfo shaped as a snapshot (Paged) with
+// items/hasMore/before always present, including an empty/false tail; other
+// ThreadInfo values (summaries) omit them.
 func (info ThreadInfo) MarshalJSONTo(enc *jsontext.Encoder) error {
 	type plain ThreadInfo
 	if !info.Paged {

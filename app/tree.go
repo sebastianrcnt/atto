@@ -832,7 +832,6 @@ func (p *treePicker) row(f *flatNode, selected bool, width int) string {
 type labelInput struct {
 	text        string
 	title, hint string
-	placeholder string // for /remote's clients
 	onDone      func(save bool, text string)
 }
 

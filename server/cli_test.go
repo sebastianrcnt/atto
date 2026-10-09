@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"io"
 	"net"
-	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -37,7 +36,7 @@ func TestServerCLIEndToEnd(t *testing.T) {
 	if output, err := exec.Command("go", "build", "-o", binary, "../cmd/atto").CombinedOutput(); err != nil {
 		t.Fatalf("build: %v\n%s", err, output)
 	}
-	for _, transport := range []string{"app-server", "app-server-ws", "app-server-unix", "serve"} {
+	for _, transport := range []string{"app-server", "app-server-ws", "app-server-unix"} {
 		t.Run(transport, func(t *testing.T) {
 			if transport == "app-server-unix" && runtime.GOOS == "windows" {
 				t.Skip("Unix listener")
@@ -53,9 +52,6 @@ func TestServerCLIEndToEnd(t *testing.T) {
 			}
 			if transport == "app-server-unix" {
 				args = []string{"app-server", "--listen", "unix://" + socket}
-			}
-			if transport == "serve" {
-				args = append(args, "-listen", "127.0.0.1:0")
 			}
 			cmd := exec.Command(binary, args...)
 			cmd.Dir = t.TempDir()
@@ -141,52 +137,12 @@ func TestServerCLIEndToEnd(t *testing.T) {
 						return json.Unmarshal(b, out)
 					}
 				}
-			} else {
-				links := make(chan string, 1)
-				go func() {
-					sc := bufio.NewScanner(stdout)
-					for sc.Scan() {
-						line := strings.TrimSpace(sc.Text())
-						if link, ok := strings.CutPrefix(line, "web:"); ok {
-							links <- strings.TrimSpace(link)
-							return
-						}
-					}
-				}()
-				var link string
-				select {
-				case link = <-links:
-				case <-ctx.Done():
-					t.Fatal("no serve banner")
-				}
-				base, token, _ := strings.Cut(link, "/#token=")
-				invoke = func(method string, p, out any) error {
-					body, _ := json.Marshal(map[string]any{"id": 1, "method": method, "params": p})
-					req, _ := http.NewRequestWithContext(ctx, "POST", base+"/rpc", bytes.NewReader(body))
-					req.Header.Set("Authorization", "Bearer "+token)
-					resp, err := http.DefaultClient.Do(req)
-					if err != nil {
-						return err
-					}
-					defer resp.Body.Close()
-					var reply rpcReply
-					if err := json.NewDecoder(resp.Body).Decode(&reply); err != nil {
-						return err
-					}
-					if reply.Error != nil {
-						return reply.Error
-					}
-					if out != nil {
-						return json.Unmarshal(reply.Result, out)
-					}
-					return nil
-				}
 			}
 			var init map[string]any
-			if err := invoke("initialize", map[string]any{"protocolVersions": []int{2}, "clientInfo": map[string]string{"name": "test"}}, &init); err != nil {
+			if err := invoke("initialize", map[string]any{"protocolVersions": []int{3}, "clientInfo": map[string]string{"name": "test"}}, &init); err != nil {
 				t.Fatal(err)
 			}
-			if init["protocolVersion"] != float64(2) || init["serverInstanceId"] == "" {
+			if init["protocolVersion"] != float64(3) || init["serverInstanceId"] == "" {
 				t.Fatalf("initialize: %v", init)
 			}
 			var thread ThreadInfo
@@ -275,6 +231,25 @@ func TestServerCLIEndToEnd(t *testing.T) {
 				t.Fatal(err)
 			}
 		})
+	}
+}
+
+// atto serve and /remote say the web UI is being rebuilt and where the
+// protocol is served meanwhile.
+func TestServeSaysWebUIIsBeingRebuilt(t *testing.T) {
+	binary := filepath.Join(t.TempDir(), "atto")
+	if runtime.GOOS == "windows" {
+		binary += ".exe"
+	}
+	if output, err := exec.Command("go", "build", "-o", binary, "../cmd/atto").CombinedOutput(); err != nil {
+		t.Fatalf("build: %v\n%s", err, output)
+	}
+	cmd := exec.Command(binary, "serve")
+	cmd.Dir = t.TempDir()
+	cmd.Env = append(os.Environ(), "ATTO_DIR="+t.TempDir(), config.EnvAgent+"=", "ATTO_SESSION_ID=", "HOME="+t.TempDir(), "USERPROFILE="+t.TempDir())
+	out, err := cmd.CombinedOutput()
+	if err != nil || strings.TrimSpace(string(out)) != WebUIMessage || !strings.Contains(WebUIMessage, "atto app-server --listen ws://HOST:PORT") {
+		t.Fatalf("atto serve: %v %q", err, out)
 	}
 }
 

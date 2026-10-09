@@ -121,7 +121,7 @@ func TestProtocolExampleTrace(t *testing.T) {
 	c := Connect(ctx, s)
 	defer c.Close()
 	var init map[string]any
-	if err := c.Call(ctx, "initialize", map[string]any{"protocolVersions": []int{2}, "clientInfo": ClientInfo{Name: "example", Version: "1"}}, &init); err != nil {
+	if err := c.Call(ctx, "initialize", map[string]any{"protocolVersions": []int{3}, "clientInfo": ClientInfo{Name: "example", Version: "1"}}, &init); err != nil {
 		t.Fatal(err)
 	}
 	raw, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": 1, "result": init})

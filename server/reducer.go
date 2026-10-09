@@ -138,7 +138,7 @@ func (v *ThreadView) Apply(n Notification) bool {
 		if p.Loaded != nil {
 			v.Info.Context = p.Loaded
 		}
-	case "thread/branchChanged", "thread/switched", "thread/closed":
+	case "thread/branchChanged", "thread/closed":
 		v.NeedsSnapshot = true
 	case "thread/usage":
 		v.Info.Usage = p.Usage

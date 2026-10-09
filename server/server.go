@@ -9,7 +9,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/sebastianrcnt/atto/agent"
@@ -33,10 +32,7 @@ type Server struct {
 	Cwd     string // default working directory for new threads
 	Notify  func(method string, params map[string]any)
 
-	// OnClients, when set, hears how many clients follow the event stream
-	// as it changes (set before HTTPHandler).
-	OnClients func(n int)
-	memory    core.IdleMemory
+	memory core.IdleMemory
 
 	// LockKind is the writer lease threads take (session.KindServer by
 	// default; the terminal's own runtime takes session.KindTUI).
@@ -48,21 +44,20 @@ type Server struct {
 	// idle for Retention: no run, queued input, active goal, running job,
 	// pending timer or open prompt. Retention is 0 in-process; workers
 	// should use DefaultSessionRetention.
-	// Off (atto serve), threads live until the server closes.
+	// Off, threads live until the server closes.
 	Retire    bool
 	Retention time.Duration
 	// OnThreadClosed, when set, hears that a thread closed (the worker of
 	// a daemon exits with its session).
 	OnThreadClosed func(id string)
 
-	opening     sync.Mutex // serialize session opens with shutdown
-	mu          sync.Mutex
-	threads     map[string]*thread
-	stop        chan struct{}
-	instance    string // see newInstanceID
-	events      *broker
-	clients     map[string]*clientConn
-	httpStreams atomic.Int64
+	opening  sync.Mutex // serialize session opens with shutdown
+	mu       sync.Mutex
+	threads  map[string]*thread
+	stop     chan struct{}
+	instance string // see newInstanceID
+	events   *broker
+	clients  map[string]*clientConn
 }
 
 // DefaultSessionRetention is the unattended idle grace period for workers.
@@ -70,7 +65,7 @@ const DefaultSessionRetention = time.Minute
 
 func New(version, cwd string) *Server {
 	core.ConfigureMemoryBudget()
-	s := &Server{Version: version, Cwd: cwd, threads: map[string]*thread{}, stop: make(chan struct{}), instance: newInstanceID(), events: newBroker(10000)}
+	s := &Server{Version: version, Cwd: cwd, threads: map[string]*thread{}, stop: make(chan struct{}), instance: newInstanceID(), events: newBroker()}
 	s.memory = core.NewIdleMemory()
 	go s.watchInbox()
 	return s
@@ -167,7 +162,6 @@ type threadParams struct {
 	Query               string `json:"query"`
 	Limit               int    `json:"limit"`
 	Before              string `json:"before"`
-	SnapshotVersion     int    `json:"snapshotVersion,omitempty"`
 	Preview             bool   `json:"preview"`
 	DeferStart          bool   `json:"deferStart"` // TUI waits for its startup project-trust decision
 	Cwd                 string `json:"cwd"`
@@ -197,11 +191,9 @@ type threadParams struct {
 	Indexes *[]int  `json:"indexes"`
 	Text    *string `json:"text"`
 	Cancel  bool    `json:"cancel"`
-	// turn/unsteer: an input ID, or a queued follow-up rather than a steer
-	// (revision 1, by text)
+	// turn/unsteer: an input ID
 	InputID string `json:"inputId"`
-	Queued  bool   `json:"queued"`
-	// job/output, job/stop; subagent/read
+	// job/output, job/stop
 	Turn    int    `json:"turn"` // agent/turn: the agent's turn to run
 	Job     int    `json:"job"`
 	Lines   int    `json:"lines"`
@@ -252,27 +244,11 @@ func (s *Server) call(ctx context.Context, method string, raw json.RawMessage) (
 	if err != nil {
 		return nil, err
 	}
-	version := protocolOf(ctx)
-	if p.SnapshotVersion <= 0 || version < 3 {
-		p.SnapshotVersion = version
-	}
-	if method == "thread/items" && version < 3 {
-		return nil, failure(ReasonUnsupported, "thread/items requires protocol 3")
-	}
 	defer func() {
 		if callErr == nil {
 			out, callErr = s.snapshotResult(ctx, method, p, out)
 		}
 	}()
-	if sc := scopeOf(ctx); sc != nil {
-		if s.Workers != nil {
-			return s.routedScope(ctx, sc, method, p)
-		}
-		if out, err, ok := s.scopedCall(ctx, sc, method, p); ok {
-			return out, err
-		}
-		p.ThreadID = sc.Thread()
-	}
 	switch method {
 	case "thread/archive", "thread/unarchive", "thread/delete":
 		return s.mutateSession(ctx, method, p)
@@ -286,7 +262,7 @@ func (s *Server) call(ctx context.Context, method string, raw json.RawMessage) (
 	}
 	switch method {
 	case "initialize":
-		return s.initialize(ctx, p, nil)
+		return s.initialize(ctx, p)
 	case "initialized", "ping":
 		return nil, nil
 	case "models/list":
@@ -384,17 +360,12 @@ func (s *Server) call(ctx context.Context, method string, raw json.RawMessage) (
 				matches, err := session.SearchTree(path, p.Query)
 				return map[string]any{"matches": matches}, err
 			}
-			if p.SnapshotVersion >= 3 {
-				rows, err := session.ReadTreeRows(path)
-				leaf := ""
-				if len(rows) > 0 {
-					leaf = rows[len(rows)-1].ID
-				}
-				return map[string]any{"entries": rows, "leaf": leaf}, err
+			rows, err := session.ReadTreeRows(path)
+			leaf := ""
+			if len(rows) > 0 {
+				leaf = rows[len(rows)-1].ID
 			}
-			_, entries, err := session.Load(path)
-			return map[string]any{"entries": entries, "leaf": session.Leaf(entries)}, err
-
+			return map[string]any{"entries": rows, "leaf": leaf}, err
 		}
 	case "thread/list":
 		return s.listThreads(p)
@@ -735,15 +706,6 @@ func (s *Server) resumeThread(client string, p threadParams) (any, error) {
 		return nil
 	})
 	return info, err
-}
-
-// replayKeepNotices replays the branch after the notices already added
-// (the Loaded item).
-func (t *thread) replayKeepNotices(branch []session.Entry) {
-	kept := t.items
-	t.replay(branch)
-	t.items = append(kept, t.items...)
-	t.resetItemOrder()
 }
 
 // ReadOffline reads a saved thread without taking its writer lease.

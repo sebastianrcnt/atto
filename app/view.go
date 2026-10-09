@@ -23,7 +23,7 @@ func (g gap) Spaced() (tui.Component, int) { return g.Component, 1 }
 // blank shaded row above and below.
 type userBlock struct {
 	text string
-	// remote marks a message sent from /remote's web client.
+	// remote marks a message sent from another client of the session.
 	remote     bool
 	cache, pin tui.RenderCache[string]
 }

@@ -103,11 +103,4 @@ func TestIdleMemoryRequestsAndClose(t *testing.T) {
 	if _, _, closed := m.state(); !closed {
 		t.Fatal("Close left the idle timer running")
 	}
-	live := New("test", t.TempDir())
-	defer live.Close()
-	memory := live.memory
-	_ = live.ScopedHandler("token", Scope{Thread: func() string { return "live" }})
-	if live.memory != memory {
-		t.Fatal("gateway owns a second reclaimer")
-	}
 }

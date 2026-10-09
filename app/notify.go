@@ -136,8 +136,6 @@ func (a *App) onNotification(n server.Notification) {
 	case "event":
 		title := p.Title
 		a.add(&eventBlock{title: title})
-	case "prompt/clientAnswered":
-		a.localAnswered(p.ClientID, p.RequestID, p.Answer)
 	case "prompt/open":
 		if p.Prompt != nil {
 			a.promptOpened(*p.Prompt)

@@ -174,18 +174,10 @@ type App struct {
 	statusLines []string // its latest output
 	statusWake  chan struct{}
 
-	// remote is the /remote gateway while it runs (remote.go); remoteHost
-	// and remotePort override where it listens (tests).
-	remote       *remote
-	remoteThread string // the session its clients were last told about
-	remoteHost   string
-	remotePort   *int
 	// prompt is the runtime's open prompt this terminal shows, and
 	// promptWaiting one that waits for a picker of this terminal to close.
 	prompt        *shownPrompt
 	promptWaiting *server.Prompt
-	localPrompt   *localPrompt
-	localSeq      int
 
 	cwd      string
 	quit     chan struct{}
@@ -317,7 +309,6 @@ func Run(opts Options) error {
 	<-a.quit
 	a.ui.Do(func() {
 		a.quitting = true
-		a.stopRemote()
 	})
 	a.ui.Stop()
 	return a.shutdown()
@@ -356,7 +347,6 @@ func (a *App) show(info server.ThreadInfo) {
 	a.applySnapshot(info)
 	a.treeEntries, a.treeLeaf = nil, ""
 	a.loadCatalog()
-	a.remoteSwitched()
 }
 
 // shutdown ends the session as atto exits. Without the daemon, the

@@ -49,7 +49,7 @@ func TestWebSocketListen(t *testing.T) {
 				dialWS(t, address, nil, 401)
 			}
 			c := dialWS(t, address, headers, 101)
-			c.rpc(t, 1, "initialize", nil)
+			c.rpc(t, 1, "initialize", map[string]any{"protocolVersions": []int{3}})
 			cancel()
 			select {
 			case err := <-done:

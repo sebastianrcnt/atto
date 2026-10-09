@@ -80,7 +80,7 @@ func TestClientsSeeTheSameThread(t *testing.T) {
 		ClientID string `json:"clientId"`
 		Version  int    `json:"protocolVersion"`
 	}
-	if err := a.Call(ctx, "initialize", map[string]any{"protocolVersions": []int{2}, "clientInfo": map[string]string{"name": "a"}}, &init); err != nil || init.ClientID == "" || init.Version != 2 {
+	if err := a.Call(ctx, "initialize", map[string]any{"protocolVersions": []int{3}, "clientInfo": map[string]string{"name": "a"}}, &init); err != nil || init.ClientID == "" || init.Version != 3 {
 		t.Fatalf("initialize %+v %v", init, err)
 	}
 	var th ThreadInfo

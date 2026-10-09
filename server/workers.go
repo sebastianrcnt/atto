@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"github.com/sebastianrcnt/atto/agentstate"
 	"github.com/sebastianrcnt/atto/session"
-	"strings"
 	"sync"
 	"time"
 )
@@ -131,7 +130,6 @@ func (s *Server) routeCall(ctx context.Context, method string, raw json.RawMessa
 		params = map[string]any{}
 	}
 	params["threadId"] = r.thread
-	params["snapshotVersion"] = protocolOf(ctx)
 	if method == "thread/start" || method == "thread/resume" {
 		method = "thread/attach"
 	}
@@ -225,7 +223,7 @@ func (s *Server) workerRoute(ctx context.Context, p threadParams, start bool) (*
 	var capabilities *Capabilities
 	if cc := connOf(ctx); cc != nil {
 		s.mu.Lock()
-		capabilities = &Capabilities{Interactive: cc.interactive || s.httpStreams.Load() > 0, Images: true}
+		capabilities = &Capabilities{Interactive: cc.interactive, Images: true}
 		s.mu.Unlock()
 	}
 	err = c.Call(ctx, "initialize", map[string]any{"protocolVersions": []int{ProtocolVersion}, "clientInfo": ClientInfo{Name: "atto-gateway", Version: s.Version}, "capabilities": capabilities}, &init)
@@ -410,77 +408,5 @@ func (s *Server) detachRoutes(client string, all bool) {
 	s.routing.mu.Unlock()
 	for _, c := range clients {
 		c.Close()
-	}
-}
-
-// routedScope preserves /remote's live shapes and frontend-only commands while
-// the execution itself belongs to a worker. The same facade can switch threads.
-func (s *Server) routedScope(ctx context.Context, sc *Scope, method string, p threadParams) (any, error) {
-	if sc.Thread == nil {
-		return nil, invalid("the live session is unavailable")
-	}
-	id := sc.Thread()
-	if p.ThreadID != "" && p.ThreadID != id && method != "initialize" && method != "models/list" {
-		return nil, invalid("thread %q is no longer the live session (now %q): thread/read it", p.ThreadID, id)
-	}
-	p.ThreadID = id
-	p.Offline = false // a live scope always reads its current runtime
-	original := method
-	switch method {
-	case "initialize":
-		return s.initialize(ctx, p, map[string]any{"live": true, "threadId": id})
-	case "initialized", "ping":
-		return nil, nil
-	case "models/list":
-		return s.listModels()
-	case "thread/start":
-		return nil, failure(ReasonUnsupported, "this is atto's live session: send /clear to start a new conversation")
-	case "thread/list":
-		return map[string]any{"threads": []map[string]any{{"threadId": id, "cwd": s.Cwd, "loaded": true, "live": true}}}, nil
-	case "turn/start", "turn/steer":
-		if strings.TrimSpace(p.Input) == "" && len(p.Images) == 0 {
-			return nil, invalid("input is required")
-		}
-		if strings.HasPrefix(p.Input, "/") && len(p.Images) == 0 && sc.Local != nil && sc.Local(p.Input) {
-			return map[string]any{"status": StatusDone}, nil
-		}
-		method = "input/submit"
-	case "thread/compact":
-		method, p.Input = "input/submit", "/compact"
-	}
-	raw, _ := json.Marshal(p)
-	out, err, ok := s.routeCall(ctx, method, raw, p)
-	if !ok {
-		return nil, &rpcError{Code: codeMethodNotFound, Message: "unknown method " + method}
-	}
-	if err == nil && original == "thread/rollback" {
-		s.Switched(id, id)
-	}
-	if method == "thread/read" || method == "thread/resume" || method == "thread/attach" || original == "thread/rollback" {
-		if m, ok := out.(map[string]any); ok {
-			m["live"] = true
-		}
-	}
-	return out, err
-}
-
-// HTTP revision-1 clients share the handler identity and become interactive
-// when they follow its SSE stream, even without initialize capabilities.
-func (s *Server) routeInteractive(client string, interactive bool) {
-	if s.Workers == nil {
-		return
-	}
-	s.routing.mu.Lock()
-	var clients []*Client
-	for _, r := range s.routing.routes[client] {
-		clients = append(clients, r.c)
-	}
-	s.routing.mu.Unlock()
-	for _, c := range clients {
-		go func() {
-			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-			defer cancel()
-			_ = c.Call(ctx, "initialize", map[string]any{"protocolVersions": []int{ProtocolVersion}, "capabilities": Capabilities{Interactive: interactive, Images: true}}, nil)
-		}()
 	}
 }
