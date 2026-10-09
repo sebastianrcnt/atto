@@ -469,6 +469,7 @@ func (s *Server) newThread(o threadOptions) (*thread, error) {
 	t.catalogVer = t.catalogVersion()
 	t.initUIStatus()
 	t.initUIGoal()
+	t.initUIJobs()
 	t.startLane()
 	s.mu.Lock()
 	s.threads[t.id] = t

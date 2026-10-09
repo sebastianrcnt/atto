@@ -10,6 +10,7 @@ import (
 	"github.com/sebastianrcnt/atto/events"
 	"github.com/sebastianrcnt/atto/jobs"
 	"github.com/sebastianrcnt/atto/trust"
+	"github.com/sebastianrcnt/atto/ui"
 	"os"
 )
 
@@ -76,6 +77,9 @@ func (t *thread) inboxTick(reload bool, evs []events.Event, nJobs, nTimers int) 
 		t.requestReload(true)
 	}
 	t.deliverEvents()
+	if t.elements != nil {
+		t.elements.Invalidate(ui.Match{Site: ui.Pane, ID: "atto/jobs"})
+	}
 	t.refreshUIStatus()
 	t.goalChanged() // the time of a running turn, and reports from atto goal
 	t.maybeRetire()

@@ -26,32 +26,7 @@ func (e *eventBlock) Render(width int) []string {
 	})
 }
 
-func (a *App) cmdJobs(string) {
-	a.rpc("job/list", nil, func(raw json.RawMessage, err error) {
-		if err != nil {
-			a.errorNotice(err)
-			return
-		}
-		var r struct {
-			Jobs []server.Job `json:"jobs"`
-		}
-		_ = json.Unmarshal(raw, &r)
-		if len(r.Jobs) == 0 {
-			a.notice("No background jobs. The agent starts them with `atto job start -- <command>`.")
-			return
-		}
-		var lines []string
-		for _, j := range r.Jobs {
-			st := j.Status
-			if j.ExitCode != nil {
-				st += fmt.Sprintf(" (%d)", *j.ExitCode)
-			}
-			runtime := (time.Duration(j.RuntimeMs) * time.Millisecond).Round(time.Second)
-			lines = append(lines, fmt.Sprintf("%-4d %-10s %-12s %-8s %s", j.ID, j.Kind, st, runtime, j.Label))
-		}
-		a.add(&contextBlock{lines: append([]string{tui.Bold("Background jobs") + tui.Dim("  · /stop stops all · output: atto job output <id>")}, lines...)})
-	})
-}
+func (a *App) cmdJobs(arg string) { a.send("/jobs "+arg, nil, "auto") }
 
 func (a *App) cmdTimers(string) {
 	a.rpc("timer/list", nil, func(raw json.RawMessage, err error) {

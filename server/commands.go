@@ -55,7 +55,7 @@ var Builtins = []CommandInfo{
 	{Name: "rename", Args: "<name>", Desc: "Rename this conversation"},
 	{Name: "archive", Desc: "Archive this conversation and start a new one", Local: true},
 	{Name: "goal", Args: "[objective|clear|edit|pause|resume]", Desc: "Set or view the goal for a long-running task"},
-	{Name: "jobs", Desc: "List background jobs and monitors", Local: true},
+	{Name: "jobs", Desc: "List background jobs and monitors"},
 	{Name: "stop", Desc: "Stop all background jobs"},
 	{Name: "timer", Args: "<when> <msg>", Desc: "Wake the agent later (10m, 15:30)"},
 	{Name: "timers", Desc: "List pending timers", Local: true},
@@ -207,6 +207,8 @@ func (t *thread) runCommand(client, text string) {
 		t.cmdName(arg)
 	case "goal":
 		t.cmdGoal(client, arg)
+	case "jobs":
+		t.openJobsPane(client)
 	case "stop":
 		n := jobs.KillAll(t.id)
 		t.setCounts(0, t.timerCount)

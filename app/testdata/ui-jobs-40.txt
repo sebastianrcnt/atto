@@ -1,0 +1,4 @@
+Job   Kind   State    Time  Command
+1     agent  running  0s    sleep 60
+[ Stop job 1 ]
+Output: atto job output <id> · /stop st…
