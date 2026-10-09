@@ -1,10 +1,16 @@
 # Shared UI elements
 
-Design, 2026-10-09; **proposal, not an implemented API**. Every frontend must
+Design, 2026-10-09; **accepted, being implemented** (decisions below). Every frontend must
 show an extension's drawing and atto's own panels through the same contract: the
 TUI first, a new multi-session web UI served on `0.0.0.0`, then GUI/Flutter.
 Swing and the frozen web client were deleted; `archive/swing` and
 `archive/web-frozen` preserve them. No compatibility layer is required.
+
+**Decisions (2026-10-09):** the user accepted every recommended answer in section 7.
+Simplification for the first stages: routing checks `rev` (and site/id/key)
+only. The `(clientId, requestKey)` dedupe cache and `uiEpoch` are deferred until
+a measured need; a stale or duplicated action after reconnect is rejected by
+`rev`, never re-executed.
 
 ## 1. Boundary and precedents
 
