@@ -196,15 +196,18 @@ func TestShellPersistsAndReplaysTheSame(t *testing.T) {
 	waitShell(t, a)
 	typeLine(a, "!!exit 2")
 	waitShell(t, a)
-	live := shellText(a)
+	var live string
+	a.ui.Do(func() { live = shellText(a) })
 	before := contextText(a)
 
-	a.ui.Body.Clear()
 	_, entries, _ := session.Load(a.sessPath)
-	a.replay(session.Active(entries))
-	if got := shellText(a); got != live {
-		t.Fatalf("replay differs\nlive:\n%s\nreplayed:\n%s", live, got)
-	}
+	a.ui.Do(func() {
+		a.ui.Body.Clear()
+		a.replay(session.Active(entries))
+		if got := shellText(a); got != live {
+			t.Fatalf("replay differs\nlive:\n%s\nreplayed:\n%s", live, got)
+		}
+	})
 
 	if got := contextText(a); got != before || strings.Contains(got, "exit") {
 		t.Fatalf("restored context %q, was %q", got, before)

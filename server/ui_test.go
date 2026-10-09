@@ -211,3 +211,32 @@ func TestUIBlockPreservesProviderOwner(t *testing.T) {
 		t.Fatalf("provider provenance lost: %#v", items)
 	}
 }
+
+func TestUIChangesDoNotAlterModelRequestBytes(t *testing.T) {
+	h := newHarness(t, providertest.Reply{Text: "original answer"})
+	h.call("turn/start", map[string]any{"input": "hello"})
+	h.completed()
+	h.call("thread/rollback", nil)
+	th, _ := h.s.thread(h.id)
+	if err := th.call(func() error {
+		r := th.uiRegistry()
+		r.Render("review", ui.Match{Site: ui.AssistantMessage}, func(e ui.Event, next ui.Next) (*ui.Node, error) {
+			original, err := next(e)
+			if err != nil {
+				return nil, err
+			}
+			n := ui.Box(ui.BoxProps{}, *original, ui.Text(ui.TextProps{Text: "display-only secret"}))
+			return &n, nil
+		})
+		n := ui.Text(ui.TextProps{Text: "display-only block secret"})
+		return r.OpenDefault("review", ui.OpenOptions{Site: ui.Transcript, ID: "review/block", Title: "Review"}, nil, &n)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	h.call("turn/start", map[string]any{"input": "hello"})
+	h.completed()
+	requests := h.m.Requests()
+	if len(requests) != 2 || requests[0] != requests[1] {
+		t.Fatalf("display mutations altered provider request bytes: %v", requests)
+	}
+}
