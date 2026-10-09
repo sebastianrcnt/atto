@@ -24,7 +24,10 @@ export const catalog = [
 ];
 export class RPC {
   next = 0;
-  pending = new Map<number, { resolve: (v: any) => void; reject: (e: any) => void }>();
+  pending = new Map<
+    number,
+    { resolve: (v: any) => void; reject: (e: any) => void }
+  >();
   constructor(
     public send: (s: string) => void,
     public event: (m: Data) => void,
@@ -51,7 +54,9 @@ export class RPC {
       if (!p) return;
       this.pending.delete(m.id);
       m.error
-        ? p.reject(Object.assign(new Error(m.error.message), { data: m.error.data }))
+        ? p.reject(
+            Object.assign(new Error(m.error.message), { data: m.error.data }),
+          )
         : p.resolve(m.result);
     } else if (m.method) {
       this.event(m);
@@ -59,7 +64,9 @@ export class RPC {
   }
   close() {
     for (const p of this.pending.values())
-      p.reject(new Error('Disconnected: request outcome unknown; not retried.'));
+      p.reject(
+        new Error('Disconnected: request outcome unknown; not retried.'),
+      );
     this.pending.clear();
   }
 }
@@ -77,12 +84,16 @@ export class View {
     this.reset = false;
     this.generation++;
     this.revs.clear();
-    for (const i of s.ui?.instances || []) this.revs.set(i.site + '\0' + i.id, i.rev);
+    for (const i of s.ui?.instances || [])
+      this.revs.set(i.site + '\0' + i.id, i.rev);
   }
   prepend(p: Data, generation: number) {
     if (generation !== this.generation || this.reset) return false;
     const seen = new Set(this.items.map((i) => i.id));
-    this.items = [...p.items.filter((i: Data) => !seen.has(i.id)), ...this.items];
+    this.items = [
+      ...p.items.filter((i: Data) => !seen.has(i.id)),
+      ...this.items,
+    ];
     this.info.hasMore = p.hasMore;
     this.info.before = p.before;
     return true;
@@ -182,22 +193,37 @@ export class View {
           a[n] = {
             ...a[n],
             rev: p.rev,
-            ...(m.method === 'ui/open' ? { options: p.options } : { tree: p.tree }),
+            ...(m.method === 'ui/open'
+              ? { options: p.options }
+              : { tree: p.tree }),
           };
         } else if (
-          !['userMessage', 'assistantMessage', 'toolCall', 'notice', 'transcript'].includes(p.site)
+          ![
+            'userMessage',
+            'assistantMessage',
+            'toolCall',
+            'notice',
+            'transcript',
+          ].includes(p.site)
         ) {
           a.push({ ...p });
         }
         if (m.method === 'ui/render') {
-          const block = this.items.find((i) => i.type === 'uiBlock' && i.uiId === p.id);
+          const block = this.items.find(
+            (i) => i.type === 'uiBlock' && i.uiId === p.id,
+          );
           if (block) {
             block.tree = p.tree;
             block.rev = p.rev;
             block.actionsEnabled = p.actionsEnabled;
           }
           const i = this.items.find((i) => i.id === p.id);
-          if (i) i.uiDisplay = { rev: p.rev, tree: p.tree, actionsEnabled: p.actionsEnabled };
+          if (i)
+            i.uiDisplay = {
+              rev: p.rev,
+              tree: p.tree,
+              actionsEnabled: p.actionsEnabled,
+            };
         }
         break;
       }
@@ -210,7 +236,8 @@ export class View {
 }
 // Same URL allowlist as ui.SafeURL: absolute HTTPS or HTTP loopback only.
 export function safeURL(s: string) {
-  if (s.length > 2048 || /[\\\s\u0000-\u001f\u007f-\u009f]/.test(s)) return false;
+  if (s.length > 2048 || /[\\\s\u0000-\u001f\u007f-\u009f]/.test(s))
+    return false;
   try {
     const u = new URL(s);
     if (u.username || u.password || !u.hostname) return false;
@@ -233,7 +260,10 @@ export function clean(s: any) {
 }
 export function consumeToken(
   location: { hash: string; pathname: string; search: string },
-  storage: { setItem: (k: string, v: string) => void; getItem: (k: string) => string | null },
+  storage: {
+    setItem: (k: string, v: string) => void;
+    getItem: (k: string) => string | null;
+  },
   replace: (url: string) => void,
 ) {
   const t = new URLSearchParams(location.hash.slice(1)).get('token');
@@ -246,4 +276,55 @@ export function consumeToken(
 export function imageResource(resource: string) {
   const m = /^([A-Za-z0-9_-]+)-image-(\d+)$/.exec(resource);
   return m ? { itemId: m[1], index: Number(m[2]) } : null;
+}
+
+// Inventory is a preview, never a second Markdown drawing.
+export function plainMarkdown(text: string) {
+  let source = clean(text);
+  // Code is already plain text: retain snake_case and literal pipes inside it.
+  // Protect it while removing markup from prose, then restore without HTML.
+  let prefix = '\ufffc';
+  while (source.includes(prefix)) prefix += '\ufffc';
+  const code: string[] = [];
+  const hold = (value: string) => prefix + (code.push(value) - 1) + prefix;
+  source = source
+    .replace(
+      /(`{3,}|~{3,})[^\n]*\n([\s\S]*?)(?:\n\1|$)/g,
+      (_all, _fence, body) => hold(body),
+    )
+    .replace(/(`+)([\s\S]*?)\1/g, (_all, _ticks, body) => hold(body))
+    .replace(/!?\[([^\]]+)\]\([^)]*\)/g, '$1')
+    .replace(/<(https?:\/\/[^>]+)>/g, '$1')
+    .replace(/^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)+\|?\s*$/gm, '')
+    .replace(/^\s*(?:#{1,6}\s+|>\s?|[-*+]\s+|\d+[.)]\s+)/gm, '')
+    .replace(
+      /(^|[^\w])(\*{1,3}|_{1,3}|~~)(?=\S)(.+?\S|\S)\2(?=$|[^\w])/g,
+      '$1$3',
+    )
+    .replace(/\|/g, ' ');
+  code.forEach((value, i) => {
+    source = source.split(prefix + i + prefix).join(value);
+  });
+  return source.replace(/\s+/g, ' ').trim();
+}
+export function relativeTime(value: string, now = Date.now()) {
+  const time = Date.parse(value);
+  if (!Number.isFinite(time)) return '';
+  const minutes = Math.max(0, Math.floor((now - time) / 60000));
+  return minutes < 1
+    ? 'now'
+    : minutes < 60
+      ? minutes + 'm'
+      : minutes < 1440
+        ? Math.floor(minutes / 60) + 'h'
+        : Math.floor(minutes / 1440) + 'd';
+}
+export function sessionState(row: Data) {
+  return row.error || ['error', 'failed'].includes(row.agent?.lastTurn?.status)
+    ? 'error'
+    : row.openPrompt || row.goalWaiting
+      ? 'needs-you'
+      : row.busy
+        ? 'busy'
+        : 'idle';
 }

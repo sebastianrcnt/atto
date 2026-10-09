@@ -1,4 +1,14 @@
-import { View, RPC, safeURL, consumeToken, clean, imageResource } from '../src/core';
+import {
+  View,
+  RPC,
+  safeURL,
+  consumeToken,
+  clean,
+  imageResource,
+  plainMarkdown,
+  relativeTime,
+  sessionState,
+} from '../src/core';
 import { render, Local, validTree, markdown } from '../src/elements';
 declare const fixture: any;
 declare function flushTimers(): void;
@@ -62,7 +72,10 @@ v.prepend(
   },
   generation,
 );
-assert(v.items[1].text === 'ab' && v.cursor === 13, 'paging never overwrites live/cursor');
+assert(
+  v.items[1].text === 'ab' && v.cursor === 13,
+  'paging never overwrites live/cursor',
+);
 for (const [method, rev] of [
   ['ui/open', 2],
   ['ui/render', 3],
@@ -93,9 +106,19 @@ v.apply({
     tree: { type: 'Text', props: { text: 'late' } },
   },
 });
-assert(v.info.ui.instances.length === 0, 'rev tombstone rejects a later transport event');
-v.apply({ method: 'thread/branchChanged', eventId: 30, params: { threadId: 't' } });
-assert(!v.prepend({ items: [], hasMore: false }, generation), 'branch discards page');
+assert(
+  v.info.ui.instances.length === 0,
+  'rev tombstone rejects a later transport event',
+);
+v.apply({
+  method: 'thread/branchChanged',
+  eventId: 30,
+  params: { threadId: 't' },
+});
+assert(
+  !v.prepend({ items: [], hasMore: false }, generation),
+  'branch discards page',
+);
 v.snapshot({
   threadId: 't',
   eventId: 1,
@@ -119,7 +142,10 @@ for (const url of [
   'https://example.com/\n',
 ])
   assert(!safeURL(url), 'unsafe link ' + url);
-assert(!clean('x\x1b]52;secret\x07\x1b[31m<svg>\x00').includes('secret'), 'escapes');
+assert(
+  !clean('x\x1b]52;secret\x07\x1b[31m<svg>\x00').includes('secret'),
+  'escapes',
+);
 const store = new Map<string, string>();
 let url = '';
 const t = consumeToken(
@@ -127,8 +153,14 @@ const t = consumeToken(
   { setItem: (k, v) => store.set(k, v), getItem: (k) => store.get(k) || null },
   (s) => (url = s),
 );
-assert(t === 'abc' && url === '/' && store.get('atto-token') === 'abc', 'fragment token');
-assert(imageResource('t-i1-image-2')?.index === 2 && !imageResource('../x'), 'resource identity');
+assert(
+  t === 'abc' && url === '/' && store.get('atto-token') === 'abc',
+  'fragment token',
+);
+assert(
+  imageResource('t-i1-image-2')?.index === 2 && !imageResource('../x'),
+  'resource identity',
+);
 let sent: any[] = [];
 const client = new RPC(
   (s) => sent.push(JSON.parse(s)),
@@ -138,7 +170,9 @@ let result: any = null;
 client.call('ping').then((r) => (result = r));
 client.receive(JSON.stringify({ id: sent[0].id, result: { ok: true } }));
 let disconnected = false;
-client.call('input/submit', { input: 'once' }).catch(() => (disconnected = true));
+client
+  .call('input/submit', { input: 'once' })
+  .catch(() => (disconnected = true));
 client.close();
 assert(sent.length === 2 && client.pending.size === 0, 'never resend');
 let actions: any[] = [];
@@ -158,7 +192,9 @@ const node = render(fixture, ctx);
 document.body.append(node);
 assert(node.textContent?.includes('Portable é 👩‍💻 漢字'), 'shared fixture text');
 assert(
-  node.querySelector('table') && node.querySelector('details') && node.querySelector('button'),
+  node.querySelector('table') &&
+    node.querySelector('details') &&
+    node.querySelector('button'),
   'semantic catalog',
 );
 node.querySelector<HTMLButtonElement>('button')!.click();
@@ -213,25 +249,157 @@ assert(
 assert(
   form.querySelector('progress') &&
     form.querySelector('img') &&
-    (form.querySelector('a') as HTMLAnchorElement)?.rel === 'noopener noreferrer',
+    (form.querySelector('a') as HTMLAnchorElement)?.rel ===
+      'noopener noreferrer',
   'leaves',
 );
 const disabled = render(inputTree, { ...ctx, enabled: false });
 disabled.querySelector<HTMLButtonElement>('button')!.click();
-assert(disabled.querySelector<HTMLInputElement>('input')!.disabled, 'offline controls');
+assert(
+  disabled.querySelector<HTMLInputElement>('input')!.disabled,
+  'offline controls',
+);
 assert(
   markdown(
     '# Heading\n- item\n<script>alert(1)</script>\n[x](javascript:evil)',
   ).textContent?.includes('<script>'),
   'raw HTML is text',
 );
-assert(!markdown('[x](javascript:evil)').querySelector('a'), 'markdown allowlist');
+assert(
+  !markdown('[x](javascript:evil)').querySelector('a'),
+  'markdown allowlist',
+);
+
+const rich = markdown(
+  '# Heading\n\nSoft line\ncontinued  \nhard\\\nnext\n\n| A | B |\n| :--- | ---: |\n| **bold** | `x|y` |\n| escaped\\|pipe | two |\n\n3. parent\n   - child\n     - grandchild\n4. next\n\n> quote\n>\n> - quoted list\n\n~~~ts\nconst x = "<script>";\n~~~\n\n- [x] done\n- [ ] next\n\n***strong italic*** and _italic_ and ~~gone~~',
+);
+assert(rich.querySelector('h1')?.textContent === 'Heading', 'headings');
+assert(
+  rich.querySelectorAll('table').length === 1 &&
+    rich.querySelectorAll('td').length === 4,
+  'GFM table',
+);
+assert(
+  rich.querySelectorAll('td')[1].textContent === 'x|y' &&
+    rich.querySelectorAll('td')[2].textContent === 'escaped|pipe',
+  'code and escaped pipes',
+);
+assert(
+  rich.querySelector('th')?.style.textAlign === 'left' &&
+    rich.querySelectorAll('th')[1].style.textAlign === 'right',
+  'column alignment',
+);
+assert(
+  rich.querySelector('ol')?.getAttribute('start') === '3' &&
+    rich.querySelectorAll('ul').length === 4,
+  'ordered and nested lists, quote and tasks',
+);
+assert(
+  rich.querySelector('blockquote')?.querySelector('ul'),
+  'recursive quote',
+);
+assert(
+  rich.querySelectorAll('br').length === 2 &&
+    rich.textContent?.includes('Soft line continued'),
+  'hard and soft breaks',
+);
+assert(
+  rich.querySelector('pre')?.textContent?.includes('<script>') &&
+    !rich.querySelector('script'),
+  'fenced code uses safe Code look',
+);
+assert(
+  rich.querySelector('s')?.textContent === 'gone' &&
+    rich.querySelectorAll('em').length >= 2,
+  'inline emphasis',
+);
+assert(
+  rich.querySelectorAll('input').length === 2 &&
+    rich.querySelector<HTMLInputElement>('input')!.disabled,
+  'passive tasks',
+);
+for (const source of [
+  '**partial',
+  '```sh\necho hello',
+  '| a | b |\n| --- |',
+  '> - partial',
+  '1. a\n   - b',
+  '~~~\n<svg>',
+]) {
+  const partial = markdown(source);
+  assert(
+    partial.textContent && !partial.querySelector('svg'),
+    'streaming incomplete input ' + source,
+  );
+}
+assert(
+  markdown('```js\na\n````').querySelectorAll('.code-line').length === 1,
+  'longer closing fence',
+);
+assert(
+  markdown('| | |\n| --- | --- |\n| a | b |').querySelectorAll('th').length ===
+    0,
+  'empty header follows TUI',
+);
+assert(
+  !markdown(
+    '[bad](https://u:p@example.com) <http://example.com> <img src=x>',
+  ).querySelector('a'),
+  'URL credentials and non-loopback HTTP blocked',
+);
+assert(
+  markdown('[**good**](https://example.com)')
+    .querySelector('a')
+    ?.querySelector('strong'),
+  'nested inline link',
+);
+assert(
+  plainMarkdown(
+    '# Title\n**bold** `code` [link](https://example.com)\n| --- | --- |',
+  ) === 'Title bold code link',
+  'plain inventory preview',
+);
+assert(
+  relativeTime('2026-10-10T00:00:00Z', Date.parse('2026-10-10T01:30:00Z')) ===
+    '1h',
+  'relative time',
+);
+assert(
+  sessionState({ busy: true }) === 'busy' &&
+    sessionState({ busy: true, openPrompt: true }) === 'needs-you',
+  'inventory state priority',
+);
+assert(
+  markdown('1. one\n\n2. two').querySelectorAll('ol').length === 1,
+  'loose ordered siblings retain numbering',
+);
+assert(
+  !markdown('| a | b |\n| --- |').querySelector('table'),
+  'partial separator does not churn table early',
+);
+assert(markdown('-*-').querySelector('p'), 'mixed delimiters not a rule');
+assert(
+  plainMarkdown('`UI_CHECK_OK` **bold** snake_case and `x|y`') ===
+    'UI_CHECK_OK bold snake_case and x|y',
+  'preview retains literal code punctuation',
+);
+assert(
+  plainMarkdown('```sh\necho snake_case\n```') === 'echo snake_case',
+  'preview strips fence language, not code',
+);
 const unknown = render(
   {
     type: 'Future',
     props: { text: 'Fallback' },
     events: ['press'],
-    children: [{ type: 'Button', key: 'hidden', events: ['press'], props: { label: 'hidden' } }],
+    children: [
+      {
+        type: 'Button',
+        key: 'hidden',
+        events: ['press'],
+        props: { label: 'hidden' },
+      },
+    ],
   },
   ctx,
 );
@@ -240,7 +408,11 @@ assert(
   'passive unknown subtree',
 );
 assert(
-  !validTree({ type: 'Link', props: { href: 'javascript:x' } }, 'pane', 'atto/test'),
+  !validTree(
+    { type: 'Link', props: { href: 'javascript:x' } },
+    'pane',
+    'atto/test',
+  ),
   'invalid link',
 );
 assert(
@@ -259,8 +431,20 @@ assert(
   'duplicate key',
 );
 const engine = render(
-  { type: 'engine', props: { site: 'assistantMessage', id: 'i', overrides: { text: 'display' } } },
-  { ...ctx, site: 'assistantMessage', id: 'i', engine: () => document.createElement('article') },
+  {
+    type: 'engine',
+    props: {
+      site: 'assistantMessage',
+      id: 'i',
+      overrides: { text: 'display' },
+    },
+  },
+  {
+    ...ctx,
+    site: 'assistantMessage',
+    id: 'i',
+    engine: () => document.createElement('article'),
+  },
 );
 assert(engine.tagName === 'ARTICLE', 'engine native renderer');
 (globalThis as any).checkPromises = () => {

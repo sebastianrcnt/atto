@@ -1,6 +1,7 @@
 // Beautiful UI Code Block, Diff Table, Task Rows and Approval Card adapted to
 // DOM/catalog data (MIT, Shane Levine 2026; THIRD_PARTY_NOTICES).
 import { Tree, Data, clean, safeURL, catalog } from './core';
+import { renderMarkdown } from './markdown';
 export function el<K extends keyof HTMLElementTagNameMap>(
   tag: K,
   text?: any,
@@ -18,76 +19,14 @@ export function button(text: string, fn: () => void, disabled = false) {
   b.onclick = fn;
   return b;
 }
-export function inline(text: string, parent: HTMLElement) {
-  const re = /(`[^`]+`|\*\*[^*]+\*\*|\*[^*]+\*|\[[^\]]+\]\([^\s)]+\))/g;
-  let last = 0;
-  for (const m of text.matchAll(re)) {
-    parent.append(document.createTextNode(clean(text.slice(last, m.index))));
-    const s = m[0];
-    if (s.startsWith('[')) {
-      const a = /^\[([^\]]+)\]\((.*)\)$/.exec(s)!;
-      if (safeURL(a[2])) {
-        const e = el('a', a[1]);
-        e.href = a[2];
-        e.rel = 'noopener noreferrer';
-        e.target = '_blank';
-        parent.append(e);
-      } else parent.append(document.createTextNode(clean(s)));
-    } else {
-      const tag = s[0] === '`' ? 'code' : s.startsWith('**') ? 'strong' : 'em';
-      const n = tag === 'strong' ? 2 : 1;
-      parent.append(el(tag, s.slice(n, -n)));
-    }
-    last = m.index! + s.length;
-  }
-  parent.append(document.createTextNode(clean(text.slice(last))));
-}
+export { inline } from './markdown';
 export function markdown(text: string) {
-  const root = el('div', null, 'markdown');
-  const lines = clean(text).split('\n');
-  let fence: string[] | null = null;
-  let language = '';
-  let list: HTMLElement | null = null;
-  for (const line of lines) {
-    if (/^\s*```/.test(line)) {
-      if (fence) {
-        root.append(code(fence.join('\n'), { language }));
-        fence = null;
-      } else {
-        fence = [];
-        language = line.replace(/^\s*```/, '');
-      }
-      list = null;
-      continue;
-    }
-    if (fence) {
-      fence.push(line);
-      continue;
-    }
-    const h = /^(#{1,6})\s+(.*)$/.exec(line);
-    const li = /^\s*(?:[-*+] |\d+\. )(.*)$/.exec(line);
-    const quote = /^>\s?(.*)$/.exec(line);
-    if (li) {
-      if (!list) {
-        list = el(/^\s*\d/.test(line) ? 'ol' : 'ul');
-        root.append(list);
-      }
-      const e = el('li');
-      inline(li[1], e);
-      list.append(e);
-      continue;
-    }
-    list = null;
-    const e = h ? document.createElement('h' + h[1].length) : quote ? el('blockquote') : el('p');
-    inline(h ? h[2] : quote ? quote[1] : line, e);
-    root.append(e);
-  }
-  if (fence) root.append(code(fence.join('\n'), { language }));
-  return root;
+  return renderMarkdown(text, code);
 }
 export function code(source: string, p: Data = {}, diff = false) {
   const root = el('div', null, 'code-block');
-  if (p.path || p.language) root.append(el('div', p.path || p.language, 'code-title'));
+  if (p.path || p.language)
+    root.append(el('div', p.path || p.language, 'code-title'));
   const pre = el('pre');
   pre.className = p.wrap === 'wrap' ? 'code-wrap' : 'code-truncate';
   const body = el('code');
@@ -109,7 +48,13 @@ export function code(source: string, p: Data = {}, diff = false) {
         );
       }
       if (p.lineNumbers)
-        line.append(el('span', String(i + (p.startLine || 1)).padStart(4) + ' │ ', 'gutter'));
+        line.append(
+          el(
+            'span',
+            String(i + (p.startLine || 1)).padStart(4) + ' │ ',
+            'gutter',
+          ),
+        );
       line.append(document.createTextNode(s));
       body.append(line);
     });
@@ -130,7 +75,9 @@ export class Local {
         if (n.type === 'Input' || n.type === 'Select') {
           const v =
             n.props.value ??
-            (n.type === 'Select' ? n.props.options?.find((o: Data) => !o.disabled)?.value : '') ??
+            (n.type === 'Select'
+              ? n.props.options?.find((o: Data) => !o.disabled)?.value
+              : '') ??
             '';
           if (this.values.get(n.key) !== v) {
             this.values.set(n.key, v);
@@ -161,7 +108,10 @@ export type Context = {
 function fallback(n: Tree): string {
   const p = n.props || {};
   return (
-    [p.text || p.source || p.label || p.alt || '', ...(n.children || []).map(fallback)]
+    [
+      p.text || p.source || p.label || p.alt || '',
+      ...(n.children || []).map(fallback),
+    ]
       .filter(Boolean)
       .join('\n') || '[unsupported: ' + n.type + ']'
   );
@@ -189,7 +139,8 @@ const schemas: Record<string, string> = {
   Diff: 'source!:s path:s lineNumbers:b wrap:s:wrap,truncate',
   Link: 'href!:s label:s',
   Button: 'label!:s plain:b hotkey:s disabled:b autoFocus:b',
-  Input: 'label:s value:s placeholder:s submitLabel:s maxLength:i:0,131072 disabled:b autoFocus:b',
+  Input:
+    'label:s value:s placeholder:s submitLabel:s maxLength:i:0,131072 disabled:b autoFocus:b',
   Select: 'options!:a label:s value:s disabled:b autoFocus:b',
   List: 'mode:s:list,table rows!:a columns:a emptyText:s',
   Progress: 'value:n:0,1 label:s width:i:1,512',
@@ -212,21 +163,36 @@ function props(p: Data, schema: string, common = true) {
     const rule = rules.get(key);
     if (!rule) throw Error('unknown prop');
     const [type, range] = rule.split(':');
-    if (type === 's' && (typeof v !== 'string' || (range && !range.split(',').includes(v))))
+    if (
+      type === 's' &&
+      (typeof v !== 'string' || (range && !range.split(',').includes(v)))
+    )
       throw Error('string prop');
-    if ((type === 'b' && typeof v !== 'boolean') || (type === 'a' && !Array.isArray(v)))
+    if (
+      (type === 'b' && typeof v !== 'boolean') ||
+      (type === 'a' && !Array.isArray(v))
+    )
       throw Error('prop type');
-    if (type === 'w' && v !== 'fill' && (!Number.isInteger(v) || v < 1 || v > 512))
+    if (
+      type === 'w' &&
+      v !== 'fill' &&
+      (!Number.isInteger(v) || v < 1 || v > 512)
+    )
       throw Error('width');
     if (type === 'n' || type === 'i') {
-      if (typeof v !== 'number' || !Number.isFinite(v) || (type === 'i' && !Number.isInteger(v)))
+      if (
+        typeof v !== 'number' ||
+        !Number.isFinite(v) ||
+        (type === 'i' && !Number.isInteger(v))
+      )
         throw Error('number prop');
       if (range) {
         const [lo, hi] = range.split(',').map(Number);
         if (v < lo || v > hi) throw Error('prop range');
       }
     }
-    if ((key === 'color' || key === 'backgroundColor') && !themes.includes(v)) throw Error('theme');
+    if ((key === 'color' || key === 'backgroundColor') && !themes.includes(v))
+      throw Error('theme');
   }
 }
 function utf8Length(s: string) {
@@ -240,9 +206,13 @@ function utf8Length(s: string) {
 function propText(v: any, depth = 0): number {
   if (depth > 32) throw Error('props depth');
   if (typeof v === 'string') return utf8Length(v);
-  if (Array.isArray(v)) return v.reduce((n, x) => n + propText(x, depth + 1), 0);
+  if (Array.isArray(v))
+    return v.reduce((n, x) => n + propText(x, depth + 1), 0);
   if (v && typeof v === 'object')
-    return Object.values(v).reduce<number>((n, x) => n + propText(x, depth + 1), 0);
+    return Object.values(v).reduce<number>(
+      (n, x) => n + propText(x, depth + 1),
+      0,
+    );
   return 0;
 }
 export function validTree(tree: Tree, site: string, id: string) {
@@ -252,10 +222,17 @@ export function validTree(tree: Tree, site: string, id: string) {
     hotkeys = new Set<string>();
   let text = 0;
   function walk(n: Tree, depth: number) {
-    if (!n || typeof n.type !== 'string' || !n.props || ++count > 2048 || depth > 32)
+    if (
+      !n ||
+      typeof n.type !== 'string' ||
+      !n.props ||
+      ++count > 2048 ||
+      depth > 32
+    )
       throw Error('tree limit');
     if (n.key) {
-      if (keys.has(n.key) || n.key.length > 128 || n.key === '$site') throw Error('key');
+      if (keys.has(n.key) || n.key.length > 128 || n.key === '$site')
+        throw Error('key');
       keys.add(n.key);
     }
     text += propText(n.props);
@@ -270,7 +247,9 @@ export function validTree(tree: Tree, site: string, id: string) {
             : ['text'];
       if (
         ++refs > 1 ||
-        !['userMessage', 'assistantMessage', 'toolCall', 'notice'].includes(site) ||
+        !['userMessage', 'assistantMessage', 'toolCall', 'notice'].includes(
+          site,
+        ) ||
         p.site !== site ||
         p.id !== id ||
         Object.keys(p).length !== 3 ||
@@ -287,8 +266,11 @@ export function validTree(tree: Tree, site: string, id: string) {
     const schema = schemas[n.type];
     if (schema) {
       props(p, schema);
-      const required = ({ Button: 'press', Input: 'submit', Select: 'select' } as Data)[n.type];
-      const allowed = n.type === 'Input' ? ['submit', 'input'] : required ? [required] : [];
+      const required = (
+        { Button: 'press', Input: 'submit', Select: 'select' } as Data
+      )[n.type];
+      const allowed =
+        n.type === 'Input' ? ['submit', 'input'] : required ? [required] : [];
       if (
         new Set(n.events || []).size !== (n.events || []).length ||
         (n.events || []).some((e) => !allowed.includes(e)) ||
@@ -303,12 +285,15 @@ export function validTree(tree: Tree, site: string, id: string) {
       )
         throw Error('passive site');
       if (p.hotkey) {
-        if (!/^[a-z0-9]$/.test(p.hotkey) || hotkeys.has(p.hotkey)) throw Error('hotkey');
+        if (!/^[a-z0-9]$/.test(p.hotkey) || hotkeys.has(p.hotkey))
+          throw Error('hotkey');
         hotkeys.add(p.hotkey);
       }
       if (n.type === 'Link' && !safeURL(p.href)) throw Error('link');
       if (n.type === 'Markdown')
-        for (const match of p.text.matchAll(/\]\(([^)]*)\)|<(https?:\/\/[^>]+)>/g))
+        for (const match of p.text.matchAll(
+          /\]\(([^)]*)\)|<(https?:\/\/[^>]+)>/g,
+        ))
           if (!safeURL(match[1] || match[2])) throw Error('markdown link');
       if (n.type === 'Image' && !/^[A-Za-z0-9_-]{1,128}$/.test(p.resource))
         throw Error('image resource');
@@ -321,11 +306,13 @@ export function validTree(tree: Tree, site: string, id: string) {
           seen.add(o.value);
           if (!o.disabled) enabled++;
         }
-        if (!enabled || (p.value != null && !seen.has(p.value))) throw Error('select');
+        if (!enabled || (p.value != null && !seen.has(p.value)))
+          throw Error('select');
       }
       if (n.type === 'List') {
         const cols = p.columns || [];
-        for (const c of cols) props(c, 'label!:s width:i:1,512 align:s:start,end', false);
+        for (const c of cols)
+          props(c, 'label!:s width:i:1,512 align:s:start,end', false);
         const size = p.mode === 'table' ? cols.length : 1;
         if (!size) throw Error('table');
         const rows = new Set<string>();
@@ -362,26 +349,32 @@ export function render(tree: Tree | null, c: Context): HTMLElement {
     c.local.sync(null);
     return el('span');
   }
-  if (!validTree(tree, c.site, c.id)) return el('div', 'Drawing unavailable', 'muted');
+  if (!validTree(tree, c.site, c.id))
+    return el('div', 'Drawing unavailable', 'muted');
   c.local.sync(tree);
   const hotkeys = new Map<string, HTMLButtonElement>();
   const draw = (n: Tree): HTMLElement => {
     const p = n.props || {};
     let e: HTMLElement;
     const send = (type: string, v?: string) => {
-      if (c.enabled && !p.disabled && n.events?.includes(type)) c.action(n.key!, type, v);
+      if (c.enabled && !p.disabled && n.events?.includes(type))
+        c.action(n.key!, type, v);
     };
     const disabled = !c.enabled || !!p.disabled;
     switch (n.type) {
       case 'engine':
-        return c.engine ? c.engine(n) : el('span', '[original item unavailable]');
+        return c.engine
+          ? c.engine(n)
+          : el('span', '[original item unavailable]');
       case 'Box': {
         e = el('div', null, 'ui-box');
         Object.assign(e.style, {
           flexDirection: p.flexDirection || 'column',
           gap: `${p.gap || 0}${p.flexDirection === 'row' ? 'ch' : 'lh'}`,
           padding: `${p.padding || 0}lh ${p.padding || 0}ch`,
-          alignItems: { start: 'stretch', center: 'center', end: 'flex-end' }[p.align || 'start'],
+          alignItems: { start: 'stretch', center: 'center', end: 'flex-end' }[
+            p.align || 'start'
+          ],
           width: typeof p.width === 'number' ? p.width + 'ch' : '100%',
           flexGrow: String(p.grow || 0),
           height: p.height ? p.height + 'lh' : 'auto',
@@ -394,7 +387,10 @@ export function render(tree: Tree | null, c: Context): HTMLElement {
         }
         for (const child of n.children || []) {
           const ch = draw(child);
-          if (p.flexDirection === 'row' && typeof child.props.width !== 'number') {
+          if (
+            p.flexDirection === 'row' &&
+            typeof child.props.width !== 'number'
+          ) {
             ch.style.flex = `${child.props.grow || 1} 1 0`;
             ch.style.width = 'auto';
           }
@@ -464,7 +460,11 @@ export function render(tree: Tree | null, c: Context): HTMLElement {
         label.append(input);
         form.append(
           label,
-          button(p.submitLabel || 'submit', () => send('submit', input.value), disabled),
+          button(
+            p.submitLabel || 'submit',
+            () => send('submit', input.value),
+            disabled,
+          ),
         );
         e = form;
         break;
@@ -476,7 +476,10 @@ export function render(tree: Tree | null, c: Context): HTMLElement {
         select.disabled = disabled;
         select.setAttribute('aria-label', p.label || 'Select');
         for (const o of p.options || []) {
-          const opt = el('option', o.label + (o.description ? ' — ' + o.description : ''));
+          const opt = el(
+            'option',
+            o.label + (o.description ? ' — ' + o.description : ''),
+          );
           opt.value = o.value;
           opt.disabled = !!o.disabled;
           select.append(opt);
@@ -548,7 +551,9 @@ export function render(tree: Tree | null, c: Context): HTMLElement {
         progress.setAttribute('aria-label', p.label || 'Progress');
         progress.style.width = (p.width || 20) + 'ch';
         if (p.value != null)
-          label.append(document.createTextNode(' ' + Math.round(p.value * 100) + '% '));
+          label.append(
+            document.createTextNode(' ' + Math.round(p.value * 100) + '% '),
+          );
         label.append(progress);
         e = label;
         break;
