@@ -156,15 +156,15 @@ A read-only/offline snapshot is not an execution owner. Use resume before writes
 
 - **Item:** `id`, `type`, optional `status` (inProgress/completed/failed), `text`.
   Types: userMessage, reasoning, agentMessage, commandExecution, compaction,
-  branchSummary, event, goal, hook, notice, goalStatus, extText.
+  branchSummary, event, goal, hook, notice, goalStatus, uiBlock.
   Common provenance: `entryId`, `callId`, `clientId`, `inputId`, `steerGroup`.
   Command: `description`, `command`, `output`, `exitCode`, `durationMs`,
   `timeoutMs`, `timedOut`, `pending`, `startedMs`, `job`, `background`, `images`,
   `dropped`, `canceled`, `error`, `resultText`, `reason`, `cap`.
   User shell: `shell`, `excluded`, `truncated`, `fullOutput`, `contextPending`.
   Compaction: `auto`, `tokensBefore`, `tokensAfter`. Hook: `hookEvent`, `blocked`.
-  Display: `blockId`, `display:{statuses:[{ext,text}],ext?,text?}`. extText:
-  `title`, `ext`, `lang`, `preview`. Notice: `level`, `title`, `loaded`,
+  Display: `blockId`, `uiDisplay?:{rev,tree,actionsEnabled?}`. uiBlock:
+  `title`, `ext`, `uiTree`, `uiRev`, `uiId`. Notice: `level`, `title`, `loaded`,
   `reloaded`, `changes`, `note`. Goal: `goalStatus`, `goalState`.
   Omitted fields aren't default display text. Display replacements never change
   the model's original text. Completed items may later get block/entry IDs. User messages receive their
@@ -181,13 +181,11 @@ A read-only/offline snapshot is not an execution owner. Use resume before writes
   ≤10 images, each ≤10 MB, and a model accepting images. `input/submit` also
   accepts `{file,mimeType,width,height,name?}` for files already in the local
   image store. Output **ItemImage**: `{name?,width?,height?,file?,mimeType?}`.
-- **Prompt:** `{id,kind:select|multiSelect|input,title,selected,options?:[{label,description?}],
+- **Prompt:** `{id,kind:select|multiSelect|input|custom,title,selected,options?:[{label,description?}],
   text?,placeholder?,subtitle?,filterable?,total?,note?,origin?,confirm?,
-  clientId?,requestId?}`.
+  clientId?,requestId?,uiId?}`.
 - **GoalInfo:** `{objective,status,statusLabel,indicator,summary,tokens,tokensUsed,
   elapsed,seconds,note?,held?,state?,turnStartedAt?}`; state is the persisted goal.
-- **ExtensionUI:** `{status:[{key,text}],widgets:[{key,lines}]}`. Display text,
-  never code/HTML to execute.
 - **Job:** `{id,label,kind,command,status,started,runtimeMs,exitCode?,error?,
   resultText?,reason?,cap?}`. **Timer:** `{id,due,message,schedule?}`.
 - **Agent:** `{name,parentThreadId?,path?,rootThreadId?,depth,origin?,project?,
@@ -379,7 +377,6 @@ clientId filtering. `events/reset` may be global or worker-scoped.
 | `item/delta` | T + `{turnId,itemId,delta}`; command output or message/reasoning text |
 | `item/updated` | T + `{turnId?,item:Item}`; replace whole item, including late block/entry IDs |
 | `item/completed` | T + `{turnId,item:Item}` |
-| `item/display` | T + `{itemId,blockId,display}`; display-only overlay |
 | `input/recovered` | T + `{clientId,text,images,ifEmpty}`; draft recovery for the named client |
 | `hook` | T + `{turnId?,event,message,blocked?}`; hook result |
 | `event` | T + `{title,source}`; inbox/job/timer notice |
@@ -399,7 +396,6 @@ clientId filtering. `events/reset` may be global or worker-scoped.
 | `events/reset` | `{eventId,serverInstanceId,threadId?}`; replace snapshot, don't append replay twice |
 | `commands/changed` | T; refresh commands/list |
 | `extension/notify` | T + `{extension,message,level}` |
-| `extension/ui` | T + `{ui:ExtensionUI}` |
 
 ### Goals and questions
 
@@ -650,3 +646,10 @@ the registry, never cross item identities, and appear at most once per tree.
 Page replay resolves their runtime item IDs from stable entry/block/call identity.
 Helper dialog references are expanded worker-side and never appear on the wire.
 Observers (`capabilities.interactive:false`) cannot send `ui/event` requests.
+
+
+Extension session JSON storage uses `ui_store` entries (`ext`, `storeKey`,
+`storeValue` or `storeDeleted`). They are excluded from model context, replayed
+along the active branch, and inherited at a fork point. Legacy `block_display`
+and `ext_text` entries are reader-only: replay converts them to passive portable
+trees, never string UI notifications. There is no `ExtensionUI` string snapshot.

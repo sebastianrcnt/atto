@@ -1,6 +1,6 @@
 # Shared UI elements
 
-Design, 2026-10-09; **accepted, being implemented** (decisions below). Every frontend must
+Design, 2026-10-09; **accepted; stages 1–3 implemented** (decisions below). Every frontend must
 show an extension's drawing and atto's own panels through the same contract: the
 TUI first, a new multi-session web UI served on `0.0.0.0`, then GUI/Flutter.
 Swing and the frozen web client were deleted; `archive/swing` and
@@ -34,13 +34,12 @@ state, persistence and transport; `extensions` supplies only the full-build goja
 adapter. Clients render data; no callback, Go closure or JavaScript source
 crosses the wire.
 
-Today `extensions/atto.d.ts`/`api_ui.go` send strings through a Host;
-`server/extui.go` queues them on the worker lane and persists block_display/
-ext_text; `server/items.go` binds/replays them. `app` draws
-blocks, status, widgets, goal/jobs panels and dialogs with `tui` primitives.
-Replace that plumbing, not [tui-as-client.md](tui-as-client.md)'s execution
-ownership or [agent-model.md](agent-model.md)'s session identity/jobs. Panels
-use session IDs, not reusable agent labels.
+Stages 1–2 provide the pure `ui` registry, protocol, persistence, portable TUI
+adapter and Go built-ins. Stage 3 adds the full-build goja binding, JSX catalog,
+session JSON store and typed examples; removes live string UI APIs/notifications
+and frontend string widgets/status/display plumbing. Legacy session strings are
+converted on read to passive trees, without rewriting files or historical code.
+The new web UI (stage 4) and external providers (stage 5) remain future work.
 
 **Precedents.** [Claude Code's interface guide][mods-interface] and
 [reference][mods-reference] inform sites (Pane/AbovePrompt/transcript/Spinner/
@@ -270,7 +269,7 @@ added with this lease later.
 
 ## 5. Extension authoring API
 
-Proposed additions/replacement in `extensions/atto.d.ts` (sketch; table above
+Implemented in `extensions/atto.d.ts` (sketch below; table above
 supplies constructor prop interfaces). Keep **notify/select/confirm/input** as
 helpers; remove the old setBlockStatus, setBlockDisplay, showText, setStatus,
 setWidget and AttoShowTextOptions.
@@ -341,6 +340,7 @@ export default function (atto: Atto) {
   let count = 0;
   atto.on("session_start", async () => {
     count = (await atto.store.get<number>("count")) ?? 0;
+    atto.ui.invalidate({ site: "pane", id: "counter" });
   });
   atto.ui.render({ site: "pane", id: "counter" }, (e) => {
     const { Box, Text, Button } = atto.ui.resolve(e);
@@ -377,7 +377,7 @@ callback revisions and re-renders; never leaks callbacks into another session.
 
 ## 6. Go built-ins and safety/testing
 
-An indicative pure-Go API (not an implementation in this change):
+The pure-Go API (see `ui/registry.go` for exact signatures):
 
 ```go
 // package ui: immutable data nodes; callbacks are separate from wire nodes.
@@ -450,7 +450,7 @@ bytes or typed transcript truth.
    focus integration, engine references; move `/diff`, status, goal, jobs, dialogs
    in separate commits with golden/full-noext parity gates. Keep typed transcript,
    paging, command center and pickers native.
-3. **Goja binding + remove strings:** thin constructor/callback bridge, render
+3. **Goja binding + remove strings (implemented):** thin constructor/callback bridge, render
    middleware, session store, JSX/types/examples; delete old setters/showText,
    UIState/string notifications/display plumbing. No compatibility shim. Back up
    sessions before any format cleanup; old saved string entries may be converted

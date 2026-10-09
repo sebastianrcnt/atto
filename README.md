@@ -357,24 +357,68 @@ Approvals live beside your settings: `hook-approvals.json`, `mcp-approvals.json`
 
 This is approval of repository-supplied code, not a sandbox or a per-command permission system. It does not prevent prompt injection in project instructions or stop the model from running commands.
 
-**Extensions** are TypeScript or JavaScript files, often written by the agent itself, that atto runs in an embedded engine (no Node.js needed). They can block or rewrite the agent's commands, rewrite what the model sees of their output (to redact secrets, say), add to prompts, add slash commands, and show status items, widgets and dialogs in the TUI.
+**Extensions** are TypeScript/TSX or JavaScript/JSX files run by esbuild + goja
+(no Node.js/React). They can watch or gate shell commands, redact model-visible
+output, add prompt context and slash commands, or draw portable UI. Full builds
+expose `atto.ui`: typed panes, bands, status slots, toasts, dialogs and transcript
+overlays, composed through `render`, `resolve` and `next()`. Drawings never
+change conversation/model data; callbacks remain session-owned in the worker.
+
+A shared, persisted counter pane (`~/.atto/extensions/counter.tsx`):
+
+```tsx
+export default function (atto: Atto) {
+  let count = 0;
+  atto.on("session_start", async () => {
+    count = (await atto.store.get<number>("count")) ?? 0;
+    atto.ui.invalidate({ site: "pane", id: "counter" });
+  });
+  atto.ui.render({ site: "pane", id: "counter" }, e => {
+    const { Box, Text, Button } = atto.ui.resolve(e);
+    return <Box gap={1}>
+      <Text text={`Count: ${count}`} />
+      <Button key="more" label="Add one" hotkey="a" onPress={async () => {
+        count++;
+        await atto.store.set("count", count);
+        atto.ui.invalidate({ site: "pane", id: "counter" });
+      }} />
+    </Box>;
+  });
+  atto.registerCommand("counter", { handler: () =>
+    atto.ui.open({ site: "pane", id: "counter", title: "Counter", focus: true }) });
+}
+```
+
+Wrapping native tool rows (plain `.ts` constructors work identically):
 
 ```ts
-// ~/.atto/extensions/no-force-push.ts
-export default function (atto) {
-  atto.on("tool_call", (e) => /git push.*--force/.test(e.command) ? { block: true, reason: "no force-push" } : undefined);
-  atto.registerCommand("todo", {
-    description: "Count TODOs",
-    handler: async (args, ctx) => ctx.ui.notify((await atto.exec("git grep -c TODO || true")).stdout || "none"),
+export default function (atto: Atto) {
+  atto.ui.render({ site: "toolCall" }, async (e, next) => {
+    const { Box, Text } = atto.ui.resolve(e);
+    const original = await next(e);
+    return Box({ children: [original, Text({
+      text: "Reviewed by my extension", color: "muted",
+    })].filter(x => x !== null) });
   });
 }
 ```
 
-- Put them in `~/.atto/extensions/` (`name.ts`, or `name/index.ts` with files it imports) or the project's `.atto/extensions/`. Project extensions run only after you approve them (`/extensions approve <name>` or `atto extensions approve <name>`); a change needs approval again.
-- `/reload` (or `atto reload`) loads changes; the Loaded block shows each extension's status, commands and events, and errors with `file:line`.
-- Events: `session_start`, `session_end`, `turn_start`, `turn_end`, `user_prompt`, `tool_call`, `tool_result`. They run inside the hooks: `PreToolUse` hooks, then `tool_call`, the command, `tool_result`, then `PostToolUse` hooks.
-- Also `atto.exec`, `atto.fs`, `fetch`, timers, `atto.sendMessage`; dialogs and widgets are TUI-only (in `-p` and the server, dialogs get default answers).
-- `atto extensions docs` prints the guide ([docs/extensions.md](docs/extensions.md)), `atto extensions types` the type declarations, `atto extensions source diff` the Go source of the native `/diff` command, `atto extensions` the list. [examples/extensions](examples/extensions) has examples to copy, such as one that shows reasoning translated by a small local model. A handler that hangs is skipped after 5 seconds and a runaway script is stopped and its extension disabled; atto goes on.
+- Files can be `name.ts/.tsx/.js/.jsx` or `name/index.*`, in
+  `~/.atto/extensions/` or the project's `.atto/extensions/`. Project code needs
+  approval (`/extensions approve <name>`); user code does not.
+- `/reload` retires registrations/callbacks, cancels dialogs and loads changes.
+  The Loaded block lists status, commands/events and errors with `file:line`.
+- Render hooks are fast and read-only: no I/O or store writes. Async composition
+  through `next()` is supported; errors/timeouts fall back to built-in drawing.
+  `atto.store` is JSON-only and session-scoped (64 KiB/value, 1 MiB/extension),
+  survives reload/resume/fork, and requires explicit invalidation after writes.
+- `notify/select/confirm/input` remain notice/dialog helpers. Worker dialogs
+  wait for clients; standalone `-p` keeps undefined/false defaults. Non-UI hooks,
+  `atto.exec`, `atto.fs`, `atto.complete`, fetch, timers and MCP remain available.
+- `atto extensions docs` prints [the guide](docs/extensions.md), `types` the full
+  declarations, and `source diff` the native Go implementation. See
+  [examples/extensions](examples/extensions) and [the UI contract](docs/ui.md).
+  Slim (`noext`) builds retain all Go UI/built-ins but do not run extension code.
 
 **Skills** are read from `~/.atto/skills` and the project's `.atto/skills` (the first of a name wins), and from nowhere else: directories other tools share, such as `.agents/skills` and `.claude/skills`, hold what was installed for those tools.
 

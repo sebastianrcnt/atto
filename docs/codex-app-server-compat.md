@@ -136,7 +136,7 @@ Codex UserInput supports `text {text,text_elements}`, `image {url|fileId,detail?
 
 Missing notifications include turn diff/plan, file patches, MCP progress/status/OAuth/events, PTY interactions, approvals resolved, account/login/rate-limit updates, catalog/app/plugin/import changes, filesystem watches, model reroute/verification/auth recovery, Guardian and moderation, realtime audio/transcript, native Windows sandbox state, and remote-control state. Appendix B lists each exact method and counterpart/status.
 
-Native atto-only notifications are `item/delta`, `item/updated`, `hook`, `event`, `thread/reloaded`, `extension/notify`, `item/display`, `extension/ui`, `thread/usage`, `turn/pending`, `events/reset`, `thread/switched`, `thread/updated`, `goal/updated`, `prompt/open`, `prompt/closed`. Their extension/UI/SSE/live semantics must remain on the native endpoint, or receive a separately negotiated extension; broadcasting them blindly to Codex clients is not safe.
+Native atto-only notifications are `item/delta`, `item/updated`, `hook`, `event`, `thread/reloaded`, `extension/notify`, `ui/open`, `ui/render`, `ui/close`, `thread/usage`, `turn/pending`, `events/reset`, `thread/switched`, `thread/updated`, `goal/updated`, `prompt/open`, `prompt/closed`. Their extension/UI/SSE/live semantics must remain on the native endpoint, or receive a separately negotiated extension; broadcasting them blindly to Codex clients is not safe.
 
 ## 5. Server-to-client requests, approvals, and sandboxing
 

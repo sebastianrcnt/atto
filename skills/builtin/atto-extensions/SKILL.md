@@ -5,7 +5,7 @@ description: Write or change atto extensions (TypeScript) - events, slash comman
 
 # Writing atto extensions
 
-An extension is a TypeScript file the full atto build loads into every session. Slim builds cannot run extensions: ask the user to switch with `atto update -variant full` first. Do not guess its API: read it first.
+An extension is a TypeScript/TSX or JavaScript/JSX file the full atto build loads into every session. Slim builds cannot run extensions: ask the user to switch with `atto update -variant full` first. Do not guess its API: read it first.
 
 1. Read the API.
    - `atto extensions docs` is the guide (events, ctx, UI, limits, examples).
@@ -23,7 +23,7 @@ An extension is a TypeScript file the full atto build loads into every session. 
 
 ## Rules
 
-- Display APIs (`ctx.ui.setBlockDisplay`, `setBlockStatus`, `showText`, `setStatus`, `setWidget`) change what the user sees, never what the model receives or what is saved as the conversation. To change what the model sees, use the blocking events.
+- Use `atto.ui.render`, `resolve` constructors (or JSX in `.tsx`), `next()` and keyed sites for display-only changes. Drawings never change model context. Render hooks must be fast and read-only: no I/O, store writes or UI mutations. Use `atto.store` for session JSON state, then invalidate explicitly. Read the exact types before writing UI code.
 - Blocking events (`tool_call`, `tool_result`, `user_prompt`) are waited for and have a timeout (5 s by default). Keep their handlers fast and do slow work elsewhere (`message_end`, `turn_end`, a command). A handler that throws is skipped, not fatal.
 - `message_end` and `reasoning_end` never delay anything, so they are the place for model calls. `step_end` gives each response's usage and timing (`outputTokens / genMs` is the generation speed).
 - `atto.complete({model, prompt, ...})` makes a side model call: for helpers such as translation or summaries. The model is `provider/id` from models.json. Keep the default concurrency of 1 (local servers slow down or hang when asked in parallel), pass `reasoningEffort: "none"` when thinking is not needed, and set `timeoutMs` if the task is long. Handle rejection (server down, timeout) by showing a status such as "failed".

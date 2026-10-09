@@ -1,8 +1,8 @@
 # Writing atto extensions
 
-An extension is a TypeScript or JavaScript file that atto loads into every
+An extension is a TypeScript/TSX or JavaScript/JSX file that atto loads into every
 session. It can watch and steer the agent's shell commands, add to prompts,
-add slash commands, and show things in the TUI. atto compiles it with esbuild
+add slash commands, and draw portable panes, status slots, dialogs and transcript overlays. atto compiles it with esbuild
 and runs it in an embedded JavaScript engine (goja); there is no Node.js, so
 `require`, `process` and npm modules that need Node are not available.
 
@@ -13,8 +13,8 @@ and runs it in an embedded JavaScript engine (goja); there is no Node.js, so
 
 | Path | Source |
 | --- | --- |
-| `~/.atto/extensions/<name>.ts` or `.js` | user |
-| `~/.atto/extensions/<name>/index.ts` or `index.js` | user (a folder: other files in it can be imported) |
+| `~/.atto/extensions/<name>.ts`, `.tsx`, `.js` or `.jsx` | user |
+| `~/.atto/extensions/<name>/index.ts` or `index.tsx`, `index.js` or `index.jsx` | user (a folder: other files in it can be imported) |
 | `<project>/.atto/extensions/...` (same shapes) | project |
 | native Go commands inside atto (full builds list these with extensions) | builtin |
 
@@ -46,9 +46,8 @@ but replaces it when you explicitly request a new title. Neither command
 requires approval. The full build lists them as `builtin`; both builds allow
 `"extensions": {"disabled": ["diff"]}`. In the full build, a user or project
 extension with the same name still replaces the native command, subject to
-normal project approval. All public extension APIs they used (`atto.exec`,
-`atto.complete`, `ctx.session` and `ctx.ui.showText`) remain available to user
-extensions in full builds. See [examples/extensions](../examples/extensions)
+normal project approval. The full build exposes `atto.exec`, `atto.complete`, `ctx.session` and the
+portable `atto.ui` API to user extensions. See [examples/extensions](../examples/extensions)
 for JavaScript/TypeScript examples.
 
 To turn one off, add its name to `settings.json`:
@@ -61,8 +60,9 @@ To turn one off, add its name to `settings.json`:
 
 - Extensions load when a session starts. After editing one, run `/reload`
   (or `atto reload` from the agent's shell): the old runtime is disposed of
-  (`onDispose` callbacks run, timers stop, its status items and widgets go)
-  and the new code runs. The reload report lists `changed extension <name>`.
+  (`onDispose` callbacks run, timers stop, its UI registrations and callbacks retire, dialogs cancel)
+  and the new code receives `session_start` with reason `reload` to rehydrate
+  session-backed state. The reload report lists `changed extension <name>`.
 - The "Loaded" block lists every extension: loaded (with its commands and
   events), failed (with the error, `file:line:col` for syntax errors, the
   source line for exceptions), needs approval, or disabled. After `atto
@@ -141,37 +141,18 @@ response ends, so `reasoning_end` comes with `message_end`, not when the
 thinking stops.) A response with no text, or no thinking, fires nothing
 for it.
 
-An extension can change how a block is shown, never what the model sees:
+Display-only changes use `atto.ui.render({site:"assistantMessage"}, fn)`:
+`e.props.kind` distinguishes `answer` from `reasoning`; `e.props.blockId`
+correlates a saved response with these observer events. Do slow model calls
+in observers or commands, cache their results, then invalidate the item site.
+Render hooks must not perform model calls, file/network I/O or state writes.
+The translation examples do exactly this with bounded ephemeral caches.
 
-- `ctx.ui.setBlockStatus(blockId, text | null)`: a short dim suffix on the
-  block's header ("translating…", "failed"). Each extension has its own.
-- `ctx.ui.setBlockDisplay(blockId, text | null)`: shows `text` (Markdown)
-  in place of the block's own text; `null` restores it. atto adds a line
-  under the block, `· shown: <extension> (click or ctrl+o to show original)`:
-  a click on that line flips that block between the replacement and the
-  original, and ctrl+o flips all of them. (Clicking the header still
-  expands and collapses a reasoning block.) The latest extension to set a
-  text owns it; only the owner can restore the original.
-
-The model's context and the session's messages are never changed:
-requests are built from what the model wrote, and "copy last answer"
-copies the original. What the extension showed is saved in the session
-file as `block_display` entries (the status and text as last set), so a
-resumed session shows it without the extension running again; a result for
-a block that no longer exists (the session was switched meanwhile) is
-ignored, and the view does not jump when a block above it changes height.
-Protocol clients (`atto app-server`) get them as data (`item/display`), and
-the server saves them the same way. In `atto -p` they do nothing and nothing is saved. Example,
-in a few lines:
-
-```ts
-export default function (atto: Atto) {
-  atto.on("reasoning_end", (e, ctx) => {
-    ctx.ui.setBlockDisplay(e.blockId, e.text.toUpperCase());
-    ctx.ui.setBlockStatus(e.blockId, "uppercased");
-  });
-}
-```
+A render may wrap `await next(e)` or pass whitelisted display overrides,
+for example `next({...e,props:{...e.props,text:translated}})`. The model's
+conversation, typed transcript truth and copied answer stay unchanged.
+Completed overlays are saved as `ui_item_display`; replay never runs old
+extension code. Clients offer “show original” outside the extension drawing.
 
 **`atto.complete({model, prompt, system?, maxTokens?, reasoningEffort?, timeoutMs?})`**
 asks a model for one reply and resolves to `{text}`: no tools, no
@@ -192,44 +173,113 @@ Loaded block (after a `/reload`) and `/extensions` show "model calls: 3 to
 p/m (1 failed)" per extension, and every call is a line in
 `~/.atto/extensions.log` with the model, the outcome and the time.
 
-## The context and the UI
+## The context and portable UI
 
-`ctx` (also `atto.ui`, `atto.session`, `atto.cwd` outside handlers):
+`ctx` has `ui`, `session`, `cwd` and `hasUI` (true with an interactive client,
+false in standalone `atto -p`). `atto.ui` is the same API outside handlers.
+`session.id/model/name`, `session.messages(limit?)` and `session.setName(name)`
+retain their existing meaning; messages returns user/assistant text from the
+active branch, not commands or display trees.
 
-- `ctx.hasUI`: true in the TUI, false in `atto -p` and the server.
-- `ctx.cwd`, `ctx.session.id`, `ctx.session.model` (`provider/id`).
-- `ctx.session.name`: the session's name, `""` without one.
-- `ctx.session.messages(limit?)`: the conversation's text so far, oldest
-  first, as `[{role, text}]`: the user's messages and the model's answers on
-  the current branch, without commands and their output; the last `limit`
-  (default 50). Read from the session file, so a reply still streaming is
-  not in it.
-- `ctx.session.setName(name)`: names the session, as `/name` does (the
-  terminal and the server; throws in `atto -p`).
-- `ctx.ui.notify(text, level?)`: `info` (default), `warning`, `error`.
-- `ctx.ui.setStatus(key, text | null)`: an item in the status line.
-- `ctx.ui.setWidget(key, lines[] | null)`: lines shown above the input.
-- `ctx.ui.setBlockStatus(blockId, text | null)` and
-  `ctx.ui.setBlockDisplay(blockId, text | null)`: see above.
-- `ctx.ui.showText(title, text, {lang?, preview?})`: a collapsible block in
-  the transcript for longer output, such as a diff or a report. It is display
-  only (the model never sees it) and saved in the session, so a resumed
-  session shows it again. While collapsed it shows the first `preview` lines
-  (default 10) and a "+N lines" row; click it or press ctrl+t to expand.
-  `lang: "diff"` colours added lines green, removed lines red, `@@` lines
-  cyan and file headers dim; any other value is plain text. Protocol clients
-  get the same block as an `extText` item; in `atto -p` the title and text arrive as a notice.
-- `ctx.ui.select(title, options)`: `Promise<string | undefined>`.
-- `ctx.ui.confirm(text)`: `Promise<boolean>`.
-- `ctx.ui.input(prompt)`: `Promise<string | undefined>`.
+Register before opening: `atto.ui.render({site,id?}, (e,next)=>tree)` returns a
+disposer. Matching renderers compose in loader order; `next()` reaches the
+unmodified built-in drawing. Return it to leave it alone, put it in a Box to
+wrap, or return a replacement. `null` removes a contribution (native item
+rendering resumes). Only text display fields are overridable through `next`;
+identity, status and provenance are immutable. `next()` on item sites is an
+opaque native-engine reference, not a constructor or a text approximation.
 
-Without a UI (`atto -p`, the server), `notify` goes to stderr (`-p`) or to
-the client as an `extension/notify` notification (server); status items and
-widgets are dropped (`-p`) or sent to the client as `extension/ui` (server);
-`select` and `input` resolve to `undefined` and
-`confirm` to `false` at once. In the TUI, a dialog asked while another
-dialog is open gets that default answer too. Time the user spends on a
-dialog does not count against the handler timeout.
+Sites: `pane`, `band`, `status`, `toast`, `transcript`, `dialog`, `userMessage`,
+`assistantMessage`, `toolCall`, `notice`. IDs and control keys are provider-local,
+then namespaced by atto. Keys must be stable and unique in the composed tree.
+Render events have `surface:"shared"`: one drawing per session, not per client.
+Callbacks receive actual `clientId`, `surface`, `rev`; only key/event names,
+never functions or source, cross the wire. Old revisions cannot act again.
+
+`atto.ui.resolve(e)` supplies the v1 factories: Box, Text, Markdown, Code, Diff,
+Link, Button, Input, Select, List (table mode), Table (alias), Progress, Collapse,
+Image. All props are documented in [ui.md](ui.md#2-element-contract-v1) and
+`atto.d.ts`. Call factories with props and children in plain `.ts`, or use JSX:
+esbuild targets CommonJS/ES2017 with `atto.ui.jsx` and `atto.ui.Fragment`.
+Strings become Text; fragments are grouping Boxes, without React or a DOM.
+Only Box/Collapse accept arbitrary element children; Text accepts spans.
+
+- `open({site,id,title?,focus?,...})`: shared existence/visibility. Pane placement
+  is client-owned (`auto`, `side`, `abovePrompt`). Defaults: title=id, 40 columns,
+  8 rows, no focus/close-on-Escape; status priority=0 and align=start.
+  Focus hints only address the invoking command/press client, with an empty editor.
+  Open/close never target item sites. Duplicate open updates metadata; transcript
+  open appends once and subsequent drawings replace that saved block.
+- `close({site,id})`: shared removal. Closing a transcript block saves a tombstone.
+- `invalidate(match?)`: coalesced redraw (10/site/sec, 60/provider/sec); omitted
+  means this provider's live sites. It does not change visibility.
+- `toast(text,{level?,timeoutMs?})`: info/warning/error, default 4000 ms, range
+  500..30000; expiry is shared, transient, not replayed.
+- `notify(text,level?)`: typed transcript notice, not a toast.
+- `select(title,options)`, `confirm(text)`, `input(prompt)`: existing asynchronous
+  broker helpers. Wrapping a helper dialog must include `next()` exactly once;
+  required Go controls cannot be replaced. First valid answer wins across clients.
+  Reload/session close cancels questions. Workers wait without attached clients;
+  standalone `-p` returns undefined/false defaults. User waits pause handler limits.
+
+`atto.store.get<T>(key)`, `set(key,JSONValue)`, `delete(key)`, `keys()` are async,
+extension+session-scoped JSON storage: 64 KiB/value, 1 MiB total, keys 1..128
+bytes. Session-writer updates survive reload/resume and inherit at a fork point;
+branch replay restores only reachable updates, `/clear` starts fresh. Module
+variables are ephemeral. Store writes do **not** redraw: invalidate explicitly.
+In standalone `-p -no-save`, storage is intentionally in-memory only.
+
+Render hooks are fast, read-only drawings (100 ms/handler, 250 ms/site).
+Store writes, dialogs, UI mutations, execution, file/network and model APIs
+throw during render. Invalid trees, exceptions or timeouts show the built-in
+default, not a stale extension tree, and log a bounded reason. Trees are limited
+to 256 KiB, 2048 nodes, depth 32 and 128 KiB aggregate text. Catalog validation
+rejects unknown props, unsafe links, duplicate keys/hotkeys and bad callbacks.
+Theme colors are names, not ANSI/CSS. See [ui.md](ui.md) for the whole contract.
+
+Saved old `block_display` and `ext_text` entries are converted **on read** into
+passive Markdown/Text/Collapse trees. Files are not rewritten, and the old
+string setters and notifications are gone; there is no second rendering API.
+Archived actions stay disabled until a current provider explicitly rebinds.
+
+### Example: a shared counter pane (`counter.tsx`)
+
+```tsx
+export default function (atto: Atto) {
+  let count = 0;
+  atto.on("session_start", async () => {
+    count = (await atto.store.get<number>("count")) ?? 0;
+    atto.ui.invalidate({ site: "pane", id: "counter" });
+  });
+  atto.ui.render({ site: "pane", id: "counter" }, e => {
+    const { Box, Text, Button } = atto.ui.resolve(e);
+    return <Box gap={1}>
+      <Text text={`Count: ${count}`} />
+      <Button key="more" label="Add one" hotkey="a" onPress={async () => {
+        count++;
+        await atto.store.set("count", count);
+        atto.ui.invalidate({ site: "pane", id: "counter" });
+      }} />
+    </Box>;
+  });
+  atto.registerCommand("counter", { handler: () =>
+    atto.ui.open({ site: "pane", id: "counter", title: "Counter", focus: true }) });
+}
+```
+
+### Example: wrap native tool rows (`review-tools.ts`)
+
+```ts
+export default function (atto: Atto) {
+  atto.ui.render({ site: "toolCall" }, async (e, next) => {
+    const { Box, Text } = atto.ui.resolve(e);
+    const original = await next(e);
+    return Box({ children: [original, Text({
+      text: "Reviewed by my extension", color: "muted",
+    })].filter(x => x !== null) });
+  });
+}
+```
 
 ## Other APIs
 
@@ -293,15 +343,6 @@ export default function (atto: Atto) {
 
 ## Example: a status item
 
-```ts
-/// <reference path="./atto.d.ts" />
-export default function (atto: Atto) {
-  const update = async () => {
-    const r = await atto.exec("git status --porcelain");
-    const n = r.stdout.split("\n").filter(Boolean).length;
-    atto.ui.setStatus("dirty", n ? `${n} changed` : null);
-  };
-  atto.on("session_start", update);
-  atto.on("turn_end", update);
-}
-```
+See [token-speed.ts](../examples/extensions/token-speed.ts): keep text in a
+module variable, register a `status` renderer, and open/invalidate its keyed
+slot after `step_end`. This uses the same trees as built-in status items.
