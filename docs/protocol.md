@@ -247,7 +247,7 @@ by `TestProtocolReferenceMethods`; adding a method without documenting it fails.
 | `thread/read` | T + `offline?,limit?` | Snapshot + items, cursor; offline reads file without loading |
 | `thread/items` | `{threadId,before,limit?,offline?}` | Revision 3: earlier transcript page `{items,hasMore,before}`, oldest first; does not change the live event cursor. |
 | `thread/entry` | `{threadId,entryId,offline?}` | Read one complete session entry from disk, including unloaded or off-branch messages (tree copy/edit). |
-| `thread/list` | `{cwd?,archived?}` | `{threads:[{threadId,name?,preview?,cwd?,updatedAt?,messages?,loaded?,live?,busy?,clients?,version?,pid?}]}`; includes active workers |
+| `thread/list` | `{cwd?,archived?,includeAgents?,includeClosedAgents?,includeArchived?}` | `{threads:[{threadId,name?,preview?,lastMessage?,cwd?,model?,branch?,updatedAt?,messages?,loaded?,live?,busy?,archived?,external?,openPrompt?,goalWaiting?,agent?,clients?,version?,pid?}]}`; inventory without attaching or starting workers |
 | `thread/detach` | T + `reason?` | `{closed,stoppedJobs?,notices?}`; releases client, not work |
 | `thread/close` | T + `reason?` | `{closed,stoppedJobs?,notices?}`; explicit session end, stops jobs/turns |
 | `thread/setModel` | T + `model,saveDefault?` | Snapshot; provider/model selection |
@@ -263,7 +263,9 @@ by `TestProtocolReferenceMethods`; adding a method without documenting it fails.
 | `thread/files` | T + `query?,limit?` | `{files:[{path,directory}],truncated}`; workspace-relative paths, case-insensitive substring filter, default 100/max 1000 matches; gitignore-aware walk capped at 50,000 entries/20 levels; cancellation supported |
 | `item/image` | T + `itemId,index,preview?,offline?` | `{mimeType,data}`; preview returns a ≤600×350 PNG for JDK-only clients; otherwise base64 stored image selected by zero-based image index of a transcript item, max 10 MiB; never accepts a client filesystem path |
 | `item/output` | T + `itemId,offline?` | `{output,truncated}`; stored full user-shell output or available tool output (saved output is zstd-compressed on disk; the cap is on the text after decompression), capped at 10 MiB; truncated is true if full output is unavailable or exceeds cap |
-| `thread/archive` | T | `{threadId,path}`; idle only; close session/stop jobs, release writer and move saved file to archive; then start a new session explicitly |
+| `thread/archive` | `{threadId,stop?}` | `{threadId,path}`; close runtime/stop jobs, release writer, compress into archive; busy workers require confirmed `stop:true` |
+| `thread/unarchive` | `{threadId}` | `{threadId,path}`; restore archived transcript; does not reopen a closed agent record |
+| `thread/delete` | `{threadId,stop?}` | `{threadId,notices?}`; remove transcript copies, jobs, inbox/timers, goal, outputs and unshared images; busy workers require confirmed `stop:true` |
 | `thread/statusLine` | T | `{configured,lines,refreshInterval?,truncated?}`; run configured server statusLine with snapshot input, off execution lane; 2s timeout/16 KiB output cap; no client command accepted |
 | `thread/debug` | T | `{heap,goroutines,memory}`; runtime heap profile (base64), goroutine dump and Go MemStats; diagnostic data can contain private process information; client saves files locally |
 | `thread/context` | T + `view?:system` | ContextInfo; system includes systemPrompt |
@@ -581,3 +583,39 @@ bounds transient allocations (not large model contexts); `GOMEMLIMIT` or an
 embedded application's explicit limit takes precedence. Rare large reads,
 pages and compactions release unused heap pages with `debug.FreeOSMemory`.
 See [the synthetic memory measurements](session-memory.md) for methodology.
+
+### Thread inventory for pickers and command centers
+
+`thread/list` keeps its defaults: active ordinary sessions, including empty
+loaded sessions; managed agents stay excluded even when loaded. `archived`
+selects archived instead of active sessions; `includeArchived` combines both.
+`includeAgents` opts into agent sessions, including records without a transcript;
+`includeClosedAgents` additionally admits closed agents in the requested scope.
+Recorded ancestors anchor the tree even before their first prompt. `cwd` uses
+server OS directory case rules. A listing never starts or attaches a worker.
+
+An agent row's `agent` object contains `parentThreadId` (empty for shell roots),
+`rootThreadId`, `depth`, `path`, `name`, `role`, `origin`, `project`, `spawnedBy`
+(`session`, `model`, `effort`, `turn`, `toolCallId`, plus provenance `origin`/`cwd`),
+`lifecycle` (`open`/`closed`; teardown may transiently show `closing`), `lastTurn`
+(turn number, status, queued/started/ended RFC3339 times, prompt/cached/output
+tokens, cost, steps/error), `durationMs`, and `worktreeBranch`. `preview` is the
+first prompt/task; `lastMessage` is the bounded last assistant answer on the
+active branch. `branch` is the saved git branch, overridden by worktree branch.
+`openPrompt` and `goalWaiting` are independent needs-you flags: the latter also
+includes paused, blocked and usage-limited goals, or an active held goal.
+`loaded` identifies a live runtime; `busy` includes a turn or user shell.
+
+Frontends build trees from parent links, derive status/tabs, and refresh on
+opening and explicit refresh. There is no overview method or inventory change
+notification. Scoped live links still list only their session.
+
+Archive/delete of an open agent closes its subtree deepest-first under the
+agent tree lock. Any running/queued descendant turn is refused even with
+`stop:true`: interrupt it first. Dirty worktrees are refused; clean worktrees
+are removed and branches retained, like agent close. Closed records and IDs
+remain after deletion. Descendant transcripts are archived; deletion removes
+only the selected transcript. Unarchiving a closed agent restores its transcript,
+not its lifecycle. Frontends must confirm deletion and ask "stop it and
+archive/delete?" before stopping a live worker. Other processes' read-only
+writers are never silently taken over.

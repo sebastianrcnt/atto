@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/sebastianrcnt/atto/agentstate"
+	"github.com/sebastianrcnt/atto/session"
 	"strings"
 	"sync"
 	"time"
@@ -15,17 +17,22 @@ import (
 // returns a new client of it; the facade owns that client, not the worker.
 // Configure it before serving clients. Closing the facade only detaches them.
 type WorkerRoutes struct {
-	Open func(context.Context, string, string, string, string, bool) (*Client, string, error)
-	List func() ([]WorkerSummary, error)
+	Open  func(context.Context, string, string, string, string, bool) (*Client, string, error)
+	List  func() ([]WorkerSummary, error)
+	Close func(context.Context, string, bool) error
 }
 
 type WorkerSummary struct {
-	ID      string `json:"threadId"`
-	Cwd     string `json:"cwd"`
-	Busy    bool   `json:"busy"`
-	Clients int    `json:"clients"`
-	Version string `json:"version"`
-	PID     int    `json:"pid"`
+	ID          string `json:"threadId"`
+	Cwd         string `json:"cwd"`
+	Busy        bool   `json:"busy"`
+	Clients     int    `json:"clients"`
+	Version     string `json:"version"`
+	PID         int    `json:"pid"`
+	Name        string `json:"name"`
+	OpenPrompt  bool   `json:"openPrompt"`
+	GoalWaiting bool   `json:"goalWaiting"`
+	State       string `json:"state"`
 }
 
 type workerRoute struct {
@@ -68,13 +75,33 @@ func (s *Server) routeCall(ctx context.Context, method string, raw json.RawMessa
 			for _, w := range workers {
 				if w.ID == id {
 					row["loaded"], row["busy"], row["clients"], row["version"], row["pid"] = true, w.Busy, w.Clients, w.Version, w.PID
+					row["openPrompt"], row["goalWaiting"] = w.OpenPrompt, w.GoalWaiting
+					if w.State == "waiting" && !w.GoalWaiting {
+						row["openPrompt"] = true
+					}
+					if w.Name != "" {
+						row["name"] = w.Name
+					}
 					seen[id] = true
 				}
 			}
 		}
 		for _, w := range workers {
-			if !seen[w.ID] && (p.Cwd == "" || p.Cwd == w.Cwd) && !p.Archived {
-				rows = append(rows, map[string]any{"threadId": w.ID, "cwd": w.Cwd, "loaded": true, "busy": w.Busy, "clients": w.Clients, "version": w.Version, "pid": w.PID})
+			if st, err := agentstate.Load(w.ID); err == nil && st.Lifecycle == agentstate.Closed && !p.IncludeClosedAgents {
+				continue
+			}
+			if !p.IncludeAgents {
+				if _, err := agentstate.Load(w.ID); err == nil {
+					continue
+				}
+				if path, err := session.Find(w.ID); err == nil {
+					if h, err := session.ReadHeader(path); err == nil && h.IsAgent() {
+						continue
+					}
+				}
+			}
+			if !seen[w.ID] && (p.Cwd == "" || session.SameDir(p.Cwd, w.Cwd)) && !p.Archived {
+				rows = append(rows, map[string]any{"threadId": w.ID, "cwd": w.Cwd, "loaded": true, "busy": w.Busy, "clients": w.Clients, "version": w.Version, "pid": w.PID, "name": w.Name, "openPrompt": w.OpenPrompt, "goalWaiting": w.GoalWaiting})
 			}
 		}
 		return map[string]any{"threads": rows}, nil, true

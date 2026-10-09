@@ -12,16 +12,13 @@ import (
 	"github.com/sebastianrcnt/atto/core"
 	"github.com/sebastianrcnt/atto/core/transcript"
 	"github.com/sebastianrcnt/atto/events"
+	"github.com/sebastianrcnt/atto/goal"
 	"github.com/sebastianrcnt/atto/images"
 	"github.com/sebastianrcnt/atto/jobs"
 	"github.com/sebastianrcnt/atto/provider"
 	"github.com/sebastianrcnt/atto/session"
 	"runtime/debug"
 )
-
-// archiveRequest asks threadCall to close the thread and move its transcript
-// off the lane.
-type archiveRequest struct{ path string }
 
 // threadCall serves the requests that act on one thread; ok is false for
 // a method it does not know. State is resolved on the thread's lane;
@@ -49,10 +46,6 @@ func (s *Server) threadCall(ctx context.Context, client, method string, p thread
 	if err == nil {
 		if method == "thread/files" {
 			out, err = threadFiles(ctx, out.(string), p.Query, p.Limit)
-		} else if r, ok := out.(archiveRequest); ok {
-			s.closeThread(t, closeMode{reason: "archive"})
-			path, e := session.Archive(r.path)
-			out, err = map[string]any{"threadId": t.id, "path": path}, e
 		} else if r, ok := out.(statusLineRequest); ok {
 			out, err = runStatusLine(ctx, r)
 		} else if method == "thread/debug" {
@@ -81,18 +74,6 @@ var threadMethods = map[string]func(t *thread, client string, p threadParams) (a
 		page, _, err := replayFile(&b, t.id, t.sess.Path, p.Before, p.Limit, t.pageAnchor(p.Before)...)
 		debug.FreeOSMemory()
 		return page, err
-	},
-	"thread/archive": func(t *thread, client string, p threadParams) (any, error) {
-		if t.readOnly != "" {
-			return nil, failure(ReasonReadOnly, "%s", t.readOnly)
-		}
-		if t.turns.Busy || t.shell != nil {
-			return nil, failure(ReasonBusy, "interrupt before archiving")
-		}
-		if t.sess.Leaf() == "" {
-			t.sess.Branch("")
-		}
-		return archiveRequest{path: t.sess.Path}, t.sess.Err()
 	},
 	"thread/statusLine": func(t *thread, client string, p threadParams) (any, error) {
 		return t.statusLine()
@@ -150,7 +131,7 @@ var threadMethods = map[string]func(t *thread, client string, p threadParams) (a
 		if t.prompt != nil || (t.goal.Active() && t.goal.Held()) {
 			state = "waiting"
 		}
-		return map[string]any{"id": t.s.instance, "session": t.id, "name": t.name, "state": state, "cwd": t.cwd, "clients": len(t.attached), "busy": busy, "version": t.s.Version, "pid": os.Getpid()}, nil
+		return map[string]any{"id": t.s.instance, "session": t.id, "name": t.name, "state": state, "cwd": t.cwd, "clients": len(t.attached), "busy": busy, "openPrompt": t.prompt != nil, "goalWaiting": t.goal.Goal != nil && (t.goal.Held() || t.goal.Goal.Status == goal.Paused || t.goal.Goal.Status == goal.Blocked || t.goal.Goal.Status == goal.UsageLimited), "version": t.s.Version, "pid": os.Getpid()}, nil
 	},
 	"mcp/list": func(t *thread, client string, p threadParams) (any, error) {
 		if t.mcp == nil {

@@ -327,6 +327,23 @@ func configFiles(cwd string) []ConfigFile {
 		{Path: config.ModelsPath(), Role: "models"},
 		{Path: config.AuthPath(), Role: "credentials"},
 	}
+	seen := map[string]bool{}
+	files = slices.DeleteFunc(files, func(f ConfigFile) bool {
+		path, err := filepath.Abs(f.Path)
+		if err != nil {
+			path = f.Path
+		}
+		path = filepath.Clean(path)
+		if runtime.GOOS == "windows" {
+			path = strings.ToLower(path)
+		}
+		if seen[path] {
+			return true
+		}
+		seen[path] = true
+		return false
+	})
+
 	for i := range files {
 		f := &files[i]
 		if f.Role == "credentials" {

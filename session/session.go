@@ -229,6 +229,13 @@ type Writer struct {
 	readOnly string
 }
 
+// IsAgent reports whether this writer belongs to a managed agent.
+func (w *Writer) IsAgent() bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.agent != nil || w.agentOf != ""
+}
+
 // SetReadOnly makes w drop every entry, for a session another process is
 // writing; why is shown to the user.
 func (w *Writer) SetReadOnly(why string) {
@@ -270,7 +277,7 @@ func newWithID(id, cwd string) *Writer {
 // entries continue from its last entry; SetLeaf(Leaf(entries)) saves
 // reading the file again to find it.
 func Resume(path string, h Entry) *Writer {
-	return &Writer{ID: h.ID, Path: path, cwd: h.Cwd, created: h.Time}
+	return &Writer{ID: h.ID, Path: path, cwd: h.Cwd, created: h.Time, agent: h.Agent, agentOf: h.AgentOf, external: h.External, branch: h.GitBranch}
 }
 
 // SetLeaf sets the entry the next appended entry follows.

@@ -56,7 +56,7 @@
 //	               Revision 3 snapshots are post-compaction tails (default 200).
 //	               Revision 2 snapshots remain full; page cursors do not change event IDs.
 //	thread/entry   {threadId,entryId,offline?}      → complete saved entry
-//	thread/list    {cwd?, archived?}               → {threads: [...]}
+//	thread/list    {cwd?, archived?, includeAgents?, includeClosedAgents?, includeArchived?}               → {threads: [...]}
 //	thread/setModel {threadId, model}              → thread
 //	thread/setEffort {threadId, effort}            → thread
 //	thread/compact {threadId}                      → {turnId}
@@ -115,7 +115,9 @@
 //	               Revision 3 uses bounded previews; thread/entry reads full text.
 //	thread/navigate {threadId, entryId, summary?: {mode: none|auto|custom, instructions?}}
 //	thread/fork    {threadId, entryId}  → {threadId, path, input, images}
-//	thread/archive {threadId} → {threadId,path}; idle, close then archive
+//	thread/archive {threadId,stop?} → {threadId,path}; close then archive
+//	thread/unarchive {threadId} → {threadId,path}; restore transcript only
+//	thread/delete {threadId,stop?} → {threadId,notices?}; permanent cleanup
 //	thread/statusLine {threadId} → {configured,lines,refreshInterval?,truncated?}
 //	thread/debug {threadId} → {heap,goroutines,memory}; runtime profiles
 //	thread/files {threadId, query?, limit?} → {files:[{path,directory}],truncated}

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -332,4 +333,28 @@ func TestLoadedAgentJSON(t *testing.T) {
 			t.Errorf("context aliases %s/%s: %s", old, current, raw)
 		}
 	}
+}
+
+func TestConfigFilesDedupeHomeProject(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv(config.EnvDir, filepath.Join(home, ".atto"))
+	writeFile(t, config.SettingsPath(), `{}`)
+	files := configFiles(home)
+	count := 0
+	for _, file := range files {
+		if sessionPathEqual(file.Path, config.SettingsPath()) {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Fatalf("settings listed %d times: %+v", count, files)
+	}
+}
+func sessionPathEqual(a, b string) bool {
+	a, _ = filepath.Abs(a)
+	b, _ = filepath.Abs(b)
+	if runtime.GOOS == "windows" {
+		return strings.EqualFold(a, b)
+	}
+	return a == b
 }

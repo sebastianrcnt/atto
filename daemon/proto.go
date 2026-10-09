@@ -42,17 +42,19 @@ type Hello struct {
 // Worker is a session worker the daemon runs: the runtime of one
 // session, reached at Socket.
 type Worker struct {
-	Name    string    `json:"name,omitempty"`
-	State   string    `json:"state,omitempty"`
-	ID      string    `json:"id"`
-	Version string    `json:"version"`
-	Busy    bool      `json:"busy"`
-	Clients int       `json:"clients"`
-	Session string    `json:"session"`
-	Socket  string    `json:"socket"`
-	PID     int       `json:"pid"`
-	Cwd     string    `json:"cwd"`
-	Started time.Time `json:"started"`
+	OpenPrompt  bool      `json:"openPrompt"`
+	GoalWaiting bool      `json:"goalWaiting"`
+	Name        string    `json:"name,omitempty"`
+	State       string    `json:"state,omitempty"`
+	ID          string    `json:"id"`
+	Version     string    `json:"version"`
+	Busy        bool      `json:"busy"`
+	Clients     int       `json:"clients"`
+	Session     string    `json:"session"`
+	Socket      string    `json:"socket"`
+	PID         int       `json:"pid"`
+	Cwd         string    `json:"cwd"`
+	Started     time.Time `json:"started"`
 }
 
 // Exit acknowledges a successful control operation.

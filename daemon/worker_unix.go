@@ -233,6 +233,7 @@ func (d *daemon) workerList() []Worker {
 				out[i].Cwd = state.Cwd
 			}
 			out[i].Name, out[i].State = state.Name, state.State
+			out[i].OpenPrompt, out[i].GoalWaiting = state.OpenPrompt, state.GoalWaiting
 		}
 	}
 	slices.SortFunc(out, func(a, b Worker) int { return a.Started.Compare(b.Started) })

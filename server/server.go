@@ -162,23 +162,27 @@ func decode[T any](raw json.RawMessage) (T, error) {
 }
 
 type threadParams struct {
-	ThreadID        string `json:"threadId"`
-	ItemID          string `json:"itemId"`
-	Query           string `json:"query"`
-	Limit           int    `json:"limit"`
-	Before          string `json:"before"`
-	SnapshotVersion int    `json:"snapshotVersion,omitempty"`
-	Preview         bool   `json:"preview"`
-	DeferStart      bool   `json:"deferStart"` // TUI waits for its startup project-trust decision
-	Cwd             string `json:"cwd"`
-	Model           string `json:"model"`
-	Provider        string `json:"provider"`
-	APIKey          string `json:"apiKey"`
-	OAuth           bool   `json:"oauth"`
-	Effort          string `json:"effort"`
-	Input           string `json:"input"`
-	Archived        bool   `json:"archived"`
-	NumTurns        int    `json:"numTurns"`
+	ThreadID            string `json:"threadId"`
+	ItemID              string `json:"itemId"`
+	Query               string `json:"query"`
+	Limit               int    `json:"limit"`
+	Before              string `json:"before"`
+	SnapshotVersion     int    `json:"snapshotVersion,omitempty"`
+	Preview             bool   `json:"preview"`
+	DeferStart          bool   `json:"deferStart"` // TUI waits for its startup project-trust decision
+	Cwd                 string `json:"cwd"`
+	Model               string `json:"model"`
+	Provider            string `json:"provider"`
+	APIKey              string `json:"apiKey"`
+	OAuth               bool   `json:"oauth"`
+	Effort              string `json:"effort"`
+	Input               string `json:"input"`
+	Archived            bool   `json:"archived"`
+	IncludeAgents       bool   `json:"includeAgents"`
+	IncludeClosedAgents bool   `json:"includeClosedAgents"`
+	IncludeArchived     bool   `json:"includeArchived"`
+	Stop                bool   `json:"stop"`
+	NumTurns            int    `json:"numTurns"`
 	// Images go with turn/start's and input/submit's input (see images.go).
 	Images []ImageInput `json:"images"`
 	// input/submit: auto, queue, replace or steer.
@@ -268,6 +272,10 @@ func (s *Server) call(ctx context.Context, method string, raw json.RawMessage) (
 			return out, err
 		}
 		p.ThreadID = sc.Thread()
+	}
+	switch method {
+	case "thread/archive", "thread/unarchive", "thread/delete":
+		return s.mutateSession(ctx, method, p)
 	}
 	if out, err, ok := s.routeCall(ctx, method, raw, p); ok {
 		return out, err
@@ -791,55 +799,6 @@ func readOffline(id string) (ThreadInfo, error) {
 	return info, nil
 }
 
-func (s *Server) listThreads(p threadParams) (any, error) {
-	list, err := session.List(p.Cwd, p.Archived)
-	if err != nil {
-		return nil, err
-	}
-	out := []map[string]any{}
-	for _, x := range list {
-		s.mu.Lock()
-		_, loaded := s.threads[x.ID]
-		s.mu.Unlock()
-		out = append(out, map[string]any{
-			"threadId": x.ID, "name": x.Name, "preview": x.Preview, "cwd": x.Cwd,
-			"updatedAt": x.Updated, "messages": x.Messages, "loaded": loaded,
-		})
-	}
-	if !p.Archived {
-		s.mu.Lock()
-		live := make([]*thread, 0, len(s.threads))
-		for _, t := range s.threads {
-			live = append(live, t)
-		}
-		s.mu.Unlock()
-		byID := map[string]map[string]any{}
-		for _, row := range out {
-			byID[row["threadId"].(string)] = row
-		}
-		for _, t := range live {
-			var row map[string]any
-			if err := t.call(func() error {
-				if p.Cwd != "" && p.Cwd != t.cwd {
-					return nil
-				}
-				row = map[string]any{"threadId": t.id, "name": t.name, "cwd": t.cwd, "updatedAt": t.lastActive, "loaded": true, "busy": t.turns.Busy}
-				return nil
-			}); err != nil || row == nil {
-				continue
-			}
-			if saved := byID[t.id]; saved != nil {
-				for _, key := range []string{"name", "loaded", "busy"} {
-					saved[key] = row[key]
-				}
-			} else {
-				out = append(out, row)
-			}
-		}
-	}
-	return map[string]any{"threads": out}, nil
-}
-
 // --- attachment and lifetime ---
 
 // attach is thread/attach: client follows the thread from its snapshot.
@@ -1045,7 +1004,7 @@ func (s *Server) closeThread(t *thread, m closeMode) detachResult {
 			switch {
 			case t.mgd != nil && m.retire:
 				res.StoppedJobs = core.LeaveKeepingAgents(t.id) // idle: the agents it started go on
-			case t.mgd != nil:
+			case t.mgd != nil || t.sess.IsAgent():
 				res.StoppedJobs = core.LeaveAgent(t.id)
 			default:
 				res.StoppedJobs = core.Leave(t.id)
