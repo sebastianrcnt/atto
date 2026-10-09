@@ -138,8 +138,12 @@ explicitly stop a session and its jobs; archive closes before moving the saved
 file. With `--in-process`, ending the spawned **server process** necessarily
 ends its runtimes; it cannot provide daemon-backed unattended lifetime.
 
-The desktop defers new/resumed startup, displays loaded context, and asks before
-releasing startup hooks/MCP work. Runtime extension/MCP approvals remain native
+The desktop defers new/resumed startup, lists configured hooks, extensions and
+MCP servers, and asks before releasing startup work. **Allow once** releases
+this session; **Allow** remembers this startup review in the client settings
+until its loaded executable configuration changes. Neither button overrides
+native project-content approvals: unapproved content stays disabled and can be
+approved with `atto trust` on the server. Runtime extension/MCP approvals remain native
 questions; disconnect never supplies an approval automatically. A session whose
 legacy writer is elsewhere is read from disk and shown read-only, not taken over.
 
@@ -156,22 +160,77 @@ outputs may contain private workspace/provider data; choose export locations
 accordingly. Raw Markdown HTML and arbitrary remote images are not executed or
 fetched. Native transcript image resources are separate from Markdown links.
 
-## Screenshots to capture
+## Reproducible GUI review
 
-The intended macOS review screenshots are:
+![Light workspace](docs/screenshots/02-workspace-light.png)
 
-1. **Main workspace:** live searchable sidebar, two session tabs, assistant
-   heading/list/code block, collapsed reasoning and streamed command output;
-   the composer with a queued message and full status/extension rows.
-2. **Tree and goal:** session tree with branches/labels and a goal panel showing
-   objective, status, tokens and notes.
-3. **Approval and jobs:** a non-modal runtime question alongside a background
-   job/output follow panel; show its withdrawal after a second client answers.
-4. **Dark theme and images:** dark UI with user/tool image thumbnails, colored
-   `/diff`, attached composer images and the command palette.
+![Dark theme and images](docs/screenshots/15-workspace-dark-image.png)
 
-No synthetic screenshots are checked in; the real Swing UI should be captured
-on the reviewer's desktop, rather than substituting a browser mock-up.
+These are real Swing component captures, not browser mock-ups. They were
+captured and visually reviewed on macOS using the real native server with a
+local scripted provider; no paid model or personal credentials are involved.
+The images are 2× resolution PNGs (typically 90–190 KiB).
+
+```sh
+# Requires a desktop/display server and Java 21. CI remains headless by default.
+ATTO_SWING_SCREENSHOTS=1 go test ./clients/swing -run TestSwingScreenshots -count=1 -v
+
+# Or drive any disposable server/workspace with your own JSON action script:
+java -jar clients/swing/build/atto-swing.jar --atto /path/to/atto \
+  --in-process --cwd /tmp/work --screenshot-script /path/to/actions.json
+```
+
+The fixture in `swing_test.go` provisions an isolated ATTO_DIR and Java home,
+installs the local streaming model and a prompt extension, and runs
+[`docs/screenshot-script.json`](docs/screenshot-script.json). It verifies real
+composer actions, queue takeback, completion, context-menu forking, model/effort
+pickers, goals, jobs/follow/stop, extension select/confirm/input answers,
+clipboard paste, file-drop import, image retrieval, copy, request/profile
+exports, reload, compaction, timers, server-process death/reconnect and offline
+read-only state. The script exits and closes its client/server; generated
+exports live in the ignored `build/screenshot-exports/` directory.
+
+Scripts are JSON arrays of action objects. Common actions are `type`/`send`,
+`action` (a named palette action), `click`, `rpc`, `idle`, `prompt`, `theme`,
+`screenshot`, and `assert`/`assertState`. All component mutations and painting
+run on the EDT; protocol calls and waits run on a worker. `screenshot.file` is
+relative to the script. Use only isolated sessions: scripts intentionally send
+inputs and may stop jobs or kill their own spawned app-server. The reviewed
+suite uses the actual clipboard and Swing transfer handler, but does not claim
+to test every OS drag gesture or a live provider's OAuth browser flow.
+
+| Screenshot | Scene |
+| --- | --- |
+| [01-project-trust.png](docs/screenshots/01-project-trust.png) | Readable startup review |
+| [02-workspace-light.png](docs/screenshots/02-workspace-light.png) | Chat, Markdown, compact tool row and composer |
+| [03-tool-output.png](docs/screenshots/03-tool-output.png) | Expanded reasoning and one copy of command output |
+| [04-slash-completion.png](docs/screenshots/04-slash-completion.png) | Runtime slash catalog popup |
+| [05-file-completion.png](docs/screenshots/05-file-completion.png) | Server workspace mentions |
+| [06-model-picker.png](docs/screenshots/06-model-picker.png) | Filterable model picker |
+| [07-effort-picker.png](docs/screenshots/07-effort-picker.png) | Effort picker |
+| [08-session-tree.png](docs/screenshots/08-session-tree.png) | Session tree navigation |
+| [09-session-tabs.png](docs/screenshots/09-session-tabs.png) | Named fork and detachable tabs |
+| [10-goal-panel.png](docs/screenshots/10-goal-panel.png) | Objective, state, usage and controls |
+| [11-jobs-follow.png](docs/screenshots/11-jobs-follow.png) | Background job output follow and stop |
+| [12-select-prompt.png](docs/screenshots/12-select-prompt.png) | Extension select dialog |
+| [13-confirm-prompt.png](docs/screenshots/13-confirm-prompt.png) | Extension yes/no confirmation |
+| [14-input-prompt.png](docs/screenshots/14-input-prompt.png) | Extension text input |
+| [15-workspace-dark-image.png](docs/screenshots/15-workspace-dark-image.png) | Dark theme and a persisted image |
+| [16-command-palette.png](docs/screenshots/16-command-palette.png) | Keyboard action palette |
+| [17-reconnected.png](docs/screenshots/17-reconnected.png) | Snapshot after killing the server process |
+| [18-read-only.png](docs/screenshots/18-read-only.png) | Offline session with disabled composer |
+| [19-pending-input.png](docs/screenshots/19-pending-input.png) | Queued input chip during a streamed turn |
+| [20-message-context-menu.png](docs/screenshots/20-message-context-menu.png) | Fork/label/copy context menu |
+| [21-image-paste.png](docs/screenshots/21-image-paste.png) | Actual clipboard image paste |
+| [22-image-drop.png](docs/screenshots/22-image-drop.png) | File-transfer import into the composer |
+| [23-image-viewer.png](docs/screenshots/23-image-viewer.png) | Runtime image resource viewer |
+| [24-disconnected.png](docs/screenshots/24-disconnected.png) | Connection loss and disabled composer |
+| [25-context-panel.png](docs/screenshots/25-context-panel.png) | Readable context breakdown |
+| [26-agent-tree.png](docs/screenshots/26-agent-tree.png) | Observational agent team tree |
+| [27-authentication.png](docs/screenshots/27-authentication.png) | Provider status without exposing credentials |
+| [28-compacted-context.png](docs/screenshots/28-compacted-context.png) | Native reload and compaction |
+| [29-debug-export.png](docs/screenshots/29-debug-export.png) | Runtime profile and request export confirmation |
+| [30-timers.png](docs/screenshots/30-timers.png) | Runtime timer picker |
 
 ## Tests and architecture
 
@@ -206,7 +265,8 @@ not tracked artifacts or external Java downloads.
 Native additions are documented in [docs/protocol.md](../../docs/protocol.md):
 workspace discovery, transcript image/output resources (including offline and
 PNG previews), runtime authentication, archive, statusLine and debug profiles,
-multi-select prompt answers, user entry provenance and resumable fork IDs.
+multi-select prompt answers, user entry provenance, resumable fork IDs, scoped
+agent trees and live-session sidebar metadata.
 
 ### Deliberate limits
 
@@ -214,9 +274,10 @@ Markdown is a small safe renderer, not full CommonMark (tables/raw HTML are not
 rendered as rich content). Very long text/output is clipped in the inline view;
 the full viewer exposes only bytes still retained by the runtime or its output
 file. Job output follows the protocol's 2,000-line cap. The observational agent
-picker shows named agent states/reports; it does not become an execution owner or
-move agents between runtimes. Native input/prompt/job persistence still has the
+tree shows states/reports; it does not become an execution owner or move agents
+between runtimes. Native input/prompt/job persistence still has the
 server's documented worker-crash limitations. OAuth itself requires the real
 provider/browser; protocol tests use a deterministic mocked flow, not a paid
-provider account. Real GUI layout/theme/OS-attention behavior needs the manual
-macOS screenshot review; the automated tests are deliberately headless.
+provider account. GUI layout, light/dark themes and the captured interactions have been reviewed
+on macOS. OS attention/sound, native drag gestures and real-provider OAuth still
+depend on the desktop/provider; the default CI tests remain headless.

@@ -243,3 +243,74 @@ func startListener(t *testing.T, ctx context.Context, binary string, env []strin
 		return "", ""
 	}
 }
+
+// The GUI suite is opt-in because CI may have a JDK but no display server.
+// It uses the same native server/provider as the headless integration test.
+func TestSwingScreenshots(t *testing.T) {
+	if os.Getenv("ATTO_SWING_SCREENSHOTS") != "1" {
+		t.Skip("set ATTO_SWING_SCREENSHOTS=1 on a desktop to capture the GUI")
+	}
+	jar, _ := buildJava(t, false)
+	binary := filepath.Join(t.TempDir(), "atto")
+	if runtime.GOOS == "windows" {
+		binary += ".exe"
+	}
+	if out, err := exec.Command("go", "build", "-o", binary, "../../cmd/atto").CombinedOutput(); err != nil {
+		t.Fatalf("build atto: %v\n%s", err, out)
+	}
+	dir := t.TempDir()
+	t.Setenv("ATTO_DIR", dir)
+	model := providertest.New(t,
+		providertest.Reply{Reasoning: "I will inspect the project before proposing a small, testable change.", Command: "printf 'src/cli.go\\nsrc/config.go\\nREADME.md\\n3 tests passed\\n'", Description: "Inspect the workspace", Prompt: 12400, Completion: 96, Cached: 11200},
+		providertest.Reply{Text: "## A focused plan\n\nThe workspace is ready. I recommend **three small changes** before shipping:\n\n- Keep configuration loading in one place.\n- Add a regression test for the empty path.\n- Document the default flags in `README.md`.\n\n```go\nfunc Open(path string) error {\n    if path == \"\" {\n        return errors.New(\"path is required\")\n    }\n    return loadConfig(path)\n}\n```\n\nYou can review the [Go error-handling guide](https://go.dev/blog/error-handling-and-go) for the rationale.", Words: 12, Delay: 150 * time.Millisecond, Prompt: 12600, Completion: 240, Cached: 11200})
+	model.Install(t, dir)
+	// Give the model realistic display metadata while keeping every request local.
+	modelsPath := filepath.Join(dir, "models.json")
+	data, err := os.ReadFile(modelsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data = bytes.ReplaceAll(data, []byte(`"id":"m"`), []byte(`"id":"m","name":"Atlas Local","reasoning":true,"efforts":["low","medium","high"]`))
+	if err := os.WriteFile(modelsPath, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "settings.json"), []byte(`{"model":"fake/m","daemon":false}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ext := filepath.Join(dir, "extensions")
+	if err := os.MkdirAll(ext, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(ext, "desktop-review.ts"), []byte(`export default (atto: any) => {
+ atto.registerCommand("desktop-review", {description: "Review a change with native prompts", handler: async (_: string, ctx: any) => {
+  const choice = await ctx.ui.select("Review strategy", ["Small, focused commits", "One complete change", "Explore alternatives"]);
+  const approved = await ctx.ui.confirm("Run the project checks before committing?");
+  const note = await ctx.ui.input("Review note");
+  ctx.ui.notify("Review saved: " + choice + " · " + approved + " · " + note);
+ }});
+}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	workspace := filepath.Join(t.TempDir(), "atlas")
+	if err := os.MkdirAll(filepath.Join(workspace, "src"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for _, file := range []string{"README.md", "src/cli.go", "src/config.go"} {
+		if err := os.WriteFile(filepath.Join(workspace, file), []byte("// screenshot workspace\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	script, err := filepath.Abs("docs/screenshot-script.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "java", "-Duser.home="+t.TempDir(), "-jar", jar, "--atto", binary, "--in-process", "--cwd", workspace, "--screenshot-script", script)
+	cmd.Env = append(os.Environ(), "ATTO_NO_DAEMON=1", "ATTO_SESSION_ID=", "ATTO_AGENT=")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("GUI capture: %v\n%s", err, out)
+	}
+	t.Log(string(out))
+}
