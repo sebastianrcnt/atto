@@ -334,14 +334,15 @@ type UIDisplay struct {
 }
 
 type Item struct {
-	UITree    *ui.Node   `json:"tree,omitempty"`
-	UIRev     int64      `json:"rev,omitempty"`
-	UIID      string     `json:"uiId,omitempty"`
-	UIDisplay *UIDisplay `json:"uiDisplay,omitempty"`
-	ID        string     `json:"id"`
-	Type      string     `json:"type"`
-	Text      string     `json:"text,omitempty"`   // message, reasoning, notes, hook message
-	Status    string     `json:"status,omitempty"` // inProgress, completed, failed
+	ActionsEnabled bool       `json:"actionsEnabled,omitempty"` // uiBlock: live bindings, never persisted
+	UITree         *ui.Node   `json:"tree,omitempty"`
+	UIRev          int64      `json:"rev,omitempty"`
+	UIID           string     `json:"uiId,omitempty"`
+	UIDisplay      *UIDisplay `json:"uiDisplay,omitempty"`
+	ID             string     `json:"id"`
+	Type           string     `json:"type"`
+	Text           string     `json:"text,omitempty"`   // message, reasoning, notes, hook message
+	Status         string     `json:"status,omitempty"` // inProgress, completed, failed
 
 	// commandExecution
 	Description string `json:"description,omitempty"`

@@ -2,6 +2,7 @@ package server
 
 import (
 	"fmt"
+	"github.com/sebastianrcnt/atto/ui"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -16,6 +17,8 @@ import (
 // the terminal's /context. The breakdown is only known while no run goes
 // on (the agent's messages change during one).
 type ContextInfo struct {
+	tierNote      string      // local metadata for the passive card; never a wire/private credential field
+	Tree          *ui.Node    `json:"tree,omitempty"`
 	Loaded        core.Loaded `json:"loaded"`
 	ContextTokens int         `json:"contextTokens"`
 	ContextWindow int         `json:"contextWindow,omitempty"`
@@ -37,12 +40,22 @@ func (t *thread) contextInfo(view string) ContextInfo {
 		ContextWindow: m.Model.ContextWindow, LongContext: t.agent.LongContext(), Usage: t.total, Busy: t.turns.Busy}
 	c.CompactLimit, c.Cap = t.agent.CompactionLimit()
 	c.PriceCap = c.Cap > 0 && c.Cap == m.Model.Cost.ContextPriceBoundary()
+	if m.Model.Cost.ContextPriceBoundary() == 0 {
+		c.tierNote = "No tier cap: no tier data known for this model."
+		if m.Model.Cost != nil && len(m.Model.Cost.Tiers) > 0 {
+			c.tierNote = "No tier cap: known tiers do not increase the input price."
+		}
+	}
 	if !t.turns.Busy {
 		b := t.agent.Breakdown()
 		c.Breakdown = &b
 	}
 	if view == "system" {
 		c.System = t.agent.SystemPrompt()
+	}
+	if view != "system" {
+		n := ContextTree(c)
+		c.Tree = &n
 	}
 	return c
 }

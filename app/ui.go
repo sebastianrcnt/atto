@@ -325,7 +325,11 @@ func (a *App) portableBlock(w server.Item) *tui.Elements {
 		a.uiBlocks[w.ID] = e
 		a.add(e)
 	}
-	_ = e.SetTree(ui.Transcript, w.UIID, w.UIRev, w.UITree)
+	tree := w.UITree
+	if !w.ActionsEnabled {
+		tree = passiveUITree(tree)
+	}
+	_ = e.SetTree(ui.Transcript, w.UIID, w.UIRev, tree)
 	return e
 }
 

@@ -48,7 +48,7 @@ func (t *thread) publishUI(m ui.Mutation) {
 		}
 	case "ui/render":
 		p["tree"] = i.Tree
-		if ui.IsItem(i.Site) {
+		if ui.IsItem(i.Site) || i.Site == ui.Transcript {
 			p["actionsEnabled"] = t.elements.Bound(i.Site, i.ID)
 		}
 	case "ui/close":
@@ -143,6 +143,7 @@ func (t *thread) persistUIBlock(m ui.Mutation) {
 		if it.Type == ItemUIBlock && it.EntryID == entry {
 			it.UITree = i.Tree
 			it.UIRev = i.Rev
+			it.ActionsEnabled = t.elements.Bound(ui.Transcript, i.ID)
 			if e.UIClosed {
 				it.UITree = nil
 			}

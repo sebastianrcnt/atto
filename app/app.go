@@ -407,7 +407,7 @@ func (a *App) build() {
 
 	// The command list sits above the input, as in Claude Code, so the
 	// input and the status line keep their place as it opens and closes.
-	a.ui.Footer.Add(tui.Func(a.renderActivity), tui.Func(a.renderPending), jumpPill{a}, tui.Func(a.renderReadOnly), portableFooter{a}, tui.Func(a.renderSuggestions), inputFooter{a}, tui.Func(a.renderStatus))
+	a.ui.Footer.Add(tui.Func(a.renderActivity), jumpPill{a}, tui.Func(a.renderReadOnly), portableFooter{a}, tui.Func(a.renderSuggestions), inputFooter{a}, tui.Func(a.renderStatus))
 	a.ui.SetFocus(a.editor)
 	a.ui.OnInput = a.onInput
 	a.ui.OnCopy = a.copySelection

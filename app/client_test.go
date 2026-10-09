@@ -34,7 +34,9 @@ func TestSteerTakeBackAndQueue(t *testing.T) {
 	within(t, a, "the steer back in the editor", func() bool { return a.editor.Text() == "a steer" && len(a.pending.Steers) == 0 })
 	a.ui.Do(func() { a.editor.SetText("queued-x9") })
 	key(a, "\t")
-	within(t, a, "the queued follow-up", func() bool { return len(a.pending.Queued) == 1 })
+	within(t, a, "the queued follow-up", func() bool {
+		return len(a.pending.Queued) == 1 && strings.Contains(footerText(a, 100), "Queued follow-up inputs")
+	})
 	if f := footer(a, 100); !strings.Contains(f, "Queued follow-up inputs") {
 		t.Fatalf("footer:\n%s", f)
 	}

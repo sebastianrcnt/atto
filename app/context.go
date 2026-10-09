@@ -13,6 +13,7 @@ import (
 	"github.com/sebastianrcnt/atto/provider"
 	"github.com/sebastianrcnt/atto/server"
 	"github.com/sebastianrcnt/atto/tui"
+	"github.com/sebastianrcnt/atto/ui"
 )
 
 // usageStats tracks token usage for the status line and /context.
@@ -101,65 +102,17 @@ func (a *App) showContext(c server.ContextInfo, system bool) {
 		a.add(&noticeBlock{text: "System prompt:\n\n" + c.System, style: tui.Dim})
 		return
 	}
-	m := a.model()
-	ctx := c.ContextTokens
-	var lines []string
-	head := fmt.Sprintf("%s · %s tokens", tui.Bold("Context"), tui.FormatTokens(ctx))
-	if cw := c.ContextWindow; cw > 0 {
-		head += fmt.Sprintf(" of %s (%d%%)", tui.FormatTokens(cw), pct(ctx, cw))
+	tree := c.Tree
+	if tree == nil {
+		n := server.ContextTree(c)
+		tree = &n
 	}
-	lines = append(lines, head)
-	if limit, cap := c.CompactLimit, c.Cap; limit > 0 {
-		lines = append(lines, tui.Dim("Auto-compacts at "+tui.FormatTokens(limit)))
-		if cap > 0 {
-			if c.PriceCap {
-				lines = append(lines, tui.Dim(fmt.Sprintf("%s costs more above %s input tokens.", m.Model.DisplayName(), tui.FormatTokens(cap))))
-			} else {
-				lines = append(lines, tui.Dim("Cap set by settings.json compaction.limits."))
-			}
-			lines = append(lines, tui.Dim("/context long to allow more."))
-		} else if c.LongContext {
-			lines = append(lines, tui.Dim("Long context; /context normal to restore the tier cap."))
-		}
+	e := &tui.Elements{}
+	if err := e.SetTree(ui.Pane, "atto/context", 1, tree); err != nil {
+		a.errorNotice(err)
+		return
 	}
-	if m.Model.Cost.ContextPriceBoundary() == 0 {
-		reason := "no tier data known for this model"
-		if m.Model.Cost != nil && len(m.Model.Cost.Tiers) > 0 {
-			reason = "known tiers do not increase the input price"
-		}
-		lines = append(lines, tui.Dim("No tier cap: "+reason+"."))
-	}
-	if b := c.Breakdown; c.Busy || b == nil {
-		lines = append(lines, tui.Dim("Breakdown is available when the turn finishes."))
-	} else {
-		total := max(b.Total(), 1)
-		rows := []struct {
-			name  string
-			chars int
-		}{
-			{"system prompt", b.System}, {"tool schema", b.Tools}, {"user messages", b.User}, {"images", b.Images},
-			{"handoff notes", b.Notes}, {"assistant text", b.Assistant}, {"reasoning", b.Reasoning},
-			{"tool calls", b.ToolCalls}, {"tool results", b.ToolResults},
-		}
-		for _, r := range rows {
-			if r.chars == 0 {
-				continue
-			}
-			p := pct(r.chars, total)
-			lines = append(lines, fmt.Sprintf("  %-15s %s %6s %3d%%", r.name, contextBar(p, 20), "~"+tui.FormatTokens(r.chars/4), p))
-		}
-		lines = append(lines, tui.Dim(fmt.Sprintf("  %d messages · sizes estimated at 4 characters per token", b.Messages)))
-	}
-
-	u := a.usage
-	if u.last.PromptTokens > 0 {
-		lines = append(lines, "", fmt.Sprintf("Last request   %s input · %s cached (%d%%) · %s output",
-			tui.FormatTokens(u.last.PromptTokens), tui.FormatTokens(u.last.CachedTokens), pct(u.last.CachedTokens, u.last.PromptTokens), tui.FormatTokens(u.last.CompletionTokens)))
-		lines = append(lines, fmt.Sprintf("This session   %s input · %s cached (%d%%) · %s output",
-			tui.FormatTokens(u.input), tui.FormatTokens(u.cached), pct(u.cached, u.input), tui.FormatTokens(u.output)))
-	}
-	lines = append(lines, "", tui.Dim("/context system shows the system prompt · /request saves the raw last request"))
-	a.add(&contextBlock{lines: lines})
+	a.add(e)
 }
 
 // cmdRequest saves the last request body sent to the model, pretty-printed.

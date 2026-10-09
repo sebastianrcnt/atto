@@ -60,7 +60,7 @@ var Builtins = []CommandInfo{
 	{Name: "timer", Args: "<when> <msg>", Desc: "Wake the agent later (10m, 15:30)"},
 	{Name: "timers", Desc: "List pending timers", Local: true},
 	{Name: "tui", Args: "[auto|fullscreen|inline]", Desc: "Choose the renderer (fullscreen or inline)", Local: true},
-	{Name: "remote", Desc: "The web UI is being rebuilt; how to attach other clients meanwhile", Local: true},
+	{Name: "remote", Desc: "Serve the browser UI for this machine (LAN/Tailscale)", Local: true},
 	{Name: "clear", Desc: "Start a new conversation", Local: true},
 	{Name: "new", Desc: "Start a new conversation", Local: true},
 	{Name: "agents", Desc: "Every atto session, its goal and subagents (also ← on an empty prompt)", Local: true},
@@ -198,7 +198,11 @@ func (t *thread) runCommand(client, text string) {
 	case "compact":
 		t.cmdCompact()
 	case "context":
-		t.cmdContext(arg)
+		if arg == "" {
+			t.openContextPane(client)
+		} else {
+			t.cmdContext(arg)
+		}
 	case "reload":
 		t.requestReload(false)
 	case "extensions":

@@ -470,6 +470,7 @@ func (s *Server) newThread(o threadOptions) (*thread, error) {
 	t.initUIStatus()
 	t.initUIGoal()
 	t.initUIJobs()
+	t.initUIQueue()
 	t.startLane()
 	s.mu.Lock()
 	s.threads[t.id] = t

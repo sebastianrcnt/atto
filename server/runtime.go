@@ -279,6 +279,9 @@ func (t *thread) snapshot() ThreadInfo {
 	info.HasMore, info.Before = t.hasMore, t.before
 	info.Items = make([]Item, 0, len(t.items))
 	for _, it := range t.items {
+		if it.Type == ItemUIBlock {
+			it.ActionsEnabled = t.elements.Bound(ui.Transcript, it.UIID)
+		}
 		info.Items = append(info.Items, t.blocks.attach(it))
 	}
 	if t.turns.Busy || t.shell != nil {
@@ -319,6 +322,9 @@ func (t *thread) resetItemOrder() {
 // wire is the protocol form of a transcript item of this thread.
 func (t *thread) wire(it *transcript.Item) Item {
 	w := wireItem(t.id, it)
+	if w.Type == ItemUIBlock && t.elements != nil {
+		w.ActionsEnabled = t.elements.Bound(ui.Transcript, w.UIID)
+	}
 	if w.Type == ItemCommand && w.Shell {
 		w.ContextPending = t.shellPending(it.ID)
 	}
@@ -416,6 +422,9 @@ func (t *thread) pendingChanged() {
 		p = &PendingInput{Steers: []string{}}
 	}
 	t.publish("turn/pending", map[string]any{"pending": p})
+	if t.elements != nil {
+		t.elements.Invalidate(ui.Match{Site: ui.Band, ID: "atto/queue"})
+	}
 }
 
 // gated reports whether automatic work waits: a prompt is open, or a
