@@ -10,6 +10,7 @@ import (
 
 	"golang.org/x/sys/windows"
 
+	"github.com/sebastianrcnt/atto/internal/consoletest"
 	"github.com/sebastianrcnt/atto/shell"
 )
 
@@ -40,6 +41,7 @@ func (s *lockedBuf) Write(p []byte) (int, error) {
 // a console of their own, so the user's terminal keeps its code page (and
 // with it, under conhost, its font).
 func TestHostLeavesConsoleCodePage(t *testing.T) {
+	consoletest.Lock(t)
 	cp, err := windows.GetConsoleOutputCP()
 	if err != nil || cp == 0 {
 		t.Skip("no console")

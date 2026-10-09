@@ -7,11 +7,14 @@ import (
 	"testing"
 
 	"golang.org/x/sys/windows"
+
+	"github.com/sebastianrcnt/atto/internal/consoletest"
 )
 
 // A hook runs PowerShell, whose prelude sets the console's code pages. It
 // gets a console of its own, so the user's terminal keeps its code pages.
 func TestHookLeavesConsoleCodePage(t *testing.T) {
+	consoletest.Lock(t)
 	cp, err := windows.GetConsoleOutputCP()
 	if err != nil || cp == 0 {
 		t.Skip("no console")
