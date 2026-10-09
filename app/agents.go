@@ -1,8 +1,8 @@
 package app
 
 import (
+	"context"
 	"fmt"
-	"github.com/sebastianrcnt/atto/core"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -11,7 +11,7 @@ import (
 
 	"github.com/sebastianrcnt/atto/agent"
 	"github.com/sebastianrcnt/atto/agentstate"
-	"github.com/sebastianrcnt/atto/daemon"
+	"github.com/sebastianrcnt/atto/core"
 	"github.com/sebastianrcnt/atto/server"
 	"github.com/sebastianrcnt/atto/session"
 	"github.com/sebastianrcnt/atto/tui"
@@ -28,58 +28,6 @@ import (
 // matching agents with their ancestors. Opening a locked agent shows its
 // transcript read-only, with the usual ctrl+r refresh. Ctrl+C closes the
 // center only, never interrupting the underlying session's work.
-
-var listWorkers = daemon.Workers
-
-// listSaved lists saved sessions, newest first; tests replace it.
-var listSaved = func() []session.Summary {
-	active, _ := session.ListAll("", false)
-	archived, _ := session.ListAll("", true)
-	// Closing agents archives their transcripts. Keep those visible as
-	// Inactive, along with any archived ancestors needed to connect them.
-	needed := map[string]bool{}
-	for _, s := range active {
-		if s.AgentOf != "" {
-			needed[s.AgentOf] = true
-		}
-	}
-	for _, s := range archived {
-		if s.IsAgent() { // a closed root started from a shell has no parent to connect
-			needed[s.ID] = true
-			if s.AgentOf != "" {
-				needed[s.AgentOf] = true
-			}
-		}
-	}
-	for changed := true; changed; {
-		changed = false
-		for _, s := range archived {
-			if needed[s.ID] && s.AgentOf != "" && !needed[s.AgentOf] {
-				needed[s.AgentOf], changed = true, true
-			}
-		}
-	}
-	for _, s := range archived {
-		if needed[s.ID] {
-			active = append(active, s)
-		}
-	}
-	slices.SortStableFunc(active, func(x, y session.Summary) int { return y.Updated.Compare(x.Updated) })
-	return active
-}
-
-// shellRootOf says whether a saved session is an agent started from a shell
-// (a root with no parent) and its project; closed ones are known by their
-// header alone.
-func shellRootOf(s session.Summary) (bool, string) {
-	if s.Agent == nil || !s.Agent.IsRoot() || s.Agent.Origin != session.OriginExternal {
-		return false, ""
-	}
-	return true, s.Agent.Project
-}
-
-// centerRefresh is how often the open center reloads.
-const centerRefresh = 2 * time.Second
 
 // centerRows is how many list rows the inline renderer shows at once.
 const centerRows = 24
@@ -105,6 +53,7 @@ type centerItem struct {
 	updated                        time.Time
 	parent, agentPath, role, model string
 	external, archived             bool
+	closed                         bool
 	// shell: an agent started from a shell, the root of a tree of its own;
 	// virtual: a display group with no session behind it (the heading those
 	// agents are shown under); isAgent: a managed agent, whatever its parent.
@@ -138,19 +87,25 @@ type agentCenter struct {
 	onOpen func(id, cwd string)
 	onNew  func(cwd string)
 
-	scope     string // resume picker: this directory only
-	resume    bool
-	picking   bool
-	items     []centerItem
-	tab       int
-	sel       int // index into shown()
-	top       int // first shown row
-	search    string
-	typing    bool // the search box has focus
-	flat      bool // not grouped by project (g)
-	msgs      map[string]string
-	loaded    bool
-	collapsed map[string]bool // expanded by default; retained across refreshes
+	scope           string // resume picker: this directory only
+	resume          bool
+	archiveView     bool
+	picking         bool
+	items           []centerItem
+	tab             int
+	sel             int // index into shown()
+	top             int // first shown row
+	search          string
+	typing          bool // the search box has focus
+	flat            bool // not grouped by project (g)
+	msgs            map[string]string
+	loaded          bool
+	collapsed       map[string]bool // explicit and default folds, retained across refreshes
+	client          *server.Client
+	release         func()
+	confirm, notice string
+	pending         centerItem
+	pendingMethod   string
 }
 
 func (a *App) cmdAgents(string) { a.openAgents(tabAll) }
@@ -165,187 +120,154 @@ func (a *App) openAgents(tab int) {
 		}
 		a.openThread("", map[string]any{"cwd": cwd}, func(info server.ThreadInfo, old *conn) { a.switchTo(info, "new", old, nil) })
 	}
-	c.apply(centerSnapshot{})
+	c.connect()
+	c.apply(nil)
 	c.selectCurrent()
 	a.openModal(c)
 	a.ui.Screen = c // fullscreen: the center takes the whole screen
 	go c.watch(a.ui, func() bool { return a.modal == c }, a.quit)
 }
 
-type centerSnapshot struct {
-	workers []daemon.Worker
-	saved   []session.Summary
-	agents  []centerAgent
+// listCenter is the protocol boundary; tests can replace it with wire fixtures.
+var listCenter = func(client *server.Client) ([]server.ThreadSummary, error) {
+	var out struct {
+		Threads []server.ThreadSummary `json:"threads"`
+	}
+	err := client.Call(context.Background(), "thread/list", map[string]any{"includeAgents": true, "includeClosedAgents": true, "includeArchived": true}, &out)
+	return out.Threads, err
 }
 
-type centerAgent struct {
-	state agentstate.State
-	turn  agentstate.Turn
+func (c *agentCenter) connect() {
+	if c.client != nil {
+		return
+	}
+	if c.a != nil && c.a.conn != nil && c.a.conn.own != nil {
+		c.client = c.a.conn.c
+		return
+	}
+	c.client, c.release = centerClient()
 }
 
-func scanCenter() centerSnapshot {
-	workers, _ := listWorkers()
-	snapshot := centerSnapshot{workers: workers, saved: listSaved()}
-	for _, s := range agentstate.ListAll() {
-		snapshot.agents = append(snapshot.agents, centerAgent{s, s.Latest()})
-	}
-	// A parent may have no user message yet (for example a shell using
-	// -session explicitly). Default-style listings omit those sessions,
-	// but an existing recorded parent should still anchor its agents.
-	seen := map[string]bool{}
-	var parents []string
-	for _, s := range snapshot.saved {
-		seen[s.ID] = true
-		parents = append(parents, s.AgentOf)
-	}
-	for _, agent := range snapshot.agents {
-		parents = append(parents, agent.state.Parent)
-	}
-	for len(parents) > 0 {
-		id := parents[0]
-		parents = parents[1:]
-		if id == "" || seen[id] {
-			continue
-		}
-		seen[id] = true
-		if path, err := session.Find(id); err == nil {
-			if s, err := session.Summarize(path); err == nil {
-				snapshot.saved = append(snapshot.saved, s)
-				parents = append(parents, s.AgentOf)
-			}
-		}
-	}
-	return snapshot
-}
-
-// watch scans off the UI goroutine and swaps completed snapshots in.
+// watch refreshes once on opening; refreshes afterwards are explicit (r).
 func (c *agentCenter) watch(ui *tui.TUI, active func() bool, quit <-chan struct{}) {
-	t := time.NewTicker(centerRefresh)
-	defer t.Stop()
-	for {
-		alive := false
-		ui.Do(func() { alive = active() })
-		if !alive {
-			return
+	c.connect()
+	rows, err := listCenter(c.client)
+	ui.Do(func() {
+		if active() {
+			c.accept(rows, err)
+			c.selectCurrent()
 		}
-		snapshot := scanCenter()
-		ui.Do(func() {
-			if active() {
-				first := !c.loaded
-				c.apply(snapshot)
-				c.loaded = true
-				if first {
-					c.selectCurrent()
-				}
+	})
+}
+func (c *agentCenter) accept(rows []server.ThreadSummary, err error) {
+	if err != nil {
+		c.notice = err.Error()
+	} else {
+		c.apply(rows)
+	}
+	c.loaded = true
+}
+func (c *agentCenter) reload() { c.connect(); rows, err := listCenter(c.client); c.accept(rows, err) }
+func (c *agentCenter) refresh() {
+	c.loaded = false
+	if c.a == nil {
+		c.reload()
+		return
+	}
+	go func() {
+		rows, err := listCenter(c.client)
+		c.a.ui.Do(func() {
+			if c.a.modal == c {
+				c.accept(rows, err)
 			}
 		})
-		select {
-		case <-quit:
-			return
-		case <-t.C:
-		}
-	}
+	}()
 }
 
-// reload gathers the sessions: live workers, this one (when atto
-// runs directly), then the saved ones, newest first.
-func (c *agentCenter) reload() { c.apply(scanCenter()); c.loaded = true }
-
-func (c *agentCenter) apply(snapshot centerSnapshot) {
+func (c *agentCenter) apply(rows []server.ThreadSummary) {
 	var keep string
 	if sh := c.shown(); c.sel < len(sh) {
 		keep = sh[c.sel].id
 	}
-	var items []centerItem
-	seen := map[string]bool{}
-	for _, w := range snapshot.workers {
-		state := tabReady
-		if w.Busy {
-			state = tabWorking
+	items := make([]centerItem, 0, len(rows))
+	c.msgs = map[string]string{}
+	for _, row := range rows {
+		it := centerItem{id: row.ID, title: row.Name, cwd: row.Cwd, branch: row.Branch, prompt: row.Preview, model: row.Model, updated: row.Updated, live: row.Loaded, archived: row.Archived, external: row.External, tab: tabInactive, current: c.a != nil && c.a.threadID == row.ID}
+		if it.title == "" {
+			it.title = row.Preview
 		}
-		if w.State == "waiting" {
-			state = tabNeedsYou
+		if row.External {
+			it.title = "agents started from a shell"
 		}
-		items = append(items, centerItem{id: w.Session, title: w.Name, live: true, cwd: w.Cwd, updated: w.Started, tab: state, current: c.a != nil && c.a.threadID == w.Session})
-		seen[w.Session] = true
-	}
-	if a := c.a; a != nil && a.threadID != "" && !seen[a.threadID] {
-		it := centerItem{id: a.threadID, title: a.sessName, cwd: a.cwd, current: true, updated: time.Now(), tab: tabReady}
-		switch {
-		case a.busy:
+		if row.Loaded {
+			it.tab = tabReady
+		}
+		if row.Busy {
 			it.tab = tabWorking
-		case a.goalHeld() && a.goalActive():
+		}
+		if row.OpenPrompt || row.GoalWaiting {
 			it.tab = tabNeedsYou
 		}
-		items = append(items, it)
-		seen[a.threadID] = true
-	}
-	c.msgs = make(map[string]string)
-	for _, s := range snapshot.saved {
-		c.msgs[s.ID] = s.LastMessage
-		title := s.Name
-		if s.External {
-			title = "agents started from a shell"
-		}
-		if title == "" {
-			title = s.Preview
-		}
-		if seen[s.ID] {
-			for j := range items { // enrich live session metadata
-				if items[j].id == s.ID {
-					if items[j].title == "" {
-						items[j].title = title
-					}
-					items[j].branch, items[j].prompt, items[j].model = s.Branch, s.Preview, s.Model
-					items[j].updated = s.Updated
-					items[j].parent, items[j].external, items[j].archived, items[j].isAgent = s.AgentOf, s.External, s.Archived, s.IsAgent()
-					items[j].shell, items[j].projectRoot = shellRootOf(s)
+		if m := row.Agent; m != nil {
+			it.isAgent = true
+			it.closed = m.Lifecycle == agentstate.Closed
+			it.parent, it.title, it.role, it.agentPath = m.ParentThreadID, m.Name, m.Role, m.Path
+			if it.title == "" {
+				it.title = row.Name
+			}
+			it.spawnedBy, it.projectRoot, it.turn = m.SpawnedBy, m.Project, &m.LastTurn
+			it.shell = m.ParentThreadID == "" && m.Origin == session.OriginExternal
+			if !row.Loaded && !row.Archived && m.Lifecycle != agentstate.Closed {
+				switch m.LastTurn.Status {
+				case agentstate.Running, agentstate.Queued:
+					it.tab = tabWorking
+				case agentstate.Idle, agentstate.Done:
+					it.tab = tabReady
 				}
 			}
-			continue
-		}
-		items = append(items, centerItem{id: s.ID, title: title, cwd: s.Cwd, branch: s.Branch, prompt: s.Preview, model: s.Model, updated: s.Updated, tab: tabInactive, parent: s.AgentOf, external: s.External, archived: s.Archived, isAgent: s.IsAgent()})
-		items[len(items)-1].shell, items[len(items)-1].projectRoot = shellRootOf(s)
-	}
-	// Enrich from the same state and Latest turn used by atto agent list.
-	// State can precede a session's first write, or outlive its parent.
-	for _, agent := range snapshot.agents {
-		st, turn := agent.state, agent.turn
-		if st.Session == "" {
-			continue
-		}
-		j := slices.IndexFunc(items, func(it centerItem) bool { return it.id == st.Session })
-		if j < 0 {
-			items = append(items, centerItem{id: st.Session, cwd: st.Cwd, updated: st.Created})
-			j = len(items) - 1
-		}
-		it := &items[j]
-		it.parent, it.title, it.prompt = st.Parent, st.Name, st.Task
-		it.role, it.model, it.turn = st.Preset, st.Model, &turn
-		it.isAgent, it.spawnedBy, it.projectRoot = true, st.SpawnedBy, st.Project
-		it.shell = st.IsRoot() && st.Origin == session.OriginExternal
-		if st.Branch != "" {
-			it.branch = st.Branch
-		}
-		viewer := it.current && c.a != nil && c.a.readOnly != ""
-		if (!it.live && !it.current || viewer) && !it.archived {
-			switch turn.Status {
-			case agentstate.Running, agentstate.Queued:
-				it.tab = tabWorking
-			case agentstate.Idle, agentstate.Done:
-				it.tab = tabReady
-			default:
+			if m.Lifecycle == agentstate.Closed {
 				it.tab = tabInactive
 			}
 		}
+		c.msgs[row.ID] = row.LastMessage
+		items = append(items, it)
+	}
+	if c.archiveView {
+		items = slices.DeleteFunc(items, func(it centerItem) bool { return !it.archived })
 	}
 	if c.scope != "" {
 		items = slices.DeleteFunc(items, func(it centerItem) bool {
-			return !session.SameDir(it.cwd, c.scope) || it.archived || it.parent != "" || it.isAgent
+			return !session.SameDir(it.cwd, c.scope) || it.archived && !c.archiveView || it.parent != "" || it.isAgent
 		})
 	}
 	c.items = items
 	c.reorder()
+	// Fold only completed agent subtrees, never a subtree containing an open agent.
+	if c.collapsed == nil {
+		c.collapsed = map[string]bool{}
+	}
+	tree := centerTree(items)
+	for i, it := range tree {
+		if !it.children {
+			continue
+		}
+		if _, set := c.collapsed[it.id]; set {
+			continue
+		}
+		hasAgent, finished := it.isAgent, !it.isAgent || it.closed
+		for j := i + 1; j < len(tree) && tree[j].depth > it.depth; j++ {
+			kid := tree[j]
+			if kid.isAgent {
+				hasAgent = true
+				if !kid.closed || kid.tab == tabWorking {
+					finished = false
+				}
+			}
+		}
+		if hasAgent && finished {
+			c.collapsed[it.id] = true
+		}
+	}
 	c.sel = 0
 	for i, it := range c.shown() {
 		if keep != "" && it.id == keep {
@@ -526,14 +448,27 @@ func (c *agentCenter) selectCurrent() {
 	}
 }
 
-func (c *agentCenter) close() { c.onClose() }
+func (c *agentCenter) close() {
+	if c.release != nil {
+		c.release()
+		c.release = nil
+	}
+	c.onClose()
+}
 
 func (c *agentCenter) HandleInput(data string) {
 	key := tui.Key(data)
-	// Ctrl+C belongs to the center while it has focus, even in search.
-	// Do not pass it through to the session's turn or shell cancellation.
 	if key == "ctrl+c" {
 		c.close()
+		return
+	}
+	if c.confirm != "" {
+		if data == "y" || key == "enter" {
+			c.confirm = ""
+			c.mutate(c.pending, c.pendingMethod, true)
+		} else if key == "escape" || data == "n" {
+			c.confirm = ""
+		}
 		return
 	}
 	if c.typing {
@@ -589,6 +524,37 @@ func (c *agentCenter) HandleInput(data string) {
 			c.collapsed[id] = !c.collapsed[id]
 			c.top = 0
 		}
+	case "v":
+		c.archiveView = !c.archiveView
+		c.sel, c.top = 0, 0
+		c.refresh()
+	case "r", "ctrl+r":
+		c.refresh()
+	case "a", "d":
+		if c.sel >= len(sh) || sh[c.sel].virtual {
+			return
+		}
+		it := sh[c.sel]
+		method := "thread/archive"
+		action := "archive"
+		if key == "d" {
+			method, action = "thread/delete", "delete"
+		} else if it.archived {
+			method, action = "thread/unarchive", "unarchive"
+		}
+		if it.isAgent && it.turn != nil && it.turn.Status.Active() {
+			c.notice = "Agent has a running turn: interrupt it before archiving/deleting."
+			return
+		}
+		if key == "d" || it.live {
+			c.pending, c.pendingMethod = it, method
+			c.confirm = "Confirm " + action + "? y / Enter confirms · Esc cancels"
+			if it.live {
+				c.confirm = "Stop it and " + action + "? y / Enter confirms · Esc cancels"
+			}
+		} else {
+			c.mutate(it, method, false)
+		}
 	case "n":
 		c.picking = true
 		cwd := ""
@@ -610,7 +576,7 @@ func (c *agentCenter) HandleInput(data string) {
 		c.picking = true
 		c.close()
 		switch {
-		case it.current:
+		case it.current && it.live:
 		default:
 			c.onOpen(it.id, it.cwd)
 		}
@@ -636,6 +602,9 @@ func (c *agentCenter) RenderScreen(width, height int) []string {
 		group = "None"
 	}
 	head := tui.Bold("Agent command center") + tui.Dim("  Group: "+group+"  g")
+	if c.archiveView {
+		head += tui.Dim(" · Archived")
+	}
 	if c.typing || c.search != "" {
 		head = tui.Bold("Search: ") + c.search
 		if c.typing {
@@ -665,7 +634,12 @@ func (c *agentCenter) RenderScreen(width, height int) []string {
 	if width < 60 {
 		keys = "esc ←  ↑↓  enter →  space fold  n new  / find  tab"
 	}
-	footer := []string{"", tui.Truncate(tui.Dim(keys), width, "…")}
+	keys += "  r refresh  a archive  d delete  v archived"
+	message := c.notice
+	if c.confirm != "" {
+		message = c.confirm
+	}
+	footer := []string{tui.Truncate(message, width, "…"), tui.Truncate(tui.Dim(keys), width, "…")}
 	bodyH := max(height-len(out)-len(footer), 3)
 
 	detailW := 0
@@ -736,7 +710,7 @@ func (c *agentCenter) renderList(sh []centerItem, width, bodyH int) []string {
 			title = "(new session)"
 		}
 		if it.agentPath != "" {
-			title = it.agentPath
+			title = strings.TrimPrefix(it.agentPath, "/root/")
 			if it.role != "" {
 				title += " · " + it.role
 			}
@@ -904,6 +878,12 @@ func RunAgents() (AgentsPick, error) {
 		onOpen: func(id, cwd string) { pick = AgentsPick{Session: id, Cwd: cwd} },
 		onNew:  func(cwd string) { pick = AgentsPick{New: true, Cwd: cwd} },
 	}
+	defer func() {
+		if c.release != nil {
+			c.release()
+			c.release = nil
+		}
+	}()
 	c.reload()
 	ui.Screen = c
 	ui.SetFocus(c)
@@ -919,7 +899,7 @@ func RunAgents() (AgentsPick, error) {
 	}
 	stopSignals := watchTerminalExit(func() { terminal.InterruptOutput(); quit() })
 	defer stopSignals()
-	go c.watch(ui, func() bool { return true }, done)
+	// The standalone center already refreshed before starting the UI.
 	for {
 		select {
 		case <-done:
@@ -932,4 +912,34 @@ func RunAgents() (AgentsPick, error) {
 			return pick, nil
 		}
 	}
+}
+
+func (c *agentCenter) mutate(it centerItem, method string, stop bool) {
+	c.connect()
+	run := func() error {
+		return c.client.Call(context.Background(), method, map[string]any{"threadId": it.id, "stop": stop}, nil)
+	}
+	if c.a == nil {
+		if err := run(); err != nil {
+			c.notice = err.Error()
+		} else {
+			c.notice = ""
+			c.reload()
+		}
+		return
+	}
+	go func() {
+		err := run()
+		c.a.ui.Do(func() {
+			if c.a.modal != c {
+				return
+			}
+			if err != nil {
+				c.notice = err.Error()
+			} else {
+				c.notice = ""
+				c.refresh()
+			}
+		})
+	}()
 }

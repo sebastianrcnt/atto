@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/sebastianrcnt/atto/agentstate"
-	"github.com/sebastianrcnt/atto/daemon"
 	"github.com/sebastianrcnt/atto/provider"
 	"github.com/sebastianrcnt/atto/session"
 	"github.com/sebastianrcnt/atto/tui"
@@ -25,7 +24,7 @@ func treeIDs(items []centerItem) []string {
 
 func smallCenter() *agentCenter {
 	c := &agentCenter{flat: true, onClose: func() {}}
-	c.apply(centerSnapshot{
+	c.applyFixture(centerSnapshot{
 		saved: []session.Summary{
 			{ID: "root", Name: "Fix API", Cwd: "/work", LastMessage: "Started the tests."},
 			{ID: "tests", Name: "tests", AgentOf: "root", Cwd: "/trees/tests", Branch: "atto/tests", Preview: "Run the suite\nThen review failures", LastMessage: "All tests pass."},
@@ -85,7 +84,7 @@ func TestCenterFoldAndFilter(t *testing.T) {
 		t.Fatalf("fold %v", got)
 	}
 	// Refresh keeps folds and selection, and tabs reveal working descendants.
-	c.apply(centerSnapshot{saved: []session.Summary{{ID: "root", Cwd: "/work"}, {ID: "tests", Name: "tests", AgentOf: "root", Cwd: "/work"}}, agents: []centerAgent{{state: agentstate.State{Session: "tests", Parent: "root", Name: "tests", Task: "Run suite"}, turn: agentstate.Turn{Status: agentstate.Running}}}})
+	c.applyFixture(centerSnapshot{saved: []session.Summary{{ID: "root", Cwd: "/work"}, {ID: "tests", Name: "tests", AgentOf: "root", Cwd: "/work"}}, agents: []centerAgent{{state: agentstate.State{Session: "tests", Parent: "root", Name: "tests", Task: "Run suite"}, turn: agentstate.Turn{Status: agentstate.Running}}}})
 	if len(c.shown()) != 1 || c.sel != 0 {
 		t.Fatal("refresh lost fold/selection")
 	}
@@ -207,7 +206,7 @@ func TestCenterStateStatusVocabulary(t *testing.T) {
 		{agentstate.Done, tabReady}, {agentstate.Failed, tabInactive}, {agentstate.Stopped, tabInactive},
 	} {
 		c := &agentCenter{}
-		c.apply(centerSnapshot{agents: []centerAgent{{state: agentstate.State{Session: "child", Parent: "gone", Name: "child"}, turn: agentstate.Turn{Status: test.status}}}})
+		c.applyFixture(centerSnapshot{agents: []centerAgent{{state: agentstate.State{Session: "child", Parent: "gone", Name: "child"}, turn: agentstate.Turn{Status: test.status}}}})
 		if c.items[0].tab != test.tab {
 			t.Fatalf("%s mapped to %s", test.status, c.items[0].status())
 		}
@@ -217,9 +216,7 @@ func TestCenterStateStatusVocabulary(t *testing.T) {
 
 func TestCenterScanIncludesShellNestedAndClosedAgents(t *testing.T) {
 	t.Setenv("ATTO_DIR", t.TempDir())
-	oldP := listWorkers
-	listWorkers = func() ([]daemon.Worker, error) { return nil, nil }
-	t.Cleanup(func() { listWorkers = oldP })
+
 	// An agent started from a shell is a root; one started below it is nested.
 	root := session.NewManaged("/trees/tests", func(id string) session.AgentMeta {
 		return session.AgentMeta{Version: 1, RootSessionID: id, Path: "/root", Name: "tests", Project: "/project", Origin: session.OriginExternal}
@@ -262,6 +259,8 @@ func TestCenterScanIncludesShellNestedAndClosedAgents(t *testing.T) {
 		}
 	}
 	c.reload()
+	c.collapsed[heading] = false
+	c.collapsed[root.ID] = false
 	sh = c.shown()
 	if got := treeIDs(sh); !reflect.DeepEqual(got, []string{heading, root.ID, nested.ID}) {
 		t.Fatalf("archived inventory %v", got)
@@ -296,9 +295,7 @@ func TestCenterScanIncludesShellNestedAndClosedAgents(t *testing.T) {
 
 func TestCenterEmptyParentStillAnchorsAgent(t *testing.T) {
 	t.Setenv("ATTO_DIR", t.TempDir())
-	oldP := listWorkers
-	listWorkers = func() ([]daemon.Worker, error) { return nil, nil }
-	t.Cleanup(func() { listWorkers = oldP })
+
 	parent := session.New("/work")
 	parent.Append(session.Entry{Type: session.TypeName, Name: "empty parent"})
 	parent.Close()

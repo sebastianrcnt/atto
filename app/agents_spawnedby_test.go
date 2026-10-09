@@ -13,7 +13,7 @@ import (
 func TestCenterDetailShowsWhoStartedTheAgent(t *testing.T) {
 	c := &agentCenter{flat: true}
 	parent := "root"
-	c.apply(centerSnapshot{
+	c.applyFixture(centerSnapshot{
 		saved: []session.Summary{{ID: "root", Cwd: "/work"}, {ID: "tests", Name: "tests", AgentOf: "root", Cwd: "/work"}},
 		agents: []centerAgent{{state: agentstate.State{Session: "tests", Parent: "root", Name: "tests", Task: "Run suite", Model: "fake/m",
 			SpawnedBy: &session.SpawnedBy{Session: &parent, Model: "openai/gpt-6.1-sol", Effort: "high", Turn: 3, ToolCallID: "call_9", Origin: session.SpawnModel}},

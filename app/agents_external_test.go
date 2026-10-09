@@ -7,6 +7,7 @@ import (
 
 	"github.com/sebastianrcnt/atto/agentstate"
 	"github.com/sebastianrcnt/atto/config"
+	"github.com/sebastianrcnt/atto/server"
 	"github.com/sebastianrcnt/atto/session"
 )
 
@@ -78,13 +79,22 @@ func TestCenterListsShellRootsOfSeveralSpawnsAndArchivedAgentsUnderOneHeading(t 
 	}
 	// Read real inventory without relying on a running daemon.
 	c := &agentCenter{}
-	inventory := func() centerSnapshot {
-		snapshot := scanCenter()
-		snapshot.workers = nil
-		return snapshot
+	client, release := centerClient()
+	defer release()
+	inventory := func() []server.ThreadSummary {
+		rows, err := listCenter(client)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return rows
 	}
 	check := func(archived bool) {
 		c.apply(inventory())
+		if archived {
+			for id := range c.collapsed {
+				c.collapsed[id] = false
+			}
+		}
 		tree := c.shown()
 		if len(tree) != 3 || !tree[0].virtual || tree[0].title != "agents started from a shell" || tree[1].depth != 1 || tree[2].depth != 1 {
 			t.Fatalf("shell forest: %+v", tree)
@@ -113,7 +123,7 @@ func TestCenterListsShellRootsOfSeveralSpawnsAndArchivedAgentsUnderOneHeading(t 
 
 func TestCenterKeepsAnAgentRootOutOfTheResumePicker(t *testing.T) {
 	c := &agentCenter{scope: "/work", resume: true}
-	c.apply(centerSnapshot{
+	c.applyFixture(centerSnapshot{
 		saved: []session.Summary{
 			{ID: "plain", Cwd: "/work", Preview: "hello"},
 			{ID: "root-agent", Cwd: "/work", Preview: "task", Agent: &session.AgentMeta{Version: 1, RootSessionID: "root-agent", Path: "/root"}},

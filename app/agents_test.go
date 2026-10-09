@@ -20,10 +20,26 @@ func centerText(a *App) string {
 
 // fakeCenter replaces the worker and saved-session discovery.
 func fakeCenter(t *testing.T, workers []daemon.Worker, saved []session.Summary) {
-	oldP, oldS := listWorkers, listSaved
-	t.Cleanup(func() { listWorkers, listSaved = oldP, oldS })
-	listWorkers = func() ([]daemon.Worker, error) { return workers, nil }
-	listSaved = func() []session.Summary { return saved }
+	old := listCenter
+	t.Cleanup(func() { listCenter = old })
+	listCenter = func(client *server.Client) ([]server.ThreadSummary, error) {
+		rows, err := old(client)
+		fixtures := fixtureRows(centerSnapshot{workers: workers, saved: saved})
+		for _, row := range fixtures {
+			found := false
+			for i := range rows {
+				if rows[i].ID == row.ID {
+					rows[i] = row
+					found = true
+					break
+				}
+			}
+			if !found {
+				rows = append(rows, row)
+			}
+		}
+		return rows, err
+	}
 }
 
 func TestLeftOnEmptyPromptOpensCenter(t *testing.T) {
@@ -212,10 +228,10 @@ func TestCenterRefreshDoesNotBlockUI(t *testing.T) {
 	a, _ := recordedApp(t)
 	fakeCenter(t, nil, nil)
 	entered, release := make(chan struct{}), make(chan struct{})
-	listSaved = func() []session.Summary {
+	listCenter = func(*server.Client) ([]server.ThreadSummary, error) {
 		close(entered)
 		<-release
-		return []session.Summary{{ID: "saved", Cwd: "/work", Preview: "task", LastMessage: "fresh answer"}}
+		return []server.ThreadSummary{{ID: "saved", Cwd: "/work", Preview: "task", LastMessage: "fresh answer"}}, nil
 	}
 	a.cmdAgents("")
 	select {
@@ -245,7 +261,7 @@ func TestCenterRefreshDoesNotBlockUI(t *testing.T) {
 func TestResumeCenterLiveOrderAndDefault(t *testing.T) {
 	now := time.Now()
 	c := &agentCenter{scope: "/work", resume: true, flat: true}
-	c.apply(centerSnapshot{
+	c.applyFixture(centerSnapshot{
 		workers: []daemon.Worker{{Session: "live", Cwd: "/work", Started: now.Add(-time.Hour)}},
 		saved: []session.Summary{
 			{ID: "recent", Cwd: "/work", Name: "last conversation", Updated: now},
@@ -270,7 +286,7 @@ func TestCenterWorkerProjectStateAndNavigation(t *testing.T) {
 	c.onClose = func() {}
 	c.onOpen = func(id, cwd string) { picked = id + " " + cwd }
 	c.onNew = func(cwd string) { picked = "new " + cwd }
-	c.apply(centerSnapshot{
+	c.applyFixture(centerSnapshot{
 		workers: []daemon.Worker{
 			{Session: "working", Name: "fix the API", Cwd: "/api", Busy: true, State: "working", Started: now},
 			{Session: "waiting", Name: "answer me", Cwd: "/api", State: "waiting", Started: now.Add(-time.Minute)},

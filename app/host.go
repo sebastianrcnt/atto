@@ -132,3 +132,14 @@ func (a *App) dialWorker(id string, params map[string]any) (*conn, server.Thread
 	}
 	return cn, info, nil
 }
+
+// centerClient is a discovery facade, not an execution worker. Its inventory
+// and session mutations use the same protocol as remote frontends.
+func centerClient() (*server.Client, func()) {
+	s := server.New(Version, "")
+	if daemon.Usable() {
+		s.Workers = daemon.Routes()
+	}
+	c := server.Connect(context.Background(), s)
+	return c, func() { c.Close(); s.Close() }
+}

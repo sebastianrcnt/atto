@@ -2,12 +2,12 @@ Agent command center  Group: None  g
  All 6   Needs you 0   Working 1   Ready 2   Inactive 3
 ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
   ○ ▾ Fix API                                                                                     Inactive            │ Task details
-  ● ├─ ▾ /root/tests · tester · fake/fast · atto/tests                                            Working             │
-  ● │  └─ /root/tests/lint · review · fake/fast                                                   Ready               │ Run the suite
-  ● └─ /root/docs · writer · fake/fast                                                            Ready               │ /root/tests
+  ● ├─ ▾ tests · tester · fake/fast · atto/tests                                                  Working             │
+  ● │  └─ tests/lint · review · fake/fast                                                         Ready               │ Run the suite
+  ● └─ docs · writer · fake/fast                                                                  Ready               │ /root/tests
   ○ ▾ agents started from a shell                                                                 Inactive            │ tester · fake/fast
-  ○ └─ /root/check · general · fake/fast                                                          Inactive            │ Tokens: 120 in · 20 cached · 30 out
-  ○ /root/orphan                                                                                  Inactive            │ Duration: 2.0s
+  ○ └─ check · general · fake/fast                                                                Inactive            │ Tokens: 120 in · 20 cached · 30 out
+  ○ orphan                                                                                        Inactive            │ Duration: 2.0s
                                                                                                                       │ Working
                                                                                                                       │
                                                                                                                       │ Last answer / report
@@ -21,4 +21,4 @@ Agent command center  Group: None  g
                                                                                                                       │
                                                                                                                       │ Prompt
 
-esc quit  ↑/↓ move  enter open  space fold  n new  / search  tab filter
+esc quit  ↑/↓ move  enter open  space fold  n new  / search  tab filter  r refresh  a archive  d delete  v archived
