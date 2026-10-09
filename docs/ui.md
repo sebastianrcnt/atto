@@ -1,6 +1,6 @@
 # Shared UI elements
 
-Design, 2026-10-09; **accepted; stages 1–3 implemented** (decisions below). Every frontend must
+Design, 2026-10-09; **accepted; stages 1–4 implemented** (decisions below). Every frontend must
 show an extension's drawing and atto's own panels through the same contract: the
 TUI first, a new multi-session web UI served on `0.0.0.0`, then GUI/Flutter.
 Swing and the frozen web client were deleted; `archive/swing` and
@@ -39,7 +39,7 @@ adapter and Go built-ins. Stage 3 adds the full-build goja binding, JSX catalog,
 session JSON store and typed examples; removes live string UI APIs/notifications
 and frontend string widgets/status/display plumbing. Legacy session strings are
 converted on read to passive trees, without rewriting files or historical code.
-The new web UI (stage 4) and external providers (stage 5) remain future work.
+The new web UI (stage 4) is implemented; external providers (stage 5) remain future work.
 
 **Precedents.** [Claude Code's interface guide][mods-interface] and
 [reference][mods-reference] inform sites (Pane/AbovePrompt/transcript/Spinner/
@@ -455,7 +455,7 @@ bytes or typed transcript truth.
    UIState/string notifications/display plumbing. No compatibility shim. Back up
    sessions before any format cleanup; old saved string entries may be converted
    once to passive trees, not maintained as a second rendering API.
-4. **New web UI:** ordinary Go HTTP server bound to `0.0.0.0` with existing auth,
+4. **New web UI (implemented):** ordinary Go HTTP server bound to `0.0.0.0` with existing auth,
    static assets and WS gateway over workers; many sessions via thread/list and
    independent attach/detach. DOM catalog follows these rules, not the frozen
    client. Native web prompt editor/scroll/focus/pickers; audit whether command
@@ -490,3 +490,51 @@ element/site, tree transport or cross-frontend drawing mechanism.
 [mods-reference]: https://code.claude.com/docs/en/plugins/mods/reference.md
 [a2ui]: https://a2ui.org
 [osc7501]: https://www.superlogical.com/rex/docs/build/program-status
+
+## Stage 4 delivery (2026-10-09)
+
+`server/web` is a new plain TypeScript DOM client of revision 3, embedded in Go.
+This is the smaller permitted DOM option rather than adding a Preact runtime;
+Tailwind standalone + Go esbuild builds committed dist without Node. The frozen
+client was consulted only for Beautiful UI design/animation patterns and build
+pins, never its HTTP/SSE/string protocol. Beautiful UI adaptations and licenses
+are recorded in THIRD_PARTY_NOTICES; Vercel AI Elements supplies behavior ideas
+only, with no copied source.
+
+An explicit `--web` flag keeps existing WS-only app-server listeners stable.
+`atto serve` and TUI `/remote` enable it on `0.0.0.0:7879` by default. Static
+assets are public and contain no session/token data; `/ws` requires the existing
+off-loopback bearer auth and Origin checks. The fragment bootstrap is consumed
+once into tab-scoped sessionStorage; the socket uses an auth subprotocol offer,
+not a query string. Transport close never closes its runtime/workers.
+
+Every catalog family and site has a DOM adapter. Controls use declared events
+and current rev; local drafts, collapse state, site hotkeys and focus survive
+unrelated drawings. Saved controls stay passive, engine references resolve to
+native typed items, and original display is always available. Pages load tail
+first, preserve live items and anchors, and invalidate on branch/reset. Reconnect
+buffers notifications around replacement snapshots and never resends actions.
+Native inventory shows live/needs-you and agent parent links, archived reads,
+multiple open session tabs and confirmed mutations. The composer supports
+send/steer/queue/send-now/interrupt, runtime slash suggestions, model/effort and
+image attachment. Pane tabs/layout, status priority, expiry and dialogs are local.
+Queue previews/resume and the context card now use Go trees for both frontends;
+goal/jobs/diff/extension UI already use the shared worker registry.
+
+**Boundary audit:** inventory, model/effort pickers and tree/checkpoint navigation
+remain native: their paging/search, scroll anchors and selection are client-local,
+and dialogs for worker questions already use shared trees. Credential and
+repository-trust flows intentionally remain in the local CLI. Tool/reasoning
+items use accessible disclosures, plain code/output and unified diff lines;
+there is no syntax-highlighting dependency. Browser Markdown is a conservative
+semantic subset (headings, paragraphs, lists, blockquotes, fences, emphasis,
+inline code and allowed links); raw HTML remains literal text. Tool grouping is
+not yet identical to the TUI's grouping preference: the web draws one disclosure
+per command. Clipboard text falls back to a selectable dialog on plain HTTP.
+
+Tests run TS core/catalog and page workflows through Go/esbuild/goja with a
+DOM shim at phone and desktop widths, plus the shared TUI fixture, Go auth/CSP/
+bootstrap/detach tests and real CLI process e2e. No headless browser is available:
+actual browser paint, touch keyboards, CSP enforcement, focus/scroll geometry,
+image paste/drop and light/dark visual appearance still need manual browser QA.
+See docs/ui-stage-4-report.md for verification and live-model evidence.

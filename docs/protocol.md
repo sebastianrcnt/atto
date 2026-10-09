@@ -25,23 +25,31 @@ atto app-server --listen ws://0.0.0.0:7878 --allow-origin https://client.example
   at startup: remove a stale socket yourself after checking its owner is gone.
   This is **raw JSON lines**, not Codex's WebSocket-over-UDS. Unix listeners are
   unavailable on Windows versions without Unix-socket support.
-- **WebSocket:** HTTP upgrade at any path (use `/`). One JSON-RPC message per
+- **WebSocket:** without `--web`, HTTP upgrade at any path (use `/`). With
+  `--web`, the page is at `/`, static assets at `/app.js` and `/app.css`, and
+  HTTP upgrade is at `/ws`. One JSON-RPC message per
   text message, no trailing newline required. RFC 6455 masking, fragmentation, ping/pong and close are supported;
   binary messages are refused. Max message size is 64 MiB (aggregate fragments).
-  Server frames are unmasked. No compression or subprotocol is negotiated.
+  Server frames are unmasked. No compression is negotiated. `atto.rpc.v3` is negotiated when offered.
   Slow writes have a 10-second deadline. Framing errors close with 1002;
   binary messages with 1003, invalid UTF-8 with 1007, oversize with 1009.
 
-There is no HTTP RPC or SSE endpoint, and no web page: the web UI is being
-rebuilt, and `atto serve` and `/remote` only say so. Attach other clients with
-`atto app-server`.
+There is no HTTP RPC or SSE endpoint. `atto serve` defaults to
+`atto app-server --listen ws://0.0.0.0:7879 --web`. `/remote` starts the same
+listener for the running TUI runtime/workers; `/remote off` closes only that
+listener. The explicit `--web` flag preserves WS-only listener behavior.
+With `--web`, app-server prints a bootstrap `http://HOST:PORT/#token=…` link
+on stdout once; the browser consumes the fragment into sessionStorage and
+removes it from the address bar. Off-loopback auth is still mandatory.
 
 app-server WS requires the bearer token when bound beyond loopback, but not when
 bound only to loopback. The persistent token is generated in `~/.atto/server-token` (or
-`$ATTO_DIR/server-token`, 0600); app-server prints the token and file on stderr
-for non-loopback listeners. Supply `Authorization: Bearer <token>` or
-`?token=<token>` (browser WebSocket cannot set headers). Do not log
-query tokens. Non-loopback listeners print a no-TLS warning: use a trusted
+`$ATTO_DIR/server-token`, 0600); WS-only app-server prints the token and file on stderr
+for non-loopback listeners; web mode prints only the bootstrap link on stdout. Supply `Authorization: Bearer <token>`, or (for browsers) offer
+`Sec-WebSocket-Protocol: atto.rpc.v3, atto.auth.<token>`. The secret offer is
+never echoed. WS-only listeners still accept `?token=<token>` for existing
+clients, but `/ws` in web mode rejects query parameters; the page never puts
+a token in a query string. Do not log query tokens or credential headers. Non-loopback listeners print a no-TLS warning: use a trusted
 private network such as Tailscale or a TLS reverse proxy. There is no built-in
 TLS termination, sandbox or per-command approval policy.
 
@@ -164,7 +172,7 @@ A read-only/offline snapshot is not an execution owner. Use resume before writes
   User shell: `shell`, `excluded`, `truncated`, `fullOutput`, `contextPending`.
   Compaction: `auto`, `tokensBefore`, `tokensAfter`. Hook: `hookEvent`, `blocked`.
   Display: `blockId`, `uiDisplay?:{rev,tree,actionsEnabled?}`. uiBlock:
-  `title`, `ext`, `uiTree`, `uiRev`, `uiId`. Notice: `level`, `title`, `loaded`,
+  `title`, `ext`, `tree`, `rev`, `uiId`, `actionsEnabled?`. Notice: `level`, `title`, `loaded`,
   `reloaded`, `changes`, `note`. Goal: `goalStatus`, `goalState`.
   Omitted fields aren't default display text. Display replacements never change
   the model's original text. Completed items may later get block/entry IDs. User messages receive their
@@ -207,7 +215,8 @@ A read-only/offline snapshot is not an execution owner. Use resume before writes
   command needs a client renderer/picker; don't silently execute a substitute.
 - **ContextInfo:** `{loaded,contextTokens,contextWindow?,compactLimit?,cap?,
   priceCap?,longContext?,breakdown?,systemPrompt?,usage,busy}`. `breakdown` is
-  unavailable while busy.
+  unavailable while busy. `tree?:Node` is the passive shared context card
+  (omitted for `view:system`).
 
 **ServerInfo** (MCP): `{name,scope,transport,target,path,status,tools,error?,invalid?,hash?}`.
 **SentRequest** (diagnostics): `{Time,URL,Body}`; Time is RFC3339, Body is base64
@@ -653,3 +662,27 @@ Extension session JSON storage uses `ui_store` entries (`ext`, `storeKey`,
 along the active branch, and inherited at a fork point. Legacy `block_display`
 and `ext_text` entries are reader-only: replay converts them to passive portable
 trees, never string UI notifications. There is no `ExtensionUI` string snapshot.
+
+### Web catalog resources and native boundaries
+
+The page announces `capabilities.ui.surface:"web"`, width in measured logical
+columns, and the full v1 element catalog. Resize sends `ui/capabilities`.
+`ui/event` retains the existing rev-only routing; there is no epoch/dedupe or
+execution retry addition. A `uiBlock` now has optional `actionsEnabled:true`
+only while its current provider has live bindings. Historical/offline pages
+omit it; the corresponding transcript `ui/render` also includes that flag.
+This is display metadata, never persisted as an authorization grant.
+
+`Image.resource` names an existing item image as
+`<itemId>-image-<zero-based-index>` (`ui.ImageResource` in Go). The client
+resolves it through authenticated `item/image` on the current thread, with
+`offline:true` when appropriate. The server validates transcript membership,
+index, stored format and size. There is no HTTP file/image path, remote URL or
+inline SVG resource. Unknown/unresolvable resources show alt text.
+
+`thread/context.tree` is Go-built passive data, the same card used by the TUI;
+`/context` also opens a Go pane. Pending-input previews and queue resume are the
+`atto/queue` band tree; client-local take-back/draft editing uses `turn/unsteer`.
+Model/effort selectors, session inventory/management, tree/fork/navigation and
+slash autocomplete remain native client interactions. Web inventory refresh is
+explicit plus every ten seconds while visible; no inventory push method exists.
