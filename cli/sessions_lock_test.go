@@ -5,8 +5,10 @@ import (
 	"errors"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"testing"
 
+	"github.com/sebastianrcnt/atto/outputs"
 	"github.com/sebastianrcnt/atto/session"
 )
 
@@ -31,10 +33,17 @@ func TestSessionsDeleteWriterLeaseAndSidecars(t *testing.T) {
 	if err := os.WriteFile(session.LogPath(w.Path), []byte("log"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	saved := outputs.SessionDir(w.ID)
+	if err := os.MkdirAll(saved, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(saved, "call.log.zst"), []byte("out"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	if err := sessionsDelete(&out, w.Path, true); err != nil {
 		t.Fatal(err)
 	}
-	for _, path := range []string{w.Path, session.LockPath(w.Path), session.LogPath(w.Path)} {
+	for _, path := range []string{w.Path, session.LockPath(w.Path), session.LogPath(w.Path), saved} {
 		if _, err := os.Stat(path); !os.IsNotExist(err) {
 			t.Fatalf("deleted path %s: %v", path, err)
 		}

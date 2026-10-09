@@ -21,6 +21,7 @@ import (
 	"github.com/sebastianrcnt/atto/goal"
 	"github.com/sebastianrcnt/atto/images"
 	"github.com/sebastianrcnt/atto/jobs"
+	"github.com/sebastianrcnt/atto/outputs"
 	"github.com/sebastianrcnt/atto/session"
 )
 
@@ -32,7 +33,8 @@ const sessionsUsage = `usage:
   atto sessions unarchive <id>                              bring it back
   atto sessions compress                                   compress legacy plain archives
   atto sessions delete [-y] <id>                            delete it for good, with its jobs,
-                                                            inbox, goal and unshared images
+                                                            inbox, goal, saved output and
+                                                            unshared images
 
 -all lists every directory, -archived the archive, -json prints JSON.
 An <id> may be a unique prefix. Resume one with: atto resume <id>.
@@ -397,6 +399,9 @@ func sessionsDelete(out io.Writer, path string, yes bool) error {
 		}
 	}
 	if err := os.Remove(goal.Path(id)); err != nil && !os.IsNotExist(err) {
+		fmt.Fprintf(out, "warning: %v\n", err)
+	}
+	if err := outputs.RemoveSession(id); err != nil {
 		fmt.Fprintf(out, "warning: %v\n", err)
 	}
 	fmt.Fprintf(out, "Deleted session %s.\n", id)
