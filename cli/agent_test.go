@@ -16,6 +16,7 @@ import (
 
 	"github.com/sebastianrcnt/atto/agent"
 	"github.com/sebastianrcnt/atto/agentstate"
+	"github.com/sebastianrcnt/atto/agentturn"
 	"github.com/sebastianrcnt/atto/config"
 	"github.com/sebastianrcnt/atto/events"
 	"github.com/sebastianrcnt/atto/jobs"
@@ -276,7 +277,7 @@ func TestAgentStartWaitReport(t *testing.T) {
 		t.Fatalf("the final answer waits in the inbox after wait printed it: %+v", evs)
 	}
 	st1, _ := agentstate.LoadChild(parent, "bugs")
-	ev := turnEvent(st1, st1.Latest())
+	ev := agentturn.Event(st1, st1.Latest())
 	if ev.Source != "agent" || !strings.Contains(ev.Text, "Message Type: FINAL_ANSWER\nFrom: /root/bugs\nTo: /root") ||
 		!strings.Contains(ev.Text, "Turn 1 finished") || !strings.Contains(ev.Text, "found 3 bugs") || ev.Quiet {
 		t.Fatalf("event %+v", ev)

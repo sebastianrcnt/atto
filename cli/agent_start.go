@@ -12,12 +12,11 @@ import (
 
 	"github.com/sebastianrcnt/atto/agent"
 	"github.com/sebastianrcnt/atto/agentstate"
+	"github.com/sebastianrcnt/atto/agentturn"
 	"github.com/sebastianrcnt/atto/config"
 	"github.com/sebastianrcnt/atto/core"
-	"github.com/sebastianrcnt/atto/events"
 	"github.com/sebastianrcnt/atto/jobs"
 	"github.com/sebastianrcnt/atto/session"
-	"github.com/sebastianrcnt/atto/tui"
 )
 
 // agentStart creates an agent from preset and starts its first turn. The
@@ -120,6 +119,10 @@ func agentStart(out io.Writer, settings config.Settings, c caller, name, preset,
 	w := session.NewManagedID(id, agentCwd, func(string) session.AgentMeta { return meta })
 	// The session exists from the start, so every turn resumes it.
 	w.Append(session.Entry{Type: session.TypeName, Name: name})
+	// The agent's model and effort are in its session, so whatever resumes it
+	// (a turn, a worker, a client) runs it as it was started.
+	w.Append(session.Entry{Type: session.TypeModel, Provider: ref.ProviderName, Model: ref.Model.ID})
+	w.Append(session.Entry{Type: session.TypeEffort, Effort: effort})
 	w.Close()
 	if err := w.Err(); err != nil {
 		_ = os.Remove(w.Path)
@@ -249,24 +252,18 @@ func startTurn(st *agentstate.State, text string) error {
 // parent session; a root, which has none, owns the job of its own turn. The
 // job names the agent and the turn, not where the record is.
 func startTurnLocked(st *agentstate.State, text string) error {
-	cur, err := agentstate.Load(st.Session)
+	cur, err := agentturn.Prepare(*st, text)
 	if err != nil {
+		return err
+	}
+	*st = cur
+	if handled, err := startTurnInWorker(st); handled || err != nil {
 		return err
 	}
 	exe, err := os.Executable()
 	if err != nil {
 		return err
 	}
-	cur.Turns++
-	cur.Prompt, cur.Job = text, 0
-	cur.JobOwner = cur.Parent
-	if cur.IsRoot() {
-		cur.JobOwner = cur.Session
-	}
-	if err := agentstate.Save(cur); err != nil {
-		return err
-	}
-	*st = cur
 	args := []string{exe, "_agent-turn", cur.Session, fmt.Sprint(cur.Turns)}
 	j, err := jobs.StartAgentArgs(cur.JobOwner, cur.Cwd, "agent "+cur.Name, args, cur.IsRoot())
 	if err != nil {
@@ -331,15 +328,6 @@ func agentModel(models config.ModelsFile, settings config.Settings, p agentstate
 	return ref, "", nil
 }
 
-// workerOf is the description of an agent's session for its system prompt.
-func workerOf(st agentstate.State) *agent.Worker {
-	w := &agent.Worker{Name: st.Name, Preset: st.Preset, Instructions: st.Instructions, ID: st.Session, Path: st.Path, Worktree: st.Worktree, Branch: st.Branch}
-	if st.Parent != "" {
-		w.Parent, w.ParentID = agentstate.PathOf(st.Parent), st.Parent
-	}
-	return w
-}
-
 // RunAgentTurn is the hidden entry point of an agent's turn (atto
 // _agent-turn <agent session ID> <turn>), started by atto agent as a job:
 // of the parent session, or of the agent's own for an agent started from a
@@ -373,57 +361,24 @@ func RunAgentTurn(args []string, _ io.Writer) error {
 	var res printResult
 	runErr := RunPrint(PrintOptions{
 		Prompt: st.Prompt, Model: st.Model, Effort: st.Effort, Resume: st.Session, Format: "text", Verbose: true,
-		Worker: workerOf(st),
+		Worker: agent.WorkerOf(st),
 		done:   func(r printResult) { res = r }, turnContext: ctx,
 	})
 	return finishAgentTurn(ctx, st, t, res, runErr, startTurn)
 }
 
-// finishAgentTurn records how a turn went, tells the parent, and starts the
-// successor when waking work arrived as the turn ended. It is the end of a
-// turn however it ran (RunAgentTurn here, a session worker's driver).
+// finishAgentTurn records how a turn went (package agentturn).
 func finishAgentTurn(ctx context.Context, st agentstate.State, t agentstate.Turn, res printResult, runErr error, start func(*agentstate.State, string) error) error {
-	t.Ended = time.Now()
-	t.PromptTokens, t.CachedTokens, t.OutputTokens = res.Usage.InputTokens, res.Usage.CachedInputTokens, res.Usage.OutputTokens
-	t.Cost, t.Steps = res.cost, res.NumSteps
-	t.Status = agentstate.Done
+	r := agentturn.Result{Prompt: res.Usage.InputTokens, Cached: res.Usage.CachedInputTokens, Output: res.Usage.OutputTokens, Cost: res.cost, Steps: res.NumSteps,
+		Stopped: errors.Is(context.Cause(ctx), agent.ErrUserInterrupt)}
 	switch {
-	case errors.Is(context.Cause(ctx), agent.ErrUserInterrupt):
-		t.Status = agentstate.Stopped
+	case r.Stopped:
 	case res.Error != "":
-		t.Status, t.Error = agentstate.Failed, res.Error
+		r.Error = res.Error
 	case runErr != nil && !errors.Is(runErr, ErrPrintFailed):
-		t.Status, t.Error = agentstate.Failed, runErr.Error()
+		r.Error = runErr.Error()
 	}
-	releaseTurn, err := agentstate.LockTurn(st.Session)
-	if err != nil {
-		return err
-	}
-	defer releaseTurn()
-	// The answer first: a wait that sees the turn over takes it from the
-	// inbox, so it is not delivered twice. Only a recorded parent gets one.
-	if st.Parent != "" {
-		if err := events.Push(st.Parent, turnEvent(st, t)); err != nil {
-			return err
-		}
-	}
-	if err := agentstate.SaveTurn(st.Session, t); err != nil {
-		return err
-	}
-	if t.Status == agentstate.Stopped {
-		return nil
-	}
-	// Tasks accepted after the final poll need a successor, not an idle inbox.
-	_, evs := events.SplitReload(core.Poll(st.Session))
-	if !events.Wakes(evs) {
-		events.Requeue(st.Session, evs)
-		return nil
-	}
-	if err := start(&st, events.Format(evs)); err != nil {
-		events.Requeue(st.Session, evs)
-		return err
-	}
-	return nil
+	return agentturn.Finish(st, t, r, start)
 }
 
 // watchAgentInterrupt handles the portable, per-turn control request while
@@ -442,36 +397,4 @@ func watchAgentInterrupt(ctx context.Context, st agentstate.State, cancel contex
 		case <-tick.C:
 		}
 	}
-}
-
-// finalAnswerMax caps the answer a turn's end delivers; the rest is in
-// atto agent report.
-const finalAnswerMax = 8000
-
-// turnEvent tells the parent session that an agent's turn ended, with its
-// final answer, as codex delivers FINAL_ANSWER.
-func turnEvent(st agentstate.State, t agentstate.Turn) events.Event {
-	from, to := st.Path, agentstate.PathOf(st.Parent)
-	what := "finished"
-	if t.Status == agentstate.Failed {
-		what = "failed"
-	} else if t.Status == agentstate.Stopped {
-		what = "stopped"
-	}
-	detail := tui.FormatDuration(t.Duration())
-	if n := t.PromptTokens + t.OutputTokens; n > 0 {
-		detail += ", " + tui.FormatTokens(n) + " tokens"
-	}
-	body := fmt.Sprintf("Turn %d %s (%s).", t.N, what, detail)
-	if t.Error != "" {
-		body += " Error: " + t.Error
-	}
-	if msg := session.LastAssistant(st.Session); msg != "" {
-		if len(msg) > finalAnswerMax {
-			msg = msg[:finalAnswerMax] + fmt.Sprintf("\n[cut: atto agent report @%s has all of it]", st.Session)
-		}
-		body += "\n\n" + msg
-	}
-	return events.Event{Source: "agent", Text: agentstate.Envelope(agentstate.FinalAnswer, from, to, body),
-		Title: fmt.Sprintf("◆ agent %s %s after %s", from, what, tui.FormatDuration(t.Duration()))}
 }

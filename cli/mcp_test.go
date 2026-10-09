@@ -12,6 +12,7 @@ import (
 
 	"github.com/sebastianrcnt/atto/agent"
 	"github.com/sebastianrcnt/atto/config"
+	"github.com/sebastianrcnt/atto/daemon"
 	"github.com/sebastianrcnt/atto/jobs"
 	"github.com/sebastianrcnt/atto/mcp"
 	"github.com/sebastianrcnt/atto/mcp/mcptest"
@@ -39,6 +40,17 @@ func TestMain(m *testing.M) {
 				os.Exit(1)
 			}
 			os.Exit(0)
+		case "_daemon": // the daemon a worker test starts by running this binary
+			if RunDaemonServe(nil, io.Discard) != nil {
+				os.Exit(1)
+			}
+			os.Exit(0)
+		case "_session-server": // a session worker, which also runs the turns of agents
+			agent.ShellHost = true
+			if daemon.RunWorker("test", os.Args[2:]) != nil {
+				os.Exit(1)
+			}
+			os.Exit(0)
 		case "_agent-turn":
 			agent.ShellHost = true
 			if err := RunAgentTurn(os.Args[2:], io.Discard); err != nil {
@@ -52,6 +64,9 @@ func TestMain(m *testing.M) {
 	for _, key := range []string{config.EnvAgent, config.EnvLegacyAgent, "ATTO_SESSION_ID", config.EnvDir} {
 		os.Unsetenv(key)
 	}
+	// Tests run agent turns as job processes unless one asks for the daemon
+	// (a test of the worker path unsets this).
+	os.Setenv("ATTO_NO_DAEMON", "1")
 	os.Exit(m.Run())
 }
 

@@ -342,7 +342,14 @@ func interruptTurn(out io.Writer, st agentstate.State, addr string) error {
 // forceStop ends a turn that did not answer the interrupt request.
 func forceStop(out io.Writer, st agentstate.State, addr string) error {
 	owner, id := st.JobRef()
-	if _, err := jobs.Kill(owner, id); err != nil {
+	if j, err := jobs.Get(owner, id); err == nil && j.InWorker() {
+		// The turn runs in its session's worker, which ignored the request:
+		// closing the worker ends it.
+		if err := forceStopWorkerTurn(st); err != nil {
+			return err
+		}
+		_ = jobs.EndWorkerTurn(owner, id, true)
+	} else if _, err := jobs.Kill(owner, id); err != nil {
 		return err
 	}
 	jobs.KillAll(st.Session)
@@ -520,6 +527,7 @@ func closeTree(out io.Writer, tree []agentstate.State, force bool, refused *[]st
 			fmt.Fprintln(out, line)
 		}
 		archive := ""
+		stopWorkerOf(s.Session) // an idle worker holds the session's writer lease
 		if p, err := session.Find(s.Session); err == nil && !isArchived(p) {
 			if dst, err := session.Archive(p); err != nil {
 				fmt.Fprintf(out, "warning: agent %s: archiving its session: %v\n", label, err)

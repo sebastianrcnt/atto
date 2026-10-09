@@ -1084,3 +1084,51 @@ Large one-off reads/compactions release unused heap pages; the default 32 MiB so
 budget is overridable with `GOMEMLIMIT`. Regression tests use a generated
 65.56 MiB session and separate process measurements, not private user transcripts.
 Results/methodology: [session-memory.md](session-memory.md).
+
+### Phase H — agent turns in session workers (2026-10-09)
+
+With the daemon (Unix), an agent's turns execute in that agent session's
+worker, the runtime every session has, not in an `atto _agent-turn` process under
+a job supervisor. `atto agent spawn/task/next/send/interrupt/stop/close/wait/
+report` are clients of the worker: they write the agent's record (turn number,
+prompt, the job that stands for the turn), find or start the worker
+(`daemon.StartWorker`) and ask it for the turn with the local method `agent/turn`
+(no attach, so an agent's worker has no clients unless a person attaches).
+
+- **The turn.** `server/agentturn.go` (`managedAgent`, only on a worker's thread
+  for a session whose header has `agent` and whose record exists): the turn is one
+  run and more while waking work arrives, until the thread is idle; usage, steps
+  and status are recorded; `agentturn.Finish` (shared with `_agent-turn`) writes
+  the turn, pushes `FINAL_ANSWER` to the recorded parent only (capped at 8,000
+  characters), and starts a successor turn when waking work arrived as the turn
+  ended; the jobs of the turn end with it except the agent's own agents' turns and
+  commands a user interrupt detached.
+- **Interrupts** keep the file protocol (`<id>.turn.json.interrupt`): the worker
+  watches it for the turn and stops the run as a user interrupt (a hosted command
+  becomes a job); a turn still waiting is stopped without an event. A worker that
+  does not answer is closed by `interrupt` after 10 seconds.
+- **Jobs.** The turn is a job record of kind `agent`, labelled `agent NAME`, in
+  the parent's `atto job list` (a root's, in its own): its "supervisor" is the
+  worker's PID, so a killed worker makes it lost (`Latest()` reports a failed
+  turn, as a crashed `_agent-turn` did); `jobs.Kill` on it asks the worker through
+  the same interrupt file and never signals the worker (`jobs.Control`).
+- **Idle and retirement.** An idle agent is not woken by inbox events: they wait
+  for its next turn, as when an idle agent had no process. A worker with a turn
+  running, waiting or being recorded is not retired; an idle one retires after the
+  usual retention. `atto agent close` closes the worker first (it holds the
+  session's lease) and then archives the session.
+- **Clients.** A TUI, app-server client or Swing attaches to a running agent
+  session like any other and sees the live items; the worker is the writer. The
+  agent's model and effort are in its session (written at spawn), and its system
+  prompt (`agent.WorkerOf`) says what it is. With no client the runtime keeps no
+  display list (the headless behaviour of the memory work).
+- **Fallbacks.** Without the daemon (`ATTO_NO_DAEMON=1`, `"daemon": false`,
+  Windows), or when the session's writer lease is held by another process, the
+  turn is the job process it was. `_agent-turn` is `_agent-turn <session ID>
+  <turn>`.
+- **Differences** from the job path: the environment of the agent's commands
+  comes from the process that started the worker, not from the `atto agent` call
+  that asked for the turn (API keys exported only in that shell are not seen by
+  an already-running worker); extension hooks such as SessionStart/SessionEnd run
+  per worker, not per turn; the turn's stderr log (`atto job output`) is a one-line
+  note, the transcript is the record.

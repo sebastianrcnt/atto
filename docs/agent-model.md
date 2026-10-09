@@ -1,6 +1,6 @@
 # Agents are sessions; trees are metadata
 
-**Proposal, 2026-10-09 — design only.** Adopt Codex's identity model, not its
+**Implemented 2026-10-09** (see "Implementation notes" at the end for what was decided on the way; the text below is the design as proposed, with the later decisions listed at the end taking precedence). Adopt Codex's identity model, not its
 storage implementation or wire protocol. An agent's identity is its session ID;
 its parent, role and address are attributes, never storage keys. Remove synthetic
 outside parents. Preserve atto's durable turns, jobs, events and same-tree model
@@ -278,3 +278,46 @@ defaults; tree locks for spawn/close races; ancestry validation with cycle
 detection (a bounded walk, never a limit on depth); and the per-agent turn lock,
 so one agent runs one turn at a time. The sections above that describe limits,
 slots or the outside-root depth change are superseded by this decision.
+
+## Implementation notes (2026-10-09)
+
+What was built, and where it differs from the proposal above.
+
+- **Identity and records.** The session header carries the `agent` object
+  (`session.AgentMeta`: parent|null, root, depth, path label, name, role, spawn
+  directory, project, origin, `spawnedBy`); a header with it is a managed agent
+  even without a parent, and `AgentOf` is still written for children. Records are
+  `agent-state/<id>.json` (`agentstate.State`; its first JSON field `summary` is
+  what the inventory decodes, cached by file signature), with `<id>.turn.json`,
+  `<id>.turn.json.interrupt` and `<id>.turn.lock` beside it. `Get/Children/Tree/
+  ExternalRoots` are `Load/Children/Tree/ExternalRoots`. No `_up`, no `_closed`,
+  no per-parent directories; closed agents are records (`lifecycle: closed`, with
+  the archive location), their names free and their IDs reserved.
+- **Coordination** lives under `agent-state/.coord`: `trees/<root>/.tree.lock`
+  and `<id>.closed` gates, `spawn/<id>.json` journal entries (flock-held by the
+  spawning process, so a crashed spawn is rolled back by the next one). The slots
+  of the proposal are gone with the concurrency limit.
+- **Ancestry** is validated on every mutation (`agentstate.Ancestry`): a bounded
+  walk that fails closed on a loop, a missing record of a parent whose own header
+  says it is an agent, or a record that disagrees with its parents about root or
+  depth. It limits nothing about how deep trees grow.
+- **Outside spawns** are parentless roots at `/root`; outside names are labels
+  among the project's open roots (`ResolveOutside`); listings spell them `panes`,
+  `panes/lint` and `From: external` marks a message from a shell. An outside root
+  can have children (`-session ID`, or an agent started by the root).
+- **Jobs.** A child's turn is a job of its parent, a root's of its own session
+  (record fields `jobOwner`, `job`; `jobs.Job.Silent` keeps a root's job from
+  posting an exit event). `FINAL_ANSWER` goes only to the recorded parent.
+- **Worktrees**: `worktrees/<id>` on `atto/<id>`, the ID chosen before git work.
+- **spawnedBy** (not in the proposal): who started the agent, the spawning
+  session's model and effort read from its own record, its turn, the
+  `ATTO_TOOL_CALL_ID`, origin `model`, `outside` or `explicit-session`. Tracking,
+  not proof: environment variables can be changed by the model.
+- **Migration** is `atto agent migrate` (package `agentmigrate`): refuse while
+  agent turns, their jobs or workers of agent sessions run; back up to
+  `~/.atto/backups/`; convert; delete the old layout; write `agent-state/.format`
+  last. The format version is 2 (`agentstate.FormatVersion`); agent commands
+  refuse a marker newer than that. Closed tombstones become closed records; a
+  tombstone of a direct child of an external parent becomes a closed root.
+- **Agent turns run in the agent session's worker** (phase H of
+  [tui-as-client.md](tui-as-client.md)); see there.
