@@ -309,11 +309,16 @@ client, not every client's editor.
 | `timer/list` | T | `{timers:[Timer]}` |
 | `timer/create` | T + `when,message` | `{timer:Timer}`; e.g. when "10m", "15:30" |
 | `timer/cancel` | T + `id` | `{}` |
-| `agent/list` | T | `{agents:[Agent]}` |
-| `agent/read` | T + `name` | `{agent:Agent,message,items:[Item]}`; read-only transcript/report |
+| `agent/list` | T | `{agents:[Agent]}`; direct children |
+| `agent/tree` | T | `{rootThreadId,agents:[Agent]}`; observational tree (up to 1,000 sessions), including descendants; Agent adds parentThreadId and absolute `/root/…` path |
+| `agent/read` | T + `name` (child name or `/root/…` address) | `{agent:Agent,message,items:[Item]}`; read-only transcript/report |
 | `subagent/list` | T | `{agents,subagents}`; frozen web alias |
 | `subagent/read` | T + `name` | `{agent,subagent,message,items}`; frozen web alias |
 | `mcp/list` | T | `{servers:[ServerInfo]}`; configured MCP servers/status/tool counts |
+
+Live session listings include started/forked runtimes before their first message
+is saved, with `loaded` and `busy` state. Cwd filtering and archived listings do
+not pull in unrelated live sessions.
 
 ## Notifications (server → client)
 

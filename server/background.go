@@ -5,6 +5,7 @@ import (
 	"github.com/sebastianrcnt/atto/config"
 	"github.com/sebastianrcnt/atto/jobs"
 	"github.com/sebastianrcnt/atto/session"
+	"strings"
 )
 
 // What runs beside a thread's turns, for the web client's panels: the
@@ -53,6 +54,27 @@ func background(method, sid string, p threadParams) (any, error) {
 			return nil, err
 		}
 		return map[string]any{"job": wireJob(j)}, nil
+	case "agent/tree":
+		root := agentstate.Root(sid)
+		out := []Agent{}
+		pending := []string{root}
+		seen := map[string]bool{root: true}
+		for len(pending) > 0 && len(seen) <= 1000 {
+			parent := pending[0]
+			pending = pending[1:]
+			for _, st := range agentstate.List(parent) {
+				if len(seen) >= 1000 {
+					break
+				}
+				if st.Session == "" || seen[st.Session] {
+					continue
+				}
+				seen[st.Session] = true
+				out = append(out, wireAgent(st))
+				pending = append(pending, st.Session)
+			}
+		}
+		return map[string]any{"rootThreadId": root, "agents": out}, nil
 	case "agent/list", "subagent/list":
 		out := []Agent{}
 		for _, st := range agentstate.List(sid) {
@@ -65,6 +87,16 @@ func background(method, sid string, p threadParams) (any, error) {
 		return result, nil
 	case "agent/read", "subagent/read":
 		st, err := agentstate.Load(sid, p.Name)
+		if strings.Contains(p.Name, "/") || p.Name == ".." {
+			var target agentstate.Target
+			target, err = agentstate.Resolve(sid, p.Name)
+			if err == nil {
+				if target.State == nil {
+					return nil, invalid("%q names the root session, not an agent", p.Name)
+				}
+				st = *target.State
+			}
+		}
 		if err != nil {
 			return nil, invalid("%v", err)
 		}
@@ -100,7 +132,7 @@ func wireJob(j jobs.Job) Job {
 func wireAgent(st agentstate.State) Agent {
 	t := st.Latest()
 	return Agent{
-		Name: st.Name, Preset: st.Preset, Model: st.Model, Effort: st.Effort, ThreadID: st.Session,
+		Name: st.Name, ParentThreadID: st.Parent, Path: agentstate.PathOf(st.Session), Preset: st.Preset, Model: st.Model, Effort: st.Effort, ThreadID: st.Session,
 		Task: st.Task, Prompt: st.Prompt, Turn: t.N, Status: string(t.Status),
 		DurationMs: t.Duration().Milliseconds(), Error: t.Error,
 		InputTokens: t.PromptTokens, CachedTokens: t.CachedTokens, OutputTokens: t.OutputTokens, Cost: t.Cost,

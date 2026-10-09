@@ -412,6 +412,7 @@ var threadMethods = map[string]func(t *thread, client string, p threadParams) (a
 	"job/output":    bg("job/output"),
 	"job/stop":      bg("job/stop"),
 	"agent/list":    bg("agent/list"),
+	"agent/tree":    bg("agent/tree"),
 	"agent/read":    bg("agent/read"),
 	"subagent/list": bg("subagent/list"),
 	"subagent/read": bg("subagent/read"),

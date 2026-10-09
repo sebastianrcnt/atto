@@ -132,3 +132,29 @@ func TestArchiveRPC(t *testing.T) {
 		t.Fatal("archive retained runtime/writer")
 	}
 }
+
+func TestListIncludesLiveEmptySessions(t *testing.T) {
+	h := newHarness(t)
+	h.call("thread/setName", map[string]any{"name": "Empty workspace"})
+	value, err := h.s.listThreads(threadParams{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows := value.(map[string]any)["threads"].([]map[string]any)
+	found := false
+	for _, row := range rows {
+		if row["threadId"] == h.id {
+			found = true
+			if row["name"] != "Empty workspace" || row["loaded"] != true || row["busy"] != false {
+				t.Fatalf("live metadata: %#v", row)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("empty live session missing: %#v", rows)
+	}
+	value, err = h.s.listThreads(threadParams{Cwd: t.TempDir()})
+	if err != nil || len(value.(map[string]any)["threads"].([]map[string]any)) != 0 {
+		t.Fatalf("cwd filter: %#v %v", value, err)
+	}
+}

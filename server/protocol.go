@@ -65,6 +65,7 @@
 //	job/list       {threadId}                      → {jobs: [Job]}  (the session's background jobs)
 //	job/output     {threadId, job, lines?}         → {output}  (the last lines, 200 by default)
 //	job/stop       {threadId, job}                 → {job}
+//	agent/tree     {threadId}                      → {rootThreadId, agents: [Agent]}
 //	agent/list     {threadId}                      → {agents: [Agent]}
 //	agent/read     {threadId, name}                → {agent, message, items}
 //	               an agent's transcript (its own session), read only,
@@ -662,13 +663,15 @@ type Job struct {
 // Agent is an agent of the thread's session (package agentstate, atto
 // agent) with its latest turn.
 type Agent struct {
-	Name     string `json:"name"`
-	Preset   string `json:"preset"`
-	Model    string `json:"model"`
-	Effort   string `json:"effort,omitempty"`
-	ThreadID string `json:"threadId"` // its own session
-	Task     string `json:"task"`     // the first message
-	Prompt   string `json:"prompt"`   // the latest turn's
+	Name           string `json:"name"`
+	ParentThreadID string `json:"parentThreadId,omitempty"`
+	Path           string `json:"path,omitempty"`
+	Preset         string `json:"preset"`
+	Model          string `json:"model"`
+	Effort         string `json:"effort,omitempty"`
+	ThreadID       string `json:"threadId"` // its own session
+	Task           string `json:"task"`     // the first message
+	Prompt         string `json:"prompt"`   // the latest turn's
 	// The latest turn: its number and status (idle, queued, running, done,
 	// failed or stopped), how long it ran, its error and its usage.
 	Turn         int     `json:"turn"`

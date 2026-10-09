@@ -699,6 +699,37 @@ func (s *Server) listThreads(p threadParams) (any, error) {
 			"updatedAt": x.Updated, "messages": x.Messages, "loaded": loaded,
 		})
 	}
+	if !p.Archived {
+		s.mu.Lock()
+		live := make([]*thread, 0, len(s.threads))
+		for _, t := range s.threads {
+			live = append(live, t)
+		}
+		s.mu.Unlock()
+		byID := map[string]map[string]any{}
+		for _, row := range out {
+			byID[row["threadId"].(string)] = row
+		}
+		for _, t := range live {
+			var row map[string]any
+			if err := t.call(func() error {
+				if p.Cwd != "" && p.Cwd != t.cwd {
+					return nil
+				}
+				row = map[string]any{"threadId": t.id, "name": t.name, "cwd": t.cwd, "updatedAt": t.lastActive, "loaded": true, "busy": t.turns.Busy}
+				return nil
+			}); err != nil || row == nil {
+				continue
+			}
+			if saved := byID[t.id]; saved != nil {
+				for _, key := range []string{"name", "loaded", "busy"} {
+					saved[key] = row[key]
+				}
+			} else {
+				out = append(out, row)
+			}
+		}
+	}
 	return map[string]any{"threads": out}, nil
 }
 
