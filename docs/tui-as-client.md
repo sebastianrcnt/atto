@@ -46,8 +46,8 @@ update/restart of a busy execution worker.
 
 Interactive startup (`cmd/atto/main.go`) normally asks `daemon.Run` to start the
 whole interactive binary in a PTY pane. Inside that pane `app.Run` still does all
-execution. The former attachment command was a terminal byte relay, not a protocol client. Windows,
-non-terminals, `daemon: false` and `ATTO_NO_DAEMON` bypass this path.
+execution. The former attachment command was a terminal byte relay, not a protocol client. Non-terminals,
+`daemon: false` and `ATTO_NO_DAEMON` bypass this path.
 
 `App` in `app/app.go` creates `core.NewAgentSources`, `core.LoadExtensions` with
 `tuiHost`, and `core.LoadMCP`; binds a `session.Writer`; starts agent turns in a
@@ -270,8 +270,9 @@ Unix sockets use same-user peer checks/private permissions. Stdio remains useful
 for local embedding and SSH forwarding; **transport lifetime is not session
 lifetime**. For a durable worker, use a stdio bridge to its socket; EOF detaches
 that bridge, not the worker. Direct embedded/no-daemon mode can explicitly retain
-old process-bound lifetime. Windows needs a named-pipe or authenticated loopback
-counterpart, or a documented initial in-process fallback; today's daemon is Unix.
+old process-bound lifetime. On Windows the same Unix-domain sockets are used
+(AF_UNIX, Windows 10 1803+); see "Windows transport" below for how peers are
+authenticated there.
 
 Cold load retains original session start time and exact active branch messages
 for prefix caching, but may pause a saved active goal as today. Reattach does not
@@ -704,8 +705,8 @@ but persistent inbox/job state remains useful for recovery/external callers.
    old TUI display until intentionally changed. Also decide whether memory means
    worker RSS, client RSS, or both in custom status input.
 7. **Transport/screen sharing:** retain legacy PTY `attach` separately, or replace
-   it fully with independent protocol TUI clients? Initial Unix durability only
-   with Windows in-process fallback, or fund Windows transport immediately?
+   it fully with independent protocol TUI clients? (Decided: independent clients;
+   Windows got the same daemon, over AF_UNIX sockets.)
 8. **Gateway exposure:** should `/remote` links outlive the enabling TUI and
    follow its selection, or be stable session-scoped? Should `atto serve` manage
    new session workers or only expose existing ones? Recommend scoped/revocable
@@ -750,8 +751,47 @@ The split follows the archived implementation's decisions: detach does not stop
 execution; goals, jobs and timers continue without clients; prompts are server
 objects, the first answer wins and unattended prompts are not auto-answered;
 clients are equal; daemon PTY panes were removed on 2026-10-09; the protocol is
-versioned and negotiated; Windows retains an in-process runtime. The TUI keeps
+versioned and negotiated; Windows runs the same daemon and workers as Unix
+(2026-10-09). The TUI keeps
 its present execution path during phase 1 and becomes a runtime client in phase 2.
+
+### Windows transport
+
+The daemon, the workers and their clients share one code path with Unix; only
+these parts differ (`daemon/socket_*.go`, `daemon/process_*.go`):
+
+- **Sockets.** AF_UNIX stream sockets, in the same `run` directory under the same
+  length rule (a deep `ATTO_DIR` falls back to a directory below the temporary
+  directory). The first connection to a missing daemon starts it.
+- **Peer trust.** Windows has no `SO_PEERCRED` for these sockets. Two checks stand
+  in: (1) `privateDir` requires the socket directory to be a real directory (not a
+  link or junction) owned by the user, the administrators or the system, and gives
+  it a protected DACL granting only the user (a directory of a trusted owner with a
+  looser list is tightened; one of any other owner is refused); (2) every socket
+  has a random 32-byte token written to `<socket>.tok` before the socket exists. A
+  client reads it after connecting and sends it as its first bytes; a listener
+  closes any connection that does not start with it (constant-time comparison,
+  5-second limit). Processes of the same user can read the token, so trust is the
+  same as on Unix: the user's own processes.
+- **Detaching.** The daemon and workers start with `CREATE_NEW_PROCESS_GROUP |
+  CREATE_NO_WINDOW` (the same `shell.Isolate` the shell host uses, which adds
+  `CREATE_BREAKAWAY_FROM_JOB` where the enclosing job allows it): a hidden console
+  of their own, so that the terminal closing does not reach them and what they run
+  has a console to inherit without a window appearing. `DETACHED_PROCESS` is not
+  used, because commands started by a console-less process each get a visible
+  console.
+- **TUI exit.** Go reports `CTRL_CLOSE_EVENT`, `CTRL_LOGOFF_EVENT` and
+  `CTRL_SHUTDOWN_EVENT` as SIGTERM; the TUI treats it as it treats SIGHUP on Unix
+  (detach, never close the session). Windows ends the process shortly after the
+  handler returns, which a detach beats easily.
+- **Locks and liveness.** The daemon holds a `LockFileEx` lock on `daemon.lock`
+  (released by the system when the process ends, so a stale daemon never blocks a
+  new one). A stale worker socket is one that refuses a connection; it and its
+  token are removed when the daemon starts.
+- **Stopping workers.** The daemon keeps a pipe to each worker's standard input and
+  writes a line to ask it to close its session (Windows has no SIGTERM to send, and
+  a console event only reaches processes on the sender's console); a worker that
+  does not end within 5 seconds is terminated.
 
 ## 8. Implementation status on main
 
@@ -867,7 +907,7 @@ usage, HTTP/SSE and current cancellation regression tests remain in place.
 App now owns the terminal/editor/rendering and presentation-only commands, not
 an agent, session writer, TurnRunner, hooks, extensions, MCP, goal driver or inbox.
 `server.Connect` connects it to the in-process runtime, including in daemon PTY
-panes in this phase and on Windows. The runtime uses retention zero; `/clear`
+panes in this phase. The runtime uses retention zero; `/clear`
 and `/resume` detach the old thread without canceling its turn, and it retires
 once it has no clients or unattended work. Process exit explicitly closes all
 loaded threads with `exit`, running SessionEnd and stopping their jobs.
@@ -945,7 +985,7 @@ Plain interactive atto uses worker sockets when the daemon is available.
 Ctrl+D detach, including during a turn. `/close` closes the runtime with reason
 `close`. `/clear`, `/new`, `/resume` and `/fork` move this client to another worker;
 old connections cannot apply notifications or callbacks to the new view. Startup
-keeps the terminal's project-trust deferral before SessionStart. Windows,
+keeps the terminal's project-trust deferral before SessionStart.
 `ATTO_NO_DAEMON=1` and `daemon: false` retain the phase-2 in-process path, retention
 zero and explicit shutdown on exit.
 
@@ -1130,8 +1170,7 @@ prompt, the job that stands for the turn), find or start the worker
   agent's model and effort are in its session (written at spawn), and its system
   prompt (`agent.WorkerOf`) says what it is. With no client the runtime keeps no
   display list (the headless behaviour of the memory work).
-- **Fallbacks.** Without the daemon (`ATTO_NO_DAEMON=1`, `"daemon": false`,
-  Windows), or when the session's writer lease is held by another process, the
+- **Fallbacks.** Without the daemon (`ATTO_NO_DAEMON=1`, `"daemon": false`), or when the session's writer lease is held by another process, the
   turn is the job process it was. `_agent-turn` is `_agent-turn <session ID>
   <turn>`.
 - **Differences** from the job path: the environment of the agent's commands

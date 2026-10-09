@@ -11,8 +11,8 @@ A picture of the whole structure (concepts, processes, memory, agents, commands,
 Five concepts. A **session** is a JSONL file (the source of truth). A **worker** (`atto _session-server`) executes one session.
 The **daemon** (`atto _daemon`) only starts, lists and retires workers; it holds no screens. **Clients** (TUI,
 `app-server`, `-p`, scripts) attach to workers over JSON-RPC and only render. An **agent** is a session started by another
-session; its identity is its session ID and its tree position is metadata. Without the daemon (Windows, `ATTO_NO_DAEMON=1`)
-the worker runs inside the client process. Keep this separation strict: clients never read `~/.atto` or the daemon directly.
+session; its identity is its session ID and its tree position is metadata. Without the daemon (`ATTO_NO_DAEMON=1`, `"daemon": false`)
+the worker runs inside the client process; Windows has the daemon too (below). Keep this separation strict: clients never read `~/.atto` or the daemon directly.
 The Swing and web clients are gone (tags `archive/swing` and `archive/web-frozen`); protocol revision 3 is the only one
 served, and `atto app-server --listen stdio:// | unix:// | ws://` is how other clients attach. `/remote` and `atto serve`
 only print that the web UI is being rebuilt.
@@ -56,7 +56,13 @@ mid-turn, migration on a copy of the real `agent-state/`, send/interrupt/queued 
 2. **Command center tidy-up:** `a` archive/unarchive, `d` delete, finished agent trees folded by default, no `/root/` prefix.
 3. **New web UI** on a new shared UI-element layer (planned, not started): it attaches through `atto app-server --listen ws://`
    and speaks revision 3 (`docs/protocol.md`); `/remote` and `atto serve` return when it exists.
-4. **Windows daemon:** workers on Windows (AF_UNIX sockets work since Windows 10). Verify on `win`.
+4. **Windows daemon: implemented, not yet verified on `win`.** Same daemon and workers as Unix over AF_UNIX sockets: `run` dir with a
+   protected DACL plus a per-socket token file instead of peer credentials (`daemon/socket_windows.go`), daemon/workers on a hidden
+   console via `shell.Isolate` (`daemon/process_windows.go`), workers stopped through their stdin, the TUI detaches on
+   CTRL_CLOSE (SIGTERM in Go). Run the live checks on `win` (list in the commit/PR report: attach/detach, close the window, ssh drop,
+   `atto resume`, two clients, one-minute retirement, agent turn in a worker, `daemon stop -force`). Left: `atto agents` on Windows
+   starts the chosen session as a child process, so its first keystroke may go to the parent's still-blocked console reader; the new
+   `cli` worker tests and the Windows daemon tests have only been compiled (`GOOS=windows`), their first run is the next nightly.
 5. Small: the startup Config line lists `~\.atto\settings.json` twice on Windows; a `cli` test failed once under full load (not reproduced in 6 reruns).
 
 ## Decisions and things to know

@@ -142,7 +142,8 @@ An unattended worker with no work retires after one minute; its saved conversati
 can still be resumed.
 
 The daemon starts on demand, runs per user and is never installed as a service
-(no launchd, systemd or scheduled task). It supervises workers only: every TUI
+(no launchd, systemd or scheduled task). It works the same on macOS, Linux and
+Windows (see below for how a Windows terminal detaches). It supervises workers only: every TUI
 runs in its calling terminal process with its own editor and terminal size.
 Several clients may attach and send input to the same conversation.
 
@@ -175,9 +176,23 @@ it; `atto daemon status` and `stop [-force]` still work against it.
 
 `"daemon": false` or `ATTO_NO_DAEMON=1` keeps the in-process runtime: exit closes
 its sessions and stops their jobs, and the busy exit menu still offers “Run in
-background.” Windows always uses that mode. Normal sockets live in `~/.atto/run`
-(too-long paths use a private temporary directory); logs are in
-`~/.atto/logs/daemon.log`.
+background.” Normal sockets live in `~/.atto/run` (too-long paths use a private
+temporary directory); logs are in `~/.atto/logs/daemon.log`.
+
+**On Windows** the daemon and its workers are ordinary processes on a hidden console
+of their own (no window appears), started by the first `atto` that needs them, so
+closing the terminal window, or the SSH session, ends only the TUI: Windows sends it
+a console-close event, which detaches it like SIGHUP does elsewhere. (Where the
+parent environment puts every process of a session in a job that kills it on
+close, the daemon leaves that job if the job allows it; otherwise it ends with the
+session.) The sockets are Unix-domain sockets (Windows 10 1803 or later). With no
+peer-credential call for them, a connection is trusted by the access list of the
+`run` directory (a protected DACL naming only your account, which atto sets when
+the directory is yours or an administrator's and refuses otherwise) and by a random
+per-socket token, kept in a file beside the socket under that DACL, that a client
+sends first. `atto daemon stop -force` asks each worker to close its session through
+its standard input, then ends any that do not answer within 5 seconds. A logoff or
+system shutdown reaches a worker as a stop request too.
 
 The TUI reconnects after a dropped worker socket, restarting a crashed worker from
 its saved conversation when needed. A live worker retains running command clocks
@@ -465,7 +480,7 @@ atto agent roles                    what -role picks from
 - **Nesting.** There is no depth limit and no concurrency limit: any agent may start agents of its own, at any depth, and every queued turn starts at once (`agents.maxDepth` and `agents.maxConcurrent` no longer exist; old values are ignored). A turn is queued only behind the same agent's previous turn, since one agent runs one turn at a time. Closing an agent closes the agents below it.
 - **From a normal shell**, every command accepts `-session ID`. See above for what an agent started without it is.
 - External callers can set the model and effort on `spawn` with `-m provider/model -effort LEVEL`; in atto's model shell (`ATTO_SESSION_ID` / `ATTO_AGENT` set) these flags are refused and models pick roles. `read` and `show` are aliases of `report`. `wait` and `report` accept `-json` for one object with `name`, `status`, `turn`, `duration` (seconds), `tokens` (`in`, `cached`, `out`), optional `cost` (estimated USD), `session`, `model`, `message` and optional `error`, `worktree` and `branch`, plus `path`, `parent`, `root`, `depth`, `role`, `project`, `origin`, `lifecycle`, `job`/`jobOwner` (the job running the turn) and `spawnedBy`.
-- **Where turns run.** With the daemon, an agent's turns run in the worker of the agent's own session, like every other session: `atto agent` finds or starts that worker and asks it for the turn, and a TUI or app-server client can attach to a running agent live (`atto resume ID`, or Enter in the command center) instead of reading a locked transcript. The worker stays while a turn runs or waits and retires when idle like others; an idle agent is not woken by what lands in its inbox, only by `task`. Without the daemon (`ATTO_NO_DAEMON=1`, `"daemon": false`, Windows) each turn is a background job process, `atto _agent-turn`, as before, and the same when the session's writer lease is held elsewhere. A worker takes its environment from the process that started it, so an API key exported only in the shell of one `atto agent` call may not reach an already-running worker.
+- **Where turns run.** With the daemon, an agent's turns run in the worker of the agent's own session, like every other session: `atto agent` finds or starts that worker and asks it for the turn, and a TUI or app-server client can attach to a running agent live (`atto resume ID`, or Enter in the command center) instead of reading a locked transcript. The worker stays while a turn runs or waits and retires when idle like others; an idle agent is not woken by what lands in its inbox, only by `task`. Without the daemon (`ATTO_NO_DAEMON=1`, `"daemon": false`) each turn is a background job process, `atto _agent-turn`, as before, and the same when the session's writer lease is held elsewhere. A worker takes its environment from the process that started it, so an API key exported only in the shell of one `atto agent` call may not reach an already-running worker.
 - An agent is its own session (in the spawning checkout's directory, or its own worktree with `-worktree`) that sees only what it is sent. Each turn runs headless as a job: of the session that started it for a child (`atto job list` shows `agent NAME`), of the agent's own session for one started from a shell; `report -json` and `list` show the job and its owner. An agent's own agents keep running when its turn ends. The session header carries an `agent` object (parent or null, root, depth, path label, name, role, spawn directory, project, origin, and `spawnedBy`); runtime state is `~/.atto/agent-state/<session ID>.json` (with `.turn.json`, `.turn.json.interrupt` and `.turn.lock` beside it), one flat file per agent, no per-parent directories. **spawnedBy** records who started the agent: the session (or null from a plain shell), that session's model and effort when it did (read from the session's own record, not its environment), its turn number, the `ATTO_TOOL_CALL_ID` of the command and the directory, with origin `model`, `outside` or `explicit-session`. `list` shows a compact `BY` column (`sol·high t3`), `report -json` the object, the command center the details. It is tracking, not proof: environment variables can be changed by the model. Agents' sessions are kept out of the default `atto resume` and `atto sessions` listings, including agents started from a shell, but appear in the agent command center under their parent, recursively. Working includes running/queued agent turns; idle or completed agents are Ready, failed/stopped or closed agents Inactive. Closed agents keep their record (the ID stays reserved, the name is free) and their archived transcripts in the center. The center opens a locked agent transcript read-only (banner and `Ctrl+R` refresh); once unlocked, refresh opens it normally.
 - **Worktrees.** `spawn -worktree` gives the agent a git worktree of its own, so agents editing files in parallel don't clobber each other or your checkout. It is made from the spawning checkout's `HEAD` (committed work only) on a new branch `atto/<session ID>`, at `~/.atto/worktrees/<session ID>`: the ID is chosen before any git work and never reused, so closing an agent and reusing its name cannot collide. The worktree is outside the project, so nothing shows up in its `git status` or searches, and short enough for Windows paths. Agents started before keep the worktree paths and branch names they were made with (`worktrees/<parent>/<name>`, `atto/<parent>/<name>`); they are recorded with the agent and always used from there. The agent works at the same place in it as the spawning checkout and is told to commit there. It needs a git repository with a commit. `report`, `list` and `-json` show the worktree and branch. `close` runs `git worktree remove` and keeps the branch, printing it and its new commits for you to merge; while the worktree has uncommitted changes `close` refuses and lists them, unless `-force`. A spawn that dies halfway is rolled back by the next one (journaled in `agent-state/.coord/spawn`).
 - **Roles** set an agent's model, effort and instructions (`-role`, default `general`, which uses the parent's model and effort, or `agents.model` / `agents.effort` from `settings.json`). Add roles as Markdown files in `~/.atto/agents/` or the project's `.atto/agents/` (the project wins on the same name, and either replaces the built-in `general`):
