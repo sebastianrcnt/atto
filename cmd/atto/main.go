@@ -61,6 +61,14 @@ usage:
   atto extensions [list|approve <name>|types|docs]
                                     JavaScript/TypeScript extensions (docs: atto extensions docs)
   atto update [-check]              install the latest release
+  atto backup [-o FILE] [-with-secrets] [-include-cache] [-force]
+                                    stream portable ATTO_DIR archive (.tar.zst)
+  atto restore FILE [-into DIR] [-force] [-worktrees]
+                                    safely restore data; -worktrees alone recreates checkouts
+  atto clean [-y] [-older 30d] [-dry-run]
+                                    remove idle leftovers, never normal sessions/settings
+  atto uninstall [-y] [-keep-data] [-no-backup]
+                                    back up, stop processes, and remove atto
   atto channel [stable|edge]        show or switch the release channel this build follows
   atto serve [-listen addr]         JSON-RPC over HTTP + SSE, with a web client
   atto app-server [--listen URL]    JSON-RPC: stdio://, unix://, ws://
@@ -102,6 +110,10 @@ func subcommandNames() []string {
 // subcommands maps each subcommand to its implementation.
 func subcommands() map[string]func([]string, io.Writer) error {
 	return map[string]func([]string, io.Writer) error{
+		"backup":      cli.RunBackup,
+		"restore":     cli.RunRestore,
+		"clean":       cli.RunClean,
+		"uninstall":   cli.RunUninstall,
 		"history":     cli.RunHistory,
 		"sessions":    cli.RunSessions,
 		"auth":        cli.RunAuth,

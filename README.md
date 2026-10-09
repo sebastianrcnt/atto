@@ -542,3 +542,133 @@ The web client (`server/web`) is Preact and TypeScript styled with Tailwind; its
 ## License
 
 [MIT](LICENSE)
+
+## Moving, cleaning and removing atto
+
+Atto keeps its data in `~/.atto` (`%USERPROFILE%\.atto` on Windows), or the
+path in `ATTO_DIR`. These commands run from your own terminal; `restore`,
+`clean` and `uninstall` refuse an atto model shell.
+
+```sh
+atto backup                         # ./atto-backup-HOST-YYYYMMDD-HHMM.tar.zst
+atto backup -o /safe/atto.tar.zst    # output must be outside ATTO_DIR
+atto backup -with-secrets           # WARNING: includes credentials
+atto backup -include-cache          # also preserve rebuildable caches
+atto restore /safe/atto.tar.zst      # restore into an empty ATTO_DIR
+atto restore /safe/atto.tar.zst -into /new/data -force
+atto restore -worktrees -into /new/data
+atto clean -dry-run                 # category/count/byte table; no removal
+atto clean                          # show table, then ask
+atto clean -y -older 7d              # positive days, or Go durations like 168h
+atto uninstall                      # ask; offer a backup by default
+atto uninstall -y -keep-data -no-backup
+```
+
+### Backup and restore
+
+A backup is one streaming zstd-compressed tar archive, with `manifest.json`
+first. It includes session transcripts and both compressed and legacy archives,
+images, saved command outputs, jobs and inbox/events/goals, agent state (including
+legacy `subagents`, reverse indexes and closed-agent records), external-parent
+mappings, extensions and their log, skills, prompts, themes, agent profiles,
+settings and their `.bak`, models, approvals, device identity, translation/Swing
+settings, and helper binaries—indeed **every regular file, directory and safe
+relative symlink under `ATTO_DIR`, except**:
+
+* `cache/` (unless `-include-cache`), `run/`, `debug/`, `logs/`;
+* `*.lock`, `update-check.json`, and the prior restore's bookkeeping manifest;
+* `worktrees/` checkouts; repository, branch, base commit and agent identity are
+  recorded instead;
+* `auth.json` and its backup variants, and `server-token`, unless `-with-secrets`.
+
+Archives are created exclusively (never silently overwrite an existing backup)
+and with mode `0600`; included credential files are also marked `0600`.
+**Transcripts, outputs and custom files can themselves contain secrets**, even
+without `-with-secrets`. Keep all backups private. Unknown files are included,
+not guessed to be disposable. Runtime sockets and other special files are not
+archived. A backup refuses active workers, sessions, turn/slot locks or jobs;
+`-force` explicitly warns that the copy may be inconsistent. Each transcript
+is copied under its existing session writer lease when possible. Stop atto
+before backing up for the strongest consistency guarantee.
+
+The manifest records the atto version, archive/session-header/agent-layout/daemon
+format versions, creation time, OS/architecture, hostname, source directory,
+entry count, source bytes, exclusions and worktrees. Restore refuses newer
+formats, unsafe/duplicate paths, absolute or escaping symlinks, hard links,
+special files and entries traversing symlinks. It verifies entry and byte counts
+in an isolated staging directory before replacing anything. `-force` first
+preserves an existing non-empty directory as
+`DIR.before-restore-YYYYMMDD-HHMMSS.NNNNNNNNN`; an active destination is never
+replaced. Regular file/directory permission bits are preserved, subject to OS
+semantics; credentials are always `0600` on Unix. Windows does not provide Unix
+permission bits and requires the user's normal private directory ACLs.
+
+The existing lazy agent-layout migration runs on restore (Windows retains the
+legacy layout when its migration requires a symlink). Archive compression is
+**not automatic**: use `atto sessions compress` if desired. Restore saves
+`restore-manifest.json`, so `atto restore -worktrees` can later recreate clean
+checkouts from existing local branches and relocate their agent-state paths.
+Missing repositories/branches are reported and skipped. Git repositories and
+branch contents are **not in the backup**: clone/copy them separately, retain
+`atto/*` branches, and ensure their recorded repository paths exist on the new
+machine. Dirty/uncommitted worktree contents are not backed up; commit or save
+those changes separately first. Other historical absolute paths in transcripts
+and project approvals are not rewritten.
+
+### Clean
+
+Clean never removes normal sessions or settings. It prints a category/count/byte
+table before asking (or before `-y` removal). Its only transcript exception is an
+unused **zero-message external orchestration parent** and its corresponding
+`external_parents` mappings; a parent with agents, messages or a writer lock is
+kept. Clean removes:
+
+* `outputs/` files older than `-older` (default `30d`) **only when their session
+  no longer exists**, including in the archive;
+* job directories of deleted sessions, only without active jobs/open files;
+* orphan registered agent worktrees through `git worktree remove`, never forcing
+  dirty checkouts; active records are kept, and closed recorded branches must be
+  absent or merged;
+* old `debug/` files and stale `run/` sockets without listeners;
+* idle, owned temporary `atto-bash-*.log`, `atto-transcript-*`, `atto-view-*`, Swing
+  `atto-drop-*.png` older than a day, `atto-mcp-*.sock`, and private `atto-<uid>/` socket files;
+* `atto-home*`, `atto-session-test*`, `atto-swing-*` test leftovers older than a
+  day, including read-only module-cache contents.
+
+Deletion is re-inventoried after confirmation. Locks and live job PIDs protect
+items. Open files are checked with `lsof` on macOS, `lsof` or `/proc` on Linux,
+and exclusive file handles on Windows; inability to prove a runtime artifact
+idle keeps it. Temporary cleanup is deliberately conservative: another atto
+process keeps temporary artifacts even when it uses another data directory.
+Symlink directory aliases below a maintenance root are kept, never traversed
+for deletion. Branches are never deleted by `clean`.
+
+### Uninstall
+
+Uninstall offers a credential-excluding backup by default, stops the daemon
+with force, recorded supervisors and non-daemon session processes, and removes
+agent checkouts through Git. Runtime shutdown precedes the backup so it is
+consistent. Dirty checkouts are listed and retained unless explicitly confirmed;
+`-y` **does not authorize discarding dirty changes or deleting branches**.
+Atto branches are listed per discovered repository and require a separate
+confirmation to delete (including unmerged commits). If a worktree is retained,
+its checkout and agent metadata are kept even without `-keep-data`; other data
+is removed. `-keep-data` retains the data directory but does not prevent runtime
+shutdown or clean worktree removal. `-no-backup` skips the backup offer.
+
+The running binary's actual path and recognized installer `.old`/`.new`
+artifacts are removed when idle, whether installed in
+`~/.local/bin`, `$GOPATH/bin`, a custom install directory, or
+`%LOCALAPPDATA%\Programs\atto`. Windows schedules running-executable deletion
+in a detached process after exit, and removes the installer's directory from
+user PATH when this binary resides there. The Unix installer **does not edit
+shell startup files** (it only prints PATH advice); uninstall therefore does not
+guess at or rewrite user-owned shell configuration. Manually added PATH entries,
+other binary copies, manually installed Swing jars, and external repository
+branches/checkouts outside the atto data directory must be removed separately.
+Any failed or unsafe removal is reported. Open a new terminal afterward.
+
+The Swing client's `swing.json` currently uses the Java user home directly,
+rather than `ATTO_DIR`; if you override `ATTO_DIR`, that separate Swing setting
+file is outside these commands' archive/data-removal scope. Default installs
+include it normally.
