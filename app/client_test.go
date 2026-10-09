@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/sebastianrcnt/atto/config"
+	"github.com/sebastianrcnt/atto/extensions"
 	"github.com/sebastianrcnt/atto/hooks/hooktest"
 	"github.com/sebastianrcnt/atto/provider"
 	"github.com/sebastianrcnt/atto/provider/providertest"
@@ -127,6 +128,9 @@ export default function (atto: any) {
 
 // An extension's dialogs are the runtime's prompts, answered here.
 func TestExtensionDialogsInTerminal(t *testing.T) {
+	if !extensions.Supported {
+		t.Skip("requires the JS extension engine")
+	}
 	a := extApp(t, dialogExtension, newMainServer(t, reply{"", "ok"}), "")
 	within(t, a, "the command", func() bool { return hasCommand(a.allCommands(), "demo") })
 	typeLine(a, "/demo now")

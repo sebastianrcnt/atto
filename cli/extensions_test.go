@@ -1,3 +1,5 @@
+//go:build !noext
+
 package cli
 
 import (
@@ -80,7 +82,7 @@ func TestExtensionsCLI(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"bad  failed: ", "bad.js:1:", "mine  ok · user", "diff  ok · builtin · builtin/diff.ts", "local  needs approval · project", "atto extensions approve local"} {
+	for _, want := range []string{"bad  failed: ", "bad.js:1:", "mine  ok · user", "diff  ok · builtin · builtin/diff.go", "local  needs approval · project", "atto extensions approve local"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("list lacks %q:\n%s", want, out)
 		}
@@ -103,7 +105,7 @@ func TestExtensionsCLI(t *testing.T) {
 	if out, _ := run("docs"); !strings.HasPrefix(out, "# Writing atto extensions") {
 		t.Fatal("docs prints the guide")
 	}
-	if out, err := run("source", "diff"); err != nil || !strings.Contains(out, "registerCommand") || !strings.Contains(out, `"diff"`) {
+	if out, err := run("source", "diff"); err != nil || !strings.Contains(out, "nativeDiff") || !strings.Contains(out, `"diff"`) {
 		t.Fatalf("source diff: %v\n%s", err, out)
 	}
 	if _, err := run("source", "nope"); err == nil {

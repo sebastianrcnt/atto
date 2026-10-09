@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/sebastianrcnt/atto/config"
+	"github.com/sebastianrcnt/atto/extensions"
 	"github.com/sebastianrcnt/atto/session"
 )
 
@@ -35,6 +36,9 @@ func TestApprovalCommandsRequireUserTerminal(t *testing.T) {
 				"mcp":        func() error { return mcpApprove([]string{"one"}, io.Discard) },
 				"extensions": func() error { return RunExtensions([]string{"approve", "one"}, io.Discard) },
 			} {
+				if name == "extensions" && !extensions.Supported {
+					continue
+				}
 				if err := run(); err == nil || !strings.Contains(err.Error(), "not from an agent's shell") {
 					t.Errorf("%s: %v", name, err)
 				}

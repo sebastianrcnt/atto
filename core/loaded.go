@@ -489,7 +489,7 @@ func (l Loaded) Summary() []Row {
 		}
 	}
 	rows = append(rows, Row{"Hooks", text})
-	if len(l.Extensions) > 0 { // most sessions have none: no row for them
+	if len(l.Extensions) > 0 || !extensions.Supported { // slim reports ignored files
 		rows = append(rows, Row{"Extensions", extensionSummary(l.Extensions)})
 	}
 
@@ -660,6 +660,9 @@ func (l Loaded) Details() []Section {
 	out = append(out, s)
 
 	s = Section{Title: "Extensions"}
+	if !extensions.Supported {
+		s.Rows = append(s.Rows, Row{"slim", extensions.UnsupportedMessage(extensions.IgnoredCount(l.Extensions))})
+	}
 	for _, e := range l.Extensions {
 		s.Rows = append(s.Rows, extensionRow(e))
 	}

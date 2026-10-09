@@ -8,6 +8,7 @@ import (
 
 	"github.com/sebastianrcnt/atto/ai"
 	"github.com/sebastianrcnt/atto/config"
+	"github.com/sebastianrcnt/atto/extensions"
 	"github.com/sebastianrcnt/atto/provider"
 )
 
@@ -16,6 +17,9 @@ func hasCommand(cmds []command, name string) bool {
 }
 
 func TestAllCommandsCached(t *testing.T) {
+	if !extensions.Supported {
+		t.Skip("requires the JS extension engine")
+	}
 	a := extApp(t, `export default (atto: any) => { atto.registerCommand("demo", { description: "Demo things", handler() {} }) }`, newMainServer(t, reply{"", "ok"}), "")
 	within(t, a, "the extension command", func() bool { return hasCommand(a.allCommands(), "demo") })
 	var first, second []command

@@ -1,3 +1,5 @@
+//go:build !noext
+
 package extensions
 
 import (
@@ -111,6 +113,7 @@ func (m *Manager) SessionStart(reason string) {
 // SessionEnd fires session_end and waits briefly for the handlers;
 // reason is "exit", "clear", "resume" or "other".
 func (m *Manager) SessionEnd(reason string) {
+	m.endNative()
 	m.fireWait("session_end", map[string]any{"reason": reason}, sessionEndWait)
 	for _, e := range m.running() { // model calls for the session that ended
 		e.cancelRequests()
@@ -238,11 +241,4 @@ func (m *Manager) ToolResult(ctx context.Context, args agent.BashArgs, res agent
 		}, &o.Notices)
 	}
 	return output, o
-}
-
-func orDefault(v any, def string) string {
-	if s, ok := v.(string); ok && strings.TrimSpace(s) != "" {
-		return s
-	}
-	return def
 }

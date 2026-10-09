@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/sebastianrcnt/atto/config"
+	"github.com/sebastianrcnt/atto/extensions"
 	"github.com/sebastianrcnt/atto/hooks/hooktest"
 	"github.com/sebastianrcnt/atto/trust"
 	"github.com/sebastianrcnt/atto/tui"
@@ -58,12 +59,21 @@ func TestProjectTrustPromptAllowsEveryKindByContent(t *testing.T) {
 		a.askProjectApprovals()
 		p := a.modal.(projectTrustPrompt)
 		text := tui.StripEscapes(strings.Join(p.Render(80), "\n"))
-		for _, want := range []string{"This project wants to run code", "hook", "SessionStart", "echo project", "mcp", "server", "ext", "deploy", trustAllowAll, trustReview, trustDeny} {
+		wants := []string{"This project wants to run code", "hook", "SessionStart", "echo project", "mcp", "server", trustAllowAll, trustReview, trustDeny}
+		if extensions.Supported {
+			wants = append(wants, "ext", "deploy")
+		}
+		for _, want := range wants {
 			if !strings.Contains(text, want) {
 				t.Errorf("prompt lacks %q:\n%s", want, text)
 			}
 		}
-		if len(p.items) != 3 {
+		if len(p.items) != func() int {
+			if !extensions.Supported {
+				return 2
+			}
+			return 3
+		}() {
 			t.Fatalf("one prompt should contain every pending kind: %+v", p.items)
 		}
 		chooseTrust(t, a, trustAllowAll)
@@ -92,6 +102,9 @@ func TestProjectTrustPromptAllowsEveryKindByContent(t *testing.T) {
 }
 
 func TestProjectTrustReviewDenialAndEsc(t *testing.T) {
+	if !extensions.Supported {
+		t.Skip("review includes an extension item")
+	}
 	a := projectTrustApp(t)
 	a.ui.Do(func() {
 		a.askProjectApprovals()

@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/sebastianrcnt/atto/config"
+	"github.com/sebastianrcnt/atto/extensions"
 	"github.com/sebastianrcnt/atto/jobs"
 	"github.com/sebastianrcnt/atto/provider/providertest"
 )
@@ -278,6 +279,9 @@ func TestServerCLIEndToEnd(t *testing.T) {
 }
 
 func TestPythonExample(t *testing.T) {
+	if !extensions.Supported {
+		t.Skip("requires the JS extension engine")
+	}
 	python, err := exec.LookPath("python3")
 	if err != nil {
 		t.Skip("python3 unavailable")

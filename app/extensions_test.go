@@ -1,3 +1,5 @@
+//go:build !noext
+
 package app
 
 import (
@@ -27,28 +29,6 @@ func (a *App) extensionCommands() []command {
 	}
 	return out
 }
-
-func (a *App) runCommand(text string) { a.submit(text, nil) }
-
-// within polls cond under the UI lock: extensions reach the UI
-// asynchronously.
-
-const demoExtension = `
-export default function (atto: any) {
-  atto.on("session_start", (e: any, ctx: any) => ctx.ui.setStatus("mode", "demo:" + e.reason));
-  atto.registerCommand("demo", {
-    description: "Demo things",
-    handler: async (args: string, ctx: any) => {
-      ctx.ui.setWidget("w", ["widget " + args]);
-      const pick = await ctx.ui.select("Pick one", ["red", "green"]);
-      const ok = await ctx.ui.confirm("Sure?");
-      const name = await ctx.ui.input("Name?");
-      ctx.ui.notify("picked " + pick + " " + ok + " " + name, "warning");
-    },
-  });
-  atto.registerCommand("model", { handler: () => ctx.ui.notify("shadowed") });
-}
-`
 
 func TestExtensionInTUI(t *testing.T) {
 	a := extUIApp(t, demoExtension)
@@ -119,7 +99,7 @@ func TestExtensionInTUI(t *testing.T) {
 	}
 	within(t, a, "the new extension catalog", func() bool {
 		cs := a.extensionCommands()
-		return len(cs) == 3 && cs[0].name == "demo2" && cs[2].name == "diff"
+		return len(cs) == 1 && cs[0].name == "demo2"
 	})
 }
 

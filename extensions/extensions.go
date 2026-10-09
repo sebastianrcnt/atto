@@ -1,3 +1,5 @@
+//go:build !noext
+
 // Package extensions runs JavaScript and TypeScript extensions, in the
 // spirit of pi's: a file exporting a default function that receives the
 // atto API and registers event handlers and slash commands.
@@ -11,7 +13,7 @@
 // one script (see Bundle); goja runs it, one runtime and one goroutine per
 // extension (see ext). They are found in ~/.atto/extensions and in the
 // project's .atto/extensions (see Discover); project extensions run only
-// once approved (see Approve). Some ship inside atto (see builtin.go).
+// once approved (see Approve). Native Go commands ship inside atto (see builtin.go).
 // atto.d.ts declares the API (Types).
 //
 // Extensions run inside the hooks: PreToolUse hooks, then tool_call
@@ -23,12 +25,9 @@ package extensions
 
 import (
 	"context"
-	_ "embed"
-	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -36,61 +35,8 @@ import (
 	"github.com/dop251/goja"
 
 	"github.com/sebastianrcnt/atto/agent"
-	"github.com/sebastianrcnt/atto/config"
 	"github.com/sebastianrcnt/atto/mcp"
-	"github.com/sebastianrcnt/atto/provider"
-	"github.com/sebastianrcnt/atto/session"
 )
-
-// Statuses of an extension.
-const (
-	Loaded        = "loaded"
-	Failed        = "failed"
-	NeedsApproval = "needs approval"
-	Disabled      = "disabled" // by settings.json
-)
-
-// DefaultTimeout bounds what atto waits for (see config.ExtensionSettings).
-const DefaultTimeout = 5 * time.Second
-
-// Types is atto.d.ts, the API's TypeScript declarations.
-//
-//go:embed atto.d.ts
-var Types string
-
-// TypesFile is the name Types is written under next to extensions.
-const TypesFile = "atto.d.ts"
-
-// Info describes an extension, for the Loaded block.
-type Info struct {
-	Name     string   `json:"name"`
-	Path     string   `json:"path"`
-	Source   string   `json:"source"` // User, Project or Builtin
-	Status   string   `json:"status"`
-	Error    string   `json:"error,omitempty"`
-	Commands []string `json:"commands,omitempty"`
-	Events   []string `json:"events,omitempty"`
-	Hash     string   `json:"hash,omitempty"` // of the bundled code
-	// Completes counts the atto.complete requests the extension made, per
-	// model, since it loaded.
-	Completes []CompleteStat `json:"completes,omitempty"`
-}
-
-// Command is a slash command an extension registered.
-type Command struct {
-	Name        string
-	Description string
-	Ext         string
-}
-
-// Options configures a Manager.
-type Options struct {
-	Cwd string
-	// Agent, if set, gives atto.session its model.
-	Agent *agent.Agent
-	// Host is the front end; nil is a Headless host that drops everything.
-	Host Host
-}
 
 // Manager runs the extensions of one session. Its methods are safe from
 // any goroutine.
@@ -106,6 +52,8 @@ type Manager struct {
 	mcp  mcp.Backend
 
 	logMu sync.Mutex
+
+	native *nativeState
 
 	cmdVer atomic.Uint64 // see CommandsVersion
 }
@@ -159,22 +107,6 @@ func (m *Manager) timeout() time.Duration {
 	return m.to
 }
 
-// Ready is the status Inspect gives an extension that would load.
-const Ready = "ready"
-
-// settings reads the timeout and the disabled names from settings.json.
-func settings() (time.Duration, []string) {
-	s, _ := config.LoadSettings() // a broken file was reported by whoever loaded it first
-	if s.Extensions == nil {
-		return DefaultTimeout, nil
-	}
-	to := DefaultTimeout
-	if s.Extensions.Timeout > 0 {
-		to = time.Duration(s.Extensions.Timeout) * time.Second
-	}
-	return to, s.Extensions.Disabled
-}
-
 // candidate is an extension found, checked without running it.
 type candidate struct {
 	Spec
@@ -199,6 +131,10 @@ func check(cwd string, disabled []string) []candidate {
 			out = append(out, c)
 			continue
 		}
+		if s.Source == Builtin {
+			out = append(out, c)
+			continue
+		}
 		code, err := bundleSpec(s)
 		switch {
 		case err != nil:
@@ -219,6 +155,10 @@ func Inspect(cwd string) []Info {
 	out := []Info{}
 	for _, c := range check(cwd, disabled) {
 		in := Info{Name: c.Name, Path: c.Path, Source: c.Source, Status: c.status, Error: c.err}
+		if c.Source == Builtin {
+			src, _ := BuiltinSource(c.Name)
+			in.Hash = hash(src)
+		}
 		if c.code != "" {
 			in.Hash = hash(c.code)
 		}
@@ -234,8 +174,13 @@ func (m *Manager) load() {
 	m.mu.Unlock()
 
 	var exts []*ext
+	var natives []Spec
 	typesFor := map[string]bool{}
 	for _, c := range check(m.cwd, disabled) {
+		if c.Source == Builtin {
+			natives = append(natives, c.Spec)
+			continue
+		}
 		if c.Source != Builtin {
 			typesFor[filepath.Dir(entryDir(c.Spec))] = true
 		}
@@ -254,6 +199,7 @@ func (m *Manager) load() {
 	m.mu.Lock()
 	m.exts = exts
 	m.mu.Unlock()
+	m.loadNative(natives, disabled)
 	m.cmdVer.Add(1)
 }
 
@@ -295,6 +241,7 @@ func (m *Manager) Reload() {
 
 // Close disposes of every extension.
 func (m *Manager) Close() {
+	m.closeNative()
 	m.mu.Lock()
 	exts := m.exts
 	m.exts = nil
@@ -318,7 +265,7 @@ func (m *Manager) Report() []Info {
 	for _, e := range exts {
 		out = append(out, e.info())
 	}
-	return out
+	return append(out, m.nativeReport()...)
 }
 
 func (e *ext) info() Info {
@@ -367,6 +314,12 @@ func (m *Manager) Commands() []Command {
 		}
 		e.mu.Unlock()
 	}
+	for _, c := range m.nativeCommands() {
+		if !seen[c.Name] {
+			seen[c.Name] = true
+			out = append(out, c)
+		}
+	}
 	return out
 }
 
@@ -387,25 +340,7 @@ func (m *Manager) RunCommand(name, args string) bool {
 			return true
 		}
 	}
-	return false
-}
-
-// log appends to the extensions log, which atto.log writes to too.
-func (m *Manager) log(name, msg string) {
-	m.logMu.Lock()
-	defer m.logMu.Unlock()
-	path := config.ExtensionLogPath()
-	if st, err := os.Stat(path); err == nil && st.Size() > 1<<20 {
-		_ = os.Rename(path, path+".old")
-	}
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
-	if err != nil {
-		return
-	}
-	defer f.Close()
-	for line := range strings.SplitSeq(strings.TrimRight(msg, "\n"), "\n") {
-		fmt.Fprintf(f, "%s [%s] %s\n", time.Now().Format("2006-01-02 15:04:05"), name, line)
-	}
+	return m.runNative(name, args)
 }
 
 // start runs the extension's script and its default export. A throw,
@@ -428,30 +363,4 @@ func (e *ext) start(code string) {
 	e.mu.Unlock()
 	e.halt()
 	e.m.log(e.spec.Name, "failed to load: "+msg)
-}
-
-// sessionText reads the session's file: its latest name, and the last
-// limit user and assistant messages of the active branch that carry text.
-func (m *Manager) sessionText(limit int) (name string, msgs []provider.Message) {
-	id, _ := m.session()
-	path, err := session.Find(id)
-	if err != nil {
-		return "", nil // not written yet
-	}
-	_, entries, err := session.Load(path)
-	if err != nil {
-		return "", nil
-	}
-	for _, e := range session.Active(entries) {
-		switch {
-		case e.Type == session.TypeName:
-			name = e.Name
-		case e.Type == session.TypeMessage && e.Message != nil && (e.Message.Role == "user" || e.Message.Role == "assistant") && strings.TrimSpace(e.Message.Content) != "":
-			msgs = append(msgs, provider.Message{Role: e.Message.Role, Content: e.Message.Content})
-		}
-	}
-	if len(msgs) > limit {
-		msgs = msgs[len(msgs)-limit:]
-	}
-	return name, msgs
 }

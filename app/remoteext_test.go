@@ -1,3 +1,5 @@
+//go:build !noext
+
 package app
 
 import (

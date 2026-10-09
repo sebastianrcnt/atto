@@ -14,6 +14,7 @@ import (
 
 	"github.com/sebastianrcnt/atto/config"
 	"github.com/sebastianrcnt/atto/events"
+	"github.com/sebastianrcnt/atto/extensions"
 	"github.com/sebastianrcnt/atto/goal"
 	"github.com/sebastianrcnt/atto/provider/providertest"
 	"github.com/sebastianrcnt/atto/session"
@@ -499,6 +500,9 @@ func TestCommandsShellExclusionAndTimer(t *testing.T) {
 }
 
 func TestExtensionPromptAndStepEndUseRuntime(t *testing.T) {
+	if !extensions.Supported {
+		t.Skip("requires the JS extension engine")
+	}
 	h := newHarness(t, providertest.Reply{Text: "extension answer", Prompt: 20, Completion: 4})
 	path := filepath.Join(config.Dir(), "extensions", "ask.ts")
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {

@@ -38,6 +38,13 @@ func write(t *testing.T, path, text string) {
 	}
 }
 
+func executableCount(full int) int {
+	if !extensions.Supported {
+		return full - 1
+	}
+	return full
+}
+
 func discover(t *testing.T, cwd string) []Item {
 	t.Helper()
 	items, err := Discover(cwd)
@@ -50,7 +57,7 @@ func discover(t *testing.T, cwd string) []Item {
 func TestDiscoveryAndContentDecisions(t *testing.T) {
 	cwd := project(t)
 	items := discover(t, cwd)
-	if len(items) != 2 || len(Unapproved(items)) != 2 {
+	if len(items) != executableCount(2) || len(Unapproved(items)) != executableCount(2) {
 		t.Fatalf("only project code belongs in trust: %+v", items)
 	}
 	for _, in := range items {
@@ -69,7 +76,7 @@ func TestDiscoveryAndContentDecisions(t *testing.T) {
 		}
 	}
 	for _, in := range extensions.Inspect(cwd) {
-		if in.Source == extensions.Project && in.Status != extensions.Ready {
+		if extensions.Supported && in.Source == extensions.Project && in.Status != extensions.Ready {
 			t.Fatalf("existing extension approval does not see trust approval: %+v", in)
 		}
 	}
@@ -89,7 +96,7 @@ func TestDiscoveryAndContentDecisions(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if len(Unapproved(discover(t, cwd))) != 2 {
+	if len(Unapproved(discover(t, cwd))) != executableCount(2) {
 		t.Fatal("revocation should forget both approval and denial")
 	}
 }
@@ -104,7 +111,7 @@ func TestApprovalUsesDisplayedHash(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if len(Unapproved(discover(t, cwd))) != 2 {
+	if len(Unapproved(discover(t, cwd))) != executableCount(2) {
 		t.Fatal("allow approved code changed after discovery, without showing it")
 	}
 }
@@ -145,7 +152,7 @@ func TestHookAdapterAndHashChanges(t *testing.T) {
 	write(t, config.SettingsPath(), `{"hooks":{"Stop":[{"hooks":[{"command":"user"}]}]}}`)
 	write(t, config.ProjectSettingsPath(cwd), `{"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"check"}]}]}}`)
 	items := discover(t, cwd)
-	if len(items) != 3 || items[0].Kind != Hook || !strings.Contains(items[0].Target, "PreToolUse [Bash]") {
+	if len(items) != executableCount(3) || items[0].Kind != Hook || !strings.Contains(items[0].Target, "PreToolUse [Bash]") {
 		t.Fatalf("project hooks should join other executable content, never user hooks: %+v", items)
 	}
 	in := items[0]
@@ -209,7 +216,7 @@ func TestRevokeAllForgetsRemovedAndOldContent(t *testing.T) {
 	write(t, hookPath, hookText)
 	write(t, config.ProjectMCPPath(cwd), `{"mcpServers":{"repo":{"command":"project-server"}}}`)
 	write(t, extPath, "export default () => {}")
-	if len(Unapproved(discover(t, cwd))) != 3 {
+	if len(Unapproved(discover(t, cwd))) != executableCount(3) {
 		t.Fatal("restoring removed content restored revoked project trust")
 	}
 }

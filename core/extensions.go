@@ -36,6 +36,9 @@ func ApproveHint(name string) string {
 // waiting for approval.
 func extensionWarnings(exts []extensions.Info) []string {
 	var out []string
+	if !extensions.Supported {
+		return out
+	}
 	for _, e := range exts {
 		switch e.Status {
 		case extensions.Failed:
@@ -49,6 +52,9 @@ func extensionWarnings(exts []extensions.Info) []string {
 
 // extensionSummary is the Extensions row of the collapsed Loaded block.
 func extensionSummary(exts []extensions.Info) string {
+	if !extensions.Supported {
+		return extensions.UnsupportedMessage(extensions.IgnoredCount(exts))
+	}
 	if len(exts) == 0 {
 		return "none"
 	}

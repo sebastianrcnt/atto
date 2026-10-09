@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/sebastianrcnt/atto/config"
+	"github.com/sebastianrcnt/atto/extensions"
 	"github.com/sebastianrcnt/atto/session"
 	"github.com/sebastianrcnt/atto/tui"
 )
@@ -126,6 +127,9 @@ export default function (atto: any) {
 `
 
 func TestBlockDisplayLifecycle(t *testing.T) {
+	if !extensions.Supported {
+		t.Skip("requires the JS extension engine")
+	}
 	srv := newMainServer(t, reply{"deep thought", "first answer"}, reply{"", "second answer"}, reply{"", "third"})
 	a := extApp(t, upperExtension, srv, "")
 
@@ -261,6 +265,9 @@ func answerTexts(a *App) string {
 }
 
 func TestBlockDisplayLateResultAfterSessionSwitch(t *testing.T) {
+	if !extensions.Supported {
+		t.Skip("requires the JS extension engine")
+	}
 	srv := newMainServer(t, reply{"", "old answer"}, reply{"", "new answer"})
 	a := extApp(t, `
 export default function (atto: any) {
@@ -291,6 +298,9 @@ export default function (atto: any) {
 // A side model that is down, slow or failing never touches the turn: the
 // answer shows at once and the extension marks the block.
 func TestSideModelFailuresLeaveTheTurnAlone(t *testing.T) {
+	if !extensions.Supported {
+		t.Skip("requires the JS extension engine")
+	}
 	side := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		raw, _ := io.ReadAll(r.Body)
 		if strings.Contains(string(raw), "slow") {

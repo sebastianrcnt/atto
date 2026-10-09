@@ -96,7 +96,7 @@ func Discover(cwd string) ([]Item, error) {
 		out = append(out, in)
 	}
 	for _, info := range extensions.Inspect(cwd) {
-		if info.Source != extensions.Project {
+		if info.Source != extensions.Project || !extensions.Supported {
 			continue
 		}
 		s := extensions.Spec{Name: info.Name, Path: info.Path, Source: info.Source}

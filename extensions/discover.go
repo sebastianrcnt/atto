@@ -136,6 +136,9 @@ var ErrNotFound = errors.New("no such extension")
 // session in cwd, as its code is now; a later change needs approval
 // again. It returns the extension approved. User extensions need none.
 func Approve(cwd, name string) (Spec, error) {
+	if !Supported {
+		return Spec{}, fmt.Errorf("%s", UnsupportedMessage(IgnoredCount(Inspect(cwd))))
+	}
 	for _, s := range Discover(cwd) {
 		if s.Name != name {
 			continue

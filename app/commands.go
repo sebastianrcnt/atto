@@ -10,6 +10,7 @@ import (
 
 	"github.com/sebastianrcnt/atto/config"
 	"github.com/sebastianrcnt/atto/core"
+	"github.com/sebastianrcnt/atto/extensions"
 	"github.com/sebastianrcnt/atto/server"
 	"github.com/sebastianrcnt/atto/session"
 	"github.com/sebastianrcnt/atto/tui"
@@ -395,6 +396,10 @@ func (a *App) cmdArchive(string) {
 
 // cmdExtensions lists the extensions; approving one is the runtime's.
 func (a *App) cmdExtensions(arg string) bool {
+	if !extensions.Supported && strings.TrimSpace(arg) == "" {
+		a.notice("%s", extensions.UnsupportedMessage(extensions.IgnoredCount(a.loaded.Extensions)))
+		return true
+	}
 	if strings.TrimSpace(arg) != "" {
 		return false
 	}

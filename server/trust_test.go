@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/sebastianrcnt/atto/config"
+	"github.com/sebastianrcnt/atto/extensions"
 	"github.com/sebastianrcnt/atto/hooks/hooktest"
 	"github.com/sebastianrcnt/atto/trust"
 )
@@ -88,7 +89,12 @@ func TestStdioAndHTTPLeaveUnapprovedProjectCodeOffAndWarn(t *testing.T) {
 			}
 			warnings, _ := os.ReadFile(errOut.Name())
 			items, err := trust.Discover(work)
-			if err != nil || len(items) != 3 {
+			if err != nil || len(items) != func() int {
+				if !extensions.Supported {
+					return 2
+				}
+				return 3
+			}() {
 				t.Fatalf("trust items %+v: %v", items, err)
 			}
 			for _, in := range items {

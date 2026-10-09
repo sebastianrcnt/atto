@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/sebastianrcnt/atto/config"
+	"github.com/sebastianrcnt/atto/extensions"
 	"github.com/sebastianrcnt/atto/goal"
 	"github.com/sebastianrcnt/atto/tui"
 	"path/filepath"
@@ -35,6 +36,9 @@ func optionLabels(p map[string]any) []string {
 // Every kind of prompt the terminal opens shows on the phone, and Esc
 // from the phone closes it in the terminal.
 func TestRemotePromptKinds(t *testing.T) {
+	if !extensions.Supported {
+		t.Skip("requires the JS extension engine")
+	}
 	a, c, ev := remotePromptSetup(t)
 	cases := []struct {
 		name, kind, title string

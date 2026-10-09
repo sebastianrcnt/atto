@@ -54,7 +54,7 @@ interface AttoUI {
    * file, so a resumed session shows it again. Long text shows its first
    * `preview` lines and a "+N lines" row that expands it (click or ctrl+t).
    * The TUI shows a block; atto -p prints the title and text as a notice.
-   * See the built-in /diff extension (extensions/builtin/diff.ts).
+   * See the native /diff command (extensions/native_diff.go).
    */
   showText(title: string, text: string, options?: AttoShowTextOptions): void;
   /** Show a notice in the transcript (stderr in atto -p). */

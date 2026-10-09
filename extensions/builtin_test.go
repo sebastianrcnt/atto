@@ -1,3 +1,5 @@
+//go:build !noext
+
 package extensions
 
 import (
@@ -96,8 +98,7 @@ func TestUserAndProjectExtensionsOverrideBuiltin(t *testing.T) {
 	}
 }
 
-// Bundling the built-in extensions at every start must stay cheap: if this
-// ever fails, bundle them at build time (go generate) and embed the output.
+// Loading native built-in commands must stay cheap.
 func TestBuiltinStartupCost(t *testing.T) {
 	_, cwd := env(t)
 	timeLoads := func(settings string) time.Duration {
@@ -120,7 +121,7 @@ func TestBuiltinStartupCost(t *testing.T) {
 	if with-without > 250*time.Millisecond {
 		t.Errorf("loading the built-in extensions adds %s", with-without)
 	}
-	// Bundling alone.
+	// Reading native source alone.
 	spec := builtinSpecs()[0]
 	start := time.Now()
 	for range 5 {

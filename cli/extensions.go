@@ -21,7 +21,7 @@ const extensionsUsage = `usage: atto extensions [list [-json] | approve <name> |
                   a change to it needs approval again. Not from an agent's shell.
   types           print atto.d.ts, the API's TypeScript declarations
   docs            print the guide to writing extensions
-  source <name>   print the source of a built-in extension (diff), as an example
+  source <name>   print the Go source of a built-in command, as an example
 
 A running session picks changes up with /reload (or atto reload).`
 
@@ -48,6 +48,10 @@ func RunExtensions(args []string, out io.Writer) error {
 			enc.SetIndent("", "  ")
 			return enc.Encode(list)
 		}
+		if !extensions.Supported {
+			fmt.Fprintln(out, extensions.UnsupportedMessage(extensions.IgnoredCount(list)))
+			return nil
+		}
 		if len(list) == 0 {
 			fmt.Fprintf(out, "No extensions. Put .ts or .js files in %s or %s.\n",
 				core.ShortPath(config.ExtensionsDir()), core.ShortPath(config.ProjectExtensionsDir("<project>")))
@@ -69,6 +73,9 @@ func RunExtensions(args []string, out io.Writer) error {
 	case "approve":
 		if len(args) != 1 {
 			return fmt.Errorf("%s", extensionsUsage)
+		}
+		if !extensions.Supported {
+			return fmt.Errorf("%s", extensions.UnsupportedMessage(extensions.IgnoredCount(extensions.Inspect(cwd))))
 		}
 		if err := requireUserApproval("project extensions are approved", "atto extensions approve "+args[0]); err != nil {
 			return err

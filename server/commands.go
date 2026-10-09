@@ -97,6 +97,10 @@ func (t *thread) extensionCommands() []CommandInfo {
 		if slices.ContainsFunc(Builtins, func(b CommandInfo) bool { return b.Name == c.Name }) {
 			continue
 		}
+		if t.ext.NativeCommand(c) {
+			out = append(out, CommandInfo{Name: c.Name, Args: "[args]", Desc: c.Description, Origin: "builtin"})
+			continue
+		}
 		desc := c.Description
 		if desc != "" {
 			desc += " "
@@ -183,6 +187,10 @@ func (t *thread) runCommand(client, text string) {
 		return
 	}
 	switch c.Name {
+	case "diff", "autorename":
+		if t.ext != nil {
+			t.ext.RunCommand(c.Name, arg)
+		}
 	case "model":
 		t.cmdModel(arg)
 	case "effort":
@@ -320,6 +328,10 @@ func (t *thread) setContextMode(long bool) {
 }
 
 func (t *thread) cmdExtensions(arg string) {
+	if !extensions.Supported {
+		t.notice("", "%s", extensions.UnsupportedMessage(extensions.IgnoredCount(extensions.Inspect(t.cwd))))
+		return
+	}
 	fields := strings.Fields(arg)
 	if len(fields) == 2 && fields[0] == "approve" {
 		s, err := extensions.Approve(t.cwd, fields[1])

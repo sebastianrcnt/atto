@@ -13,6 +13,7 @@ import (
 
 	"github.com/sebastianrcnt/atto/config"
 	"github.com/sebastianrcnt/atto/events"
+	"github.com/sebastianrcnt/atto/extensions"
 	"github.com/sebastianrcnt/atto/tui"
 )
 
@@ -79,7 +80,12 @@ func TestLoadedBlockAtSessionStart(t *testing.T) {
 		"AGENTS.md   ~/.atto/AGENTS.md (13 B), ~/proj/AGENTS.md (14 B); 1 skipped",
 		"Skills      1: pdf; 1 skipped",
 		"Hooks       1: PreToolUse(Bash) · from ~/.atto/settings.json",
-		"Extensions  2: autorename, diff",
+		func() string {
+			if !extensions.Supported {
+				return "this atto build has no extension support (slim)"
+			}
+			return "Extensions  2: autorename, diff"
+		}(),
 		"Model       m · medium (model from ~/.atto/settings.json, effort default)",
 		"Config      ~/.atto/settings.json, ~/.atto/models.json",
 		"Prompt      ", "system prompt: base, environment, 2 AGENTS files, 1 skill",
