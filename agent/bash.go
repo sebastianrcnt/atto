@@ -71,6 +71,23 @@ var bashSchema = json.RawMessage(`{
   "required": ["description", "command"]
 }`)
 
+// toolSchema is bashSchema, with the command described in the shell's own
+// words. The bash text is bashSchema as it is.
+func toolSchema(sh shell.Shell) json.RawMessage {
+	var what string
+	switch sh.Kind {
+	case shell.PowerShell:
+		what = "PowerShell"
+	case shell.Cmd:
+		what = "cmd.exe"
+	case shell.Sh:
+		what = "POSIX sh"
+	default:
+		return bashSchema
+	}
+	return json.RawMessage(strings.Replace(string(bashSchema), "The bash command to run.", "The "+what+" command to run.", 1))
+}
+
 // toolDescription describes the shell tool for the model.
 func toolDescription(sh shell.Shell) string {
 	return prompts.Render("bash_tool", map[string]any{"Kind": string(sh.Kind)})

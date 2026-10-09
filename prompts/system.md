@@ -7,6 +7,8 @@ This is Windows PowerShell 5.1: `&&` and `||` are not available; chain with `;` 
 {{- end}}
 {{- else if eq .Kind "cmd" -}}
 You have one tool, cmd (cmd.exe). Use it for everything: exploring (dir, type, findstr), editing files, building, and testing.
+{{- else if eq .Kind "sh" -}}
+You have one tool, bash, but this machine has no bash: it runs commands with POSIX sh, so write POSIX sh, not bash-only syntax such as [[ ]], arrays, `source` or process substitution. Use it for everything: exploring (ls, rg, cat, sed -n), editing files (heredocs, sed, python scripts, patch), building, and testing.
 {{- else -}}
 You have one tool, bash. Use it for everything: exploring (ls, rg, cat, sed -n), editing files (heredocs, sed, python scripts, patch), building, and testing.
 {{- end}}

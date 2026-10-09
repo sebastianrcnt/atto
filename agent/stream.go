@@ -35,7 +35,7 @@ func (a *Agent) tools() []provider.Tool {
 		Function: provider.ToolFunction{
 			Name:        a.Shell.ToolName(),
 			Description: toolDescription(a.Shell),
-			Parameters:  bashSchema,
+			Parameters:  toolSchema(a.Shell),
 		},
 	}}
 }
