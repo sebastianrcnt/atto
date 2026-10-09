@@ -5,7 +5,6 @@ package tui
 import (
 	"os"
 	"time"
-	"unsafe"
 
 	"golang.org/x/sys/windows"
 )
@@ -45,43 +44,13 @@ func restoreVT(s consoleState) {
 	_ = windows.SetConsoleMode(s.out, s.outMode)
 }
 
-// releaseInput ends the console read that is still blocked after Stop, so
-// that it cannot take the first keys typed into a process started next on
-// this console (atto agents runs "atto resume" as a child). The read is
-// cancelled; if that does not wake it, a Return key event is queued for it
-// to swallow, the way libuv unblocks a console reader.
+// releaseInput waits for the input reader to return, which it does within a
+// poll interval once done is closed. Nothing then reads the console, so the
+// keys typed next go to whatever process uses it after this one.
 func (t *ProcessTerminal) releaseInput() {
-	if t.reader == nil || t.reader.wait(0) {
-		return
+	if t.reader != nil {
+		t.reader.wait(time.Second)
 	}
-	_ = windows.CancelIoEx(t.console.in, nil)
-	if t.reader.wait(100 * time.Millisecond) {
-		return
-	}
-	wakeConsoleRead(t.console.in)
-	t.reader.wait(time.Second)
-}
-
-// inputRecord is INPUT_RECORD holding a KEY_EVENT_RECORD.
-type inputRecord struct {
-	eventType       uint16
-	_               uint16
-	keyDown         int32
-	repeatCount     uint16
-	virtualKeyCode  uint16
-	virtualScanCode uint16
-	unicodeChar     uint16
-	controlKeyState uint32
-}
-
-var procWriteConsoleInput = windows.NewLazySystemDLL("kernel32.dll").NewProc("WriteConsoleInputW")
-
-// wakeConsoleRead queues a Return key press on the console input.
-func wakeConsoleRead(in windows.Handle) {
-	const keyEvent = 0x0001
-	rec := inputRecord{eventType: keyEvent, keyDown: 1, repeatCount: 1, virtualKeyCode: 0x0D, virtualScanCode: 0x1C, unicodeChar: '\r'}
-	var n uint32
-	_, _, _ = procWriteConsoleInput.Call(uintptr(in), uintptr(unsafe.Pointer(&rec)), 1, uintptr(unsafe.Pointer(&n)))
 }
 
 // watchResize polls the console size: Windows has no SIGWINCH.

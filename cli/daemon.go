@@ -95,9 +95,9 @@ func age(t time.Time) string {
 }
 
 // RunAgents implements "atto agents": the agent center by itself, then
-// what was picked, in a fresh process (on Windows a child: stopping the
-// center's terminal cancels its pending console read, so the child gets
-// every key): a running
+// what was picked, in a fresh process (on Windows a child: the center's
+// console reader never stays blocked once its terminal stops, so the child
+// gets every key): a running
 // session attached, a saved one opened, or a new one started, in the
 // daemon.
 func RunAgents(args []string, out io.Writer) error {

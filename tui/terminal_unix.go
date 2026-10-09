@@ -3,6 +3,7 @@
 package tui
 
 import (
+	"io"
 	"os"
 	"os/signal"
 	"syscall"
@@ -14,8 +15,11 @@ type consoleState struct{}
 func enableVT(in, out *os.File) consoleState { return consoleState{} }
 func restoreVT(consoleState)                 {}
 
-// releaseInput does nothing: exec replaces the process, and a blocked read
-// cannot be interrupted portably.
+// newInputReader is stdin itself: exec replaces the process, and a blocked
+// read cannot be interrupted portably.
+func newInputReader(in *os.File, _ <-chan struct{}) io.Reader { return in }
+
+// releaseInput does nothing for the same reason.
 func (t *ProcessTerminal) releaseInput() {}
 
 // watchResize delivers SIGWINCH as resize events until done closes.

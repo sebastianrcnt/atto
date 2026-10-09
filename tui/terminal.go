@@ -77,10 +77,11 @@ func (t *ProcessTerminal) Start(onInput func(string), onResize func()) error {
 
 	// The read loop is not joined on Stop: a blocking read on stdin cannot be
 	// interrupted portably, and the process exits shortly after anyway. On
-	// Windows Stop does interrupt it (see releaseInput), because a process
-	// started afterwards on this console would otherwise lose its first keys
-	// to the read still pending here.
-	t.reader = &pendingReader{r: t.in}
+	// Windows the reader never blocks that way and Stop joins it (see
+	// consoleReader), because a process started afterwards on this console
+	// (atto agents runs one) would otherwise lose its first keys to a read
+	// still pending here.
+	t.reader = &pendingReader{r: newInputReader(t.in, t.done)}
 	go readInput(t.reader, t.done, runtime.GOOS == "windows", onInput)
 
 	return nil
