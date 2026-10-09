@@ -14,7 +14,7 @@ trap 'rm -rf "$tmp"' EXIT
 git archive --format=tar -o "$tmp/src.tar" HEAD
 
 dir="atto-wintest\\$sha"
-ssh "$host" "if exist %TEMP%\\$dir rmdir /s /q %TEMP%\\$dir & mkdir %TEMP%\\$dir" >/dev/null
+ssh "$host" "(if exist %TEMP%\\$dir rmdir /s /q %TEMP%\\$dir) & mkdir %TEMP%\\$dir" >/dev/null
 scp -q "$tmp/src.tar" "$host:AppData/Local/Temp/atto-wintest/$sha/src.tar"
 args=${*:-./...}
 # cmd: && stops on the first failing step; ATTO_* from the ssh session must not
