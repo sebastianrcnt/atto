@@ -236,7 +236,7 @@ func PlanClean(o CleanOptions) (p Plan, err error) {
 	// Worktree-less agents also keep their external parent alive.
 	for _, layout := range []string{"agent-state", "subagents"} {
 		_ = filepath.WalkDir(filepath.Join(o.Root, layout), func(file string, d fs.DirEntry, e error) error {
-			if e == nil && !d.IsDir() && strings.HasSuffix(file, ".json") && !strings.Contains(filepath.ToSlash(file), "/_closed/") && !strings.Contains(filepath.ToSlash(file), "/_up/") {
+			if e == nil && !d.IsDir() && strings.HasSuffix(file, ".json") && !strings.HasSuffix(file, ".turn.json") && !strings.Contains(filepath.ToSlash(file), "/_closed/") && !strings.Contains(filepath.ToSlash(file), "/_up/") && !strings.Contains(filepath.ToSlash(file), "/.coord/") {
 				b, _ := os.ReadFile(file)
 				var s struct {
 					Parent  string `json:"parent"`

@@ -1,26 +1,58 @@
 package agentstate
 
 import (
-	"encoding/json"
-	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
 	"regexp"
-	"sort"
-	"strings"
 	"time"
 
-	"github.com/sebastianrcnt/atto/fsutil"
 	"github.com/sebastianrcnt/atto/jobs"
+	"github.com/sebastianrcnt/atto/session"
 )
 
-// State is an agent as atto agent left it. Only atto agent (start,
-// next) writes it; the turn process writes its Turn.
+// Lifecycle is where an agent is in its life. A closed agent keeps its
+// record (its ID stays reserved, with its last turn and the place of its
+// archived transcript) but is no longer live.
+type Lifecycle string
+
+const (
+	Open    Lifecycle = "open"
+	Closing Lifecycle = "closing" // teardown started; resumed by the next close
+	Closed  Lifecycle = "closed"
+)
+
+// RecordVersion is the version of the agent record.
+const RecordVersion = 1
+
+// Summary is the small first field of a record: what a directory inventory
+// needs, readable without decoding the task and instructions after it. It
+// is derived from the rest of the record whenever the record is saved.
+type Summary struct {
+	ID        string    `json:"id"`
+	Parent    string    `json:"parent,omitempty"` // "" for a root
+	Root      string    `json:"root"`
+	Name      string    `json:"name"`
+	Path      string    `json:"path"`
+	Depth     int       `json:"depth"`
+	Origin    string    `json:"origin,omitempty"`
+	Project   string    `json:"project,omitempty"`
+	Lifecycle Lifecycle `json:"lifecycle"`
+	Created   time.Time `json:"created,omitzero"`
+}
+
+// SpawnedBy is who started an agent (see session.SpawnedBy).
+type SpawnedBy = session.SpawnedBy
+
+// State is an agent as atto agent left it, one file per agent named by the
+// agent's session ID. Only atto agent writes it (spawn, task, close); the
+// process running a turn writes the Turn.
 type State struct {
-	Name    string `json:"name"`
-	Parent  string `json:"parent"`  // the session it works for
-	Session string `json:"session"` // its own session
+	// Summary stays the first field: inventories decode only it.
+	Summary Summary `json:"summary"`
+	Version int     `json:"version"`
+
+	Name    string `json:"name"`    // among its parent's children; a project label for a root
+	Parent  string `json:"parent"`  // the session it works for; "" for a root started from a shell
+	Session string `json:"session"` // its own session: the agent's identity
 	Preset  string `json:"preset"`
 	// Instructions are the preset's, as they were when it started.
 	Instructions string `json:"instructions,omitempty"`
@@ -28,17 +60,50 @@ type State struct {
 	Effort       string `json:"effort,omitempty"`
 	Cwd          string `json:"cwd"`
 	// Worktree, with -worktree: the git worktree it works in (Cwd is in
-	// it), on Branch, made from commit Base of the parent's repository
-	// Repo.
+	// it), on Branch, made from commit Base of the spawning checkout's
+	// repository Repo. Existing worktrees keep the paths and names they
+	// were made with; new ones are worktrees/<id> on atto/<id>.
 	Worktree string    `json:"worktree,omitempty"`
 	Branch   string    `json:"branch,omitempty"`
 	Base     string    `json:"base,omitempty"`
 	Repo     string    `json:"repo,omitempty"`
 	Task     string    `json:"task"` // the first message
 	Created  time.Time `json:"created"`
-	Turns    int       `json:"turns"`         // turns started
-	Prompt   string    `json:"prompt"`        // the latest turn's message
-	Job      int       `json:"job,omitempty"` // the parent's job running the latest turn
+	Turns    int       `json:"turns"`  // turns started
+	Prompt   string    `json:"prompt"` // the latest turn's message
+	// Job is the job running the latest turn, and JobOwner the session whose
+	// job it is: the parent for a child, the agent itself for a root. Empty
+	// means the parent (records written before roots had jobs).
+	Job      int    `json:"job,omitempty"`
+	JobOwner string `json:"jobOwner,omitempty"`
+
+	Root      string     `json:"root"`
+	Path      string     `json:"path"`
+	Depth     int        `json:"depth"`
+	Origin    string     `json:"origin,omitempty"` // session.OriginExternal or OriginAgent
+	Project   string     `json:"project,omitempty"`
+	SpawnCwd  string     `json:"spawnCwd,omitempty"`
+	SpawnedBy *SpawnedBy `json:"spawnedBy,omitempty"`
+	Lifecycle Lifecycle  `json:"lifecycle"`
+	Closed    time.Time  `json:"closed,omitzero"`
+	// Archive is where the transcript went when the agent closed.
+	Archive string `json:"archive,omitempty"`
+}
+
+// IsRoot reports whether the agent has no parent: it was started from a
+// shell and is the root of a tree of its own.
+func (s State) IsRoot() bool { return s.Parent == "" }
+
+// Live reports whether the agent has not been closed (or started closing).
+func (s State) Live() bool { return s.Lifecycle == Open || s.Lifecycle == "" }
+
+// JobRef is the session and job that run the latest turn.
+func (s State) JobRef() (owner string, id int) {
+	owner = s.JobOwner
+	if owner == "" {
+		owner = s.Parent
+	}
+	return owner, s.Job
 }
 
 // Status is where an agent's latest turn is.
@@ -96,143 +161,19 @@ func ValidName(name string) error {
 	return nil
 }
 
-// Dir holds the agents of session parent.
-func Dir(parent string) string { return existingPath(parent) }
-
-func statePath(parent, name string) string { return existingPath(parent, name+".json") }
-func turnPath(parent, name string) string {
-	return filepath.Join(filepath.Dir(statePath(parent, name)), name+".turn.json")
-}
-
-// ErrNotFound is wrapped by Load for a name no agent has.
-var ErrNotFound = errors.New("no such agent")
-
-// Load reads the agent name of session parent.
-func Load(parent, name string) (State, error) {
-	var s State
-	if err := ValidName(name); err != nil {
-		return s, err
-	}
-	data, err := os.ReadFile(statePath(parent, name))
-	if errors.Is(err, os.ErrNotExist) {
-		return s, fmt.Errorf("%w %q (see atto agent list)", ErrNotFound, name)
-	}
-	if err != nil {
-		return s, err
-	}
-	return s, json.Unmarshal(data, &s)
-}
-
-// Save writes s.
-func Save(s State) error {
-	if err := ValidName(s.Name); err != nil {
-		return err
-	}
-	if err := os.MkdirAll(filepath.Dir(statePath(s.Parent, s.Name)), 0o755); err != nil {
-		return err
-	}
-	if err := saveUp(s); err != nil {
-		return err
-	}
-	data, _ := json.MarshalIndent(s, "", "  ")
-	return fsutil.WriteAtomic(statePath(s.Parent, s.Name), data, 0o644)
-}
-
-// Create saves s as a new agent; the name must be free.
-func Create(s State) error {
-	if err := ValidName(s.Name); err != nil {
-		return err
-	}
-	if err := os.MkdirAll(filepath.Dir(statePath(s.Parent, s.Name)), 0o755); err != nil {
-		return err
-	}
-	f, err := os.OpenFile(statePath(s.Parent, s.Name), os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
-	if errors.Is(err, os.ErrExist) {
-		return fmt.Errorf("an agent named %q exists: give it a follow-up with atto agent next %s, or pick another name", s.Name, s.Name)
-	}
-	if err != nil {
-		return err
-	}
-	f.Close()
-	return Save(s)
-}
-
-// Remove deletes the agent's state (its session stays), retaining its ID as
-// closed. If recording the closed ID fails, its state is kept and an error
-// returned. As before, deleting missing state is harmless.
-func Remove(parent, name string) error {
-	if s, err := Load(parent, name); err == nil {
-		if err := rememberClosed(s); err != nil {
-			return err
-		}
-	}
-	roots := stateRoots()
-	for _, root := range roots {
-		path := filepath.Join(root, parent, name+".json")
-		data, _ := os.ReadFile(path)
-		var s State
-		if json.Unmarshal(data, &s) == nil && s.Session != "" {
-			for _, indexRoot := range roots {
-				_ = os.Remove(filepath.Join(indexRoot, "_up", s.Session+".json"))
-			}
-		}
-		_ = os.Remove(path)
-		_ = os.Remove(filepath.Join(root, parent, name+".turn.json"))
-		_ = os.Remove(filepath.Join(root, parent, name+".turn.json.interrupt"))
-	}
-	return nil
-}
-
-// List returns the agents of session parent, oldest first.
-func List(parent string) []State {
-	var paths []string
-	for _, root := range stateRoots() {
-		more, _ := filepath.Glob(filepath.Join(root, parent, "*.json"))
-		paths = append(paths, more...)
-	}
-	seen := map[string]bool{}
-	var out []State
-	for _, p := range paths {
-		name := strings.TrimSuffix(filepath.Base(p), ".json")
-		if strings.HasSuffix(name, ".turn") || seen[name] {
-			continue
-		}
-		seen[name] = true
-		if s, err := Load(parent, name); err == nil {
-			out = append(out, s)
-		}
-	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Created.Before(out[j].Created) })
-	return out
-}
-
-// SaveTurn records how turn t of agent name is going.
-func SaveTurn(parent, name string, t Turn) error {
-	if err := os.MkdirAll(filepath.Dir(turnPath(parent, name)), 0o755); err != nil {
-		return err
-	}
-	data, _ := json.MarshalIndent(t, "", "  ")
-	return fsutil.WriteAtomic(turnPath(parent, name), data, 0o644)
-}
-
-// LoadTurn reads what the latest turn process recorded.
-func LoadTurn(parent, name string) (Turn, bool) {
-	var t Turn
-	data, err := os.ReadFile(turnPath(parent, name))
-	if err != nil || json.Unmarshal(data, &t) != nil {
-		return Turn{}, false
-	}
-	return t, true
-}
-
 // Latest returns the latest turn and its status: what the turn process
 // recorded, corrected by its job (a stopped or crashed turn records
 // nothing more).
 func (s State) Latest() Turn {
+	t, ok := LoadTurn(s.Session)
+	return s.latest(t, ok)
+}
+
+// latest is Latest given what the turn process recorded (ok: it did).
+func (s State) latest(t Turn, ok bool) Turn {
 	if s.Turns == 0 {
 		return Turn{Status: Idle}
 	}
-	t, ok := LoadTurn(s.Parent, s.Name)
 	if !ok || t.N != s.Turns { // the turn process hasn't written yet
 		t = Turn{N: s.Turns, Status: Queued}
 	}
@@ -242,7 +183,8 @@ func (s State) Latest() Turn {
 		}
 		return t
 	}
-	j, err := jobs.Get(s.Parent, s.Job)
+	owner, id := s.JobRef()
+	j, err := jobs.Get(owner, id)
 	switch {
 	case err != nil:
 		t.Status, t.Error = Failed, err.Error()
@@ -266,14 +208,4 @@ func (s State) Latest() Turn {
 		}
 	}
 	return t
-}
-
-// ListAll returns agents from every parent, including agents whose parent
-// session no longer exists. Like List, it reads only the agent state files.
-func ListAll() []State {
-	var out []State
-	for _, parent := range parentIDs() {
-		out = append(out, List(parent)...)
-	}
-	return out
 }

@@ -1,17 +1,13 @@
 package cli
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"os"
-	"os/signal"
-	"slices"
 	"strings"
-	"syscall"
 	"text/tabwriter"
 	"time"
 
@@ -26,7 +22,7 @@ import (
 	"github.com/sebastianrcnt/atto/tui"
 )
 
-// agentUsage includes the older settings spelling for compatibility with old installs.
+// agentUsage: agents need no setting; old keys are read and ignored.
 const agentUsage = `Agents are always available, from a plain shell or from a model's shell: no setting
 turns them on, and no running atto session or atto -p root is needed.
 
@@ -47,55 +43,80 @@ usage:
   atto agent close AGENT... | close -done [-force]
                                        remove agents you are done with, and theirs
   atto agent roles                     the roles -role picks from
+  atto agent migrate                   convert agent data of the old layout (see below)
 
 Agents are atto sessions other agents start, as in codex: equally capable,
-with the same tools. Each has a path from the root of its tree: the
-session that started the first ones is /root, its agent "tests" is
-/root/tests. AGENT is a name you gave (tests), a path below you
-(tests/lint), ".." for the agent that started you, or a full path (/root,
-/root/tests), or @ID (its own session ID or a unique prefix of at least
-6 characters). Inside atto, @ID stays within your own tree; outside atto
-it works from any directory or parent. list -all is for outside callers
-and shows agents under every external parent. An agent sees only what it
-is sent. When its turn ends, its
-final answer reaches the agent that started it by itself, wrapped in
-<atto_internal_context source="agent"> with Message Type FINAL_ANSWER;
-messages and tasks arrive the same way (MESSAGE, NEW_TASK). wait exits with
-status 124 when -timeout passes first, and returns early when the user
-sends a message. Close agents once you have their result and no more work
-for them.
+with the same tools, and an agent is its session: its session ID is its identity.
+Each has a path from the root of its tree: the session that started the first ones
+is /root, its agent "tests" is /root/tests. AGENT is a name you gave (tests), a
+path below you (tests/lint), ".." for the agent that started you, or a full path
+(/root, /root/tests), or @ID (its own session ID or a unique prefix of at least
+6 characters). Names and paths are labels that can be reused after an agent is
+closed; the @ID never is. Inside atto, @ID stays within your own tree; outside atto
+it works from any directory. An agent sees only what it is sent. When its turn ends,
+its final answer reaches the agent that started it by itself, wrapped in
+<atto_internal_context source="agent"> with Message Type FINAL_ANSWER; messages and
+tasks arrive the same way (MESSAGE, NEW_TASK). wait exits with status 124 when
+-timeout passes first, and returns early when the user sends a message. Close
+agents once you have their result and no more work for them.
 
 Agents work in this directory. With -worktree, an agent gets its own git
-worktree (under the atto dir) on a new branch atto/<session>/NAME made from
-HEAD, and commits its work there: use it when agents edit files in
-parallel. close removes the worktree, refusing while it has uncommitted
-changes unless -force, and keeps the branch for you to merge.
+worktree (under the atto dir, worktrees/<session ID>) on a new branch
+atto/<session ID> made from HEAD, and commits its work there: use it when agents
+edit files in parallel. close removes the worktree, refusing while it has
+uncommitted changes unless -force, and keeps the branch for you to merge.
 
 Agents may start agents of their own at any depth, and every turn starts at
 once. In the agents setting, "model" and "effort" apply to agents whose role
 names none (else they use their parent's); older "enabled", "maxDepth" and
 "maxConcurrent" keys are ignored.
 
-Every command accepts -session ID (default: $ATTO_SESSION_ID). Outside
-atto, without -session or ATTO_SESSION_ID, a lightweight parent is created
-without a model call for each spawn; it is never reused by another spawn.
-Names are project-wide labels (git root, else cwd): a unique live name works,
-but duplicates report their @id, status and age. Paths first resolve that
-label, then follow its own tree. Use the exact @id returned by spawn to avoid
-ambiguity. list includes every outside-spawned tree in this project; -all
-includes every project. wait without addresses waits for any in this project,
-and close -done closes finished trees in this project. close archives an
-external parent after its last agent is removed. -session PARENT and callers
-inside atto keep their existing tree-relative names and unique child names.
-spawn accepts -m provider/model and -effort LEVEL for external callers only;
-in atto's model shell (ATTO_SESSION_ID / ATTO_AGENT set), use -role instead.
+From a plain shell (no ATTO_SESSION_ID, no -session), spawn starts an agent
+with no parent: the root of a tree of its own (/root), recorded with the
+project (git root, else cwd). Nothing sends its answers anywhere: poll it with
+wait and report. Its NAME is a label among the open agents started from a shell
+in the project: a unique name works, duplicates report their @id, status and
+age. Paths first resolve that label, then follow its own tree: tests/lint. Use
+the exact @id spawn prints to avoid ambiguity. list shows those agents and
+their trees in this project; -all shows every project. wait without addresses
+waits for any of them, and close -done closes those whose whole tree is done.
+With -session ID the agent is a child of that session, and answers reach it.
+spawn accepts -m provider/model and -effort LEVEL for outside callers only; in
+atto's model shell (ATTO_SESSION_ID / ATTO_AGENT set), use -role instead.
+Every command accepts -session ID (default: $ATTO_SESSION_ID).
 wait and report accept -json: one object; duration is in seconds.
 Old names still work: start (spawn), next (task, idle), steer (task,
-running), wait-any (wait), stop (interrupt), rm (close), presets (roles), read/show (report).`
+running), wait-any (wait), stop (interrupt), rm (close), presets (roles), read/show (report).
+
+Agent data written by older versions (one directory per parent session) must be
+converted once, by atto agent migrate, which backs ~/.atto up first. Every machine
+that shares the data must run this atto or a newer one afterwards.`
 
 // agentInterruptWait gives a worker time to record a graceful stop before
 // an unresponsive process is force-stopped. Tests shorten it.
 var agentInterruptWait = 10 * time.Second
+
+// caller is who runs an atto agent command.
+type caller struct {
+	// session is the session the command acts for: the model's own, the one
+	// -session names, or "" from a plain shell.
+	session string
+	// outside: run from a plain shell (by a person or an orchestrator), not
+	// by a model's shell. Names are then labels of the project's agents.
+	outside bool
+}
+
+// implicit reports an outside caller with no session: it addresses the
+// agents started from a shell in this project.
+func (c caller) implicit() bool { return c.session == "" && c.outside }
+
+// sender is who a message from this caller is from.
+func (c caller) sender() string {
+	if c.implicit() {
+		return agentstate.OutsideSender
+	}
+	return agentstate.PathOf(c.session)
+}
 
 // RunAgent implements "atto agent".
 func RunAgent(args []string, out io.Writer) error {
@@ -108,13 +129,13 @@ func RunAgent(args []string, out io.Writer) error {
 		sub = to
 	}
 	fs := newFlags("agent " + sub)
-	session := sessionFlag(fs)
+	sessionID := sessionFlag(fs)
 	timeout := fs.Duration("timeout", 0, "give up after this long")
 	model, effort, role := "", "", ""
 	useWorktree, force := false, false
 	if sub == "spawn" {
-		fs.StringVar(&model, "m", "", "model (external callers only)")
-		fs.StringVar(&effort, "effort", "", "effort (external callers only)")
+		fs.StringVar(&model, "m", "", "model (outside callers only)")
+		fs.StringVar(&effort, "effort", "", "effort (outside callers only)")
 		fs.StringVar(&role, "role", "", "the role to start from (atto agent roles)")
 		fs.BoolVar(&useWorktree, "worktree", false, "work in a git worktree of its own, on a new branch")
 	}
@@ -127,7 +148,7 @@ func RunAgent(args []string, out io.Writer) error {
 	}
 	all := false
 	if sub == "list" {
-		fs.BoolVar(&all, "all", false, "outside atto: agents of every external parent")
+		fs.BoolVar(&all, "all", false, "outside atto: agents of every project")
 	}
 	done := fs.Bool("done", false, "close: every agent that is not running or queued")
 	words, err := parseInterleaved(fs, rest)
@@ -144,49 +165,38 @@ func RunAgent(args []string, out io.Writer) error {
 		return fmt.Errorf("-m and -effort are for external callers only; inside atto use -role")
 	}
 	switch sub {
-	case "spawn", "task", "send", "wait", "report", "list", "interrupt", "close", "roles":
+	case "spawn", "task", "send", "wait", "report", "list", "interrupt", "close", "roles", "migrate":
 	default:
 		return fmt.Errorf("unknown subcommand %q\n%s", sub, agentUsage)
+	}
+	if sub == "migrate" {
+		return runAgentMigrate(out)
 	}
 	settings, err := config.LoadSettings()
 	if err != nil {
 		return fmt.Errorf("%s: %w", config.SettingsPath(), err)
 	}
+	if sub != "roles" {
+		if err := ensureAgentLayout(out); err != nil {
+			return err
+		}
+	}
+	c := caller{session: *sessionID, outside: outsideAgentCaller()}
 	if all {
-		if !outsideAgentCaller() {
+		if !c.outside {
 			return errors.New("atto agent list -all is for external callers only; inside atto use atto agent list")
 		}
 		return agentListAll(out)
 	}
-	implicitOutside := *session == "" && outsideAgentCaller()
-	if *session == "" {
-		if !implicitOutside {
-			return requireSession(*session)
-		}
-		if sub == "spawn" {
-			id, err := newExternalParent(out)
-			if err != nil {
-				return err
-			}
-			*session = id
-			// Invalid tasks/models must not leave an empty fresh parent behind.
-			defer func() { _ = forgetExternalParent(id) }()
-		}
+	if c.session == "" && !c.outside && sub != "roles" {
+		return requireSession(c.session)
 	}
 
-	if sub == "close" {
-		err := agentRemove(out, *session, words, *done, force)
-		if ferr := forgetExternalParent(*session); err == nil {
-			err = ferr
-		}
-		return err
-	}
 	switch sub {
+	case "close":
+		return agentRemove(out, c, words, *done, force)
 	case "list":
-		if implicitOutside {
-			return agentListExternal(out, false)
-		}
-		return agentList(out, *session)
+		return agentList(out, c)
 	case "roles":
 		cwd, _ := os.Getwd()
 		presets, warns := agentstate.LoadPresets(agentstate.Dirs(cwd, agent.ProjectRoot(cwd)))
@@ -204,23 +214,20 @@ func RunAgent(args []string, out io.Writer) error {
 	case "wait":
 		var cands []agentstate.State
 		if len(words) == 0 {
-			if implicitOutside {
-				cands, err = externalAgents(false, true)
-				if err != nil {
-					return err
-				}
+			if c.implicit() {
+				cands = agentstate.ExternalRoots(externalProjectHere(), false)
 			} else {
-				cands = agentstate.List(*session)
+				cands = agentstate.Children(c.session)
 			}
 		}
 		for _, w := range words {
-			st, err := agentAt(*session, w)
+			st, err := agentAt(c, w)
 			if err != nil {
 				return err
 			}
 			cands = append(cands, st)
 		}
-		return agentWait(out, *session, cands, *timeout, jsonOut)
+		return agentWait(out, c, cands, *timeout, jsonOut)
 	}
 	if len(words) == 0 {
 		return fmt.Errorf("atto agent %s needs an AGENT\n%s", sub, agentUsage)
@@ -242,84 +249,68 @@ func RunAgent(args []string, out io.Writer) error {
 		if role == "" {
 			role = "general"
 		}
-		return agentStart(out, settings, *session, addr, role, text, model, effort, useWorktree, implicitOutside)
+		return agentStart(out, settings, c, addr, role, text, model, effort, useWorktree)
 	case "report":
-		st, err := agentAt(*session, addr)
+		st, err := agentAt(c, addr)
 		if err != nil {
 			return err
 		}
 		return writeAgentReport(out, st, jsonOut)
 	case "interrupt":
-		st, err := agentAt(*session, addr)
+		st, err := agentAt(c, addr)
 		if err != nil {
 			return err
 		}
 		if t := st.Latest(); !t.Status.Active() {
 			return fmt.Errorf("agent %s is %s, not running", addr, t.Status)
 		}
-		if err := agentstate.RequestInterrupt(st.Parent, st.Name, st.Turns); err != nil {
-			return err
-		}
-		// Wait for the turn to record its stop, so an immediate task or
-		// close sees an idle agent rather than racing the cancellation.
-		for deadline := time.Now().Add(agentInterruptWait); st.Latest().Status.Active(); time.Sleep(20 * time.Millisecond) {
-			if time.Now().After(deadline) {
-				if _, err := jobs.Kill(st.Parent, st.Job); err != nil {
-					return err
-				}
-				jobs.KillAll(st.Session)
-				t := st.Latest()
-				t.Status, t.Ended = agentstate.Stopped, time.Now()
-				if err := agentstate.SaveTurn(st.Parent, st.Name, t); err != nil {
-					return err
-				}
-				fmt.Fprintf(out, "agent %s force-stopped after it did not respond to the interrupt. Give it a new task with atto agent task %s \"...\"\n", addr, addr)
-				return nil
-			}
-		}
-		fmt.Fprintf(out, "agent %s interrupted. Give it a new task with atto agent task %s \"...\"\n", addr, addr)
+		return interruptTurn(out, st, addr)
 	case "task":
 		if text == "" {
 			return fmt.Errorf(`usage: atto agent task AGENT "<text>"`)
 		}
-		st, err := agentAt(*session, addr)
+		st, err := agentAt(c, addr)
 		if err != nil {
 			return err
 		}
-		release, err := agentstate.LockTurn(st.Parent, st.Name)
+		release, err := agentstate.LockTurn(st.Session)
 		if err != nil {
 			return err
 		}
 		defer release()
-		st, err = agentstate.Load(st.Parent, st.Name)
+		st, err = agentstate.Load(st.Session)
 		if err != nil {
 			return err
 		}
-		from, to := agentstate.PathOf(*session), agentstate.PathOf(st.Session)
+		from, to := c.sender(), st.Path
 		msg := agentstate.Envelope(agentstate.NewTask, from, to, text)
 		if t := st.Latest(); t.Status.Active() || args[0] == "steer" {
 			if err := events.Push(st.Session, events.Event{Source: "agent", Text: msg, Title: "◆ new task from " + from}); err != nil {
 				return err
 			}
-			fmt.Fprintf(out, "agent %s is %s: it takes the task after its current step.\n", to, t.Status)
+			fmt.Fprintf(out, "agent %s is %s: it takes the task after its current step.\n", agentLabel(st), t.Status)
 			return nil
 		}
 		if err := startTurn(&st, msg); err != nil {
 			return err
 		}
-		fmt.Fprintf(out, "agent %s: turn %d started (job %d). Its final answer reaches you when it ends; wait: atto agent wait %s\n", to, st.Turns, st.Job, addr)
+		if st.IsRoot() {
+			fmt.Fprintf(out, "agent %s: turn %d started (job %d of session %s). Poll it: atto agent wait %s · atto agent report %s\n", agentLabel(st), st.Turns, st.Job, st.Session, addr, addr)
+		} else {
+			fmt.Fprintf(out, "agent %s: turn %d started (job %d). Its final answer reaches you when it ends; wait: atto agent wait %s\n", agentLabel(st), st.Turns, st.Job, addr)
+		}
 	case "send":
 		if text == "" {
 			return fmt.Errorf(`usage: atto agent send AGENT "<text>"`)
 		}
-		t, err := resolveAgentAddress(*session, addr)
+		t, err := resolveAgentAddress(c, addr)
 		if err != nil {
 			return err
 		}
-		if t.Session == *session {
+		if t.Session == c.session {
 			return errors.New("that is you: send messages to other agents")
 		}
-		from := agentstate.PathOf(*session)
+		from := c.sender()
 		if err := events.Push(t.Session, events.Event{Source: "agent", Quiet: true, Text: agentstate.Envelope(agentstate.Message, from, t.Path, text), Title: "◆ message from " + from}); err != nil {
 			return err
 		}
@@ -327,8 +318,40 @@ func RunAgent(args []string, out io.Writer) error {
 		if t.State != nil && t.State.Latest().Status.Active() {
 			when = "after its current step"
 		}
-		fmt.Fprintf(out, "sent to %s: it reads it %s.\n", t.Path, when)
+		fmt.Fprintf(out, "sent to %s: it reads it %s.\n", targetLabel(t), when)
 	}
+	return nil
+}
+
+// interruptTurn asks st's running turn to stop and waits for it to say so.
+func interruptTurn(out io.Writer, st agentstate.State, addr string) error {
+	if err := agentstate.RequestInterrupt(st.Session, st.Turns); err != nil {
+		return err
+	}
+	// Wait for the turn to record its stop, so an immediate task or
+	// close sees an idle agent rather than racing the cancellation.
+	for deadline := time.Now().Add(agentInterruptWait); st.Latest().Status.Active(); time.Sleep(20 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			return forceStop(out, st, addr)
+		}
+	}
+	fmt.Fprintf(out, "agent %s interrupted. Give it a new task with atto agent task %s \"...\"\n", addr, addr)
+	return nil
+}
+
+// forceStop ends a turn that did not answer the interrupt request.
+func forceStop(out io.Writer, st agentstate.State, addr string) error {
+	owner, id := st.JobRef()
+	if _, err := jobs.Kill(owner, id); err != nil {
+		return err
+	}
+	jobs.KillAll(st.Session)
+	t := st.Latest()
+	t.Status, t.Ended = agentstate.Stopped, time.Now()
+	if err := agentstate.SaveTurn(st.Session, t); err != nil {
+		return err
+	}
+	fmt.Fprintf(out, "agent %s force-stopped after it did not respond to the interrupt. Give it a new task with atto agent task %s \"...\"\n", addr, addr)
 	return nil
 }
 
@@ -340,35 +363,35 @@ var agentAliases = map[string]string{
 }
 
 // ID scope follows the actual caller, never a -session override. Names and
-// paths still resolve relative to the selected parent as before.
+// paths still resolve relative to the selected session as before.
 func outsideAgentCaller() bool {
 	return os.Getenv("ATTO_SESSION_ID") == "" && !config.InAgentCommand()
 }
 
-func resolveAgentAddress(parent, addr string) (agentstate.Target, error) {
+func resolveAgentAddress(c caller, addr string) (agentstate.Target, error) {
 	if strings.HasPrefix(addr, "@") {
-		if outsideAgentCaller() {
+		if c.outside {
 			return agentstate.Resolve("", addr)
 		}
-		caller := os.Getenv("ATTO_SESSION_ID")
-		if caller == "" {
-			caller = parent
+		self := os.Getenv("ATTO_SESSION_ID")
+		if self == "" {
+			self = c.session
 		}
-		if err := requireSession(caller); err != nil {
+		if err := requireSession(self); err != nil {
 			return agentstate.Target{}, err
 		}
-		return agentstate.Resolve(caller, addr)
+		return agentstate.Resolve(self, addr)
 	}
-	if parent == "" && outsideAgentCaller() {
-		return resolveExternalAgent(addr)
+	if c.implicit() {
+		return agentstate.ResolveOutside(externalProjectHere(), addr)
 	}
-	return agentstate.Resolve(parent, addr)
+	return agentstate.Resolve(c.session, addr)
 }
 
-// agentAt is the agent addr names, seen from session: one that some
-// session started, not a root.
-func agentAt(session, addr string) (agentstate.State, error) {
-	t, err := resolveAgentAddress(session, addr)
+// agentAt is the agent addr names, seen from the caller: a managed agent,
+// not an ordinary session.
+func agentAt(c caller, addr string) (agentstate.State, error) {
+	t, err := resolveAgentAddress(c, addr)
 	if err != nil {
 		return agentstate.State{}, err
 	}
@@ -376,6 +399,16 @@ func agentAt(session, addr string) (agentstate.State, error) {
 		return agentstate.State{}, fmt.Errorf("%s is not an agent anyone started (message it with atto agent send %s)", t.Path, addr)
 	}
 	return *t.State, nil
+}
+
+// agentLabel is how output spells an agent for this caller.
+func agentLabel(st agentstate.State) string { return agentstate.Label(st, outsideAgentCaller()) }
+
+func targetLabel(t agentstate.Target) string {
+	if t.State != nil {
+		return agentLabel(*t.State)
+	}
+	return t.Path
 }
 
 func isPreset(name string) bool {
@@ -386,17 +419,20 @@ func isPreset(name string) bool {
 }
 
 // agentRemove closes agents that are done (not running or queued), with
-// the agents they started: their state goes, freeing the names, and their
-// sessions are archived. An agent's worktree goes too, unless it has
-// uncommitted changes and not force; its branch stays. Named agents are
-// all closed or none; -done closes those it can and errs about the rest.
-func agentRemove(out io.Writer, parent string, names []string, done, force bool) error {
+// the agents they started: they become closed records (their IDs stay
+// reserved, their names free), their sessions are archived. An agent's
+// worktree goes too, unless it has uncommitted changes and not force; its
+// branch stays. Named agents are all closed or none; -done closes those it
+// can and errs about the rest. The tree stays locked while this runs, and
+// each agent is marked closing before anything is taken away, so nothing
+// new starts below it.
+func agentRemove(out io.Writer, c caller, names []string, done, force bool) error {
 	var trees [][]agentstate.State // each: an agent and its descendants, deepest first
 	var refused []string
 	check := func(tree []agentstate.State) error {
 		for _, s := range tree {
 			if t := s.Latest(); t.Status.Active() {
-				return fmt.Errorf("agent %s is %s: interrupt it first (atto agent interrupt %s)", agentstate.PathOf(s.Session), t.Status, agentstate.PathOf(s.Session))
+				return fmt.Errorf("agent %s is %s: interrupt it first (atto agent interrupt @%s)", agentLabel(s), t.Status, s.Session)
 			}
 		}
 		for _, s := range tree {
@@ -410,13 +446,9 @@ func agentRemove(out io.Writer, parent string, names []string, done, force bool)
 	case done && len(names) > 0, !done && len(names) == 0:
 		return fmt.Errorf("usage: atto agent close AGENT... | atto agent close -done")
 	case done:
-		rows := agentstate.List(parent)
-		if parent == "" && outsideAgentCaller() {
-			var err error
-			rows, err = externalAgents(false, true)
-			if err != nil {
-				return err
-			}
+		rows := agentstate.Children(c.session)
+		if c.implicit() {
+			rows = agentstate.ExternalRoots(externalProjectHere(), false)
 		}
 		for _, s := range rows {
 			tree := subtree(s)
@@ -434,7 +466,7 @@ func agentRemove(out io.Writer, parent string, names []string, done, force bool)
 		}
 	default:
 		for _, n := range names {
-			s, err := agentAt(parent, n)
+			s, err := agentAt(c, n)
 			if err != nil {
 				return err
 			}
@@ -446,36 +478,8 @@ func agentRemove(out io.Writer, parent string, names []string, done, force bool)
 		}
 	}
 	for _, tree := range trees {
-		blocked := make(map[string]bool)
-		for _, s := range tree {
-			if blocked[s.Session] {
-				blocked[s.Parent] = true
-				continue
-			}
-			path := agentstate.PathOf(s.Session)
-			if s.Worktree != "" {
-				line, err := removeWorktree(s, force)
-				if err != nil {
-					refused = append(refused, fmt.Sprintf("agent %s: removing its worktree: %v (ancestors kept)", path, err))
-					blocked[s.Parent] = true
-					continue
-				}
-				fmt.Fprintln(out, line)
-			}
-			if p, err := session.Find(s.Session); err == nil && !isArchived(p) {
-				if _, err := session.Archive(p); err != nil {
-					fmt.Fprintf(out, "warning: agent %s: archiving its session: %v\n", path, err)
-				}
-			}
-			if err := agentstate.Remove(s.Parent, s.Name); err != nil {
-				refused = append(refused, fmt.Sprintf("agent %s: closing: %v", path, err))
-				blocked[s.Parent] = true
-				continue
-			}
-			if err := forgetExternalParent(s.Parent); err != nil {
-				refused = append(refused, err.Error())
-			}
-			fmt.Fprintf(out, "closed agent %s (session %s archived)\n", path, s.Session)
+		if err := closeTree(out, tree, force, &refused); err != nil {
+			refused = append(refused, err.Error())
 		}
 	}
 	if len(refused) > 0 {
@@ -484,10 +488,68 @@ func agentRemove(out io.Writer, parent string, names []string, done, force bool)
 	return nil
 }
 
+// closeTree closes one agent and what is below it (deepest first).
+func closeTree(out io.Writer, tree []agentstate.State, force bool, refused *[]string) error {
+	if len(tree) == 0 {
+		return nil
+	}
+	release, err := agentstate.LockTree(tree[len(tree)-1].Session)
+	if err != nil {
+		return err
+	}
+	defer release()
+	for _, s := range tree {
+		if err := agentstate.MarkClosing(s.Session); err != nil {
+			return fmt.Errorf("agent %s: closing: %v", agentLabel(s), err)
+		}
+	}
+	blocked := make(map[string]bool)
+	for _, s := range tree {
+		if blocked[s.Session] {
+			blocked[s.Parent] = true
+			continue
+		}
+		label := agentLabel(s)
+		if s.Worktree != "" {
+			line, err := removeWorktree(s, force)
+			if err != nil {
+				*refused = append(*refused, fmt.Sprintf("agent %s: removing its worktree: %v (ancestors kept)", label, err))
+				blocked[s.Parent] = true
+				continue
+			}
+			fmt.Fprintln(out, line)
+		}
+		archive := ""
+		if p, err := session.Find(s.Session); err == nil && !isArchived(p) {
+			if dst, err := session.Archive(p); err != nil {
+				fmt.Fprintf(out, "warning: agent %s: archiving its session: %v\n", label, err)
+			} else {
+				archive = dst
+			}
+		} else if err == nil {
+			archive = p
+		}
+		if err := agentstate.MarkClosed(s.Session, archive); err != nil {
+			*refused = append(*refused, fmt.Sprintf("agent %s: closing: %v", label, err))
+			blocked[s.Parent] = true
+			continue
+		}
+		fmt.Fprintf(out, "closed agent %s (@%s, session %s archived)\n", label, agentstate.ShortID(s.Session), s.Session)
+	}
+	// An agent whose teardown failed is open again: nothing was lost.
+	for _, s := range tree {
+		if cur, err := agentstate.Load(s.Session); err == nil && cur.Lifecycle == agentstate.Closing {
+			cur.Lifecycle = agentstate.Open
+			_ = agentstate.Save(cur)
+		}
+	}
+	return nil
+}
+
 // subtree is s and the agents below it, deepest first.
 func subtree(s agentstate.State) []agentstate.State {
 	var out []agentstate.State
-	for _, c := range agentstate.List(s.Session) {
+	for _, c := range agentstate.Children(s.Session) {
 		out = append(out, subtree(c)...)
 	}
 	return append(out, s)
@@ -504,204 +566,21 @@ func checkWorktree(s agentstate.State, force bool) error {
 		return fmt.Errorf("agent %s: checking its worktree: %v", s.Name, err)
 	}
 	if dirt != "" {
-		return fmt.Errorf("agent %s: its worktree %s has uncommitted changes:\n%s\ncommit them (or have it commit: atto agent task %s \"commit your work\"), or close it anyway with atto agent close -force %s", s.Name, s.Worktree, dirt, s.Name, s.Name)
+		return fmt.Errorf("agent %s: its worktree %s has uncommitted changes:\n%s\ncommit them (or have it commit: atto agent task @%s \"commit your work\"), or close it anyway with atto agent close -force @%s", s.Name, s.Worktree, dirt, s.Session, s.Session)
 	}
 	return nil
 }
 
-func contains(list []string, s string) bool {
-	return slices.Contains(list, s)
-}
-
-// agentStart creates agent name from preset and starts its first turn.
-func agentStart(out io.Writer, settings config.Settings, parent, name, preset, task, model, effortOverride string, useWorktree, useIDAddress bool) error {
-	release, err := agentstate.StartWork(parent)
-	if err != nil {
-		return err
-	}
-	defer release()
-
-	if task == "" {
-		return fmt.Errorf("give the agent its task: atto agent start %s %s \"...\"", name, preset)
-	}
-	cwd, err := os.Getwd()
-	if err != nil {
-		return err
-	}
-	presets, _ := agentstate.LoadPresets(agentstate.Dirs(cwd, agent.ProjectRoot(cwd)))
-	p, err := agentstate.Find(presets, preset)
-	if err != nil {
-		return err
-	}
-	_, models, err := core.Load()
-	if err != nil {
-		return err
-	}
-	if model != "" {
-		p.Model = model
-	}
-	if effortOverride != "" {
-		p.Effort = effortOverride
-	}
-	pm, pe := sessionModel(parent)
-	ref, effort, err := agentModel(models, settings, p, pm, pe)
-	if err != nil {
-		return err
-	}
-	var wt worktree
-	if useWorktree {
-		if _, err := agentstate.Load(parent, name); err == nil {
-			return fmt.Errorf("an agent named %q exists: give it a follow-up with atto agent next %s, or pick another name", name, name)
-		}
-		if wt, err = planWorktree(cwd, parent, name); err != nil {
-			return err
-		}
-		if err := wt.create(); err != nil {
-			return err
-		}
-		cwd = wt.Cwd
-	}
-	undo := func() {
-		if useWorktree {
-			wt.undo()
-		}
-	}
-	w := session.NewAgent(cwd, parent)
-	st := agentstate.State{
-		Name: name, Parent: parent, Session: w.ID, Preset: p.Name, Instructions: p.Instructions,
-		Model: ref.String(), Effort: effort, Cwd: cwd, Task: task, Created: time.Now(),
-		Worktree: wt.Path, Branch: wt.Branch, Base: wt.Base, Repo: wt.Repo,
-	}
-	if err := agentstate.Create(st); err != nil {
-		undo()
-		return err
-	}
-	// The session exists from the start, so every turn resumes it.
-	w.Append(session.Entry{Type: session.TypeName, Name: name})
-	w.Close()
-	if err := w.Err(); err != nil {
-		agentstate.Remove(parent, name)
-		undo()
-		return err
-	}
-	if err := startTurnLocked(&st, task); err != nil {
-		agentstate.Remove(parent, name)
-		undo()
-		return err
-	}
-	fmt.Fprintf(out, "agent %s started (@%s, session %s, %s · %s, role %s, job %d).\n", agentstate.PathOf(st.Session), agentstate.ShortID(st.Session), st.Session, st.Model, orDash(effort), p.Name, st.Job)
-	address := name
-	if useIDAddress {
-		address = "@" + st.Session
-	}
-	if useWorktree {
-		fmt.Fprintf(out, "It works in worktree %s on branch %s (from %.7s); atto agent close %s removes the worktree and keeps the branch.\n", st.Worktree, st.Branch, st.Base, address)
-	}
-	fmt.Fprintf(out, "Its final answer reaches you when its turn ends. wait: atto agent wait %s · new task: atto agent task %s \"...\" · message: atto agent send %s \"...\"\n", address, address, address)
-	return nil
-}
-
-func orDash(s string) string {
-	if s == "" {
-		return "-"
-	}
-	return s
-}
-
-// startTurn starts the next turn of st with message text, as a job of the
-// parent session, and saves st.
-func startTurn(st *agentstate.State, text string) error {
-	release, err := agentstate.StartWork(st.Session)
-	if err != nil {
-		return err
-	}
-	defer release()
-	return startTurnLocked(st, text)
-}
-
-func startTurnLocked(st *agentstate.State, text string) error {
-	exe, err := os.Executable()
-	if err != nil {
-		return err
-	}
-	st.Turns++
-	st.Prompt, st.Job = text, 0
-	if err := agentstate.Save(*st); err != nil {
-		return err
-	}
-	args := []string{exe, "_agent-turn", "-session", st.Parent, st.Name, fmt.Sprint(st.Turns)}
-	j, err := jobs.StartAgentArgs(st.Parent, st.Cwd, "agent "+st.Name, args)
-	if err != nil {
-		return fmt.Errorf("starting agent %s: %w", st.Name, err)
-	}
-	st.Job = j.ID
-	return agentstate.Save(*st)
-}
-
-// sessionModel is the model (provider/id) and effort session id last
-// used, "" when it can't be read.
-func sessionModel(id string) (model, effort string) {
-	path, err := session.Find(id)
-	if err != nil {
-		return "", ""
-	}
-	saved, err := core.Read(path)
-	if err != nil {
-		return "", ""
-	}
-	model, effort = saved.Model, saved.Effort
-	return model, effort
-}
-
-// agentModel picks an agent's model and effort: its role's, else
-// settings.json's agents.model and .effort, else what the parent
-// session uses. A model or effort named in a preset or the settings must
-// exist; one inherited from the parent that the model doesn't offer gives
-// way to the default.
-func agentModel(models config.ModelsFile, settings config.Settings, p agentstate.Preset, parentModel, parentEffort string) (config.ModelRef, string, error) {
-	cfgModel, cfgEffort := settings.AgentDefaults()
-	model, from := p.Model, "role "+p.Name
-	if model == "" && cfgModel != "" {
-		model, from = cfgModel, "settings agents.model"
-	}
-	ref, _, err := core.PickModelFrom(models, settings, model, parentModel)
-	if err != nil {
-		if model != "" {
-			return ref, "", fmt.Errorf("%s: %w", from, err)
-		}
-		return ref, "", err
-	}
-	effort, from := p.Effort, "role "+p.Name
-	if effort == "" && cfgEffort != "" {
-		effort, from = cfgEffort, "settings agents.effort"
-	}
-	if effort != "" {
-		if err := core.CheckEffort(ref, effort); err != nil {
-			return ref, "", fmt.Errorf("%s: %w", from, err)
-		}
-		return ref, effort, nil
-	}
-	cands := []string{parentEffort, settings.DefaultEffort, core.DefaultEffort}
-	if lv := ref.Model.Levels(); len(lv) > 0 {
-		cands = append(cands, lv[0])
-	}
-	for _, e := range cands {
-		if e != "" && core.CheckEffort(ref, e) == nil {
-			return ref, e, nil
-		}
-	}
-	return ref, "", nil
-}
-
-// takeFinalAnswer removes from parent's inbox the final answers of st that
-// wait there: its report says the same, once.
-func takeFinalAnswer(parent string, st agentstate.State) {
+// takeFinalAnswer removes from the inbox of st's parent the final answers of
+// st that wait there: its report says the same, once.
+func takeFinalAnswer(st agentstate.State) {
+	parent := st.Parent
 	if parent == "" {
-		parent = st.Parent
+		return // a root has no recipient
 	}
 	evs := events.Drain(parent)
 	var keep []events.Event
-	mark := "◆ agent " + agentstate.PathOf(st.Session) + " "
+	mark := "◆ agent " + st.Path + " "
 	for _, e := range evs {
 		if e.Source == "agent" && strings.HasPrefix(e.Title, mark) {
 			continue
@@ -711,11 +590,19 @@ func takeFinalAnswer(parent string, st agentstate.State) {
 	events.Requeue(parent, keep)
 }
 
+// refreshed is st as the agent's record has it now.
+func refreshed(st agentstate.State) agentstate.State {
+	if cur, err := agentstate.Load(st.Session); err == nil {
+		return cur
+	}
+	return st
+}
+
 // agentWait blocks until the first of cands that is running ends, then
 // prints its report.
-func agentWait(out io.Writer, parent string, cands []agentstate.State, timeout time.Duration, jsonOut bool) error {
+func agentWait(out io.Writer, c caller, cands []agentstate.State, timeout time.Duration, jsonOut bool) error {
 	if len(cands) == 1 && !cands[0].Latest().Status.Active() {
-		takeFinalAnswer(parent, cands[0])
+		takeFinalAnswer(cands[0])
 		return writeAgentReport(out, cands[0], jsonOut) // already over
 	}
 	var running []agentstate.State
@@ -729,9 +616,11 @@ func agentWait(out io.Writer, parent string, cands []agentstate.State, timeout t
 	}
 	start := time.Now()
 	for {
-		for _, s := range running {
+		for i, s := range running {
+			s = refreshed(s)
+			running[i] = s
 			if !s.Latest().Status.Active() {
-				takeFinalAnswer(parent, s)
+				takeFinalAnswer(s)
 				return writeAgentReport(out, s, jsonOut)
 			}
 		}
@@ -739,7 +628,7 @@ func agentWait(out io.Writer, parent string, cands []agentstate.State, timeout t
 			fmt.Fprintf(out, "still running after %s: %s\n", timeout, stateNames(running))
 			return ExitCode(124)
 		}
-		if parent != "" && events.WokenSince(parent, start) {
+		if c.session != "" && events.WokenSince(c.session, start) {
 			fmt.Fprintf(out, "stopped waiting: the user sent a message. still running: %s\n", stateNames(running))
 			return nil
 		}
@@ -760,7 +649,7 @@ func stateNames(sts []agentstate.State) string {
 func agentReport(st agentstate.State) string {
 	t := st.Latest()
 	var b strings.Builder
-	fmt.Fprintf(&b, "agent %s · turn %d %s", agentstate.PathOf(st.Session), t.N, t.Status)
+	fmt.Fprintf(&b, "agent %s · turn %d %s", agentLabel(st), t.N, t.Status)
 	if d := t.Duration(); d > 0 {
 		fmt.Fprintf(&b, " · %s", tui.FormatDuration(d))
 	}
@@ -773,6 +662,9 @@ func agentReport(st agentstate.State) string {
 	fmt.Fprintf(&b, "\n%s · session %s\n", st.Model, st.Session)
 	if st.Worktree != "" {
 		fmt.Fprintf(&b, "worktree %s · branch %s\n", st.Worktree, st.Branch)
+	}
+	if st.SpawnedBy != nil {
+		fmt.Fprintf(&b, "started by %s\n", spawnedByText(st.SpawnedBy))
 	}
 	if t.Error != "" {
 		fmt.Fprintf(&b, "error: %s\n", t.Error)
@@ -801,73 +693,87 @@ func writeAgentReport(out io.Writer, st agentstate.State, jsonOut bool) error {
 		Out    int `json:"out"`
 	}
 	t := st.Latest()
+	owner, job := st.JobRef()
 	return json.NewEncoder(out).Encode(struct {
-		Name     string            `json:"name"`
-		Status   agentstate.Status `json:"status"`
-		Turn     int               `json:"turn"`
-		Duration float64           `json:"duration"`
-		Tokens   tokens            `json:"tokens"`
-		Cost     float64           `json:"cost,omitempty"`
-		Session  string            `json:"session"`
-		Model    string            `json:"model"`
-		Message  string            `json:"message"`
-		Error    string            `json:"error,omitempty"`
-		Worktree string            `json:"worktree,omitempty"`
-		Branch   string            `json:"branch,omitempty"`
-	}{st.Name, t.Status, t.N, t.Duration().Seconds(), tokens{t.PromptTokens, t.CachedTokens, t.OutputTokens}, t.Cost, st.Session, st.Model, session.LastAssistant(st.Session), t.Error, st.Worktree, st.Branch})
+		Name      string               `json:"name"`
+		Status    agentstate.Status    `json:"status"`
+		Turn      int                  `json:"turn"`
+		Duration  float64              `json:"duration"`
+		Tokens    tokens               `json:"tokens"`
+		Cost      float64              `json:"cost,omitempty"`
+		Session   string               `json:"session"`
+		Model     string               `json:"model"`
+		Message   string               `json:"message"`
+		Error     string               `json:"error,omitempty"`
+		Worktree  string               `json:"worktree,omitempty"`
+		Branch    string               `json:"branch,omitempty"`
+		Path      string               `json:"path"`
+		Parent    string               `json:"parent,omitempty"`
+		Root      string               `json:"root"`
+		Depth     int                  `json:"depth"`
+		Role      string               `json:"role,omitempty"`
+		Project   string               `json:"project,omitempty"`
+		Origin    string               `json:"origin,omitempty"`
+		Lifecycle agentstate.Lifecycle `json:"lifecycle"`
+		JobOwner  string               `json:"jobOwner,omitempty"`
+		Job       int                  `json:"job,omitempty"`
+		SpawnedBy *session.SpawnedBy   `json:"spawnedBy,omitempty"`
+	}{st.Name, t.Status, t.N, t.Duration().Seconds(), tokens{t.PromptTokens, t.CachedTokens, t.OutputTokens}, t.Cost, st.Session, st.Model, session.LastAssistant(st.Session), t.Error, st.Worktree, st.Branch,
+		st.Path, st.Parent, st.Root, st.Depth, st.Preset, st.Project, st.Origin, st.Lifecycle, owner, job, st.SpawnedBy})
 }
 
-func agentList(out io.Writer, parent string) error {
+// spawnedByText is who started an agent, compactly: "sol·high t3".
+func spawnedByText(b *session.SpawnedBy) string { return b.Brief() }
+
+func agentList(out io.Writer, c caller) error {
+	if c.implicit() {
+		return agentListRows(out, c, outsideRows(externalProjectHere()))
+	}
+	return agentListRows(out, c, agentstate.Tree(c.session))
+}
+
+func agentListAll(out io.Writer) error {
+	return agentListRows(out, caller{outside: true}, outsideRows(""))
+}
+
+// outsideRows are the agents started from a shell in project ("": any) and
+// everything below them, each root followed by its tree.
+func outsideRows(project string) []agentstate.State {
 	var rows []agentstate.State
-	var walk func(p string)
-	walk = func(p string) {
-		for _, s := range agentstate.List(p) {
-			rows = append(rows, s)
-			walk(s.Session)
-		}
+	for _, root := range agentstate.ExternalRoots(project, false) {
+		rows = append(rows, root)
+		rows = append(rows, agentstate.Tree(root.Session)...)
 	}
-	walk(parent)
-	return agentListRows(out, parent, rows)
+	return rows
 }
 
-func agentListAll(out io.Writer) error { return agentListExternal(out, true) }
-
-func agentListExternal(out io.Writer, all bool) error {
-	rows, err := externalAgents(all, false)
-	if err != nil {
-		return err
-	}
-	return agentListRows(out, "", rows)
-}
-
-func agentListRows(out io.Writer, parent string, rows []agentstate.State) error {
+func agentListRows(out io.Writer, c caller, rows []agentstate.State) error {
 	if len(rows) == 0 {
 		fmt.Fprintln(out, "no agents")
-		return listAgentWorkers(out, parent, rows)
+		return listAgentWorkers(out, c.session, rows)
 	}
 	tw := tabwriter.NewWriter(out, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(tw, "AGENT\tID\tADDRESS\tROLE\tMODEL\tSTATUS\tTURN\tTASK")
+	fmt.Fprintln(tw, "AGENT\tID\tADDRESS\tROLE\tMODEL\tSTATUS\tTURN\tBY\tTASK")
 	for _, s := range rows {
 		t := s.Latest()
 		d := "-"
 		if t.Duration() > 0 {
 			d = tui.FormatDuration(t.Duration())
 		}
-		fmt.Fprintf(tw, "%s\t%s\t@%s\t%s\t%s\t%s\t%s\t%s\n", agentstate.PathOf(s.Session), agentstate.ShortID(s.Session), agentstate.ShortID(s.Session), s.Preset, s.Model, t.Status, d, tui.Truncate(tui.FirstLineWithEllipsis(s.Task), 60, "…"))
+		fmt.Fprintf(tw, "%s\t%s\t@%s\t%s\t%s\t%s\t%s\t%s\t%s\n", agentstate.Label(s, c.outside), agentstate.ShortID(s.Session), agentstate.ShortID(s.Session), s.Preset, s.Model, t.Status, d, spawnedByText(s.SpawnedBy), tui.Truncate(tui.FirstLineWithEllipsis(s.Task), 60, "…"))
 	}
 	if err := tw.Flush(); err != nil {
 		return err
 	}
 	for _, s := range rows {
 		if s.Worktree != "" {
-			fmt.Fprintf(out, "%s: worktree %s · branch %s\n", agentstate.PathOf(s.Session), s.Worktree, s.Branch)
+			fmt.Fprintf(out, "%s: worktree %s · branch %s\n", agentstate.Label(s, c.outside), s.Worktree, s.Branch)
 		}
 	}
-	return listAgentWorkers(out, parent, rows)
+	return listAgentWorkers(out, c.session, rows)
 }
 
-// listAgentWorkers adds execution state for sessions represented in the tree;
-// legacy agent turns keep their existing state and control path.
+// listAgentWorkers adds execution state for sessions represented in the tree.
 func listAgentWorkers(out io.Writer, parent string, rows []agentstate.State) error {
 	if !daemon.Enabled() {
 		return nil
@@ -877,7 +783,7 @@ func listAgentWorkers(out io.Writer, parent string, rows []agentstate.State) err
 		return err
 	}
 	for _, w := range workers {
-		if w.Session != parent && !slices.ContainsFunc(rows, func(st agentstate.State) bool { return st.Session == w.Session }) {
+		if w.Session != parent && !containsSession(rows, w.Session) {
 			continue
 		}
 		state := "idle"
@@ -889,141 +795,17 @@ func listAgentWorkers(out io.Writer, parent string, rows []agentstate.State) err
 	return nil
 }
 
+func containsSession(rows []agentstate.State, id string) bool {
+	for _, st := range rows {
+		if st.Session == id {
+			return true
+		}
+	}
+	return false
+}
+
 // ExitCode makes atto exit with this status after what the command
 // printed, and print nothing more.
 type ExitCode int
 
 func (e ExitCode) Error() string { return fmt.Sprintf("exit status %d", int(e)) }
-
-// RunAgentTurn is the hidden entry point of an agent's turn (atto
-// _agent-turn -session <parent> <name> <turn>), started by atto agent as
-// a job of the parent session. It runs the turn as
-// atto -p resuming the agent's session, records how it went and tells
-// the parent. It exits 0 once it has told the parent, however the turn
-// went.
-func RunAgentTurn(args []string, _ io.Writer) error {
-	fs := newFlags("_agent-turn")
-	parent := fs.String("session", "", "")
-	if err := fs.Parse(args); err != nil || fs.NArg() != 2 || *parent == "" {
-		return fmt.Errorf("usage: atto _agent-turn -session <parent> <name> <turn> (started by atto agent)")
-	}
-	name := fs.Arg(0)
-	st, err := agentstate.Load(*parent, name)
-	if err != nil {
-		return err
-	}
-	if fmt.Sprint(st.Turns) != fs.Arg(1) {
-		return fmt.Errorf("agent %s is at turn %d, not %s", name, st.Turns, fs.Arg(1))
-	}
-	t := agentstate.Turn{N: st.Turns, Status: agentstate.Queued, Queued: time.Now()}
-	_ = agentstate.SaveTurn(*parent, name, t)
-
-	sigCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
-	ctx, cancel := context.WithCancelCause(sigCtx)
-	defer cancel(nil)
-	go watchAgentInterrupt(ctx, st, cancel)
-	if errors.Is(context.Cause(ctx), agent.ErrUserInterrupt) { // stopped while queued
-		t.Status, t.Ended = agentstate.Stopped, time.Now()
-		return agentstate.SaveTurn(*parent, name, t)
-	}
-	t.Status, t.Started = agentstate.Running, time.Now()
-	_ = agentstate.SaveTurn(*parent, name, t)
-
-	var res printResult
-	runErr := RunPrint(PrintOptions{
-		Prompt: st.Prompt, Model: st.Model, Effort: st.Effort, Resume: st.Session, Format: "text", Verbose: true,
-		Worker: &agent.Worker{Name: name, Preset: st.Preset, Instructions: st.Instructions, Worktree: st.Worktree, Branch: st.Branch,
-			Path: agentstate.PathOf(st.Session), Parent: agentstate.PathOf(*parent)},
-		done: func(r printResult) { res = r }, turnContext: ctx,
-	})
-	t.Ended = time.Now()
-	t.PromptTokens, t.CachedTokens, t.OutputTokens = res.Usage.InputTokens, res.Usage.CachedInputTokens, res.Usage.OutputTokens
-	t.Cost, t.Steps = res.cost, res.NumSteps
-	t.Status = agentstate.Done
-	switch {
-	case errors.Is(context.Cause(ctx), agent.ErrUserInterrupt):
-		t.Status = agentstate.Stopped
-	case res.Error != "":
-		t.Status, t.Error = agentstate.Failed, res.Error
-	case runErr != nil && !errors.Is(runErr, ErrPrintFailed):
-		t.Status, t.Error = agentstate.Failed, runErr.Error()
-	}
-	releaseTurn, err := agentstate.LockTurn(st.Parent, st.Name)
-	if err != nil {
-		return err
-	}
-	defer releaseTurn()
-	// The answer first: a wait that sees the turn over takes it from the
-	// inbox, so it is not delivered twice.
-	if err := events.Push(*parent, turnEvent(st, t)); err != nil {
-		return err
-	}
-	if err := agentstate.SaveTurn(*parent, name, t); err != nil {
-		return err
-	}
-	if t.Status == agentstate.Stopped {
-		return nil
-	}
-	// Tasks accepted after the final poll need a successor, not an idle inbox.
-	_, evs := events.SplitReload(core.Poll(st.Session))
-	if !events.Wakes(evs) {
-		events.Requeue(st.Session, evs)
-		return nil
-	}
-	if err := startTurn(&st, events.Format(evs)); err != nil {
-		events.Requeue(st.Session, evs)
-		return err
-	}
-	return nil
-}
-
-// watchAgentInterrupt handles the portable, per-turn control request while
-// a worker waits for a slot, a model response, or a running shell command.
-func watchAgentInterrupt(ctx context.Context, st agentstate.State, cancel context.CancelCauseFunc) {
-	tick := time.NewTicker(50 * time.Millisecond)
-	defer tick.Stop()
-	for {
-		if agentstate.Interrupted(st.Parent, st.Name, st.Turns) {
-			cancel(agent.ErrUserInterrupt)
-			return
-		}
-		select {
-		case <-ctx.Done():
-			return
-		case <-tick.C:
-		}
-	}
-}
-
-// finalAnswerMax caps the answer a turn's end delivers; the rest is in
-// atto agent report.
-const finalAnswerMax = 8000
-
-// turnEvent tells the parent session that an agent's turn ended, with its
-// final answer, as codex delivers FINAL_ANSWER.
-func turnEvent(st agentstate.State, t agentstate.Turn) events.Event {
-	from, to := agentstate.PathOf(st.Session), agentstate.PathOf(st.Parent)
-	what := "finished"
-	if t.Status == agentstate.Failed {
-		what = "failed"
-	} else if t.Status == agentstate.Stopped {
-		what = "stopped"
-	}
-	detail := tui.FormatDuration(t.Duration())
-	if n := t.PromptTokens + t.OutputTokens; n > 0 {
-		detail += ", " + tui.FormatTokens(n) + " tokens"
-	}
-	body := fmt.Sprintf("Turn %d %s (%s).", t.N, what, detail)
-	if t.Error != "" {
-		body += " Error: " + t.Error
-	}
-	if msg := session.LastAssistant(st.Session); msg != "" {
-		if len(msg) > finalAnswerMax {
-			msg = msg[:finalAnswerMax] + fmt.Sprintf("\n[cut: atto agent report %s has all of it]", from)
-		}
-		body += "\n\n" + msg
-	}
-	return events.Event{Source: "agent", Text: agentstate.Envelope(agentstate.FinalAnswer, from, to, body),
-		Title: fmt.Sprintf("◆ agent %s %s after %s", from, what, tui.FormatDuration(t.Duration()))}
-}

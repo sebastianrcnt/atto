@@ -230,7 +230,7 @@ func TestJobsAndAgents(t *testing.T) {
 	if err := agentstate.Create(st); err != nil {
 		t.Fatal(err)
 	}
-	agentstate.SaveTurn(id, "scout", agentstate.Turn{N: 1, Status: agentstate.Done, Started: start, Ended: end, PromptTokens: 50, OutputTokens: 9})
+	agentstate.SaveTurn(w.ID, agentstate.Turn{N: 1, Status: agentstate.Done, Started: start, Ended: end, PromptTokens: 50, OutputTokens: 9})
 	subs := call(t, s, "agent/list", map[string]any{"threadId": id})["agents"].([]any)
 	if len(subs) != 1 {
 		t.Fatalf("agent/list %v", subs)

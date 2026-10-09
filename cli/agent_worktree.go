@@ -13,19 +13,21 @@ import (
 )
 
 // An agent started with -worktree works in a git worktree of its own,
-// on a new branch made from the parent's HEAD, so agents editing files
-// at the same time don't clobber each other or the parent's checkout.
+// on a new branch made from the spawning checkout's HEAD, so agents editing
+// files at the same time don't clobber each other or that checkout.
 //
-// The worktree lives under the atto dir (<atto dir>/worktrees/<parent>/
-// <name>), not in the project: nothing shows up in the parent's git
-// status, editor or searches, no .gitignore entry is needed, and the path
-// stays short on Windows. The branch is atto/<parent>/<name>: session IDs
-// are short, and the parent's part keeps names reused by other sessions
-// (or after rm, which keeps the branch) from colliding.
+// The worktree lives under the atto dir (<atto dir>/worktrees/<session ID>),
+// not in the project: nothing shows up in the project's git status, editor
+// or searches, no .gitignore entry is needed, and the path stays short on
+// Windows. The branch is atto/<session ID>. The ID is chosen before any git
+// work, and never reused, so closing an agent and reusing its name cannot
+// collide with the branch it kept. Worktrees and branches of agents started
+// before (worktrees/<parent>/<name>, atto/<parent>/<name>) keep their paths
+// and names: they are recorded with the agent and always used from there.
 
 // worktree is where a new agent's worktree goes.
 type worktree struct {
-	Repo   string // the parent's repository (top level)
+	Repo   string // the spawning checkout's repository (top level)
 	Path   string // the worktree
 	Cwd    string // the agent's directory in it: the parent's, relatively
 	Branch string
@@ -48,15 +50,13 @@ func git(dir string, args ...string) (string, error) {
 	return strings.TrimRight(stdout.String(), "\r\n"), nil
 }
 
-func worktreeBranch(parent, name string) string { return "atto/" + parent + "/" + name }
+func worktreeBranch(id string) string { return "atto/" + id }
 
-func worktreePath(parent, name string) string {
-	return filepath.Join(config.Dir(), "worktrees", parent, name)
-}
+func worktreePath(id string) string { return filepath.Join(config.Dir(), "worktrees", id) }
 
-// planWorktree checks that a worktree for agent name can be made from
-// cwd's repository and says where it would go.
-func planWorktree(cwd, parent, name string) (worktree, error) {
+// planWorktree checks that a worktree for the agent with session id can be
+// made from cwd's repository and says where it would go.
+func planWorktree(cwd, id string) (worktree, error) {
 	if _, err := exec.LookPath("git"); err != nil {
 		return worktree{}, fmt.Errorf("-worktree needs git: %v", err)
 	}
@@ -70,16 +70,16 @@ func planWorktree(cwd, parent, name string) (worktree, error) {
 	if err != nil || base == "" {
 		return worktree{}, fmt.Errorf("-worktree: the repository at %s has no commits yet", repo)
 	}
-	w := worktree{Repo: repo, Path: worktreePath(parent, name), Branch: worktreeBranch(parent, name), Base: base}
+	w := worktree{Repo: repo, Path: worktreePath(id), Branch: worktreeBranch(id), Base: base}
 	w.Cwd = filepath.Join(w.Path, filepath.FromSlash(prefix))
 	if _, err := git(cwd, "check-ref-format", "--branch", w.Branch); err != nil {
 		return worktree{}, fmt.Errorf("-worktree: %q is not a valid branch name", w.Branch)
 	}
 	if _, err := git(cwd, "rev-parse", "--verify", "--quiet", "refs/heads/"+w.Branch); err == nil {
-		return worktree{}, fmt.Errorf("-worktree: branch %s exists (from an earlier agent?): merge or delete it (git branch -D %s), or pick another name", w.Branch, w.Branch)
+		return worktree{}, fmt.Errorf("-worktree: branch %s exists: merge or delete it (git branch -D %s)", w.Branch, w.Branch)
 	}
 	if _, err := os.Stat(w.Path); err == nil {
-		return worktree{}, fmt.Errorf("-worktree: %s exists: remove it (git worktree remove %s), or pick another name", w.Path, w.Path)
+		return worktree{}, fmt.Errorf("-worktree: %s exists: remove it (git worktree remove %s)", w.Path, w.Path)
 	}
 	return w, nil
 }
@@ -99,7 +99,16 @@ func (w worktree) create() error {
 func (w worktree) undo() {
 	_, _ = git(w.Repo, "worktree", "remove", "--force", w.Path)
 	_, _ = git(w.Repo, "branch", "-D", w.Branch)
-	_ = os.Remove(filepath.Dir(w.Path))
+	pruneWorktreeParent(w.Path)
+}
+
+// pruneWorktreeParent removes the directory of a worktree made under a
+// parent's name (the old layout) once it is empty. Never worktrees/ itself.
+func pruneWorktreeParent(path string) {
+	parent := filepath.Dir(path)
+	if parent != filepath.Join(config.Dir(), "worktrees") {
+		_ = os.Remove(parent)
+	}
 }
 
 // worktreeDirt is what keeps st's worktree from being removed: git
@@ -139,7 +148,7 @@ func removeWorktree(st agentstate.State, force bool) (string, error) {
 	} else {
 		_, _ = git(st.Repo, "worktree", "prune")
 	}
-	_ = os.Remove(filepath.Dir(st.Worktree)) // the parent's directory, once empty
+	pruneWorktreeParent(st.Worktree) // the parent's directory of an old-layout worktree, once empty
 	if _, err := git(st.Repo, "rev-parse", "--verify", "--quiet", "refs/heads/"+st.Branch); err != nil {
 		return fmt.Sprintf("worktree %s removed; its branch %s is gone", st.Worktree, st.Branch), nil
 	}

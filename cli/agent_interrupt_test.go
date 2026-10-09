@@ -27,7 +27,7 @@ func TestAgentInterruptKeepsHostedCommand(t *testing.T) {
 	if _, err := runAgent(t, "spawn", "a", "work", "-session", "root"); err != nil {
 		t.Fatal(err)
 	}
-	st, err := agentstate.Load("root", "a")
+	st, err := agentstate.LoadChild("root", "a")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -89,7 +89,7 @@ func TestAgentInterruptForceStopsUnresponsiveWorker(t *testing.T) {
 	if err := agentstate.Save(st); err != nil {
 		t.Fatal(err)
 	}
-	if err := agentstate.SaveTurn(st.Parent, st.Name, agentstate.Turn{N: 1, Status: agentstate.Running, Started: time.Now()}); err != nil {
+	if err := agentstate.SaveTurn(st.Session, agentstate.Turn{N: 1, Status: agentstate.Running, Started: time.Now()}); err != nil {
 		t.Fatal(err)
 	}
 	child, err := jobs.Start(st.Session, t.TempDir(), "worker command", "sleep 30", nil, nil)

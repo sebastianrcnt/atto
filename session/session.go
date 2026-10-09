@@ -244,9 +244,14 @@ func newID() string {
 }
 
 // New prepares a writer for a fresh session in cwd.
-func New(cwd string) *Writer {
+func New(cwd string) *Writer { return newWithID(newID(), cwd) }
+
+// NewID chooses a session ID for something that will become a session, so
+// that what is made for it first (a worktree, a branch) can carry its name.
+func NewID() string { return newID() }
+
+func newWithID(id, cwd string) *Writer {
 	now := time.Now()
-	id := newID()
 	path := filepath.Join(config.SessionsDir(), now.Format("2006/01/02"), now.Format("20060102-150405")+"-"+id+".jsonl")
 	return &Writer{ID: id, Path: path, cwd: cwd, created: now, branch: GitBranch(cwd)}
 }

@@ -82,7 +82,7 @@ func TestAgentReadSessionIDAddresses(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "ambiguous") || !strings.Contains(err.Error(), "@abcdef12") || !strings.Contains(err.Error(), "@abcdef56") || strings.Contains(err.Error(), "@abcdef34") {
 		t.Fatal("scoped ambiguity:", err)
 	}
-	if err := agentstate.Remove("root", "tests"); err != nil {
+	if err := agentstate.MarkClosed("abcdef12", ""); err != nil {
 		t.Fatal(err)
 	}
 	for _, method := range []string{"agent/read", "subagent/read"} {

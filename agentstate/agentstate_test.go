@@ -5,7 +5,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 )
 
 func write(t *testing.T, path, text string) {
@@ -78,39 +77,5 @@ func TestPresetsPrecedence(t *testing.T) {
 	}
 	if _, err := Find(ps, "nope"); err == nil || !strings.Contains(err.Error(), "presets: general") {
 		t.Fatalf("find: %v", err)
-	}
-}
-
-func TestStateUniqueAndTurnStatus(t *testing.T) {
-	t.Setenv("ATTO_DIR", t.TempDir())
-	s := State{Name: "a", Parent: "p1", Session: "c1", Created: time.Now()}
-	if err := Create(s); err != nil {
-		t.Fatal(err)
-	}
-	if err := Create(s); err == nil || !strings.Contains(err.Error(), "exists") {
-		t.Fatalf("second create: %v", err)
-	}
-	if err := Create(State{Name: "../x", Parent: "p1"}); err == nil {
-		t.Fatal("bad name saved")
-	}
-	if _, err := Load("p1", "b"); err == nil {
-		t.Fatal("loaded a missing agent")
-	}
-	got, err := Load("p1", "a")
-	if err != nil || got.Latest().Status != Idle {
-		t.Fatalf("load %+v %v", got, err)
-	}
-	// A turn without a job never started.
-	got.Turns = 1
-	if st := got.Latest(); st.Status != Failed {
-		t.Fatalf("status %+v", st)
-	}
-	_ = SaveTurn("p1", "a", Turn{N: 1, Status: Done, Started: time.Now().Add(-time.Minute), Ended: time.Now()})
-	got.Job = 99 // a job that doesn't exist: the turn's own record is kept only for a live one
-	if st := got.Latest(); st.Status != Failed {
-		t.Fatalf("status %+v", st)
-	}
-	if l := List("p1"); len(l) != 1 || l[0].Name != "a" {
-		t.Fatalf("list %+v", l)
 	}
 }

@@ -44,8 +44,11 @@ var listSaved = func() []session.Summary {
 		}
 	}
 	for _, s := range archived {
-		if s.AgentOf != "" {
-			needed[s.ID], needed[s.AgentOf] = true, true
+		if s.IsAgent() { // a closed root started from a shell has no parent to connect
+			needed[s.ID] = true
+			if s.AgentOf != "" {
+				needed[s.AgentOf] = true
+			}
 		}
 	}
 	for changed := true; changed; {
@@ -63,6 +66,16 @@ var listSaved = func() []session.Summary {
 	}
 	slices.SortStableFunc(active, func(x, y session.Summary) int { return y.Updated.Compare(x.Updated) })
 	return active
+}
+
+// shellRootOf says whether a saved session is an agent started from a shell
+// (a root with no parent) and its project; closed ones are known by their
+// header alone.
+func shellRootOf(s session.Summary) (bool, string) {
+	if s.Agent == nil || !s.Agent.IsRoot() || s.Agent.Origin != session.OriginExternal {
+		return false, ""
+	}
+	return true, s.Agent.Project
 }
 
 // centerRefresh is how often the open center reloads.
@@ -92,7 +105,13 @@ type centerItem struct {
 	updated                        time.Time
 	parent, agentPath, role, model string
 	external, archived             bool
-	turn                           *agentstate.Turn
+	// shell: an agent started from a shell, the root of a tree of its own;
+	// virtual: a display group with no session behind it (the heading those
+	// agents are shown under); isAgent: a managed agent, whatever its parent.
+	shell, virtual, isAgent bool
+	projectRoot             string
+	spawnedBy               *session.SpawnedBy
+	turn                    *agentstate.Turn
 	// Tree-only presentation fields, populated by centerTree.
 	depth           int
 	prefix, project string
@@ -279,12 +298,14 @@ func (c *agentCenter) apply(snapshot centerSnapshot) {
 					}
 					items[j].branch, items[j].prompt, items[j].model = s.Branch, s.Preview, s.Model
 					items[j].updated = s.Updated
-					items[j].parent, items[j].external, items[j].archived = s.AgentOf, s.External, s.Archived
+					items[j].parent, items[j].external, items[j].archived, items[j].isAgent = s.AgentOf, s.External, s.Archived, s.IsAgent()
+					items[j].shell, items[j].projectRoot = shellRootOf(s)
 				}
 			}
 			continue
 		}
-		items = append(items, centerItem{id: s.ID, title: title, cwd: s.Cwd, branch: s.Branch, prompt: s.Preview, model: s.Model, updated: s.Updated, tab: tabInactive, parent: s.AgentOf, external: s.External, archived: s.Archived})
+		items = append(items, centerItem{id: s.ID, title: title, cwd: s.Cwd, branch: s.Branch, prompt: s.Preview, model: s.Model, updated: s.Updated, tab: tabInactive, parent: s.AgentOf, external: s.External, archived: s.Archived, isAgent: s.IsAgent()})
+		items[len(items)-1].shell, items[len(items)-1].projectRoot = shellRootOf(s)
 	}
 	// Enrich from the same state and Latest turn used by atto agent list.
 	// State can precede a session's first write, or outlive its parent.
@@ -301,6 +322,8 @@ func (c *agentCenter) apply(snapshot centerSnapshot) {
 		it := &items[j]
 		it.parent, it.title, it.prompt = st.Parent, st.Name, st.Task
 		it.role, it.model, it.turn = st.Preset, st.Model, &turn
+		it.isAgent, it.spawnedBy, it.projectRoot = true, st.SpawnedBy, st.Project
+		it.shell = st.IsRoot() && st.Origin == session.OriginExternal
 		if st.Branch != "" {
 			it.branch = st.Branch
 		}
@@ -317,7 +340,9 @@ func (c *agentCenter) apply(snapshot centerSnapshot) {
 		}
 	}
 	if c.scope != "" {
-		items = slices.DeleteFunc(items, func(it centerItem) bool { return !session.SameDir(it.cwd, c.scope) || it.archived || it.parent != "" })
+		items = slices.DeleteFunc(items, func(it centerItem) bool {
+			return !session.SameDir(it.cwd, c.scope) || it.archived || it.parent != "" || it.isAgent
+		})
 	}
 	c.items = items
 	c.reorder()
@@ -383,6 +408,9 @@ func (c *agentCenter) shown() []centerItem {
 		parents[it.id] = it.parent
 	}
 	for _, it := range tree {
+		if it.virtual { // a heading follows its agents
+			continue
+		}
 		if c.tab != tabAll && it.tab != c.tab {
 			continue
 		}
@@ -576,6 +604,9 @@ func (c *agentCenter) HandleInput(data string) {
 			return
 		}
 		it := sh[c.sel]
+		if it.virtual { // a heading is no session
+			return
+		}
 		c.picking = true
 		c.close()
 		switch {
@@ -799,6 +830,13 @@ func (c *agentCenter) renderDetail(it centerItem, width int) []string {
 	if it.agentPath != "" {
 		out = append(out, wrap(it.agentPath)...)
 		out = append(out, wrap(strings.Join(slices.DeleteFunc([]string{it.role, it.model}, func(s string) bool { return s == "" }), " · "))...)
+		if it.spawnedBy != nil { // tracking, not proof
+			text := "Started by: " + it.spawnedBy.Brief()
+			if it.spawnedBy.ToolCallID != "" {
+				text += " · call " + it.spawnedBy.ToolCallID
+			}
+			out = append(out, wrap(text)...)
+		}
 		if it.turn != nil {
 			t := it.turn
 			if t.PromptTokens+t.OutputTokens > 0 {

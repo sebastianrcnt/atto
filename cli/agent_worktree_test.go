@@ -71,15 +71,21 @@ func TestAgentWorktree(t *testing.T) {
 	t.Setenv(config.EnvAgent, "1")
 
 	out, err := runAgent(t, "start", "w1", "general", "make", "a", "file", "-worktree", "-session", parent)
-	wt := filepath.Join(config.Dir(), "worktrees", parent, "w1")
-	if err != nil || !strings.Contains(out, "worktree "+wt+" on branch atto/p1/w1") {
+	w1, lerr := agentstate.LoadChild(parent, "w1")
+	if lerr != nil {
+		t.Fatalf("start: %q %v", out, err)
+	}
+	// New worktrees and branches are named by the agent's session ID.
+	wt := filepath.Join(config.Dir(), "worktrees", w1.Session)
+	branch1 := "atto/" + w1.Session
+	if err != nil || !strings.Contains(out, "worktree "+wt+" on branch "+branch1) {
 		t.Fatalf("start: %q %v", out, err)
 	}
 	if out, err := runAgent(t, "wait", "w1", "-timeout", "30s", "-session", parent); err != nil || !strings.Contains(out, "made it") {
 		t.Fatalf("wait: %q %v", out, err)
 	}
-	st, err := agentstate.Load(parent, "w1")
-	if err != nil || st.Worktree != wt || st.Branch != "atto/p1/w1" || st.Cwd != filepath.Join(wt, "sub") {
+	st, err := agentstate.LoadChild(parent, "w1")
+	if err != nil || st.Worktree != wt || st.Branch != branch1 || st.Cwd != filepath.Join(wt, "sub") {
 		t.Fatalf("state: %+v %v", st, err)
 	}
 	// Its session and commands work in the worktree, at the parent's place in it.
@@ -96,24 +102,24 @@ func TestAgentWorktree(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(repo, "sub", "made.txt")); !os.IsNotExist(err) {
 		t.Fatalf("made in the parent's checkout: %v", err)
 	}
-	if got := mustGit(t, wt, "branch", "--show-current"); got != "atto/p1/w1" {
+	if got := mustGit(t, wt, "branch", "--show-current"); got != branch1 {
 		t.Fatalf("worktree branch %q", got)
 	}
 	// It is told where it works and to commit there.
-	if b := bodies(); !strings.Contains(b[0], "own git worktree") || !strings.Contains(b[0], "on branch atto/p1/w1") || !strings.Contains(b[0], "commit your work there") {
+	if b := bodies(); !strings.Contains(b[0], "own git worktree") || !strings.Contains(b[0], "on branch "+branch1) || !strings.Contains(b[0], "commit your work there") {
 		t.Fatalf("agent prompt: %s", b[0])
 	}
 
 	// report, -json and list show the worktree and branch.
-	if out, _ := runAgent(t, "report", "w1", "-session", parent); !strings.Contains(out, "worktree "+wt+" · branch atto/p1/w1") {
+	if out, _ := runAgent(t, "report", "w1", "-session", parent); !strings.Contains(out, "worktree "+wt+" · branch "+branch1) {
 		t.Fatalf("report: %q", out)
 	}
 	out, _ = runAgent(t, "report", "w1", "-json", "-session", parent)
 	var r struct{ Worktree, Branch string }
-	if err := json.Unmarshal([]byte(out), &r); err != nil || r.Worktree != wt || r.Branch != "atto/p1/w1" {
+	if err := json.Unmarshal([]byte(out), &r); err != nil || r.Worktree != wt || r.Branch != branch1 {
 		t.Fatalf("report -json: %q %v", out, err)
 	}
-	if out, _ := runAgent(t, "list", "-session", parent); !strings.Contains(out, "w1: worktree "+wt+" · branch atto/p1/w1") {
+	if out, _ := runAgent(t, "list", "-session", parent); !strings.Contains(out, "/root/w1: worktree "+wt+" · branch "+branch1) {
 		t.Fatalf("list: %q", out)
 	}
 
@@ -121,15 +127,10 @@ func TestAgentWorktree(t *testing.T) {
 	if _, err := runAgent(t, "start", "w1", "general", "again", "-worktree", "-session", parent); err == nil || !strings.Contains(err.Error(), "exists") {
 		t.Fatalf("second start: %v", err)
 	}
-	mustGit(t, repo, "branch", "atto/p1/w2")
-	if _, err := runAgent(t, "start", "w2", "general", "x", "-worktree", "-session", parent); err == nil || !strings.Contains(err.Error(), "branch atto/p1/w2 exists") {
+	// An existing branch of the planned name refuses the spawn before anything is made.
+	mustGit(t, repo, "branch", "atto/abcd1234")
+	if _, err := planWorktree(filepath.Join(repo, "sub"), "abcd1234"); err == nil || !strings.Contains(err.Error(), "branch atto/abcd1234 exists") {
 		t.Fatalf("branch collision: %v", err)
-	}
-	if _, err := agentstate.Load(parent, "w2"); err == nil {
-		t.Fatal("a refused agent was saved")
-	}
-	if _, err := os.Stat(filepath.Join(config.Dir(), "worktrees", parent, "w2")); !os.IsNotExist(err) {
-		t.Fatalf("a refused worktree was made: %v", err)
 	}
 
 	// rm refuses while the worktree has uncommitted changes...
@@ -144,14 +145,28 @@ func TestAgentWorktree(t *testing.T) {
 	mustGit(t, wt, "add", ".")
 	mustGit(t, wt, "commit", "-q", "-m", "made")
 	out, err = runAgent(t, "rm", "w1", "-session", parent)
-	if err != nil || !strings.Contains(out, "branch atto/p1/w1 kept (1 new commit): merge it with git merge atto/p1/w1") || !strings.Contains(out, "closed agent /root/w1") {
+	if err != nil || !strings.Contains(out, "branch "+branch1+" kept (1 new commit): merge it with git merge "+branch1) || !strings.Contains(out, "closed agent /root/w1") {
 		t.Fatalf("rm clean: %q %v", out, err)
 	}
 	if _, err := os.Stat(wt); !os.IsNotExist(err) {
 		t.Fatalf("worktree kept: %v", err)
 	}
-	if !hasBranch(repo, "atto/p1/w1") {
+	if !hasBranch(repo, branch1) {
 		t.Fatal("branch removed")
+	}
+	// The name is free again; the new agent gets a new session, worktree and branch.
+	if out, err := runAgent(t, "start", "w1", "general", "again", "-worktree", "-session", parent); err != nil {
+		t.Fatalf("reusing a closed agent's name: %q %v", out, err)
+	}
+	again, _ := agentstate.LoadChild(parent, "w1")
+	if again.Session == w1.Session || again.Branch == branch1 || again.Worktree == wt || !hasBranch(repo, branch1) {
+		t.Fatalf("reused name: %+v", again)
+	}
+	if _, err := runAgent(t, "wait", "w1", "-timeout", "30s", "-session", parent); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runAgent(t, "rm", "w1", "-force", "-session", parent); err != nil {
+		t.Fatal(err)
 	}
 
 	// rm -done skips a dirty worktree; -force removes it.
@@ -161,24 +176,25 @@ func TestAgentWorktree(t *testing.T) {
 	if _, err := runAgent(t, "wait", "w3", "-timeout", "30s", "-session", parent); err != nil {
 		t.Fatal(err)
 	}
-	wt3 := filepath.Join(config.Dir(), "worktrees", parent, "w3")
+	w3, _ := agentstate.LoadChild(parent, "w3")
+	wt3, branch3 := w3.Worktree, w3.Branch
 	if _, err := runAgent(t, "rm", "-done", "-session", parent); err == nil || !strings.Contains(err.Error(), "agent w3") || !strings.Contains(err.Error(), "uncommitted") {
 		t.Fatalf("rm -done dirty: %v", err)
 	}
-	if _, err := agentstate.Load(parent, "w3"); err != nil {
+	if _, err := agentstate.LoadChild(parent, "w3"); err != nil {
 		t.Fatalf("dirty agent removed: %v", err)
 	}
 	out, err = runAgent(t, "rm", "-done", "-force", "-session", parent)
-	if err != nil || !strings.Contains(out, "branch atto/p1/w3 kept (0 new commits)") || !strings.Contains(out, "closed agent /root/w3") {
+	if err != nil || !strings.Contains(out, "branch "+branch3+" kept (0 new commits)") || !strings.Contains(out, "closed agent /root/w3") {
 		t.Fatalf("rm -done -force: %q %v", out, err)
 	}
 	if _, err := os.Stat(wt3); !os.IsNotExist(err) {
 		t.Fatalf("forced worktree kept: %v", err)
 	}
-	if !hasBranch(repo, "atto/p1/w3") {
+	if !hasBranch(repo, branch3) {
 		t.Fatal("branch removed")
 	}
-	if out := mustGit(t, repo, "worktree", "list"); strings.Contains(out, "w3") || strings.Contains(out, "w1") {
+	if out := mustGit(t, repo, "worktree", "list"); strings.Contains(out, w3.Session) || strings.Contains(out, w1.Session) {
 		t.Fatalf("worktrees still registered: %s", out)
 	}
 }
@@ -190,7 +206,7 @@ func TestAgentWorktreeNeedsGit(t *testing.T) {
 	if _, err := runAgent(t, "start", "a", "general", "x", "-worktree", "-session", "p1"); err == nil || !strings.Contains(err.Error(), "needs a git repository") {
 		t.Fatalf("outside git: %v", err)
 	}
-	if _, err := agentstate.Load("p1", "a"); err == nil {
+	if _, err := agentstate.LoadChild("p1", "a"); err == nil {
 		t.Fatal("agent saved")
 	}
 }
@@ -213,7 +229,7 @@ func TestAgentHelpAndWorktreePrompts(t *testing.T) {
 	if got := prompts.Render("agent_parent", map[string]any{"Presets": ""}); !strings.Contains(got, "add -worktree to give it its own git worktree and branch") {
 		t.Errorf("parent prompt: %q", got)
 	}
-	if got := prompts.Render("agent", prompts.Agent{Name: "w", Preset: "p"}); strings.Contains(got, "worktree") {
+	if got := prompts.Render("agent", prompts.Agent{Name: "w", Preset: "p", Path: "/root/w"}); strings.Contains(got, "worktree") {
 		t.Errorf("worktree clause without one: %q", got)
 	}
 }
@@ -232,11 +248,11 @@ func TestAgentCloseKeepsAncestorsOfFailedRemoval(t *testing.T) {
 		}
 	}
 	var out strings.Builder
-	if err := agentRemove(&out, "root", []string{"a"}, false, false); err == nil {
+	if err := agentRemove(&out, caller{session: "root"}, []string{"a"}, false, false); err == nil {
 		t.Fatal("locked worktree removal succeeded")
 	}
 	for _, s := range []agentstate.State{a, b} {
-		if _, err := agentstate.Load(s.Parent, s.Name); err != nil {
+		if _, err := agentstate.LoadChild(s.Parent, s.Name); err != nil {
 			t.Fatalf("ancestor/child removed: %v", err)
 		}
 	}
@@ -244,10 +260,10 @@ func TestAgentCloseKeepsAncestorsOfFailedRemoval(t *testing.T) {
 		t.Fatal("child unreachable:", err)
 	}
 	mustGit(t, repo, "worktree", "unlock", wt)
-	if err := agentRemove(&out, "root", []string{"a"}, false, false); err != nil {
+	if err := agentRemove(&out, caller{session: "root"}, []string{"a"}, false, false); err != nil {
 		t.Fatal("retry:", err)
 	}
-	if len(agentstate.List("root")) != 0 || len(agentstate.List(a.Session)) != 0 {
+	if len(agentstate.Children("root")) != 0 || len(agentstate.Children(a.Session)) != 0 {
 		t.Fatal("retry left state")
 	}
 }
@@ -262,14 +278,14 @@ func TestExternalSameLabelWorktreesHaveDistinctParentsAndBranches(t *testing.T) 
 		st, out := spawnExternalAgent(t, "panes", "-worktree")
 		states = append(states, st)
 		t.Cleanup(func() { _, _ = removeWorktree(st, true) })
-		if st.Branch != "atto/"+st.Parent+"/panes" || !strings.Contains(out, "atto agent close @"+st.Session) {
-			t.Fatalf("fresh-parent worktree: %+v %q", st, out)
+		if st.Branch != "atto/"+st.Session || st.Worktree != filepath.Join(config.Dir(), "worktrees", st.Session) || !strings.Contains(out, "atto agent close @"+st.Session) {
+			t.Fatalf("outside worktree: %+v %q", st, out)
 		}
 		if _, err := runAgent(t, "wait", "@"+st.Session, "-timeout", "30s"); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if states[0].Parent == states[1].Parent || states[0].Branch == states[1].Branch || states[0].Worktree == states[1].Worktree {
+	if states[0].Session == states[1].Session || states[0].Branch == states[1].Branch || states[0].Worktree == states[1].Worktree {
 		t.Fatalf("outside worktrees collided: %+v", states)
 	}
 	if out, err := runAgent(t, "list"); err != nil || !strings.Contains(out, "@"+states[0].Session) || !strings.Contains(out, "@"+states[1].Session) {
@@ -279,13 +295,14 @@ func TestExternalSameLabelWorktreesHaveDistinctParentsAndBranches(t *testing.T) 
 		t.Fatal("worktree labels should be project-wide:", err)
 	}
 	for _, st := range states {
-		path, err := session.Find(st.Parent)
+		// The project is recorded before the worktree is entered; the session works in the worktree.
+		path, err := session.Find(st.Session)
 		if err != nil {
 			t.Fatal(err)
 		}
 		h, _, err := session.Load(path)
-		if err != nil || h.Cwd != externalProject(repo) {
-			t.Fatalf("worktree parent project: %+v %v", h, err)
+		if err != nil || h.Agent == nil || h.Agent.Project != externalProject(repo) || h.Cwd != st.Cwd || h.Agent.SpawnCwd != filepath.Join(repo, "sub") {
+			t.Fatalf("worktree agent header: %+v %v", h, err)
 		}
 		if _, err := runAgent(t, "close", "@"+st.Session); err != nil {
 			t.Fatal(err)

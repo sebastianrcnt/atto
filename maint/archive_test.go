@@ -46,7 +46,7 @@ func TestBackupRestoreRoundTrip(t *testing.T) {
 			if e != nil {
 				t.Fatal(e)
 			}
-			if m.Version != "test-version" || m.Formats != supported() || m.Created.IsZero() || m.Hostname == "" || m.OS != runtime.GOOS || m.Source != root || m.Files < 10 || m.Bytes < 100 {
+			if m.Version != "test-version" || m.Formats != (Formats{Archive: ArchiveVersion, Session: supported().Session, AgentState: 1, Daemon: supported().Daemon}) || m.Created.IsZero() || m.Hostname == "" || m.OS != runtime.GOOS || m.Source != root || m.Files < 10 || m.Bytes < 100 {
 				t.Fatalf("manifest: %+v", m)
 			}
 			if secrets && !strings.Contains(out.String(), "WARNING") {

@@ -59,27 +59,21 @@ func background(method, sid string, p threadParams) (any, error) {
 	case "agent/tree":
 		root := agentstate.Root(sid)
 		out := []Agent{}
-		pending := []string{root}
-		seen := map[string]bool{root: true}
-		for len(pending) > 0 && len(seen) <= 1000 {
-			parent := pending[0]
-			pending = pending[1:]
-			for _, st := range agentstate.List(parent) {
-				if len(seen) >= 1000 {
-					break
-				}
-				if st.Session == "" || seen[st.Session] {
-					continue
-				}
-				seen[st.Session] = true
-				out = append(out, wireAgent(st))
-				pending = append(pending, st.Session)
+		// A root that is itself a managed agent (started from a shell) is part
+		// of the tree; an ordinary session is only its anchor.
+		if st, err := agentstate.Load(root); err == nil {
+			out = append(out, wireAgent(st))
+		}
+		for _, st := range agentstate.Tree(root) {
+			if len(out) >= 1000 {
+				break
 			}
+			out = append(out, wireAgent(st))
 		}
 		return map[string]any{"rootThreadId": root, "agents": out}, nil
 	case "agent/list", "subagent/list":
 		out := []Agent{}
-		for _, st := range agentstate.List(sid) {
+		for _, st := range agentstate.Children(sid) {
 			out = append(out, wireAgent(st))
 		}
 		result := map[string]any{"agents": out}
@@ -88,16 +82,26 @@ func background(method, sid string, p threadParams) (any, error) {
 		}
 		return result, nil
 	case "agent/read", "subagent/read":
-		st, err := agentstate.Load(sid, p.Name)
-		if strings.HasPrefix(p.Name, "@") || strings.Contains(p.Name, "/") || p.Name == ".." {
+		// An agent is named by its session ID (agentId, or "@<id>" as name) or by
+		// a name or path seen from this thread; either way it must be in this
+		// thread's tree.
+		addr := p.Name
+		if p.AgentID != "" {
+			addr = "@" + p.AgentID
+		}
+		var st agentstate.State
+		var err error
+		if strings.HasPrefix(addr, "@") || strings.Contains(addr, "/") || addr == ".." {
 			var target agentstate.Target
-			target, err = agentstate.Resolve(sid, p.Name)
+			target, err = agentstate.Resolve(sid, addr)
 			if err == nil {
 				if target.State == nil {
-					return nil, invalid("%q names the root session, not an agent", p.Name)
+					return nil, invalid("%q names the root session, not an agent", addr)
 				}
 				st = *target.State
 			}
+		} else {
+			st, err = agentstate.LoadChild(sid, addr)
 		}
 		if err != nil {
 			return nil, invalid("%v", err)
@@ -140,8 +144,11 @@ func wireJob(j jobs.Job) Job {
 
 func wireAgent(st agentstate.State) Agent {
 	t := st.Latest()
+	owner, job := st.JobRef()
 	return Agent{
-		Name: st.Name, ParentThreadID: st.Parent, Path: agentstate.PathOf(st.Session), Preset: st.Preset, Model: st.Model, Effort: st.Effort, ThreadID: st.Session,
+		Name: st.Name, ParentThreadID: st.Parent, Path: st.Path, Preset: st.Preset, Model: st.Model, Effort: st.Effort, ThreadID: st.Session,
+		RootThreadID: st.Root, Depth: st.Depth, Origin: st.Origin, Project: st.Project, Lifecycle: string(st.Lifecycle),
+		JobOwner: owner, Job: job, SpawnedBy: st.SpawnedBy,
 		Task: st.Task, Prompt: st.Prompt, Turn: t.N, Status: string(t.Status),
 		DurationMs: t.Duration().Milliseconds(), Error: t.Error,
 		InputTokens: t.PromptTokens, CachedTokens: t.CachedTokens, OutputTokens: t.OutputTokens, Cost: t.Cost,

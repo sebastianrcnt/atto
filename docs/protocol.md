@@ -190,9 +190,21 @@ A read-only/offline snapshot is not an execution owner. Use resume before writes
   never code/HTML to execute.
 - **Job:** `{id,label,kind,command,status,started,runtimeMs,exitCode?,error?,
   resultText?,reason?,cap?}`. **Timer:** `{id,due,message,schedule?}`.
-- **Agent:** `{name,preset,model,effort?,threadId,task,prompt,turn,status,
-  durationMs?,error?,inputTokens?,cachedInputTokens?,outputTokens?,cost?,created}`.
-  Agent read is observational; this API does not move `atto agent` execution.
+- **Agent:** `{name,parentThreadId?,path?,rootThreadId?,depth,origin?,project?,
+  lifecycle?,jobOwner?,job?,spawnedBy?,preset,model,effort?,threadId,task,prompt,
+  turn,status,durationMs?,error?,inputTokens?,cachedInputTokens?,outputTokens?,
+  cost?,created}`. An agent is its session: `threadId` is its identity. The tree
+  fields are attributes, additive to the older ones: `parentThreadId` is omitted
+  for an agent started from a shell (the root of a tree of its own, `depth` 0,
+  `path` `/root`, `origin` `external`, `name` only its label among the open
+  agents of its `project`); `lifecycle` is `open`, `closing` or `closed`;
+  `jobOwner`/`job` name the job running its latest turn (the parent's job for a
+  child, the agent's own for a root). `spawnedBy` is `{session|null,model?,
+  effort?,turn?,toolCallId?,origin,cwd?}`: who started it, with the model and
+  effort that session used and its turn at the time, `origin` `model`, `outside`
+  or `explicit-session`. It is tracking, not proof: the tool call ID comes from
+  an environment variable the model could change. Agent read is observational;
+  this API does not move `atto agent` execution.
 - **CommandInfo:** `{name,args?,description,local?,origin,extension?}`. A local
   command needs a client renderer/picker; don't silently execute a substitute.
 - **ContextInfo:** `{loaded,contextTokens,contextWindow?,compactLimit?,cap?,
@@ -313,8 +325,8 @@ client, not every client's editor.
 | `timer/create` | T + `when,message` | `{timer:Timer}`; e.g. when "10m", "15:30" |
 | `timer/cancel` | T + `id` | `{}` |
 | `agent/list` | T | `{agents:[Agent]}`; direct children |
-| `agent/tree` | T | `{rootThreadId,agents:[Agent]}`; observational tree (up to 1,000 sessions), including descendants; Agent adds parentThreadId and absolute `/root/…` path |
-| `agent/read` | T + `name` (name/path, `..`, or `@<session id>`) | `{agent:Agent,message,items:[Item]}`; read-only transcript/report |
+| `agent/tree` | T | `{rootThreadId,agents:[Agent]}`; observational tree (up to 1,000 sessions), including descendants and, when the root is itself an agent started from a shell, the root; Agent adds parentThreadId and absolute `/root/…` path |
+| `agent/read` | T + `name` (name/path, `..`, or `@<session id>`) or `agentId` (a session ID or unique prefix) | `{agent:Agent,message,items:[Item]}`; read-only transcript/report |
 | `subagent/list` | T | `{agents,subagents}`; frozen web alias |
 | `subagent/read` | T + `name` | `{agent,subagent,message,items}`; frozen web alias |
 | `mcp/list` | T | `{servers:[ServerInfo]}`; configured MCP servers/status/tool counts |

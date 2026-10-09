@@ -35,6 +35,29 @@ func savedIDAgent(t *testing.T, parent, name string) agentstate.State {
 	return st
 }
 
+// savedRoot saves an agent started from a shell, in the working directory's project.
+func savedRoot(t *testing.T, name string) agentstate.State {
+	t.Helper()
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	project := externalProject(cwd)
+	w := session.NewManaged(cwd, func(id string) session.AgentMeta {
+		return session.AgentMeta{Version: 1, RootSessionID: id, Path: "/root", Name: name, Project: project, Origin: session.OriginExternal}
+	})
+	w.Append(session.Entry{Type: session.TypeMessage, Message: &provider.Message{Role: "assistant", Content: "saved answer"}})
+	w.Close()
+	if err := w.Err(); err != nil {
+		t.Fatal(err)
+	}
+	st := agentstate.State{Name: name, Session: w.ID, Preset: "general", Model: "fake/m", Cwd: cwd, Project: project, Origin: session.OriginExternal, Task: "task", Created: time.Now()}
+	if err := agentstate.Save(st); err != nil {
+		t.Fatal(err)
+	}
+	return st
+}
+
 func TestAgentIDInEveryAddressCommand(t *testing.T) {
 	agentServer(t, func(int, string) string { return textAnswer("task completed") })
 	t.Chdir(t.TempDir())
@@ -102,17 +125,11 @@ func TestAgentOutsideIDAcrossProjectsAndListAll(t *testing.T) {
 	agentServer(t, func(int, string) string { return textAnswer("done") })
 	enableAgents(t, "")
 	var agents []agentstate.State
-	var parents []string
 	for _, project := range []string{t.TempDir(), t.TempDir()} {
 		t.Chdir(project)
-		parent, err := newExternalParent(&strings.Builder{})
-		if err != nil {
-			t.Fatal(err)
-		}
-		parents = append(parents, parent)
-		agents = append(agents, savedIDAgent(t, parent, "same-name"))
+		agents = append(agents, savedRoot(t, "same-name"))
 	}
-	// A third directory has no external parent, yet can reach both exact agents.
+	// A third directory has no agents started from a shell, yet can reach both exact agents.
 	t.Chdir(t.TempDir())
 	for _, st := range agents {
 		for _, sub := range []string{"wait", "report"} {
@@ -129,7 +146,7 @@ func TestAgentOutsideIDAcrossProjectsAndListAll(t *testing.T) {
 			t.Fatalf("send did not reach exact agent: %+v", evs)
 		}
 	}
-	// -all includes every external tree, not regular model-run trees.
+	// -all includes every tree of an agent started from a shell, not regular model-run trees.
 	unrelated := savedIDAgent(t, "regular-root", "regular")
 	out, err := runAgent(t, "list", "-all")
 	if err != nil || !strings.Contains(out, "ID") || !strings.Contains(out, "ADDRESS") {
@@ -146,12 +163,12 @@ func TestAgentOutsideIDAcrossProjectsAndListAll(t *testing.T) {
 	if out, err := runAgent(t, "list"); err != nil || out != "no agents\n" {
 		t.Fatalf("names still project-relative: %q %v", out, err)
 	}
-	for i, st := range agents {
+	for _, st := range agents {
 		if _, err := runAgent(t, "close", "@"+st.Session); err != nil {
 			t.Fatal(err)
 		}
-		if path, err := session.Find(parents[i]); err != nil || !isArchived(path) {
-			t.Fatalf("other project's parent not archived: %s %v", path, err)
+		if path, err := session.Find(st.Session); err != nil || !isArchived(path) {
+			t.Fatalf("other project's agent not archived: %s %v", path, err)
 		}
 	}
 }
@@ -194,12 +211,12 @@ func TestAgentSpawnPrintsIDAddressAndListID(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	st, err := agentstate.Load("root", "panes")
+	st, err := agentstate.LoadChild("root", "panes")
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { jobs.KillAll(st.Parent); jobs.KillAll(st.Session) })
-	if !strings.Contains(out, "agent /root/panes started (@"+st.Session+", session "+st.Session+",") {
+	if !strings.Contains(out, "agent /root/panes started (@"+st.Session+", session "+st.Session+",") || !strings.Contains(out, "project ") || !strings.Contains(out, "job 1)") {
 		t.Fatalf("spawn: %q", out)
 	}
 	if out, err := runAgent(t, "list", "-session", "root"); err != nil || !strings.Contains(out, "ID") || !strings.Contains(out, "@"+st.Session) {

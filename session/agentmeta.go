@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"path"
+	"slices"
 	"strings"
 )
 
@@ -49,6 +50,8 @@ type AgentMeta struct {
 	Project string `json:"project,omitempty"`
 	// Origin is OriginExternal or OriginAgent.
 	Origin string `json:"origin,omitempty"`
+	// SpawnedBy records who started the agent (see SpawnedBy).
+	SpawnedBy *SpawnedBy `json:"spawnedBy,omitempty"`
 }
 
 // Parent is the ID of the session that started this one, "" for a root.
@@ -96,7 +99,12 @@ func (m AgentMeta) Validate(id string) error {
 // anything created for the agent (worktrees, branches) can use it. The
 // header also keeps AgentOf for a child: older readers filter on it.
 func NewManaged(cwd string, build func(id string) AgentMeta) *Writer {
-	w := New(cwd)
+	return NewManagedID(NewID(), cwd, build)
+}
+
+// NewManagedID is NewManaged for an ID chosen with NewID.
+func NewManagedID(id, cwd string, build func(id string) AgentMeta) *Writer {
+	w := newWithID(id, cwd)
 	meta := build(w.ID)
 	w.agent = &meta
 	w.agentOf = meta.Parent()
@@ -129,3 +137,69 @@ func (s Summary) IsAgent() bool { return s.Agent != nil || s.AgentOf != "" }
 
 // IsAgent is Summary.IsAgent for a header.
 func (e Entry) IsAgent() bool { return e.Agent != nil || e.AgentOf != "" }
+
+// How an agent was started, SpawnedBy.Origin.
+const (
+	SpawnModel           = "model"            // by a model, from its shell
+	SpawnOutside         = "outside"          // from a plain shell
+	SpawnExplicitSession = "explicit-session" // from a plain shell with -session ID
+)
+
+// SpawnedBy records who started an agent: tracking, not proof. The model
+// and effort are those the spawning session used at the time, read from
+// that session's own record rather than from its environment; the call ID
+// is the ATTO_TOOL_CALL_ID of the command that ran atto agent, which the
+// model could have changed.
+type SpawnedBy struct {
+	// Session is the session that started the agent; null from a plain shell.
+	Session *string `json:"session"`
+	// Model (provider/id) and Effort are that session's when it spawned.
+	Model  string `json:"model,omitempty"`
+	Effort string `json:"effort,omitempty"`
+	// Turn is the number of that session's turn: for an agent, its turn
+	// counter; for another session, the user messages it had received.
+	Turn int `json:"turn,omitempty"`
+	// ToolCallID is the tool call the command ran in.
+	ToolCallID string `json:"toolCallId,omitempty"`
+	// Origin is SpawnModel, SpawnOutside or SpawnExplicitSession.
+	Origin string `json:"origin"`
+	// Cwd is where atto agent ran.
+	Cwd string `json:"cwd,omitempty"`
+}
+
+// Brief is who started the agent, compactly: "sol·high t3" (the model's
+// distinguishing name, its effort and the turn), "outside" from a plain shell.
+func (b *SpawnedBy) Brief() string {
+	if b == nil {
+		return "-"
+	}
+	if b.Origin == SpawnOutside {
+		return "outside"
+	}
+	text := ShortModel(b.Model)
+	if b.Effort != "" {
+		text += "·" + b.Effort
+	}
+	if b.Turn > 0 {
+		text += fmt.Sprintf(" t%d", b.Turn)
+	}
+	if b.Origin == SpawnExplicitSession {
+		text += " (-session)"
+	}
+	return text
+}
+
+// ShortModel is the distinguishing part of a model: "openai/gpt-6.1-sol" is "sol".
+func ShortModel(ref string) string {
+	if ref == "" {
+		return "?"
+	}
+	id := ref[strings.LastIndex(ref, "/")+1:]
+	parts := strings.Split(id, "-")
+	for _, p := range slices.Backward(parts) {
+		if p != "" && (p[0] >= 'a' && p[0] <= 'z' || p[0] >= 'A' && p[0] <= 'Z') {
+			return p
+		}
+	}
+	return id
+}

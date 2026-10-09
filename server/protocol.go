@@ -685,8 +685,23 @@ type Agent struct {
 	Model          string `json:"model"`
 	Effort         string `json:"effort,omitempty"`
 	ThreadID       string `json:"threadId"` // its own session
-	Task           string `json:"task"`     // the first message
-	Prompt         string `json:"prompt"`   // the latest turn's
+	// Where it is in its tree: the root's session, the edges below it (0
+	// for a root), whether it was started from a shell ("external") or by
+	// an agent, the project it belongs to, and whether it is open, closing
+	// or closed. A root started from a shell has no parentThreadId.
+	RootThreadID string `json:"rootThreadId,omitempty"`
+	Depth        int    `json:"depth"`
+	Origin       string `json:"origin,omitempty"`
+	Project      string `json:"project,omitempty"`
+	Lifecycle    string `json:"lifecycle,omitempty"`
+	// The job running its latest turn: a job of JobOwner (the parent, or the
+	// agent itself for a root) numbered Job.
+	JobOwner string `json:"jobOwner,omitempty"`
+	Job      int    `json:"job,omitempty"`
+	// SpawnedBy: who started it; tracking, not proof.
+	SpawnedBy *session.SpawnedBy `json:"spawnedBy,omitempty"`
+	Task      string             `json:"task"`   // the first message
+	Prompt    string             `json:"prompt"` // the latest turn's
 	// The latest turn: its number and status (idle, queued, running, done,
 	// failed or stopped), how long it ran, its error and its usage.
 	Turn         int     `json:"turn"`

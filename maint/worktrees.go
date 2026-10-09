@@ -50,7 +50,7 @@ func states(root string) ([]Worktree, error) {
 			if e != nil {
 				return e
 			}
-			if d.IsDir() || !strings.HasSuffix(p, ".json") || strings.HasSuffix(p, ".turn.json") {
+			if d.IsDir() || !strings.HasSuffix(p, ".json") || strings.HasSuffix(p, ".turn.json") || strings.Contains(filepath.ToSlash(p), "/.coord/") {
 				return nil
 			}
 			b, e := os.ReadFile(p)
@@ -62,7 +62,8 @@ func states(root string) ([]Worktree, error) {
 				return nil
 			}
 			rel, _ := filepath.Rel(root, p)
-			out = append(out, Worktree{Repo: s.Repo, Path: s.Worktree, Branch: s.Branch, Base: s.Base, Parent: s.Parent, Name: s.Name, Session: s.Session, StateFile: filepath.ToSlash(rel), Closed: strings.Contains(filepath.ToSlash(rel), "/_closed/")})
+			out = append(out, Worktree{Repo: s.Repo, Path: s.Worktree, Branch: s.Branch, Base: s.Base, Parent: s.Parent, Name: s.Name, Session: s.Session, StateFile: filepath.ToSlash(rel),
+				Closed: s.Lifecycle == agentstate.Closed || strings.Contains(filepath.ToSlash(rel), "/_closed/")})
 			return nil
 		})
 		if e != nil {
@@ -145,7 +146,10 @@ func Worktrees(root string) ([]Worktree, error) {
 			} else {
 				rel, _ := filepath.Rel(canonical(dir), canonical(w.Path))
 				parts := strings.Split(filepath.ToSlash(rel), "/")
-				if len(parts) == 2 {
+				switch len(parts) {
+				case 1: // worktrees/<session ID>
+					w.Session = parts[0]
+				case 2: // worktrees/<parent>/<name>, made before agents were keyed by session
 					w.Parent, w.Name = parts[0], parts[1]
 				}
 				byPath[canonical(w.Path)] = w
@@ -159,13 +163,25 @@ func Worktrees(root string) ([]Worktree, error) {
 	sortWorktrees(out)
 	return out, nil
 }
+
+// isLegacyWorktree reports a worktree made under a parent's name
+// (worktrees/<parent>/<name>) rather than its session ID.
+func isLegacyWorktree(w Worktree) bool {
+	return filepath.Base(filepath.Dir(filepath.FromSlash(w.Path))) != "worktrees"
+}
+
 func RecreateWorktrees(root string, records []Worktree, out io.Writer) error {
 	for _, w := range records {
 		if w.Closed {
 			fmt.Fprintln(out, "Skipped closed worktree:", w.Branch)
 			continue
 		}
-		if agentstate.ValidName(w.Name) != nil || !safeName(w.Parent) || strings.Contains(w.Parent, "/") || !strings.HasPrefix(w.Branch, "atto/") {
+		legacy := isLegacyWorktree(w)
+		valid := safeName(w.Session) && !strings.Contains(w.Session, "/")
+		if legacy {
+			valid = agentstate.ValidName(w.Name) == nil && safeName(w.Parent) && !strings.Contains(w.Parent, "/")
+		}
+		if !valid || !strings.HasPrefix(w.Branch, "atto/") {
 			fmt.Fprintln(out, "Skipped invalid worktree record:", w.Path)
 			continue
 		}
@@ -177,7 +193,10 @@ func RecreateWorktrees(root string, records []Worktree, out io.Writer) error {
 			fmt.Fprintln(out, "Skipped missing branch:", w.Branch)
 			continue
 		}
-		dest := filepath.Join(root, "worktrees", w.Parent, w.Name)
+		dest := filepath.Join(root, "worktrees", w.Session)
+		if legacy {
+			dest = filepath.Join(root, "worktrees", w.Parent, w.Name)
+		}
 		if !noSymlinkParents(root, dest) {
 			fmt.Fprintln(out, "Skipped worktree with symlink ancestor:", dest)
 			continue

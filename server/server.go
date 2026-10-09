@@ -193,9 +193,10 @@ type threadParams struct {
 	InputID string `json:"inputId"`
 	Queued  bool   `json:"queued"`
 	// job/output, job/stop; subagent/read
-	Job   int    `json:"job"`
-	Lines int    `json:"lines"`
-	Name  string `json:"name"`
+	Job     int    `json:"job"`
+	Lines   int    `json:"lines"`
+	Name    string `json:"name"`
+	AgentID string `json:"agentId"` // agent/read: the agent's session ID or unique prefix
 	// initialize
 	ProtocolVersions []int         `json:"protocolVersions"`
 	Client           *ClientInfo   `json:"clientInfo"`

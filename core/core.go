@@ -301,7 +301,7 @@ func Leave(id string) int {
 		// Stop worker processes before their own jobs: a pending shell
 		// detach must not create a job after that session was cleaned up.
 		n := jobs.KillAll(session)
-		for _, s := range agentstate.List(session) {
+		for _, s := range agentstate.Children(session) {
 			n += stop(s.Session)
 		}
 		_ = goal.Clear(session)
@@ -316,7 +316,7 @@ func Leave(id string) int {
 func LeaveKeepingAgents(id string) int {
 	_ = goal.Clear(id)
 	children := make(map[int]bool)
-	for _, s := range agentstate.List(id) {
+	for _, s := range agentstate.Children(id) {
 		children[s.Job] = true
 	}
 	return jobs.KillAllExcept(id, func(j jobs.Job) bool { return j.Kind() == "agent" || children[j.ID] || j.QuietExit })

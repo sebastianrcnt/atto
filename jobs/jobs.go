@@ -88,6 +88,10 @@ type Job struct {
 	// Quiet: a clean exit posts no event, for a command that tells the
 	// session how it went itself (an agent turn).
 	Quiet bool `json:"quiet,omitempty"`
+	// Silent: no exit event at all, whatever happened. The turn of an agent
+	// started from a shell is a job of the agent's own session, which must
+	// not be woken by its own turn ending; wait and report tell the caller.
+	Silent bool `json:"silent,omitempty"`
 	// QuietExit delivers the exit event without waking an idle session.
 	// A user-interrupted command keeps running between agent turns.
 	QuietExit bool `json:"quietExit,omitempty"`
@@ -265,11 +269,12 @@ func StartArgs(session, cwd, name string, args []string, quiet bool) (Job, error
 }
 
 // StartAgentArgs starts an agent turn, which outlives an intermediate turn.
-func StartAgentArgs(session, cwd, name string, args []string) (Job, error) {
-	return startArgs(session, cwd, name, args, true, "agent")
+// With silent the job never posts an exit event (see Job.Silent).
+func StartAgentArgs(session, cwd, name string, args []string, silent bool) (Job, error) {
+	return startArgs(session, cwd, name, args, true, "agent", silent)
 }
 
-func startArgs(session, cwd, name string, args []string, quiet bool, kind string) (Job, error) {
+func startArgs(session, cwd, name string, args []string, quiet bool, kind string, silent ...bool) (Job, error) {
 	if len(args) == 0 {
 		return Job{}, fmt.Errorf("empty command")
 	}
@@ -277,7 +282,7 @@ func startArgs(session, cwd, name string, args []string, quiet bool, kind string
 	if err != nil {
 		return Job{}, err
 	}
-	j := Job{Type: kind, ID: id, Session: session, Name: name, Command: strings.Join(args, " "), Cwd: cwd, Status: Starting, Started: time.Now(), Args: args, Quiet: quiet}
+	j := Job{Type: kind, ID: id, Session: session, Name: name, Command: strings.Join(args, " "), Cwd: cwd, Status: Starting, Started: time.Now(), Args: args, Quiet: quiet, Silent: len(silent) > 0 && silent[0]}
 	return launch(dir, j, nil)
 }
 
@@ -619,7 +624,7 @@ func finish(dir string, j Job, code int, detail string, killed bool) error {
 	if err := save(dir, j); err != nil {
 		return err
 	}
-	if !killed && !(j.Quiet && j.Status == Exited && code == 0) {
+	if !killed && !j.Silent && !(j.Quiet && j.Status == Exited && code == 0) {
 		postEvent(j, detail)
 	}
 	return nil

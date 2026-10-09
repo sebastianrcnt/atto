@@ -31,15 +31,14 @@ func smallCenter() *agentCenter {
 			{ID: "tests", Name: "tests", AgentOf: "root", Cwd: "/trees/tests", Branch: "atto/tests", Preview: "Run the suite\nThen review failures", LastMessage: "All tests pass."},
 			{ID: "lint", Name: "lint", AgentOf: "tests", Cwd: "/trees/tests"},
 			{ID: "docs", Name: "docs", AgentOf: "root", Cwd: "/work"},
-			{ID: "shell", External: true, Cwd: "/shell"},
-			{ID: "check", Name: "check", AgentOf: "shell", Cwd: "/shell"},
+			{ID: "check", Name: "check", Cwd: "/shell", Agent: &session.AgentMeta{Version: 1, RootSessionID: "check", Path: "/root", Origin: session.OriginExternal}},
 			{ID: "orphan", Name: "orphan", AgentOf: "gone", Cwd: "/other"},
 		},
 		agents: []centerAgent{
 			{state: agentstate.State{Session: "tests", Parent: "root", Name: "tests", Preset: "tester", Model: "fake/fast", Branch: "atto/tests", Task: "Run the suite\nThen review failures"}, turn: agentstate.Turn{Status: agentstate.Running, PromptTokens: 120, CachedTokens: 20, OutputTokens: 30, Started: time.Unix(1, 0), Ended: time.Unix(3, 0)}},
 			{state: agentstate.State{Session: "lint", Parent: "tests", Name: "lint", Preset: "review", Model: "fake/fast", Task: "Lint all packages"}, turn: agentstate.Turn{Status: agentstate.Idle}},
 			{state: agentstate.State{Session: "docs", Parent: "root", Name: "docs", Preset: "writer", Model: "fake/fast", Task: "Update README"}, turn: agentstate.Turn{Status: agentstate.Done}},
-			{state: agentstate.State{Session: "check", Parent: "shell", Name: "check", Preset: "general", Model: "fake/fast", Task: "Check shell agents"}, turn: agentstate.Turn{Status: agentstate.Failed}},
+			{state: agentstate.State{Session: "check", Name: "check", Origin: session.OriginExternal, Project: "/shell", Cwd: "/shell", Preset: "general", Model: "fake/fast", Task: "Check shell agents"}, turn: agentstate.Turn{Status: agentstate.Failed}},
 		},
 	})
 	return c
@@ -48,7 +47,7 @@ func smallCenter() *agentCenter {
 func TestCenterTree(t *testing.T) {
 	c := smallCenter()
 	tree := c.shown()
-	want := []string{"root", "tests", "lint", "docs", "shell", "check", "orphan"}
+	want := []string{"root", "tests", "lint", "docs", "shell:/shell", "check", "orphan"}
 	if got := treeIDs(tree); !reflect.DeepEqual(got, want) {
 		t.Fatalf("tree %v", got)
 	}
@@ -82,7 +81,7 @@ func TestCenterTree(t *testing.T) {
 func TestCenterFoldAndFilter(t *testing.T) {
 	c := smallCenter()
 	c.HandleInput(" ")
-	if got := treeIDs(c.shown()); !reflect.DeepEqual(got, []string{"root", "shell", "check", "orphan"}) {
+	if got := treeIDs(c.shown()); !reflect.DeepEqual(got, []string{"root", "shell:/shell", "check", "orphan"}) {
 		t.Fatalf("fold %v", got)
 	}
 	// Refresh keeps folds and selection, and tabs reveal working descendants.
@@ -105,7 +104,7 @@ func TestCenterFoldAndFilter(t *testing.T) {
 	c.search = ""
 	c.HandleInput(" ")
 	if len(c.shown()) != 7 {
-		t.Fatal("space did not expand")
+		t.Fatalf("space did not expand: %v", treeIDs(c.shown()))
 	}
 	closed, opened := false, ""
 	c.onClose = func() { closed = true }
@@ -221,21 +220,21 @@ func TestCenterScanIncludesShellNestedAndClosedAgents(t *testing.T) {
 	oldP := listWorkers
 	listWorkers = func() ([]daemon.Worker, error) { return nil, nil }
 	t.Cleanup(func() { listWorkers = oldP })
-	root := session.NewExternal("/project")
-	root.Append(session.Entry{Type: session.TypeName, Name: "atto agent (external)"})
+	// An agent started from a shell is a root; one started below it is nested.
+	root := session.NewManaged("/trees/tests", func(id string) session.AgentMeta {
+		return session.AgentMeta{Version: 1, RootSessionID: id, Path: "/root", Name: "tests", Project: "/project", Origin: session.OriginExternal}
+	})
+	root.Append(session.Entry{Type: session.TypeName, Name: "tests"})
+	root.Append(session.Entry{Type: session.TypeModel, Provider: "fake", Model: "fast"})
+	root.Append(session.Entry{Type: session.TypeMessage, Message: &provider.Message{Role: "user", Content: "Run suite"}})
+	root.Append(session.Entry{Type: session.TypeMessage, Message: &provider.Message{Role: "assistant", Content: "Suite passes"}})
 	root.Close()
-	child := session.NewAgent("/trees/tests", root.ID)
-	child.Append(session.Entry{Type: session.TypeName, Name: "tests"})
-	child.Append(session.Entry{Type: session.TypeModel, Provider: "fake", Model: "fast"})
-	child.Append(session.Entry{Type: session.TypeMessage, Message: &provider.Message{Role: "user", Content: "Run suite"}})
-	child.Append(session.Entry{Type: session.TypeMessage, Message: &provider.Message{Role: "assistant", Content: "Suite passes"}})
-	child.Close()
-	nested := session.NewAgent("/trees/tests", child.ID)
+	nested := session.NewAgent("/trees/tests", root.ID)
 	nested.Append(session.Entry{Type: session.TypeName, Name: "lint"})
 	nested.Close()
 	for _, st := range []agentstate.State{
-		{Parent: root.ID, Session: child.ID, Name: "tests", Cwd: "/trees/tests", Task: "Run suite", Preset: "tester", Model: "fake/fast"},
-		{Parent: child.ID, Session: nested.ID, Name: "lint", Cwd: "/trees/tests", Task: "Lint suite", Preset: "review", Model: "fake/fast"},
+		{Session: root.ID, Name: "tests", Cwd: "/trees/tests", Project: "/project", Origin: session.OriginExternal, Task: "Run suite", Preset: "tester", Model: "fake/fast", Created: time.Unix(1, 0)},
+		{Parent: root.ID, Session: nested.ID, Name: "lint", Cwd: "/trees/tests", Task: "Lint suite", Preset: "review", Model: "fake/fast", Created: time.Unix(2, 0)},
 	} {
 		if err := agentstate.Save(st); err != nil {
 			t.Fatal(err)
@@ -244,40 +243,54 @@ func TestCenterScanIncludesShellNestedAndClosedAgents(t *testing.T) {
 	c := &agentCenter{}
 	c.reload()
 	sh := c.shown()
-	if got := treeIDs(sh); !reflect.DeepEqual(got, []string{root.ID, child.ID, nested.ID}) {
+	heading := "shell:/project"
+	if got := treeIDs(sh); !reflect.DeepEqual(got, []string{heading, root.ID, nested.ID}) {
 		t.Fatalf("inventory %v", got)
 	}
-	if sh[0].title != "agents started from a shell" || sh[2].agentPath != "/root/tests/lint" || sh[1].tab != tabReady || c.lastMessage(child.ID) != "Suite passes" {
+	if sh[0].title != "agents started from a shell" || !sh[0].virtual || sh[2].agentPath != "/root/tests/lint" || sh[1].tab != tabReady || c.lastMessage(root.ID) != "Suite passes" {
 		t.Fatalf("rows %+v", sh)
 	}
-	// Real agent close archives descendants and removes their state.
-	for _, w := range []*session.Writer{nested, child, root} {
+	// Real agent close archives descendants and keeps closed records.
+	for _, w := range []*session.Writer{nested, root} {
 		if _, err := session.Archive(w.Path); err != nil {
 			t.Fatal(err)
 		}
 	}
-	agentstate.Remove(child.ID, "lint")
-	agentstate.Remove(root.ID, "tests")
+	for _, id := range []string{nested.ID, root.ID} {
+		if err := agentstate.MarkClosed(id, ""); err != nil {
+			t.Fatal(err)
+		}
+	}
 	c.reload()
 	sh = c.shown()
-	if got := treeIDs(sh); !reflect.DeepEqual(got, []string{root.ID, child.ID, nested.ID}) {
+	if got := treeIDs(sh); !reflect.DeepEqual(got, []string{heading, root.ID, nested.ID}) {
 		t.Fatalf("archived inventory %v", got)
 	}
 	if sh[1].tab != tabInactive || sh[1].model != "fake/fast" || sh[2].agentPath != "/root/tests/lint" {
 		t.Fatalf("closed rows %+v", sh)
 	}
-	// A truly deleted parent leaves agents at top level, not hidden.
-	rootPath, err := session.Find(root.ID)
-	if err != nil {
+	// A truly deleted ordinary parent leaves its agents at top level, not hidden.
+	parent := session.New("/work")
+	parent.Append(session.Entry{Type: session.TypeName, Name: "parent"})
+	parent.Close()
+	child := session.NewAgent("/work", parent.ID)
+	child.Append(session.Entry{Type: session.TypeName, Name: "kid"})
+	child.Close()
+	if err := agentstate.Save(agentstate.State{Parent: parent.ID, Session: child.ID, Name: "kid", Cwd: "/work", Created: time.Unix(3, 0)}); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Remove(rootPath); err != nil {
+	if err := os.Remove(parent.Path); err != nil {
 		t.Fatal(err)
 	}
 	c.reload()
-	sh = c.shown()
-	if len(sh) != 2 || sh[0].id != child.ID || sh[0].depth != 0 || sh[1].depth != 1 {
-		t.Fatalf("orphan rows %+v", sh)
+	var kid *centerItem
+	for _, it := range c.shown() {
+		if it.id == child.ID {
+			kid = &it
+		}
+	}
+	if kid == nil || kid.depth != 0 {
+		t.Fatalf("orphan row %+v", kid)
 	}
 }
 

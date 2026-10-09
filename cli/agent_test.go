@@ -42,6 +42,9 @@ func agentServer(t *testing.T, answer func(n int, body string) string) (bodies f
 	t.Setenv(config.EnvAgent, "")
 	t.Setenv(config.EnvLegacyAgent, "")
 	t.Setenv("ATTO_SESSION_ID", "")
+	if err := agentstate.WriteMarker("test", ""); err != nil {
+		t.Fatal(err)
+	}
 	models := `{"providers":{"fake":{"baseUrl":"` + srv.URL + `","models":[` +
 		`{"id":"m","contextWindow":10000,"efforts":["low","medium","high"]},` +
 		`{"id":"small","contextWindow":10000,"efforts":["low"]}]}}}`
@@ -145,12 +148,12 @@ func TestAgentRefusals(t *testing.T) {
 	if _, err := runAgent(t, "spawn", "a", "the task", "-session", "p1"); err != nil {
 		t.Fatal(err)
 	}
-	a, _ := agentstate.Load("p1", "a")
+	a, _ := agentstate.LoadChild("p1", "a")
 	if out, err := runAgent(t, "spawn", "b", "deeper", "-session", a.Session); err != nil || !strings.Contains(out, "agent /root/a/b started") {
 		t.Fatalf("nested spawn: %q %v", out, err)
 	}
 	// Seen from the nested agent: its parent, the root and itself.
-	b, _ := agentstate.Load(a.Session, "b")
+	b, _ := agentstate.LoadChild(a.Session, "b")
 	if out, err := runAgent(t, "send", "..", "found it", "-session", b.Session); err != nil || !strings.Contains(out, "sent to /root/a") {
 		t.Fatalf("send to the parent: %q %v", out, err)
 	}
@@ -272,7 +275,7 @@ func TestAgentStartWaitReport(t *testing.T) {
 	if evs := events.Drain(parent); len(evs) != 0 {
 		t.Fatalf("the final answer waits in the inbox after wait printed it: %+v", evs)
 	}
-	st1, _ := agentstate.Load(parent, "bugs")
+	st1, _ := agentstate.LoadChild(parent, "bugs")
 	ev := turnEvent(st1, st1.Latest())
 	if ev.Source != "agent" || !strings.Contains(ev.Text, "Message Type: FINAL_ANSWER\nFrom: /root/bugs\nTo: /root") ||
 		!strings.Contains(ev.Text, "Turn 1 finished") || !strings.Contains(ev.Text, "found 3 bugs") || ev.Quiet {
@@ -310,12 +313,12 @@ func TestAgentStartWaitReport(t *testing.T) {
 		t.Fatalf("report %q %v", out, err)
 	}
 	// Removed: gone from the list, its session archived, its name free.
-	st, _ := agentstate.Load(parent, "bugs")
+	st, _ := agentstate.LoadChild(parent, "bugs")
 	out, err = runAgent(t, "close", "bugs", "-session", parent)
 	if err != nil || !strings.Contains(out, "closed agent /root/bugs") {
 		t.Fatalf("rm: %q %v", out, err)
 	}
-	if l := agentstate.List(parent); len(l) != 0 {
+	if l := agentstate.Children(parent); len(l) != 0 {
 		t.Fatalf("listed after rm: %+v", l)
 	}
 	if p, err := session.Find(st.Session); err != nil || !strings.HasPrefix(p, config.ArchivedDir()) {
@@ -356,11 +359,11 @@ func TestAgentWaitTimeout(t *testing.T) {
 	if err != nil || !strings.Contains(out, "interrupted") {
 		t.Fatalf("stop: %q %v", out, err)
 	}
-	st, _ := agentstate.Load("p1", "slow")
+	st, _ := agentstate.LoadChild("p1", "slow")
 	if s := st.Latest().Status; s != agentstate.Stopped {
 		t.Fatalf("status %s", s)
 	}
-	if out, err := runAgent(t, "rm", "-done", "-session", "p1"); err != nil || !strings.Contains(out, "closed agent /root/slow") || len(agentstate.List("p1")) != 0 {
+	if out, err := runAgent(t, "rm", "-done", "-session", "p1"); err != nil || !strings.Contains(out, "closed agent /root/slow") || len(agentstate.Children("p1")) != 0 {
 		t.Fatalf("rm -done: %q %v", out, err)
 	}
 }
@@ -414,7 +417,7 @@ func TestAgentTurnsAreNotLimited(t *testing.T) {
 
 func sleepBriefly() { time.Sleep(50 * time.Millisecond) }
 
-func TestAgentExternalParent(t *testing.T) {
+func TestAgentFromAPlainShellHasNoParent(t *testing.T) {
 	agentServer(t, func(int, string) string { return textAnswer("done") })
 	root := t.TempDir()
 	t.Chdir(root)
@@ -422,36 +425,45 @@ func TestAgentExternalParent(t *testing.T) {
 		t.Fatal(err)
 	}
 	enableAgents(t, "")
-	// Commands that only read create no parent.
-	path := filepath.Join(config.Dir(), "external_parents")
+	// Commands that only read create nothing.
 	if out, err := runAgent(t, "list"); err != nil || out != "no agents\n" {
 		t.Fatalf("list before any agent: %q %v", out, err)
 	}
 	if _, err := runAgent(t, "report", "a"); err == nil {
 		t.Fatal("report without agents succeeded")
 	}
-	if _, err := os.Stat(path); !os.IsNotExist(err) {
-		t.Fatalf("a read created a parent: %v", err)
+	if ents, _ := os.ReadDir(config.SessionsDir()); len(ents) != 0 {
+		t.Fatalf("a read created a session: %v", ents)
 	}
 	out, err := runAgent(t, "start", "a", "general", "task", "-m", "fake/m", "-effort", "high")
-	if err != nil || !strings.HasPrefix(out, "external parent created: ") {
+	if err != nil || !strings.HasPrefix(out, "agent a started (@") || strings.Contains(out, "external parent") {
 		t.Fatalf("create: %q %v", out, err)
 	}
-	parent := strings.TrimPrefix(strings.SplitN(out, "\n", 2)[0], "external parent created: ")
-	hpath, _ := session.Find(parent)
+	st, err := agentstate.Load(spawnedID.FindStringSubmatch(out)[1])
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The only session is the agent's own, hidden from the default listings.
+	hpath, _ := session.Find(st.Session)
 	h, entries, err := session.Load(hpath)
-	if err != nil || !h.External || len(entries) == 0 || entries[0].Name != "atto agent (external)" {
-		t.Fatalf("parent: %+v %+v %v", h, entries, err)
+	if err != nil || h.External || h.Agent == nil || !h.Agent.IsRoot() || len(entries) == 0 || entries[0].Name != "a" {
+		t.Fatalf("agent session: %+v %+v %v", h, entries, err)
+	}
+	if ents, _ := os.ReadDir(config.SessionsDir()); len(ents) != 1 {
+		t.Fatalf("sessions: %v", ents)
 	}
 	if _, ok := session.Latest(""); ok {
-		t.Fatal("external parent selected by continue")
+		t.Fatal("an agent selected by continue")
+	}
+	if l, _ := session.List("", false); len(l) != 0 {
+		t.Fatalf("an agent in the session list: %+v", l)
 	}
 	child := filepath.Join(root, "child")
 	if err := os.Mkdir(child, 0o755); err != nil {
 		t.Fatal(err)
 	}
 	t.Chdir(child)
-	if out, err := runAgent(t, "list"); err != nil || !strings.Contains(out, "/root/a") || strings.Contains(out, "external parent created") {
+	if out, err := runAgent(t, "list"); err != nil || !strings.Contains(out, "a  ") || strings.Contains(out, "external parent") {
 		t.Fatalf("project inventory: %q %v", out, err)
 	}
 	if out, err := runAgent(t, "list", "-session", "explicit"); err != nil || out != "no agents\n" {
@@ -470,24 +482,18 @@ func TestAgentExternalParent(t *testing.T) {
 			t.Fatalf("%s: %q %v", cmd, out, err)
 		}
 	}
-	st, _ := agentstate.Load(parent, "a")
+	st, _ = agentstate.Load(st.Session)
 	if st.Effort != "high" {
 		t.Fatalf("effort: %s", st.Effort)
 	}
 	if _, err := runAgent(t, "rm", "a"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Stat(path); !os.IsNotExist(err) {
-		t.Fatalf("mapping retained: %v", err)
-	}
-	if p, err := session.Find(parent); err != nil || !isArchived(p) {
-		t.Fatalf("parent not archived: %s %v", p, err)
+	if p, err := session.Find(st.Session); err != nil || !isArchived(p) {
+		t.Fatalf("agent session not archived: %s %v", p, err)
 	}
 	if out, err := runAgent(t, "list"); err != nil || out != "no agents\n" {
 		t.Fatalf("list after rm: %q %v", out, err)
-	}
-	if _, err := os.Stat(path); !os.IsNotExist(err) {
-		t.Fatalf("list after rm created a parent: %v", err)
 	}
 }
 
@@ -516,7 +522,7 @@ func TestAgentExternalModelFlags(t *testing.T) {
 	if _, err := runAgent(t, "wait", "a", "-session", "explicit", "-timeout", "30s"); err != nil {
 		t.Fatal(err)
 	}
-	st, _ := agentstate.Load("explicit", "a")
+	st, _ := agentstate.LoadChild("explicit", "a")
 	if st.Model != "fake/small" || st.Effort != "low" {
 		t.Fatalf("state: %+v", st)
 	}
@@ -524,6 +530,9 @@ func TestAgentExternalModelFlags(t *testing.T) {
 
 func TestAgentListTaskSummary(t *testing.T) {
 	t.Setenv(config.EnvDir, t.TempDir())
+	if err := agentstate.WriteMarker("test", ""); err != nil {
+		t.Fatal(err)
+	}
 	for _, c := range []struct {
 		name, task, want string
 	}{
@@ -532,12 +541,12 @@ func TestAgentListTaskSummary(t *testing.T) {
 		{"unicode", strings.Repeat("é", 80), strings.Repeat("é", 59) + "…"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			st := agentstate.State{Name: c.name, Parent: c.name, Session: "s1", Task: c.task}
+			st := agentstate.State{Name: c.name, Parent: c.name, Session: "s-" + c.name, Task: c.task}
 			if err := agentstate.Create(st); err != nil {
 				t.Fatal(err)
 			}
 			var out strings.Builder
-			if err := agentList(&out, c.name); err != nil {
+			if err := agentList(&out, caller{session: c.name}); err != nil {
 				t.Fatal(err)
 			}
 			if strings.ContainsRune(out.String(), 0x1b) {
@@ -553,7 +562,7 @@ func TestAgentListTaskSummary(t *testing.T) {
 
 func st0(t *testing.T, parent string) agentstate.State {
 	t.Helper()
-	l := agentstate.List(parent)
+	l := agentstate.Children(parent)
 	if len(l) == 0 {
 		t.Fatal("no agent")
 	}
@@ -628,7 +637,7 @@ func TestAgentTaskDuringFinalizationStartsSuccessor(t *testing.T) {
 	close(release)
 	deadline := time.Now().Add(20 * time.Second)
 	for time.Now().Before(deadline) {
-		st, err := agentstate.Load("root", "a")
+		st, err := agentstate.LoadChild("root", "a")
 		if err == nil && st.Turns == 2 && st.Latest().Status == agentstate.Done {
 			if len(bodies()) != 2 || !strings.Contains(bodies()[1], "second") {
 				t.Fatalf("successor requests: %v", bodies())
@@ -637,7 +646,7 @@ func TestAgentTaskDuringFinalizationStartsSuccessor(t *testing.T) {
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-	st, err := agentstate.Load("root", "a")
+	st, err := agentstate.LoadChild("root", "a")
 	t.Logf("agent state: %+v (%v), latest: %+v", st, err, st.Latest())
 	for _, j := range jobs.List("root") {
 		output, _ := os.ReadFile(jobs.OutputPath("root", j.ID))

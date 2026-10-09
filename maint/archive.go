@@ -25,8 +25,9 @@ import (
 
 const ArchiveVersion = 1
 
-// AgentLayoutVersion describes agent-state plus the legacy subagents layout.
-const AgentLayoutVersion = 1
+// AgentLayoutVersion is the layout of agent-state: 2 is one file per agent
+// session ID (agentstate.FormatVersion); 1 was one directory per parent.
+const AgentLayoutVersion = agentstate.FormatVersion
 
 type Formats struct {
 	Archive    int `json:"archive"`
@@ -79,7 +80,7 @@ func secret(name string) bool {
 func excluded(name string, o BackupOptions) bool {
 	top, _, _ := strings.Cut(name, "/")
 	switch top {
-	case "run", "debug", "logs", "worktrees":
+	case "run", "debug", "logs", "worktrees", "backups":
 		return true
 	case "cache":
 		return !o.IncludeCache
@@ -92,6 +93,11 @@ func writer(w io.Writer) io.Writer {
 	}
 	return w
 }
+
+// BackupsDir is where backups go that atto takes itself (before migrating
+// agent data), under ATTO_DIR. Archives never contain it.
+const BackupsDir = "backups"
+
 func DefaultBackupName(now time.Time) string {
 	h, _ := os.Hostname()
 	h = strings.Map(func(r rune) rune {
@@ -122,8 +128,8 @@ func Backup(o BackupOptions) (m Manifest, err error) {
 	if e != nil {
 		return m, e
 	}
-	if within(o.Root, output) {
-		return m, errors.New("backup output must be outside ATTO_DIR")
+	if within(o.Root, output) && !within(filepath.Join(o.Root, BackupsDir), output) {
+		return m, errors.New("backup output must be outside ATTO_DIR (or in its backups/ directory)")
 	}
 	active, e := Activity(o.Root)
 	if e != nil {
@@ -140,7 +146,10 @@ func Backup(o BackupOptions) (m Manifest, err error) {
 	}
 	m = Manifest{Version: o.Version, Formats: supported(), Created: time.Now().UTC(), OS: runtime.GOOS, Arch: runtime.GOARCH, Source: o.Root, WithSecrets: o.WithSecrets}
 	m.Hostname, _ = os.Hostname()
-	m.Excluded = []string{"run/", "debug/", "logs/", "*.lock", "update-check.json", "worktrees/ (records only)"}
+	if _, e := os.Stat(filepath.Join(o.Root, "agent-state", ".format")); e != nil {
+		m.Formats.AgentState = 1 // the data still has the layout of one directory per parent
+	}
+	m.Excluded = []string{"run/", "debug/", "logs/", "backups/", "*.lock", "update-check.json", "worktrees/ (records only)"}
 	if !o.IncludeCache {
 		m.Excluded = append(m.Excluded, "cache/")
 	}
@@ -478,14 +487,6 @@ func Restore(file string, o RestoreOptions) (m Manifest, err error) {
 			_ = os.Rename(previous, o.Root)
 		}
 		return m, e
-	}
-	old, had := os.LookupEnv(config.EnvDir)
-	os.Setenv(config.EnvDir, o.Root)
-	agentstate.ListAll()
-	if had {
-		os.Setenv(config.EnvDir, old)
-	} else {
-		os.Unsetenv(config.EnvDir)
 	}
 	fmt.Fprintf(writer(o.Out), "Restored %d entries (%d bytes) to %s\n", count, bytes, o.Root)
 	if previous != "" {
