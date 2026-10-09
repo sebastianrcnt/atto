@@ -6,6 +6,7 @@ import (
 	"math"
 	"net"
 	"net/url"
+	"reflect"
 	"regexp"
 	"strings"
 	"unicode/utf8"
@@ -149,12 +150,16 @@ func validate(site Site, tree Node, replay bool, id string, engineNode *Node) er
 	}
 	// Count first so oversized/cyclic child slices never reach JSON recursion.
 	count := 0
+	propText, propBytes := 0, 0
 	keys := map[string]bool{}
 	hotkeys := map[string]bool{}
 	refs := 0
 	var walk func(Node, int) error
 	walk = func(n Node, depth int) error {
 		count++
+		if err := preflightProps(reflect.ValueOf(n.Props), 0, &propText, &propBytes); err != nil {
+			return err
+		}
 		if count > MaxNodes || depth > MaxDepth {
 			return fmt.Errorf("tree exceeds node/depth limit")
 		}
@@ -410,4 +415,60 @@ func equalProps(a, b map[string]any) bool {
 	x, _ := json.Marshal(a)
 	y, _ := json.Marshal(b)
 	return string(x) == string(y)
+}
+
+// Preflight bounds text/JSON growth before allocating a serialized props object.
+// Wire props are JSON data, never custom marshalers or executable values.
+func preflightProps(v reflect.Value, depth int, textBytes, jsonBytes *int) error {
+	if depth > MaxDepth {
+		return fmt.Errorf("props exceed depth limit")
+	}
+	if !v.IsValid() {
+		return nil
+	}
+	if v.Kind() == reflect.Interface {
+		if v.IsNil() {
+			return nil
+		}
+		return preflightProps(v.Elem(), depth, textBytes, jsonBytes)
+	}
+	if v.CanInterface() {
+		if _, executable := reflect.TypeAssert[json.Marshaler](v); executable {
+			return fmt.Errorf("custom prop marshalers are forbidden")
+		}
+	}
+	*jsonBytes += 2
+	switch v.Kind() {
+	case reflect.String:
+		s := v.String()
+		if !utf8.ValidString(s) {
+			return fmt.Errorf("invalid UTF-8 prop")
+		}
+		*textBytes += len(s)
+		*jsonBytes += len(s)
+	case reflect.Bool, reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64, reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Float32, reflect.Float64:
+	case reflect.Map:
+		if v.Type().Key().Kind() != reflect.String {
+			return fmt.Errorf("non-string prop map key")
+		}
+		iter := v.MapRange()
+		for iter.Next() {
+			*jsonBytes += len(iter.Key().String()) + 3
+			if err := preflightProps(iter.Value(), depth+1, textBytes, jsonBytes); err != nil {
+				return err
+			}
+		}
+	case reflect.Slice, reflect.Array:
+		for i := 0; i < v.Len(); i++ {
+			if err := preflightProps(v.Index(i), depth+1, textBytes, jsonBytes); err != nil {
+				return err
+			}
+		}
+	default:
+		return fmt.Errorf("props must contain only JSON data")
+	}
+	if *textBytes > MaxText || *jsonBytes > MaxBytes {
+		return fmt.Errorf("props exceed text/serialized budget")
+	}
+	return nil
 }

@@ -352,3 +352,27 @@ func TestSiteSnapshotKeepsRegistrationOrder(t *testing.T) {
 		t.Fatal("unstable site ordering", instances)
 	}
 }
+
+func TestValidationPreflightBoundsProps(t *testing.T) {
+	cycle := map[string]any{}
+	cycle["self"] = cycle
+	for name, props := range map[string]map[string]any{
+		"cycle":        cycle,
+		"large text":   {"text": strings.Repeat("x", MaxText+1)},
+		"executable":   {"text": func() {}},
+		"marshaler":    {"text": forbiddenMarshaler("x")},
+		"invalid UTF8": {"text": string([]byte{0xff})},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if Validate(Pane, Node{Type: "Text", Props: props}) == nil {
+				t.Fatal("accepted non-wire or oversized props")
+			}
+		})
+	}
+}
+
+type forbiddenMarshaler string
+
+func (forbiddenMarshaler) MarshalJSON() ([]byte, error) {
+	panic("validator must not run a prop's code")
+}
