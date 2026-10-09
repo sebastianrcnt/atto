@@ -564,6 +564,10 @@ func (b *Builder) ReplayEntry(e session.Entry) {
 	case session.TypeExtText:
 		// Like block_display, it leaves the calls waiting for results alone.
 		b.add(Item{Kind: ExtText, Ext: e.Ext, Title: e.Title, Text: e.Display, Lang: e.Lang, Preview: e.Preview})
+	case session.TypeError:
+		// The turn ended here: the same notice the user saw live.
+		b.interruptCalls()
+		b.add(Item{Kind: Notice, Level: "error", Status: Completed, Text: ErrorNotice(e.Error)})
 	case session.TypeBashExecution:
 		if x := e.Bash; x != nil {
 			b.interruptCalls()
@@ -679,6 +683,9 @@ func shownOutput(content string, t *session.ToolMeta) string {
 	}
 	return content
 }
+
+// ErrorNotice is the notice for a failure that ended a turn.
+func ErrorNotice(msg string) string { return "Error: " + msg }
 
 // retryNotice says why a model request is being sent again.
 func retryNotice(e agent.StreamRetry) string {

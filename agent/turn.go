@@ -161,6 +161,9 @@ func (a *Agent) loop(ctx context.Context, emit func(any), checked bool) error {
 				a.appendMessage(res.Message, session.Entry{ThinkingMs: thinkMs})
 				a.messageSaved(res.Message, emit)
 			}
+			if ctx.Err() == nil {
+				a.recordFailure(err)
+			}
 			return err
 		}
 		usage := res.Usage

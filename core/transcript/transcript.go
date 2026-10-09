@@ -27,7 +27,7 @@ const (
 	Event      Kind = "event"      // an [atto event] for the model: a job exited, a timer fired, a monitor matched
 	Goal       Kind = "goal"       // a goal message for the model: a continuation, or what the user did to the goal
 	Hook       Kind = "hook"       // something a hook said, or what it blocked
-	Notice     Kind = "notice"     // a message from atto itself (live only: not in the session)
+	Notice     Kind = "notice"     // a message from atto itself (live only, except the error that ended a turn: see Level)
 	GoalStatus Kind = "goalStatus" // the goal changed status (live only)
 
 	// BranchSummary is the summary of a branch the user went back from
@@ -113,6 +113,10 @@ type Item struct {
 	Title   string
 	Lang    string
 	Preview int
+
+	// Notice: "error" for the failure that ended a turn, which a session
+	// keeps and replays; "" for the rest.
+	Level string
 
 	// Hook
 	HookEvent string // UserPromptSubmit, PreToolUse, Stop...

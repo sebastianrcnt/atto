@@ -580,6 +580,8 @@ func (p *treePicker) searchText(n *session.Node) string {
 		parts = append(parts, "display", e.Ext)
 	case session.TypeExtText:
 		parts = append(parts, "display", e.Ext, e.Title)
+	case session.TypeError:
+		parts = append(parts, "error", e.Provider, e.Model, e.Error)
 	}
 	return strings.Join(parts, " ")
 }
@@ -667,6 +669,8 @@ func (p *treePicker) entryText(n *session.Node) string {
 		return tui.Dim("[display: " + e.Ext + "]")
 	case session.TypeExtText:
 		return tui.Dim("[" + e.Ext + ": " + clipRunes(oneLine(e.Title), 80) + "]")
+	case session.TypeError:
+		return tui.FG(1, "[error]: ") + clipRunes(oneLine(e.Error), 200)
 	case session.TypeLabel:
 		if e.Label == "" {
 			return tui.Dim("[label: (cleared)]")

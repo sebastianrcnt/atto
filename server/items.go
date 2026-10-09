@@ -30,7 +30,7 @@ func wireItem(sid string, it *transcript.Item) Item {
 	case transcript.Hook:
 		w.Type, w.HookEvent, w.Blocked = ItemHook, it.HookEvent, it.Blocked
 	case transcript.Notice:
-		w.Type = ItemNotice
+		w.Type, w.Level = ItemNotice, it.Level
 	case transcript.GoalStatus:
 		w.Type = ItemGoalStatus
 		if g := it.GoalState; g != nil {
@@ -102,7 +102,7 @@ func TranscriptItem(w Item) transcript.Item {
 	case ItemHook:
 		it.Kind, it.HookEvent, it.Blocked = transcript.Hook, w.HookEvent, w.Blocked
 	case ItemNotice:
-		it.Kind = transcript.Notice
+		it.Kind, it.Level = transcript.Notice, w.Level
 	case ItemGoalStatus:
 		it.Kind, it.GoalState = transcript.GoalStatus, w.GoalState
 		if w.GoalState != nil {

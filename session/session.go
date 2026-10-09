@@ -63,6 +63,10 @@ const (
 	// TypeExtText is a block of text an extension added to the transcript
 	// (ctx.ui.showText): display only, it never reaches the model.
 	TypeExtText = "ext_text"
+	// TypeError records why a turn ended: a model request failed, after
+	// the retries it gets. Display only, it never reaches the model; it
+	// replays as the error notice the user saw when it happened.
+	TypeError = "error"
 )
 
 // Blocks of an assistant message, as TypeBlockDisplay entries name them.
@@ -165,6 +169,12 @@ type Entry struct {
 	Title   string `json:"title,omitempty"`
 	Lang    string `json:"lang,omitempty"`
 	Preview int    `json:"preview,omitempty"`
+
+	// error: the request to Provider/Model failed with HTTP status
+	// HTTPStatus (0: no response, a dropped connection or a cut stream),
+	// and Error is its message (the server's, cut when long).
+	HTTPStatus int    `json:"httpStatus,omitempty"`
+	Error      string `json:"error,omitempty"`
 }
 
 // BashExec is a command the user ran with "!" (or "!!", which keeps it
