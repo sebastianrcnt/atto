@@ -324,18 +324,13 @@ func PlanClean(o CleanOptions) (p Plan, err error) {
 			continue
 		}
 		cat := ""
-		test := strings.HasPrefix(name, "atto-home") || strings.HasPrefix(name, "atto-session-test") || strings.HasPrefix(name, "atto-swing-")
+		test := strings.HasPrefix(name, "atto-home") || strings.HasPrefix(name, "atto-session-test")
 		switch {
 		case test:
 			if !older(file, o.Now, 24*time.Hour) {
 				continue
 			}
 			cat = "test temp directories"
-		case strings.HasPrefix(name, "atto-drop-") && strings.HasSuffix(name, ".png"):
-			if !older(file, o.Now, 24*time.Hour) {
-				continue
-			}
-			cat = "runtime temp files"
 		case strings.HasPrefix(name, "atto-bash-") && strings.HasSuffix(name, ".log"), strings.HasPrefix(name, "atto-transcript-"), strings.HasPrefix(name, "atto-view-"):
 			cat = "runtime temp files"
 		case strings.HasPrefix(name, "atto-mcp-") && strings.HasSuffix(name, ".sock"):

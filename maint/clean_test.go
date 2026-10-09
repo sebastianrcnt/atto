@@ -36,7 +36,7 @@ func TestCleanTableAndCategories(t *testing.T) {
 	p := filepath.Join(root, "sessions", existing+".jsonl")
 	put(t, p, []byte("{\"type\":\"session\",\"id\":\"abcdef12\"}\n"))
 	put(t, filepath.Join(root, "settings.json"), []byte("keep"))
-	remove := []string{filepath.Join(root, "outputs/deleted/log.zst"), filepath.Join(root, "debug/old.dump"), filepath.Join(root, "jobs/deleted/1/job.json"), filepath.Join(temp, "atto-bash-123.log"), filepath.Join(temp, "atto-transcript-123"), filepath.Join(temp, "atto-view-123/image.png"), filepath.Join(temp, "atto-home123/go/mod/readonly"), filepath.Join(temp, "atto-session-test123/file"), filepath.Join(temp, "atto-swing-123/file")}
+	remove := []string{filepath.Join(root, "outputs/deleted/log.zst"), filepath.Join(root, "debug/old.dump"), filepath.Join(root, "jobs/deleted/1/job.json"), filepath.Join(temp, "atto-bash-123.log"), filepath.Join(temp, "atto-transcript-123"), filepath.Join(temp, "atto-view-123/image.png"), filepath.Join(temp, "atto-home123/go/mod/readonly"), filepath.Join(temp, "atto-session-test123/file")}
 	for _, p := range remove {
 		b := []byte("remove")
 		if strings.HasSuffix(p, "job.json") {
@@ -45,7 +45,7 @@ func TestCleanTableAndCategories(t *testing.T) {
 		put(t, p, b)
 		age(t, p, 40*24*time.Hour)
 	}
-	for _, n := range []string{"atto-home123", "atto-session-test123", "atto-swing-123"} {
+	for _, n := range []string{"atto-home123", "atto-session-test123"} {
 		age(t, filepath.Join(temp, n), 48*time.Hour)
 	}
 	os.Chmod(filepath.Join(temp, "atto-home123/go/mod"), 0o500)

@@ -466,7 +466,7 @@ atto agent roles                    what -role picks from
 - **Nesting.** There is no depth limit and no concurrency limit: any agent may start agents of its own, at any depth, and every queued turn starts at once (`agents.maxDepth` and `agents.maxConcurrent` no longer exist; old values are ignored). A turn is queued only behind the same agent's previous turn, since one agent runs one turn at a time. Closing an agent closes the agents below it.
 - **From a normal shell**, every command accepts `-session ID`. See above for what an agent started without it is.
 - External callers can set the model and effort on `spawn` with `-m provider/model -effort LEVEL`; in atto's model shell (`ATTO_SESSION_ID` / `ATTO_AGENT` set) these flags are refused and models pick roles. `read` and `show` are aliases of `report`. `wait` and `report` accept `-json` for one object with `name`, `status`, `turn`, `duration` (seconds), `tokens` (`in`, `cached`, `out`), optional `cost` (estimated USD), `session`, `model`, `message` and optional `error`, `worktree` and `branch`, plus `path`, `parent`, `root`, `depth`, `role`, `project`, `origin`, `lifecycle`, `job`/`jobOwner` (the job running the turn) and `spawnedBy`.
-- **Where turns run.** With the daemon, an agent's turns run in the worker of the agent's own session, like every other session: `atto agent` finds or starts that worker and asks it for the turn, and a TUI, app-server client or the Swing client can attach to a running agent live (`atto resume ID`, or Enter in the command center) instead of reading a locked transcript. The worker stays while a turn runs or waits and retires when idle like others; an idle agent is not woken by what lands in its inbox, only by `task`. Without the daemon (`ATTO_NO_DAEMON=1`, `"daemon": false`, Windows) each turn is a background job process, `atto _agent-turn`, as before, and the same when the session's writer lease is held elsewhere. A worker takes its environment from the process that started it, so an API key exported only in the shell of one `atto agent` call may not reach an already-running worker.
+- **Where turns run.** With the daemon, an agent's turns run in the worker of the agent's own session, like every other session: `atto agent` finds or starts that worker and asks it for the turn, and a TUI or app-server client can attach to a running agent live (`atto resume ID`, or Enter in the command center) instead of reading a locked transcript. The worker stays while a turn runs or waits and retires when idle like others; an idle agent is not woken by what lands in its inbox, only by `task`. Without the daemon (`ATTO_NO_DAEMON=1`, `"daemon": false`, Windows) each turn is a background job process, `atto _agent-turn`, as before, and the same when the session's writer lease is held elsewhere. A worker takes its environment from the process that started it, so an API key exported only in the shell of one `atto agent` call may not reach an already-running worker.
 - An agent is its own session (in the spawning checkout's directory, or its own worktree with `-worktree`) that sees only what it is sent. Each turn runs headless as a job: of the session that started it for a child (`atto job list` shows `agent NAME`), of the agent's own session for one started from a shell; `report -json` and `list` show the job and its owner. An agent's own agents keep running when its turn ends. The session header carries an `agent` object (parent or null, root, depth, path label, name, role, spawn directory, project, origin, and `spawnedBy`); runtime state is `~/.atto/agent-state/<session ID>.json` (with `.turn.json`, `.turn.json.interrupt` and `.turn.lock` beside it), one flat file per agent, no per-parent directories. **spawnedBy** records who started the agent: the session (or null from a plain shell), that session's model and effort when it did (read from the session's own record, not its environment), its turn number, the `ATTO_TOOL_CALL_ID` of the command and the directory, with origin `model`, `outside` or `explicit-session`. `list` shows a compact `BY` column (`sol·high t3`), `report -json` the object, the command center the details. It is tracking, not proof: environment variables can be changed by the model. Agents' sessions are kept out of the default `atto resume` and `atto sessions` listings, including agents started from a shell, but appear in the agent command center under their parent, recursively. Working includes running/queued agent turns; idle or completed agents are Ready, failed/stopped or closed agents Inactive. Closed agents keep their record (the ID stays reserved, the name is free) and their archived transcripts in the center. The center opens a locked agent transcript read-only (banner and `Ctrl+R` refresh); once unlocked, refresh opens it normally.
 - **Worktrees.** `spawn -worktree` gives the agent a git worktree of its own, so agents editing files in parallel don't clobber each other or your checkout. It is made from the spawning checkout's `HEAD` (committed work only) on a new branch `atto/<session ID>`, at `~/.atto/worktrees/<session ID>`: the ID is chosen before any git work and never reused, so closing an agent and reusing its name cannot collide. The worktree is outside the project, so nothing shows up in its `git status` or searches, and short enough for Windows paths. Agents started before keep the worktree paths and branch names they were made with (`worktrees/<parent>/<name>`, `atto/<parent>/<name>`); they are recorded with the agent and always used from there. The agent works at the same place in it as the spawning checkout and is told to commit there. It needs a git repository with a commit. `report`, `list` and `-json` show the worktree and branch. `close` runs `git worktree remove` and keeps the branch, printing it and its new commits for you to merge; while the worktree has uncommitted changes `close` refuses and lists them, unless `-force`. A spawn that dies halfway is rolled back by the next one (journaled in `agent-state/.coord/spawn`).
 - **Roles** set an agent's model, effort and instructions (`-role`, default `general`, which uses the parent's model and effort, or `agents.model` / `agents.effort` from `settings.json`). Add roles as Markdown files in `~/.atto/agents/` or the project's `.atto/agents/` (the project wins on the same name, and either replaces the built-in `general`):
@@ -595,7 +595,7 @@ first. It includes session transcripts and both compressed and legacy archives,
 images, saved command outputs, jobs and inbox/events/goals, agent state (including
 legacy `subagents`, reverse indexes and closed-agent records), external-parent
 mappings, extensions and their log, skills, prompts, themes, agent profiles,
-settings and their `.bak`, models, approvals, device identity, translation/Swing
+settings and their `.bak`, models, approvals, device identity, translation
 settings, and helper binaries—indeed **every regular file, directory and safe
 relative symlink under `ATTO_DIR`, except**:
 
@@ -654,9 +654,9 @@ kept. Clean removes:
   dirty checkouts; active records are kept, and closed recorded branches must be
   absent or merged;
 * old `debug/` files and stale `run/` sockets without listeners;
-* idle, owned temporary `atto-bash-*.log`, `atto-transcript-*`, `atto-view-*`, Swing
-  `atto-drop-*.png` older than a day, `atto-mcp-*.sock`, and private `atto-<uid>/` socket files;
-* `atto-home*`, `atto-session-test*`, `atto-swing-*` test leftovers older than a
+* idle, owned temporary `atto-bash-*.log`, `atto-transcript-*`, `atto-view-*`,
+  `atto-mcp-*.sock`, and private `atto-<uid>/` socket files;
+* `atto-home*`, `atto-session-test*` test leftovers older than a
   day, including read-only module-cache contents.
 
 Deletion is re-inventoried after confirmation. Locks and live job PIDs protect
@@ -688,11 +688,6 @@ in a detached process after exit, and removes the installer's directory from
 user PATH when this binary resides there. The Unix installer **does not edit
 shell startup files** (it only prints PATH advice); uninstall therefore does not
 guess at or rewrite user-owned shell configuration. Manually added PATH entries,
-other binary copies, manually installed Swing jars, and external repository
+other binary copies, and external repository
 branches/checkouts outside the atto data directory must be removed separately.
 Any failed or unsafe removal is reported. Open a new terminal afterward.
-
-The Swing client's `swing.json` currently uses the Java user home directly,
-rather than `ATTO_DIR`; if you override `ATTO_DIR`, that separate Swing setting
-file is outside these commands' archive/data-removal scope. Default installs
-include it normally.

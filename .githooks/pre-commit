@@ -29,9 +29,4 @@ if printf '%s\n' "$staged" | grep -qE '\.go$|^go\.(mod|sum)$'; then
 		bad "go.mod/go.sum are not tidy (run go mod tidy)"
 fi
 
-if printf '%s\n' "$staged" | grep -q '^server/web/'; then
-	go test -count=1 -run 'TestDistIsFresh' ./server/web >/dev/null ||
-		bad "server/web/dist is stale (run go generate ./server/web and stage dist/)"
-fi
-
 exit $fail
