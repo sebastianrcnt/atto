@@ -609,10 +609,7 @@ func refreshed(st agentstate.State) agentstate.State {
 // agentWait blocks until the first of cands that is running ends, then
 // prints its report.
 func agentWait(out io.Writer, c caller, cands []agentstate.State, timeout time.Duration, jsonOut bool) error {
-	if len(cands) == 1 && !cands[0].Latest().Status.Active() {
-		takeFinalAnswer(cands[0])
-		return writeAgentReport(out, cands[0], jsonOut) // already over
-	}
+	// Each agent is looked at once: one that ends meanwhile is not "not running".
 	var running []agentstate.State
 	for _, s := range cands {
 		if s.Latest().Status.Active() {
@@ -620,6 +617,10 @@ func agentWait(out io.Writer, c caller, cands []agentstate.State, timeout time.D
 		}
 	}
 	if len(running) == 0 {
+		if len(cands) == 1 {
+			takeFinalAnswer(cands[0])
+			return writeAgentReport(out, cands[0], jsonOut) // already over
+		}
 		return fmt.Errorf("no agent is running (see atto agent list)")
 	}
 	start := time.Now()
