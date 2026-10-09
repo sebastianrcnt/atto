@@ -9,6 +9,7 @@
 package transcript
 
 import (
+	"github.com/sebastianrcnt/atto/ui"
 	"time"
 
 	"github.com/sebastianrcnt/atto/goal"
@@ -40,6 +41,7 @@ const (
 	// ExtText is a block of text an extension showed (ctx.ui.showText):
 	// display only, never sent to the model.
 	ExtText Kind = "extText"
+	UIBlock Kind = "uiBlock"
 )
 
 // Status is where an item stands. Messages are complete when they start;
@@ -55,9 +57,12 @@ const (
 
 // Item is one entry of a transcript. Fields are used according to Kind.
 type Item struct {
-	ID     string
-	Kind   Kind
-	Status Status
+	UITree     *ui.Node
+	UIRevision int64
+	UIID       string
+	ID         string
+	Kind       Kind
+	Status     Status
 	// Text is the message (user, assistant, reasoning, event, goal), the
 	// handoff notes (compaction), the summary (branchSummary) or the
 	// message of a hook or notice.

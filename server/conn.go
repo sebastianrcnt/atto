@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"fmt"
+	"github.com/sebastianrcnt/atto/ui"
 	"io"
 	"strings"
 	"sync"
@@ -19,6 +20,7 @@ import (
 
 // clientConn is a connected client.
 type clientConn struct {
+	ui          *ui.Capabilities
 	id          string
 	name        string
 	interactive bool

@@ -59,6 +59,7 @@ func (s *Server) threadCall(ctx context.Context, client, method string, p thread
 
 // threadMethods are the requests on a thread; they run on its lane.
 var threadMethods = map[string]func(t *thread, client string, p threadParams) (any, error){
+	"ui/event": func(t *thread, client string, p threadParams) (any, error) { return t.routeUI(client, p) },
 	"thread/entry": func(t *thread, client string, p threadParams) (any, error) {
 		e, ok, err := session.ReadEntry(t.sess.Path, p.EntryID)
 		if err != nil {

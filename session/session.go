@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/sebastianrcnt/atto/fsutil"
+	"github.com/sebastianrcnt/atto/ui"
 	"io"
 	"io/fs"
 	"os"
@@ -62,7 +63,10 @@ const (
 	TypeBlockDisplay = "block_display"
 	// TypeExtText is a block of text an extension added to the transcript
 	// (ctx.ui.showText): display only, it never reaches the model.
-	TypeExtText = "ext_text"
+	TypeExtText       = "ext_text"
+	TypeUIBlock       = "ui_block"
+	TypeUIBlockUpdate = "ui_block_update"
+	TypeUIItemDisplay = "ui_item_display"
 	// TypeError records why a turn ended: a model request failed, after
 	// the retries it gets. Display only, it never reaches the model; it
 	// replays as the error notice the user saw when it happened.
@@ -85,8 +89,14 @@ func BlockID(sessionID, entryID, block string) string {
 
 // Entry is one line of a session file. Fields are used according to Type.
 type Entry struct {
-	Type string    `json:"type"`
-	Time time.Time `json:"time"`
+	UITree   *ui.Node  `json:"uiTree,omitempty"`
+	UIRev    int64     `json:"uiRev,omitempty"`
+	UISite   ui.Site   `json:"uiSite,omitempty"`
+	UIID     string    `json:"uiId,omitempty"`
+	UIClosed bool      `json:"uiClosed,omitempty"`
+	UICallID string    `json:"uiCallId,omitempty"`
+	Type     string    `json:"type"`
+	Time     time.Time `json:"time"`
 
 	// ID is the session ID on the header and the entry's own ID on every
 	// other line. Parent is the entry this one follows ("" for a root).

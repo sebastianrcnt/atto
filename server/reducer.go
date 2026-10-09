@@ -2,6 +2,7 @@ package server
 
 import (
 	"encoding/json"
+	"github.com/sebastianrcnt/atto/ui"
 	"slices"
 
 	"github.com/sebastianrcnt/atto/core"
@@ -17,6 +18,7 @@ type ThreadView struct {
 	Items         []Item
 	EventID       int64 // the snapshot's cursor
 	index         map[string]int
+	uiRevs        map[ui.Match]int64
 	NeedsSnapshot bool // replay reset or branch change requires thread/read
 }
 
@@ -25,6 +27,12 @@ func (v *ThreadView) Reset(info ThreadInfo) {
 	v.Items = slices.Clone(info.Items)
 	info.Items = nil
 	v.Info, v.EventID, v.NeedsSnapshot = info, info.EventID, false
+	v.uiRevs = map[ui.Match]int64{}
+	if info.UI != nil {
+		for _, i := range info.UI.Instances {
+			v.uiRevs[ui.Match{Site: i.Site, ID: i.ID}] = i.Rev
+		}
+	}
 	v.index = map[string]int{}
 	for i, it := range v.Items {
 		v.index[it.ID] = i
@@ -72,6 +80,46 @@ func (v *ThreadView) Apply(n Notification) bool {
 		return false
 	}
 	switch n.Method {
+	case "ui/open", "ui/render", "ui/close":
+		var update struct {
+			ui.Instance
+			FocusClientID string `json:"focusClientId"`
+		}
+		if json.Unmarshal(n.Params, &update) != nil {
+			return false
+		}
+		m := ui.Match{Site: update.Site, ID: update.ID}
+		if update.Rev <= v.uiRevs[m] {
+			return false
+		}
+		v.uiRevs[m] = update.Rev
+		if v.Info.UI == nil {
+			v.Info.UI = &ui.Snapshot{Version: 1, Instances: []ui.Instance{}}
+		}
+		instances := v.Info.UI.Instances
+		found := -1
+		for i, x := range instances {
+			if x.Site == m.Site && x.ID == m.ID {
+				found = i
+				break
+			}
+		}
+		if n.Method == "ui/close" {
+			if found >= 0 {
+				instances = append(instances[:found], instances[found+1:]...)
+			}
+		} else if found >= 0 {
+			instances[found].Rev = update.Rev
+			if n.Method == "ui/open" {
+				instances[found].Options = update.Options
+			} else {
+				instances[found].Tree = update.Tree
+			}
+		} else if !ui.IsItem(m.Site) && m.Site != ui.Transcript {
+			instances = append(instances, update.Instance)
+		}
+		v.Info.UI.Instances = instances
+
 	case "item/started", "item/updated", "item/completed":
 		if p.Item == nil {
 			return false
@@ -117,6 +165,7 @@ func (v *ThreadView) Apply(n Notification) bool {
 		t := *p.Thread
 		t.Items = nil
 		t.HasMore, t.Before = v.Info.HasMore, v.Info.Before
+		t.UI = v.Info.UI
 		v.Info = t
 	case "turn/started":
 		v.Info.Busy, v.Info.TurnID, v.Info.RunKind = true, p.TurnID, p.RunKind

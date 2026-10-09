@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"github.com/sebastianrcnt/atto/ui"
 	"slices"
 )
 
@@ -19,8 +20,9 @@ type ClientInfo struct {
 // clients answer prompts (extension dialogs, confirmations): while one is
 // attached, extensions see ctx.hasUI true.
 type Capabilities struct {
-	Interactive bool `json:"interactive,omitempty"`
-	Images      bool `json:"images,omitempty"`
+	UI          *ui.Capabilities `json:"ui,omitempty"`
+	Interactive bool             `json:"interactive,omitempty"`
+	Images      bool             `json:"images,omitempty"`
 }
 
 // negotiate checks that the client speaks the current protocol revision,
@@ -59,6 +61,9 @@ func (s *Server) initialize(ctx context.Context, p threadParams) (any, error) {
 			c.name = p.Client.Name
 		}
 		c.interactive = p.Capabilities != nil && p.Capabilities.Interactive
+		if p.Capabilities != nil {
+			c.ui = p.Capabilities.UI
+		}
 		s.mu.Unlock()
 		out["clientId"] = c.id
 	}
@@ -80,4 +85,17 @@ func errorReason(code int) string {
 	default:
 		return ReasonInternal
 	}
+}
+
+func (s *Server) uiCapabilities(ctx context.Context, p threadParams) (any, error) {
+	c := ui.Capabilities{Version: 1, Surface: p.Surface, Width: p.Width, Elements: p.Elements}
+	if err := c.Validate(); err != nil {
+		return nil, invalid("%s", err)
+	}
+	if cc := connOf(ctx); cc != nil {
+		s.mu.Lock()
+		cc.ui = &c
+		s.mu.Unlock()
+	}
+	return map[string]any{}, nil
 }

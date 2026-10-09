@@ -112,7 +112,12 @@ func replayFile(b *transcript.Builder, sid, path, before string, limit int, anch
 			}
 		},
 	}
-	err := session.VisitActive(path, func(e session.Entry) error { b.ReplayEntry(e); pruneReplayBlocks(bl, kept); return nil })
+	err := session.VisitActive(path, func(e session.Entry) error {
+		b.ReplayEntry(e)
+		applyUITail(kept, e)
+		pruneReplayBlocks(bl, kept)
+		return nil
+	})
 	if err != nil && !os.IsNotExist(err) {
 		return ItemPage{}, nil, err
 	}
@@ -121,6 +126,9 @@ func replayFile(b *transcript.Builder, sid, path, before string, limit int, anch
 	page := ItemPage{Items: make([]Item, 0, len(kept))}
 	for _, it := range kept {
 		page.Items = append(page.Items, bl.attach(wireItem(sid, it)))
+	}
+	if err := session.VisitActive(path, func(e session.Entry) error { applyUIItems(page.Items, e); return nil }); err != nil && !os.IsNotExist(err) {
+		return ItemPage{}, nil, err
 	}
 	first := boundary
 	if len(page.Items) > 0 {

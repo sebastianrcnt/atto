@@ -226,6 +226,7 @@ package server
 import (
 	"encoding/json"
 	"fmt"
+	"github.com/sebastianrcnt/atto/ui"
 
 	"github.com/sebastianrcnt/atto/agent"
 	"github.com/sebastianrcnt/atto/ai"
@@ -328,6 +329,7 @@ const (
 	ItemHook       = "hook"  // a hook's message, or what it blocked
 	ItemNotice     = "notice"
 	ItemGoalStatus = "goalStatus"
+	ItemUIBlock    = "uiBlock"
 	ItemExtText    = "extText" // text an extension showed (ctx.ui.showText): display only
 
 	// ItemBranchSummary is a summary of a branch the session went back
@@ -337,11 +339,20 @@ const (
 
 // Item is one unit of a turn's output: the protocol form of a
 // transcript.Item.
+type UIDisplay struct {
+	Rev  int64    `json:"rev"`
+	Tree *ui.Node `json:"tree"`
+}
+
 type Item struct {
-	ID     string `json:"id"`
-	Type   string `json:"type"`
-	Text   string `json:"text,omitempty"`   // message, reasoning, notes, hook message
-	Status string `json:"status,omitempty"` // inProgress, completed, failed
+	UITree    *ui.Node   `json:"tree,omitempty"`
+	UIRev     int64      `json:"rev,omitempty"`
+	UIID      string     `json:"uiId,omitempty"`
+	UIDisplay *UIDisplay `json:"uiDisplay,omitempty"`
+	ID        string     `json:"id"`
+	Type      string     `json:"type"`
+	Text      string     `json:"text,omitempty"`   // message, reasoning, notes, hook message
+	Status    string     `json:"status,omitempty"` // inProgress, completed, failed
 
 	// commandExecution
 	Description string `json:"description,omitempty"`
@@ -471,20 +482,21 @@ type ExtensionWidget struct {
 
 // ThreadInfo describes a thread to clients.
 type ThreadInfo struct {
-	ID            string   `json:"threadId"`
-	Cwd           string   `json:"cwd"`
-	Name          string   `json:"name,omitempty"`
-	Model         string   `json:"model"`
-	Effort        string   `json:"effort"`
-	Efforts       []string `json:"efforts,omitempty"`
-	ContextWindow int      `json:"contextWindow,omitempty"`
-	ContextTokens int      `json:"contextTokens"`
-	Busy          bool     `json:"busy"`
-	TurnID        string   `json:"turnId,omitempty"`
-	Items         []Item   `json:"items,omitempty"`
-	HasMore       bool     `json:"hasMore,omitempty"`
-	Paged         bool     `json:"-"`
-	Before        string   `json:"before,omitempty"`
+	UI            *ui.Snapshot `json:"ui,omitempty"`
+	ID            string       `json:"threadId"`
+	Cwd           string       `json:"cwd"`
+	Name          string       `json:"name,omitempty"`
+	Model         string       `json:"model"`
+	Effort        string       `json:"effort"`
+	Efforts       []string     `json:"efforts,omitempty"`
+	ContextWindow int          `json:"contextWindow,omitempty"`
+	ContextTokens int          `json:"contextTokens"`
+	Busy          bool         `json:"busy"`
+	TurnID        string       `json:"turnId,omitempty"`
+	Items         []Item       `json:"items,omitempty"`
+	HasMore       bool         `json:"hasMore,omitempty"`
+	Paged         bool         `json:"-"`
+	Before        string       `json:"before,omitempty"`
 	// What the status line shows of the model (see SetModel): its name,
 	// the context size auto-compaction starts at, and whether it has
 	// prices (a cost) and is on a subscription (the cost only estimates).

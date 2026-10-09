@@ -603,3 +603,41 @@ only the selected transcript. Unarchiving a closed agent restores its transcript
 not its lifecycle. Frontends must confirm deletion and ask "stop it and
 archive/delete?" before stopping a live worker. Other processes' read-only
 writers are never silently taken over.
+
+## Shared UI catalog v1 (revision 3)
+
+UI is portable data, not executable code. The complete element/site contract is
+in [ui.md](ui.md). `initialize.capabilities.ui` may announce
+`{version:1,surface:"terminal",width:80,elements:["Box","Text",...]}`.
+The surface is terminal, web, gui, flutter or headless; width is logical columns
+(0 if unmeasured). Renderers run once per session with surface `shared`.
+
+| Method | Parameters / result |
+| --- | --- |
+| `ui/capabilities` | Client notification: `{surface,width,elements}`; reannounce on resize. |
+| `ui/event` | Request: `{threadId,site,id,key,type,value?,rev}` → `{accepted:true,rev}`. |
+| `ui/open` | Server notification: `{threadId,site,id,rev,options,focusClientId?}`. |
+| `ui/render` | Server notification: `{threadId,site,id,rev,tree}`; full tree or null. |
+| `ui/close` | Server notification: `{threadId,site,id,rev,reason}`. |
+
+Attach/read snapshots include `ui:{version:1,instances:[{site,id,rev,options,tree}]}`
+for live panes, band/status slots, dialogs and unexpired toasts. UI shares the
+snapshot's existing hub event cursor. Subscribe before reading; discard events
+at or below that cursor, then reduce each later event once. Keep close revision
+ tombstones so late trees cannot reopen a closed site. On reset/reconnect replace
+UI from a snapshot; do not replay uncertain actions.
+
+Routing uses site/id/key and **rev only** (the 2026-10-09 simplification): no
+`uiEpoch`, `requestKey` or dedupe cache. Every publication gets a new monotonically
+increasing safe integer revision, including acceptance before the callback, so
+an old/duplicate press is rejected with `revisionConflict` and
+`currentRevision`. Press and close forbid value; input/submit/select require it.
+Close uses `$site`; callbacks must be bound and declared, enabled, with validated
+input lengths and enabled option membership. Originating client/surface comes
+from the transport, never action payload. Read-only sessions cannot act.
+
+`uiBlock` typed items carry `title`, `ext` (owner), `entryId`, `uiId`, `rev` and
+`tree`. Session entries `ui_block`, `ui_block_update` (including close tombstones)
+and `ui_item_display` contain only display data, excluded from model history.
+Pages replay the active branch and apply latest overlays without running any
+historical provider code. Saved controls remain unbound until fresh rendering.

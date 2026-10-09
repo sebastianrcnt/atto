@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"encoding/json"
 	"fmt"
+	"github.com/sebastianrcnt/atto/ui"
 	"slices"
 	"strings"
 	"sync"
@@ -71,6 +72,9 @@ type thread struct {
 	itemOrder      map[string]int // start order, including items still open
 	itemSeq        int
 	blocks         blocks
+	elements       *ui.Registry
+	uiEntries      map[string]string
+	uiSeq          int
 	ui             extensions.UIState
 	extTexts       int
 	notices        int
@@ -257,6 +261,8 @@ func (t *thread) info() ThreadInfo {
 // stand, and the event to follow it from. Lane only.
 func (t *thread) snapshot() ThreadInfo {
 	info := t.info()
+	snap := t.uiRegistry().Snapshot()
+	info.UI = &snap
 	info.HasMore, info.Before = t.hasMore, t.before
 	info.Items = make([]Item, 0, len(t.items))
 	for _, it := range t.items {

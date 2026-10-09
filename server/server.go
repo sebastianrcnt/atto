@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/sebastianrcnt/atto/ui"
 	"os"
 	"strconv"
 	"strings"
@@ -157,26 +158,35 @@ func decode[T any](raw json.RawMessage) (T, error) {
 }
 
 type threadParams struct {
-	ThreadID            string `json:"threadId"`
-	ItemID              string `json:"itemId"`
-	Query               string `json:"query"`
-	Limit               int    `json:"limit"`
-	Before              string `json:"before"`
-	Preview             bool   `json:"preview"`
-	DeferStart          bool   `json:"deferStart"` // TUI waits for its startup project-trust decision
-	Cwd                 string `json:"cwd"`
-	Model               string `json:"model"`
-	Provider            string `json:"provider"`
-	APIKey              string `json:"apiKey"`
-	OAuth               bool   `json:"oauth"`
-	Effort              string `json:"effort"`
-	Input               string `json:"input"`
-	Archived            bool   `json:"archived"`
-	IncludeAgents       bool   `json:"includeAgents"`
-	IncludeClosedAgents bool   `json:"includeClosedAgents"`
-	IncludeArchived     bool   `json:"includeArchived"`
-	Stop                bool   `json:"stop"`
-	NumTurns            int    `json:"numTurns"`
+	Site                ui.Site         `json:"site"`
+	Key                 string          `json:"key"`
+	EventType           ui.EventType    `json:"type"`
+	Value               *string         `json:"value"`
+	Rev                 int64           `json:"rev"`
+	UICapabilities      ui.Capabilities `json:"-"`
+	Surface             string          `json:"surface"`
+	Width               int             `json:"width"`
+	Elements            []string        `json:"elements"`
+	ThreadID            string          `json:"threadId"`
+	ItemID              string          `json:"itemId"`
+	Query               string          `json:"query"`
+	Limit               int             `json:"limit"`
+	Before              string          `json:"before"`
+	Preview             bool            `json:"preview"`
+	DeferStart          bool            `json:"deferStart"` // TUI waits for its startup project-trust decision
+	Cwd                 string          `json:"cwd"`
+	Model               string          `json:"model"`
+	Provider            string          `json:"provider"`
+	APIKey              string          `json:"apiKey"`
+	OAuth               bool            `json:"oauth"`
+	Effort              string          `json:"effort"`
+	Input               string          `json:"input"`
+	Archived            bool            `json:"archived"`
+	IncludeAgents       bool            `json:"includeAgents"`
+	IncludeClosedAgents bool            `json:"includeClosedAgents"`
+	IncludeArchived     bool            `json:"includeArchived"`
+	Stop                bool            `json:"stop"`
+	NumTurns            int             `json:"numTurns"`
 	// Images go with turn/start's and input/submit's input (see images.go).
 	Images []ImageInput `json:"images"`
 	// input/submit: auto, queue, replace or steer.
@@ -263,6 +273,8 @@ func (s *Server) call(ctx context.Context, method string, raw json.RawMessage) (
 	switch method {
 	case "initialize":
 		return s.initialize(ctx, p)
+	case "ui/capabilities":
+		return s.uiCapabilities(ctx, p)
 	case "initialized", "ping":
 		return nil, nil
 	case "models/list":
@@ -930,6 +942,9 @@ func (s *Server) closeThread(t *thread, m closeMode) detachResult {
 			return errThreadClosed
 		}
 		t.closing = true
+		if t.elements != nil {
+			t.elements.Stop()
+		}
 		t.cancelRetire()
 		t.cancelGoalRetry()
 		t.cancelPrompt()

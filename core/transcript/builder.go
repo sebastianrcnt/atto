@@ -561,6 +561,8 @@ func (b *Builder) ReplayEntry(e session.Entry) {
 		if b.Handler.Display != nil {
 			b.Handler.Display(Display{EntryID: e.TargetID, Block: e.Block, Ext: e.Ext, Status: e.Status, Text: e.Display})
 		}
+	case session.TypeUIBlock:
+		b.add(Item{Kind: UIBlock, Ext: e.Ext, Title: e.Title, EntryID: e.ID, UITree: e.UITree, UIRevision: e.UIRev, UIID: e.UIID})
 	case session.TypeExtText:
 		// Like block_display, it leaves the calls waiting for results alone.
 		b.add(Item{Kind: ExtText, Ext: e.Ext, Title: e.Title, Text: e.Display, Lang: e.Lang, Preview: e.Preview})
