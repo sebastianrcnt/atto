@@ -97,8 +97,12 @@ type Entry struct {
 	GitBranch     string `json:"gitBranch,omitempty"`     // branch checked out in Cwd when the session began ("HEAD" if detached)
 	// AgentOf is the ID of the session an agent session works for (atto
 	// agent). Such sessions are left out of default listings.
-	AgentOf  string `json:"agentOf,omitempty"`
-	External bool   `json:"external,omitempty"` // lightweight external orchestration parent
+	AgentOf string `json:"agentOf,omitempty"`
+	// Agent marks the session as a managed agent and says where it is in
+	// its tree (see AgentMeta). External is no longer written: it marks the
+	// lightweight parents older versions made for agents started from a shell.
+	Agent    *AgentMeta `json:"agent,omitempty"`
+	External bool       `json:"external,omitempty"`
 
 	// message
 	Message    *provider.Message `json:"message,omitempty"`
@@ -204,7 +208,8 @@ type Writer struct {
 	parent   string // ParentSession for the header
 	branch   string // GitBranch for the header
 	agentOf  string // AgentOf for the header
-	external bool
+	agent    *AgentMeta
+	external bool   // temporary: see NewExternal
 	leaf     string // ID of the last entry: the parent of the next one
 	hasLeaf  bool   // leaf is known; else read from the file on open
 	f        *os.File
@@ -244,20 +249,6 @@ func New(cwd string) *Writer {
 	id := newID()
 	path := filepath.Join(config.SessionsDir(), now.Format("2006/01/02"), now.Format("20060102-150405")+"-"+id+".jsonl")
 	return &Writer{ID: id, Path: path, cwd: cwd, created: now, branch: GitBranch(cwd)}
-}
-
-// NewExternal prepares a lightweight parent for external orchestration.
-func NewExternal(cwd string) *Writer {
-	w := New(cwd)
-	w.external = true
-	return w
-}
-
-// NewAgent is New for the session of an agent working for parent.
-func NewAgent(cwd, parent string) *Writer {
-	w := New(cwd)
-	w.agentOf = parent
-	return w
 }
 
 // Resume returns a writer that appends to an existing session file. New
@@ -332,7 +323,7 @@ func (w *Writer) open() error {
 		}
 	}
 	if statErr != nil { // new file: write the header
-		return w.write(Entry{Type: TypeSession, Time: w.created, Version: Version, ID: w.ID, Cwd: w.cwd, ParentSession: w.parent, GitBranch: w.branch, AgentOf: w.agentOf, External: w.external})
+		return w.write(Entry{Type: TypeSession, Time: w.created, Version: Version, ID: w.ID, Cwd: w.cwd, ParentSession: w.parent, GitBranch: w.branch, AgentOf: w.agentOf, Agent: w.agent, External: w.external})
 	}
 	return nil
 }
@@ -494,6 +485,7 @@ type Summary struct {
 	Size        int64  // file size in bytes
 	Running     int    // pid of the background process writing it; 0 if none
 	AgentOf     string // the session an agent session works for
+	Agent       *AgentMeta
 	External    bool
 }
 
@@ -527,7 +519,7 @@ func list(cwd string, archived, agents bool) ([]Summary, error) {
 		}
 		seen[path] = true
 		s, err := listSummaryMode(path, agents)
-		if err != nil || (cwd != "" && !SameDir(s.Cwd, cwd)) || (s.Preview == "" && !s.External && !(agents && s.AgentOf != "")) || (!agents && s.AgentOf != "") {
+		if err != nil || (cwd != "" && !SameDir(s.Cwd, cwd)) || (s.Preview == "" && !s.External && !(agents && s.IsAgent())) || (!agents && s.IsAgent()) {
 			return nil
 		}
 		s.Archived = archived

@@ -143,7 +143,7 @@ type diskSummary struct {
 }
 
 // summaryDiskVersion changes when Summary or its computation changes.
-const summaryDiskVersion = 1
+const summaryDiskVersion = 2
 
 func summaryDiskPath() string { return filepath.Join(config.Dir(), "cache", "session-summaries.json") }
 
@@ -241,9 +241,9 @@ func (s *summaryState) update(path string, st os.FileInfo, agents bool) error {
 		s.byID = map[string]int{}
 	}
 	s.Size, s.Modified = st.Size(), st.ModTime()
-	if s.Header.AgentOf != "" && !agents && !s.complete {
+	if s.Header.IsAgent() && !agents && !s.complete {
 		s.summary = Summary{Path: path, ID: s.Header.ID, Cwd: s.Header.Cwd, Created: s.Header.Time, Updated: s.Header.Time,
-			AgentOf: s.Header.AgentOf, External: s.Header.External, Size: st.Size()}
+			AgentOf: s.Header.AgentOf, Agent: s.Header.Agent, External: s.Header.External, Size: st.Size()}
 		return nil
 	}
 	if _, err := f.Seek(s.Offset, io.SeekStart); err != nil {
@@ -305,7 +305,7 @@ func (s *summaryState) updateCompressed(path string, st os.FileInfo, stream io.R
 		return fmt.Errorf("%s: not an atto session", path)
 	}
 	s.Updated = s.Header.Time
-	if s.Header.AgentOf != "" && !agents {
+	if s.Header.IsAgent() && !agents {
 		s.summary = s.summarize(path, nil)
 		return nil
 	}
@@ -411,7 +411,7 @@ func (s *summaryState) add(l summaryLine, off, length int64) {
 func (s *summaryState) summarize(path string, f *os.File) Summary {
 	h := s.Header
 	sum := Summary{Path: path, ID: h.ID, Cwd: h.Cwd, Created: h.Time, Updated: s.Updated, Branch: h.GitBranch,
-		AgentOf: h.AgentOf, External: h.External, Size: s.Size, Name: s.Name, Model: s.Model}
+		AgentOf: h.AgentOf, Agent: h.Agent, External: h.External, Size: s.Size, Name: s.Name, Model: s.Model}
 	// The active branch, from the last entry back to its root.
 	var active []int
 	seen := map[string]bool{}

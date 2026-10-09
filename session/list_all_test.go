@@ -7,8 +7,8 @@ import (
 
 func TestListAllIncludesAgentSummaries(t *testing.T) {
 	t.Setenv("ATTO_DIR", t.TempDir())
-	parent := NewExternal("/work")
-	parent.Append(Entry{Type: TypeName, Name: "external"})
+	parent := New("/work")
+	parent.Append(Entry{Type: TypeMessage, Message: &provider.Message{Role: "user", Content: "hello"}})
 	parent.Close()
 	agent := NewAgent("/work", parent.ID)
 	agent.Append(Entry{Type: TypeName, Name: "tests"})
