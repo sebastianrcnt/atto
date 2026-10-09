@@ -535,6 +535,10 @@ func (s *Server) resumeThread(client string, p threadParams) (any, error) {
 	if err != nil {
 		return nil, invalid("%v", err)
 	}
+	path, err = session.RestoreForWrite(path)
+	if err != nil {
+		return nil, err
+	}
 	release, err := session.LockKind(path, s.lockKind())
 	if err != nil {
 		if s.lockKind() == session.KindTUI {

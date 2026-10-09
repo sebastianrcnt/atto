@@ -206,6 +206,10 @@ func RunPrint(o PrintOptions) error {
 		} else {
 			return fmt.Errorf("no previous session in this directory")
 		}
+		path, err = session.RestoreForWrite(path)
+		if err != nil {
+			return err
+		}
 		release, err := lockForRun(path, o.Background, !o.NoSave)
 		if err != nil {
 			return err
