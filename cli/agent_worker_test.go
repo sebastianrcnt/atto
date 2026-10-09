@@ -1,5 +1,3 @@
-//go:build !windows
-
 package cli
 
 import (
@@ -7,9 +5,9 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
-	"syscall"
 	"testing"
 	"time"
 
@@ -236,6 +234,9 @@ func TestClientAttachesToARunningAgentTurn(t *testing.T) {
 // Interrupting a turn in a worker stops it as a user interrupt: the running
 // command becomes a job that survives, and the next turn goes on.
 func TestWorkerTurnInterruptKeepsHostedCommand(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the command is written for bash; Windows runs PowerShell")
+	}
 	marker := filepath.Join(t.TempDir(), "started")
 	agentServer(t, func(n int, _ string) string {
 		if n == 1 {
@@ -407,7 +408,7 @@ func TestWorkerKilledMidTurnRecovers(t *testing.T) {
 	var w daemon.Worker
 	waitUntil(t, "the worker", func() bool { var ok bool; w, ok = workerOfSession(t, st.Session); return ok })
 	waitUntil(t, "the model to be asked", func() bool { return len(bodies()) == 1 })
-	if err := syscall.Kill(w.PID, syscall.SIGKILL); err != nil {
+	if err := killProcess(w.PID); err != nil {
 		t.Fatal(err)
 	}
 	waitUntil(t, "the lost turn to show", func() bool {
