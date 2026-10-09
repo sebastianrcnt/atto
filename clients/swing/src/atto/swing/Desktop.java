@@ -87,11 +87,11 @@ final class Desktop {
                 JLabel project = Ui.muted(str(session.get("cwd"))); project.setBorder(BorderFactory.createEmptyBorder(16, 8, 6, 8)); return project;
             }
             JPanel row = Ui.rounded(selected ? Ui.selected : Ui.surface, 12); row.setLayout(new BorderLayout(6, 5)); row.setBorder(BorderFactory.createEmptyBorder(10, 10, 10, 10));
-            JLabel name = new JLabel("<html>" + Markdown.escape(sessionName(session)) + "</html>"); name.setFont(Ui.body(14).deriveFont(Font.BOLD)); row.add(name, BorderLayout.NORTH);
+            JLabel name = new JLabel("<html>" + Markdown.escape("  ".repeat((int)num(session.get("displayDepth"))) + SessionInventory.title(session)) + "</html>"); name.setFont(Ui.body(14).deriveFont(Font.BOLD)); row.add(name, BorderLayout.NORTH);
             row.add(Ui.muted(Ui.cwd(str(session.get("cwd")))), BorderLayout.CENTER);
             JPanel detail = new JPanel(new BorderLayout()); detail.setOpaque(false); detail.add(Ui.muted(Ui.relative(str(session.get("updatedAt")))));
-            if (yes(session.get("busy"))) { JLabel busy = Ui.muted("● Working"); busy.setForeground(Ui.accent); detail.add(busy, BorderLayout.EAST); }
-            row.add(detail, BorderLayout.SOUTH); return row;
+            { JLabel busy = Ui.muted(SessionInventory.status(session)); busy.setForeground(Ui.accent); detail.add(busy, BorderLayout.EAST); }
+            row.add(detail, BorderLayout.SOUTH); row.setToolTipText(SessionInventory.details(session)); return row;
         });
         sidebar.addMouseListener(new MouseAdapter() { public void mouseClicked(MouseEvent e) { if (e.getClickCount() == 2) resumeSelected(); } });
         bind(sidebar, "ENTER", "resume", this::resumeSelected);
@@ -256,7 +256,7 @@ final class Desktop {
         SessionPane current = pane; JButton close = Ui.icon("close", "Detach session", () -> detach(current, false)); close.setBorder(BorderFactory.createEmptyBorder(3, 3, 3, 3)); tab.add(close); tabs.setTabComponentAt(index, tab); if (namesChanged) refreshSessions();
     }
     void refreshSessions() {
-        core.call("thread/list", "", Map.of()).whenComplete((v, e) -> edt(() -> {
+        core.call("thread/list", "", SessionInventory.options()).whenComplete((v, e) -> edt(() -> {
             if (e != null) { connection.setText(e.getMessage()); return; }
             allSessions = Json.list(obj(v).get("threads")); filterSessions();
         }));
@@ -265,7 +265,7 @@ final class Desktop {
         String active = tabs.getSelectedComponent() instanceof SessionPane selectedPane ? selectedPane.id : sidebar.getSelectedValue() == null ? "" : str(sidebar.getSelectedValue().get("threadId"));
         String query = search.getText().toLowerCase(Locale.ROOT); sessionList.clear();
         Map<String, List<Map<String, Object>>> projects = new LinkedHashMap<>();
-        for (Object row : allSessions) if (write(row).toLowerCase(Locale.ROOT).contains(query)) projects.computeIfAbsent(str(obj(row).get("cwd")), key -> new ArrayList<>()).add(obj(row));
+        for (Map<String, Object> row : SessionInventory.tree(allSessions, query)) projects.computeIfAbsent(str(row.get("displayProject")), key -> new ArrayList<>()).add(row);
         for (var project : projects.entrySet()) {
             sessionList.addElement(map("projectHeader", true, "cwd", Ui.cwd(project.getKey())));
             for (var saved : project.getValue()) { Map<String, Object> session = new LinkedHashMap<>(saved); SessionPane live = sessions.get(str(session.get("threadId"))); if (live != null) { session.put("busy", live.info.get("busy")); if (str(session.get("name")).isEmpty()) session.put("name", sessionName(live.info)); } sessionList.addElement(session); if (active.equals(str(session.get("threadId")))) sidebar.setSelectedIndex(sessionList.size() - 1); }

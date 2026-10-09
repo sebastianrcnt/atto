@@ -14,7 +14,7 @@ public final class Tests {
         try { action.run(); throw new AssertionError("Expected rejection"); } catch (IllegalArgumentException expected) { checks++; }
     }
     public static void main(String[] args) throws Exception {
-        json(); reducer(); markdown(); protocol(); lines(); core(); preferences(); presentation();
+        json(); reducer(); markdown(); protocol(); lines(); core(); preferences(); presentation(); inventory();
         System.out.println("Swing core tests passed (" + checks + " assertions)");
     }
     static void presentation() throws Exception {
@@ -38,6 +38,23 @@ public final class Tests {
             var image = new java.awt.image.BufferedImage(90, 34, java.awt.image.BufferedImage.TYPE_INT_RGB); var graphics = image.createGraphics(); button.paint(graphics); graphics.dispose();
             check(button.getForeground().equals(Ui.muted), "Disabled primary button is visibly muted");
         });
+    }
+    static void inventory() {
+        Map<String, Object> parent = map("threadId", "root", "name", "Root", "cwd", "/project");
+        Map<String, Object> agent = map("threadId", "fuel", "preview", "First task", "lastMessage", "Last report", "cwd", "/worktree", "branch", "atto/fuel", "agent", map("parentThreadId", "root", "rootThreadId", "root", "path", "/root/fuel", "name", "fuel", "role", "review", "lifecycle", "open", "lastTurn", map("status", "done", "promptTokens", 120, "cachedTokens", 20, "outputTokens", 30), "durationMs", 2000, "spawnedBy", map("model", "fake/m", "effort", "high", "turn", 3, "toolCallId", "call-1")));
+        Map<String, Object> nested = map("threadId", "lint", "cwd", "/worktree", "agent", map("parentThreadId", "fuel", "path", "/root/fuel/lint", "name", "lint", "lifecycle", "closed"), "archived", true);
+        List<Map<String, Object>> rows = SessionInventory.tree(List.of(nested, agent, parent), "");
+        check(rows.stream().map(x -> str(x.get("threadId"))).toList().equals(List.of("root", "fuel", "lint")), "Inventory parent links build preorder regardless of wire order");
+        check(num(rows.get(2).get("displayDepth")) == 2 && str(rows.get(2).get("displayProject")).equals("/project"), "Worktree descendants group under root project");
+        check(SessionInventory.title(nested).equals("fuel/lint"), "Agent rows omit redundant root prefix");
+        check(SessionInventory.status(agent).equals("Ready") && SessionInventory.status(nested).equals("Inactive"), "Lifecycle and last turn derive tabs");
+        agent.put("goalWaiting", true); check(SessionInventory.status(agent).equals("Needs you"), "Goal waits need attention");
+        agent.remove("goalWaiting"); agent.put("openPrompt", true); check(SessionInventory.status(agent).equals("Needs you"), "Open prompts need attention");
+        agent.remove("openPrompt"); agent.put("busy", true); check(SessionInventory.status(agent).equals("Working"), "Live busy worker is working");
+        check(SessionInventory.tree(List.of(nested, agent, parent), "fuel/lint").size() == 3, "Search keeps ancestors");
+        String details = SessionInventory.details(agent); check(details.contains("First task") && details.contains("Last report") && details.contains("atto/fuel") && details.contains("120 in") && details.contains("2000ms") && details.contains("call-1"), "Agent details use inventory only");
+        check(SessionInventory.options().equals(map("includeAgents", true, "includeClosedAgents", true, "includeArchived", true)), "Both pickers opt into full inventory");
+        check(SessionInventory.tree(List.of(map("threadId", "a", "agent", map("parentThreadId", "b")), map("threadId", "b", "agent", map("parentThreadId", "a"))), "").size() == 2, "Corrupt parent cycles are safe");
     }
     static void json() {
         for (String text : List.of("null", "true", "false", "0", "-42", "1.25e-4", "9223372036854775808", "\"hello\\n😀\\u0041\"", "{\"x\":[null,1,true,\"y\"]}")) {

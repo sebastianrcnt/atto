@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/sebastianrcnt/atto/agentstate"
 	"github.com/sebastianrcnt/atto/provider"
 	"github.com/sebastianrcnt/atto/provider/providertest"
 	"github.com/sebastianrcnt/atto/session"
@@ -125,6 +126,32 @@ func TestSwingNativeProtocol(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 			defer cancel()
 			env := append(os.Environ(), "ATTO_NO_DAEMON=1", "ATTO_SESSION_ID=", "ATTO_AGENT=", "HOME="+t.TempDir(), "USERPROFILE="+t.TempDir())
+
+			// Wire inventory fixtures: one open and one closed agent under a saved parent.
+			parent := session.New(t.TempDir())
+			parent.Append(session.Entry{Type: session.TypeMessage, Message: &provider.Message{Role: "user", Content: "Inventory parent"}})
+			parent.Close()
+			for _, name := range []string{"inventory-agent", "closed-agent"} {
+				worker := session.NewManaged(t.TempDir(), func(id string) session.AgentMeta {
+					return session.AgentMeta{Version: 1, ParentSessionID: &parent.ID, RootSessionID: parent.ID, Depth: 1, Path: "/root/" + name, Name: name, Role: "review", Origin: session.OriginAgent, Project: "/inventory-project", SpawnedBy: &session.SpawnedBy{Session: &parent.ID, Model: "fake/m", Effort: "high", Turn: 3, ToolCallID: "inventory-call"}}
+				})
+				worker.Append(session.Entry{Type: session.TypeName, Name: name})
+				worker.Append(session.Entry{Type: session.TypeMessage, Message: &provider.Message{Role: "user", Content: "Inventory first task"}})
+				worker.Append(session.Entry{Type: session.TypeMessage, Message: &provider.Message{Role: "assistant", Content: "Inventory last report"}})
+				worker.Close()
+				if err := agentstate.Save(agentstate.State{Session: worker.ID, Parent: parent.ID, Name: name, Cwd: t.TempDir(), Task: "Inventory first task", Preset: "review", Model: "fake/m", Branch: "atto/inventory", Origin: session.OriginAgent, Project: "/inventory-project", SpawnedBy: &session.SpawnedBy{Session: &parent.ID, Model: "fake/m", Effort: "high", Turn: 3, ToolCallID: "inventory-call"}, Created: time.Now()}); err != nil {
+					t.Fatal(err)
+				}
+				if name == "closed-agent" {
+					dst, err := session.Archive(worker.Path)
+					if err != nil {
+						t.Fatal(err)
+					}
+					if err := agentstate.MarkClosed(worker.ID, dst); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
 			paging := session.New(t.TempDir())
 			for i := range 350 {
 				paging.Append(session.Entry{Type: session.TypeMessage, Message: &provider.Message{Role: "assistant", Content: fmt.Sprintf("paging-%03d", i) + strings.Repeat(" padding", 1000)}})
@@ -146,11 +173,12 @@ func TestSwingNativeProtocol(t *testing.T) {
 				t.Fatalf("Swing self-test: %v\nstdout: %s\nstderr: %s", err, &stdout, &stderr)
 			}
 			var result struct {
-				SelfTest    string `json:"selftest"`
-				PagingItems int    `json:"pagingItems"`
-				ID          string `json:"threadId"`
+				SelfTest        string `json:"selftest"`
+				PagingItems     int    `json:"pagingItems"`
+				InventoryAgents int    `json:"inventoryAgents"`
+				ID              string `json:"threadId"`
 			}
-			if err := json.Unmarshal(bytes.TrimSpace(stdout.Bytes()), &result); err != nil || result.SelfTest != "passed" || result.PagingItems != 350 {
+			if err := json.Unmarshal(bytes.TrimSpace(stdout.Bytes()), &result); err != nil || result.SelfTest != "passed" || result.PagingItems != 350 || result.InventoryAgents != 2 {
 				t.Fatalf("self-test result: %s (%v)", &stdout, err)
 			}
 			path, err := session.Find(result.ID)

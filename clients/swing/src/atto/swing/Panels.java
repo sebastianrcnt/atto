@@ -191,16 +191,24 @@ final class Panels {
         p.rpc("timer/list", Map.of(), v -> p.desktop.pick("Timers · select to cancel", list(obj(v).get("timers")), timer -> str(obj(timer).get("message")) + " · " + str(obj(timer).get("when")), timer -> p.rpc("timer/cancel", map("id", obj(timer).get("id")), x -> {})));
     }
     static void agents(SessionPane p) {
-        p.rpc("agent/tree", Map.of(), value -> {
-            Map<String, Object> tree = obj(value); DefaultMutableTreeNode root = new DefaultMutableTreeNode("Agent team · read only");
-            Map<String, DefaultMutableTreeNode> nodes = new LinkedHashMap<>(); Map<String, Object> entries = new LinkedHashMap<>();
-            for (Object entry : list(tree.get("agents"))) { Map<String, Object> agent = obj(entry); String id = str(agent.get("threadId")); entries.put(id, agent); nodes.put(id, new DefaultMutableTreeNode(str(agent.get("name")) + " · " + str(agent.get("status")) + " · " + str(agent.get("model")))); }
-            for (var entry : nodes.entrySet()) { DefaultMutableTreeNode parent = nodes.get(str(obj(entries.get(entry.getKey())).get("parentThreadId"))); (parent == null ? root : parent).add(entry.getValue()); }
+        p.rpc("thread/list", SessionInventory.options(), value -> {
+            List<Map<String, Object>> rows = SessionInventory.tree(list(obj(value).get("threads")), "");
+            DefaultMutableTreeNode root = new DefaultMutableTreeNode("Agent team · read only");
+            Map<String, DefaultMutableTreeNode> nodes = new LinkedHashMap<>(); Map<String, Map<String, Object>> entries = new LinkedHashMap<>();
+            // Locate the selected session's root by parent links, not a disk tree.
+            for (Map<String, Object> row : rows) entries.put(str(row.get("threadId")), row);
+            String rootId = p.id; Set<String> seen = new HashSet<>();
+            while (seen.add(rootId) && entries.containsKey(rootId) && entries.containsKey(SessionInventory.parent(entries.get(rootId)))) rootId = SessionInventory.parent(entries.get(rootId));
+            Set<String> team = new HashSet<>(); team.add(rootId);
+            for (Map<String, Object> row : rows) {
+                String id = str(row.get("threadId"));
+                if (!team.contains(id) && !team.contains(SessionInventory.parent(row))) continue;
+                team.add(id); DefaultMutableTreeNode node = new DefaultMutableTreeNode(SessionInventory.title(row) + " · " + SessionInventory.status(row));
+                DefaultMutableTreeNode parent = nodes.get(SessionInventory.parent(row)); (parent == null ? root : parent).add(node); nodes.put(id, node);
+            }
             JTree view = new JTree(root); view.setRowHeight(30); for (int i = 0; i < view.getRowCount(); i++) view.expandRow(i);
             JTextArea report = new JTextArea(); report.setEditable(false); report.setLineWrap(true); report.setWrapStyleWord(true); report.setBorder(BorderFactory.createEmptyBorder(12, 12, 12, 12));
-            view.addTreeSelectionListener(e -> { Object selected = view.getLastSelectedPathComponent(); String id = nodes.entrySet().stream().filter(entry -> entry.getValue() == selected).map(Map.Entry::getKey).findFirst().orElse(""); if (id.isEmpty()) return;
-                Map<String, Object> agent = obj(entries.get(id)); p.rpc("agent/read", map("name", agent.get("path")), reply -> report.setText(str(agent.get("task")) + "\n\n" + str(obj(reply).get("message"))));
-            });
+            view.addTreeSelectionListener(e -> { Object selected = view.getLastSelectedPathComponent(); String id = nodes.entrySet().stream().filter(entry -> entry.getValue() == selected).map(Map.Entry::getKey).findFirst().orElse(""); if (!id.isEmpty()) report.setText(SessionInventory.details(entries.get(id))); });
             JSplitPane body = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT, new JScrollPane(view), new JScrollPane(report)); body.setPreferredSize(new Dimension(800, 430)); body.setDividerLocation(280);
             p.desktop.showDialog(p.desktop.dialog("Agents", body));
         });

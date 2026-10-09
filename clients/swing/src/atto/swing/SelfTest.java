@@ -23,6 +23,20 @@ final class SelfTest {
             core.connect().get(30, TimeUnit.SECONDS);
             Map<String, Object> models = obj(call(core, "models/list", "", Map.of()));
             check(list(models.get("models")).stream().anyMatch(x -> "fake/m".equals(obj(x).get("id"))), "--selftest requires the providertest fake/m fixture; run go test ./clients/swing instead of a live provider");
+            List<Object> defaultRows = list(obj(call(core, "thread/list", "", Map.of())).get("threads"));
+            check(defaultRows.stream().noneMatch(x -> !obj(obj(x).get("agent")).isEmpty()), "Default inventory leaked agent sessions");
+            List<Object> inventory = list(obj(call(core, "thread/list", "", SessionInventory.options())).get("threads"));
+            List<Map<String, Object>> inventoryRows = SessionInventory.tree(inventory, "");
+            int inventoryAgents = 0;
+            for (Map<String, Object> row : inventoryRows) if (!obj(row.get("agent")).isEmpty()) {
+                inventoryAgents++;
+                Map<String, Object> agent = obj(row.get("agent"));
+                check(str(row.get("preview")).equals("Inventory first task") && str(row.get("lastMessage")).equals("Inventory last report"), "Inventory task/report missing");
+                check(str(row.get("branch")).equals("atto/inventory") && str(agent.get("role")).equals("review") && str(obj(agent.get("spawnedBy")).get("toolCallId")).equals("inventory-call"), "Inventory metadata missing");
+                check(num(row.get("displayDepth")) == 1 && !str(agent.get("parentThreadId")).isEmpty() && !yes(row.get("loaded")), "Listing attached agent or lost ancestry");
+                if (str(agent.get("name")).equals("closed-agent")) check(yes(row.get("archived")) && str(agent.get("lifecycle")).equals("closed"), "Closed archive missing");
+            }
+            check(inventoryAgents == 2, "Agent inventory fixtures missing");
             Map<String, Object> thread = core.hydrate("thread/start", map("cwd", options.cwd(), "model", "fake/m")).get(30, TimeUnit.SECONDS);
             String id = str(thread.get("threadId")); check(!id.isEmpty(), "Missing thread id");
             call(core, "input/submit", id, map("input", "hello swing", "intent", "auto"));
@@ -39,6 +53,8 @@ final class SelfTest {
             // A mirrored prompt exercises the native first-answer-wins lifecycle.
             Map<String, Object> prompt = obj(call(core, "prompt/clientOpen", id, map("prompt", map("requestId", "selftest-prompt", "kind", "input", "title", "Self-test prompt"))));
             check(!str(prompt.get("id")).isEmpty(), "Prompt did not open");
+            Map<String, Object> waiting = list(obj(call(core, "thread/list", "", SessionInventory.options())).get("threads")).stream().map(Json::obj).filter(x -> id.equals(str(x.get("threadId")))).findFirst().orElseThrow();
+            check(yes(waiting.get("openPrompt")) && SessionInventory.status(waiting).equals("Needs you"), "Inventory prompt attention flag missing");
             call(core, "prompt/answer", id, map("id", prompt.get("id"), "text", "answer"));
             if (!System.getProperty("os.name").startsWith("Windows")) {
                 events.clear();
@@ -99,7 +115,7 @@ final class SelfTest {
                 check(list(paged.get("items")).stream().map(x -> str(obj(x).get("id"))).distinct().count() == list(paged.get("items")).size(), "Pages duplicated items");
                 call(core, "thread/close", pagingId, Map.of());
             }
-            System.out.println(write(map("selftest", "passed", "threadId", id, "sessionPath", reattached.get("sessionPath"), "items", list(reattached.get("items")).size(), "pagingItems", pagingItems)));
+            System.out.println(write(map("selftest", "passed", "threadId", id, "sessionPath", reattached.get("sessionPath"), "items", list(reattached.get("items")).size(), "pagingItems", pagingItems, "inventoryAgents", inventoryAgents)));
             call(core, "thread/close", id, Map.of());
         }
     }
