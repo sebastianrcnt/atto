@@ -7,7 +7,6 @@ import {
   RPC,
   View,
   catalog,
-  consumeToken,
   imageResource,
   clean,
   plainMarkdown,
@@ -52,9 +51,6 @@ let focusHint = '';
 const originals = new Set<string>();
 const imageCache = new Map<string, Promise<string>>();
 let reconnectTimer: ReturnType<typeof setTimeout>;
-const token = consumeToken(location, sessionStorage, (url) =>
-  history.replaceState(null, '', url),
-);
 function warn(e: any) {
   notice = clean(e?.message || e);
   clearTimeout(noticeTimer);
@@ -259,7 +255,7 @@ function connect() {
     (location.protocol === 'https:' ? 'wss://' : 'ws://') +
       location.host +
       '/ws',
-    ['atto.rpc.v3', ...(token ? ['atto.auth.' + token] : [])],
+    ['atto.rpc.v3'],
   );
   rpc = new RPC((s) => {
     if (socket.readyState !== WebSocket.OPEN) throw Error('Disconnected');
@@ -318,7 +314,7 @@ function connect() {
   };
   socket.onerror = () =>
     warn(
-      'Cannot connect. Open the link printed by atto (including its token fragment), or check the listener.',
+      'Cannot connect. Check that atto serve (or /remote) is still running.',
     );
 }
 function columns() {

@@ -258,21 +258,6 @@ export function clean(s: any) {
     .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '')
     .replace(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/g, '');
 }
-export function consumeToken(
-  location: { hash: string; pathname: string; search: string },
-  storage: {
-    setItem: (k: string, v: string) => void;
-    getItem: (k: string) => string | null;
-  },
-  replace: (url: string) => void,
-) {
-  const t = new URLSearchParams(location.hash.slice(1)).get('token');
-  if (t) {
-    storage.setItem('atto-token', t);
-    replace(location.pathname + location.search);
-  }
-  return t || storage.getItem('atto-token') || '';
-}
 export function imageResource(resource: string) {
   const m = /^([A-Za-z0-9_-]+)-image-(\d+)$/.exec(resource);
   return m ? { itemId: m[1], index: Number(m[2]) } : null;

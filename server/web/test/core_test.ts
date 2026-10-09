@@ -2,7 +2,6 @@ import {
   View,
   RPC,
   safeURL,
-  consumeToken,
   clean,
   imageResource,
   plainMarkdown,
@@ -145,17 +144,6 @@ for (const url of [
 assert(
   !clean('x\x1b]52;secret\x07\x1b[31m<svg>\x00').includes('secret'),
   'escapes',
-);
-const store = new Map<string, string>();
-let url = '';
-const t = consumeToken(
-  { hash: '#token=abc', pathname: '/', search: '' },
-  { setItem: (k, v) => store.set(k, v), getItem: (k) => store.get(k) || null },
-  (s) => (url = s),
-);
-assert(
-  t === 'abc' && url === '/' && store.get('atto-token') === 'abc',
-  'fragment token',
 );
 assert(
   imageResource('t-i1-image-2')?.index === 2 && !imageResource('../x'),

@@ -10,9 +10,8 @@ function find(text: string) {
   )!;
 }
 (globalThis as any).openPage = () => {
-  assert(!ws.url.includes('token='), 'no query token');
-  assert(ws.protocols.includes('atto.auth.secret'), 'header token offer');
-  assert(location.hash === '', 'fragment consumed');
+  assert(ws.url.endsWith('/ws'), 'socket at /ws');
+  assert(ws.protocols.join() === 'atto.rpc.v3', 'no credential offer');
   find('New session').click();
 };
 (globalThis as any).checkPage = () => {

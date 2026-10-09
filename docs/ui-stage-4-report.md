@@ -9,10 +9,9 @@ Implemented on 2026-10-09 in the `atto/4c72966a` worktree.
   WS-only listeners and stdio/Unix transports keep their behavior.
 - TUI `/remote [ws://HOST:PORT]` shares its in-process Server, or uses the same
   daemon worker routes as every other facade; `/remote off` closes transport only.
-- Static assets contain no secrets. Public-bind auth uses the existing token
-  file and Origin policy. Fragment token is consumed once into sessionStorage;
-  `atto.auth.<token>` is a WS offer, only `atto.rpc.v3` is echoed. `/ws` rejects
-  query parameters. No HTTPS, PWA, service worker, QR or new runtime dependency.
+- Static assets contain no secrets. (Changed 2026-10-10: the web listener has
+  no token; it is for a trusted LAN or Tailscale. Origin and Host checks remain,
+  the latter against DNS rebinding.) `/ws` rejects query parameters. No HTTPS, PWA, service worker, QR or new runtime dependency.
 - Plain TypeScript DOM is the smaller allowed frontend alternative. Go esbuild
   + pinned/checksummed standalone Tailwind builds embedded committed assets;
   generation is not part of normal builds. Source-hash staleness test included.

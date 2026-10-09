@@ -35,6 +35,6 @@ globalThis.setTimeout=(fn,ms)=>{const id=++serial;timers.set(id,fn);return id;};
 globalThis.requestAnimationFrame=fn=>{queue.push(fn);return ++serial;};
 globalThis.flush=()=>{const a=queue.splice(0);for(const fn of a)fn();};globalThis.flushTimers=()=>{const a=[...timers.values()];timers.clear();for(const fn of a)fn();};
 globalThis.window=globalThis;globalThis.innerWidth=1400;globalThis.innerHeight=900;
-globalThis.location={protocol:'http:',host:'127.0.0.1:1234',hash:'#token=secret',pathname:'/',search:''};
+globalThis.location={protocol:'http:',host:'127.0.0.1:1234',hash:'',pathname:'/',search:''};
 const storage=new Map();globalThis.sessionStorage={setItem:(k,v)=>storage.set(k,v),getItem:k=>storage.get(k)||null};globalThis.history={replaceState(a,b,url){location.hash='';}};globalThis.navigator={};globalThis.confirm=()=>true;globalThis.prompt=()=>null;
 globalThis.testDone=false;

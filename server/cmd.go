@@ -45,14 +45,19 @@ func RunStdioWith(version string, args []string, routes *WorkerRoutes) error {
 			return err
 		}
 		defer l.Close()
-		fmt.Fprintln(os.Stdout, l.URL) // one bootstrap link; fragment never sent to HTTP
+		for _, u := range l.URLs {
+			fmt.Fprintln(os.Stdout, u)
+		}
 		if l.Public {
-			fmt.Fprintln(os.Stderr, TLSWarning, "Replace the wildcard host with this machine’s LAN/Tailscale address.")
+			fmt.Fprintln(os.Stderr, WebWarning)
 		}
 		return l.Wait()
 	}
 	return runtime.ServeListen(ctx, *listen, origins, os.Stderr)
 }
+
+// WebWarning is said when the web UI listens beyond this machine.
+const WebWarning = "warning: the web UI has no password: anyone who can reach this port can use atto (and run commands). Use it on a trusted LAN or over Tailscale."
 
 // TLSWarning is said when app-server listens beyond this machine.
 const TLSWarning = "warning: listening beyond this machine without TLS; prefer a private network such as Tailscale."

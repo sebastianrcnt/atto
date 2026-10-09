@@ -544,7 +544,7 @@ atto agent roles                    what -role picks from
 
 **Front end and back end are separate.** Clients attach to the session runtime over one JSON-RPC protocol, built around threads, turns and items (revision 3 is the only one served). `atto app-server` serves it over JSON-lines stdio by default, or `--listen unix:///tmp/atto.sock` (0600, removed on exit), or `--listen ws://127.0.0.1:7878` (one JSON-RPC message per text message). Socket disconnect is detach, not stop. The terminal UI is one such client. The browser UI is another independent client; `atto serve` or `atto app-server --listen ws://HOST:PORT --web` serves it at `/` and the protocol at `/ws`. The [client-author protocol reference](docs/protocol.md) covers every method, notification, handshake, cursor and prompt; a [small Python client](examples/clients/README.md) shows how to attach. `server/protocol.go` contains the Go DTOs.
 
-WS listeners beyond loopback require a bearer token (printed by app-server on stderr and saved in `~/.atto/server-token`); send `Authorization: Bearer <token>` or `?token=`. Browser origins must be same-host, loopback, or explicitly added with repeatable `--allow-origin https://client.example`. There is no built-in TLS: prefer a private network or TLS proxy. All transports route sessions to daemon workers when available; `--in-process` keeps a standalone server runtime. `initialize` (listing protocol revision 3) then `initialized` starts the protocol handshake. Detaching leaves worker execution alive; `thread/close` ends it.
+WS-only listeners (without `--web`) beyond loopback require a bearer token (printed by app-server on stderr and saved in `~/.atto/server-token`); send `Authorization: Bearer <token>` or `?token=`. Browser origins must be same-host, loopback, or explicitly added with repeatable `--allow-origin https://client.example`. There is no built-in TLS: prefer a private network or TLS proxy. All transports route sessions to daemon workers when available; `--in-process` keeps a standalone server runtime. `initialize` (listing protocol revision 3) then `initialized` starts the protocol handshake. Detaching leaves worker execution alive; `thread/close` ends it.
 
 ## Safety
 
@@ -556,9 +556,8 @@ atto app-server --listen ws://127.0.0.1:7879 --web # this machine only
 atto serve --listen ws://0.0.0.0:8080             # choose another port
 ```
 
-Open the **one bootstrap link printed on stdout**. For a wildcard listener,
-replace `0.0.0.0` (or `[::]`) with the machine's LAN IP, hostname or Tailscale
-address, keeping the port and `#token=…` fragment. In a running TUI, `/remote`
+Open one of the printed links (`http://<IP>:7879/`, one per address of this
+machine: LAN, Tailscale) in a browser; the machine's name or Tailscale name works too. In a running TUI, `/remote`
 starts the same listener against its runtime/workers and prints the link;
 `/remote off` stops listening, not session work. No QR dependency is added.
 
@@ -573,17 +572,16 @@ panes/band/status/toasts, `/diff`, `/goal` and `/jobs` draw the same Go UI trees
 as the TUI. The context card and pending-input previews are Go trees too.
 Tree/checkpoint navigation and fork-from-message remain native local pickers.
 
-**Security:** beyond loopback, the bearer token is required, even on a trusted
-LAN. The page consumes the URL fragment once, stores it in this tab's
-`sessionStorage`, and removes it from the address bar. It authenticates `/ws`
-using the `atto.auth.<token>` WebSocket subprotocol offer, never a query token
-or cookie. The server negotiates only `atto.rpc.v3`, not the secret offer.
-Static files contain no secrets; the socket keeps the existing Origin checks.
-Treat the printed link as a shell-access credential; don't share it publicly,
-log it, or expose the listener to the Internet. Reverse proxies must preserve
-WebSocket headers and must **not log credential headers**. Use a trusted LAN,
-Tailscale, or a TLS reverse proxy; ordinary HTTP works, with no HTTPS/PWA/service
-worker requirement. Clipboard copying may require a secure context; the page
+**Security:** the web UI has no password. Anyone who can reach the port can use
+atto, which means running commands as you, so it is for networks you trust: your
+home LAN, and Tailscale from outside (no port forwarding, no public Internet).
+Bind it to one address to narrow it, e.g. `atto serve --listen ws://100.x.y.z:7879`
+for the tailnet only or `ws://127.0.0.1:7879` for this machine. What atto still
+guards is the browser: a page from another site cannot open the socket (Origin
+check), and a site's name re-pointed at your machine is refused (DNS rebinding:
+only IP addresses, `localhost`, this machine's name, `NAME.local`, `*.ts.net`
+and `--allow-origin` hosts are served). Plain HTTP is fine; there is no
+HTTPS/PWA/service worker requirement. Clipboard copying may require a secure context; the page
 falls back to selectable text. Credential login and repository trust approvals
 remain in the local CLI, not shared extension trees.
 

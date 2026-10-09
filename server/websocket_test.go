@@ -44,6 +44,10 @@ func dialWS(t *testing.T, address string, headers http.Header, want int) *wsTest
 	if req.Header == nil {
 		req.Header = http.Header{}
 	}
+	if h := req.Header.Get("Host"); h != "" { // http.Request.Write sends req.Host, not the header
+		req.Host = h
+		req.Header.Del("Host")
+	}
 	req.Header.Set("Upgrade", "websocket")
 	req.Header.Set("Connection", "keep-alive, Upgrade")
 	req.Header.Set("Sec-WebSocket-Version", "13")

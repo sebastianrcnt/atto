@@ -38,18 +38,20 @@ There is no HTTP RPC or SSE endpoint. `atto serve` defaults to
 `atto app-server --listen ws://0.0.0.0:7879 --web`. `/remote` starts the same
 listener for the running TUI runtime/workers; `/remote off` closes only that
 listener. The explicit `--web` flag preserves WS-only listener behavior.
-With `--web`, app-server prints a bootstrap `http://HOST:PORT/#token=…` link
-on stdout once; the browser consumes the fragment into sessionStorage and
-removes it from the address bar. Off-loopback auth is still mandatory.
+With `--web`, app-server prints `http://HOST:PORT/` on stdout and asks for no
+token, also beyond loopback: the web UI is meant for a trusted LAN or a tailnet,
+which decide who reaches the port (a warning says so on stderr). It still
+refuses browser pages from other origins (below) and requests whose `Host` is
+not an IP address, `localhost`, this machine's name (`NAME`, `NAME.local`), a
+`*.ts.net` name or an `--allow-origin` host, which stops DNS rebinding. `/ws`
+in web mode rejects query parameters.
 
-app-server WS requires the bearer token when bound beyond loopback, but not when
+WS-only app-server (without `--web`) requires the bearer token when bound beyond loopback, but not when
 bound only to loopback. The persistent token is generated in `~/.atto/server-token` (or
 `$ATTO_DIR/server-token`, 0600); WS-only app-server prints the token and file on stderr
-for non-loopback listeners; web mode prints only the bootstrap link on stdout. Supply `Authorization: Bearer <token>`, or (for browsers) offer
+for non-loopback listeners. Supply `Authorization: Bearer <token>`, or (for browsers) offer
 `Sec-WebSocket-Protocol: atto.rpc.v3, atto.auth.<token>`. The secret offer is
-never echoed. WS-only listeners still accept `?token=<token>` for existing
-clients, but `/ws` in web mode rejects query parameters; the page never puts
-a token in a query string. Do not log query tokens or credential headers. Non-loopback listeners print a no-TLS warning: use a trusted
+never echoed. WS-only listeners also accept `?token=<token>`. Do not log query tokens or credential headers. Non-loopback listeners print a no-TLS warning: use a trusted
 private network such as Tailscale or a TLS reverse proxy. There is no built-in
 TLS termination, sandbox or per-command approval policy.
 

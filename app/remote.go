@@ -20,7 +20,7 @@ func (a *App) cmdRemote(arg string) {
 		return
 	}
 	if a.webListener != nil {
-		a.notice("Web UI: %s (replace wildcard host with LAN/Tailscale IP)", a.webListener.URL)
+		a.notice("Web UI: %s", strings.Join(a.webListener.URLs, "  "))
 		return
 	}
 	s := a.webServer
@@ -42,8 +42,8 @@ func (a *App) cmdRemote(arg string) {
 		return
 	}
 	a.webListener = l
-	a.notice("Web UI: %s (replace wildcard host with LAN/Tailscale IP; /remote off stops listening)", l.URL)
+	a.notice("Web UI: %s  (/remote off stops listening)", strings.Join(l.URLs, "  "))
 	if l.Public {
-		a.notice("%s", server.TLSWarning)
+		a.notice("%s", server.WebWarning)
 	}
 }

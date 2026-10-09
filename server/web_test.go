@@ -15,9 +15,9 @@ import (
 	"github.com/sebastianrcnt/atto/ui"
 )
 
-func TestWebAuthAndAssets(t *testing.T) {
+func TestWebOriginHostAndAssets(t *testing.T) {
 	s, _ := testServer(t)
-	h := httptest.NewServer(s.WebHandler("secret", nil))
+	h := httptest.NewServer(s.WebHandler(nil))
 	defer h.Close()
 	for _, path := range []string{"/", "/app.js", "/app.css"} {
 		r, e := http.Get(h.URL + path)
@@ -40,12 +40,39 @@ func TestWebAuthAndAssets(t *testing.T) {
 		}
 	}
 	for _, tc := range []struct {
-		path, token, origin string
-		want                int
-	}{{"/ws", "", "", 401}, {"/ws", "wrong", "", 401}, {"/ws", "secret", "https://evil.example", 403}, {"/ws?token=secret", "secret", "", 400}, {"/ws", "secret", "null", 403}, {"/ws", "secret", h.URL, 101}} {
-		headers := http.Header{"Sec-WebSocket-Protocol": {"atto.rpc.v3, atto.auth." + tc.token}}
+		path, origin, host string
+		want               int
+	}{
+		{"/ws", "", "", 101},                                   // no browser, no Origin
+		{"/ws", "https://evil.example", "", 403},               // cross-site page
+		{"/ws?x=1", "", "", 400},                               // no query parameters
+		{"/ws", "null", "", 403},                               // file:// and sandboxed pages
+		{"/ws", h.URL, "", 101},                                // the page itself
+		{"/ws", "http://evil.example:80", "evil.example", 403}, // DNS rebinding: same-host Origin, foreign Host
+		{"/", "", "evil.example", 403},
+		{"/", "", "box.tailnet-1234.ts.net", 200},
+		{"/", "", "192.168.0.10:7879", 200},
+		{"/", "", "localhost:7879", 200},
+	} {
+		headers := http.Header{"Sec-WebSocket-Protocol": {"atto.rpc.v3"}}
 		if tc.origin != "" {
 			headers.Set("Origin", tc.origin)
+		}
+		if tc.path == "/" {
+			req, _ := http.NewRequest("GET", h.URL+tc.path, nil)
+			req.Host = tc.host
+			r, e := http.DefaultClient.Do(req)
+			if e != nil {
+				t.Fatal(e)
+			}
+			r.Body.Close()
+			if r.StatusCode != tc.want {
+				t.Fatal(tc.host, r.Status)
+			}
+			continue
+		}
+		if tc.host != "" {
+			headers.Set("Host", tc.host)
 		}
 		c := dialWS(t, h.URL+tc.path, headers, tc.want)
 		if c != nil {
@@ -79,15 +106,13 @@ func TestWebListenerBootstrapAndDetach(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	token := strings.TrimPrefix(u.Fragment, "token=")
-	if token == "" || !l.Public || u.RawQuery != "" {
-		t.Fatal("bad bootstrap link")
+	if u.Fragment != "" || !l.Public || u.RawQuery != "" {
+		t.Fatal("bad link", l.URL)
 	}
-	u.Fragment = ""
 	u.Host = strings.ReplaceAll(u.Host, "[::]", "127.0.0.1")
 	u.Host = strings.ReplaceAll(u.Host, "0.0.0.0", "127.0.0.1")
 	u.Path = "/ws"
-	headers := http.Header{"Origin": {u.Scheme + "://" + u.Host}, "Sec-WebSocket-Protocol": {"atto.rpc.v3, atto.auth." + token}}
+	headers := http.Header{"Origin": {u.Scheme + "://" + u.Host}, "Sec-WebSocket-Protocol": {"atto.rpc.v3"}}
 	c := dialWS(t, u.String(), headers, 101)
 	c.rpc(t, 1, "initialize", map[string]any{"protocolVersions": []int{3}, "capabilities": map[string]any{"interactive": true}})
 	info := c.rpc(t, 2, "thread/start", nil)
