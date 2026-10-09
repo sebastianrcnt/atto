@@ -6,7 +6,7 @@ add slash commands, and show things in the TUI. atto compiles it with esbuild
 and runs it in an embedded JavaScript engine (goja); there is no Node.js, so
 `require`, `process` and npm modules that need Node are not available.
 
-`atto extensions docs` prints this file; `atto extensions source diff` prints the source of the built-in `/diff`, a small example; `atto extensions types` prints
+`atto extensions docs` prints this file; `atto extensions source diff` prints the Go source of the native `/diff` command; `atto extensions types` prints
 `atto.d.ts`, the API's type declarations.
 
 ## Where they live
@@ -16,7 +16,7 @@ and runs it in an embedded JavaScript engine (goja); there is no Node.js, so
 | `~/.atto/extensions/<name>.ts` or `.js` | user |
 | `~/.atto/extensions/<name>/index.ts` or `index.js` | user (a folder: other files in it can be imported) |
 | `<project>/.atto/extensions/...` (same shapes) | project |
-| inside atto (`extensions/builtin/<name>.ts` in the source) | builtin |
+| native Go commands inside atto (full builds list these with extensions) | builtin |
 
 `<project>` is the nearest directory above the working directory that holds
 `.git`. The name is the file or folder name. Files ending in `.d.ts` and
@@ -28,20 +28,28 @@ The approval covers the code as it is (the bundle's hash, including the
 files it imports); any change needs approval again. An agent cannot approve
 from its shell. User extensions need no approval.
 
-**Built-in extensions** ship inside the atto binary and are written against
-this same public API. There are two: `/diff`, which shows what changed
-in the session's working tree (`/diff [--staged] [path]`), and `/autorename`,
-which has the session's own model name the conversation from its latest
-messages
-([`extensions/builtin/autorename.ts`](../extensions/builtin/autorename.ts),
-an example of `atto.complete` and `ctx.session`). They need no
-approval, are listed as `builtin` in the Loaded block and in `atto extensions`,
-and can be turned off like any other (`"disabled": ["diff"]`). A user or
-project extension with the same name replaces it, so the way to change
-`/diff` is to copy its source,
-[`extensions/builtin/diff.ts`](../extensions/builtin/diff.ts), to
-`~/.atto/extensions/diff.ts`. It is a good small example: it runs `git` with
-`atto.exec`, parses the output, and shows it with `ctx.ui.showText`.
+**Slim builds** (`-tags noext`, `atto --version` shows `(slim)`) have no
+JavaScript or TypeScript extension engine. User and project files are ignored,
+not approved or run; the Loaded block, `atto extensions`, and `/extensions`
+report their count. Install with `ATTO_VARIANT=slim`, or switch with
+`atto update -variant slim|full`. Updates otherwise preserve your variant.
+
+**Native commands** `/diff [--staged] [path]` and `/autorename` ship in both
+variants. They were formerly TypeScript built-ins and are now implemented in
+Go ([diff](../extensions/native_diff.go),
+[autorename](../extensions/native_autorename.go)). `/autorename` runs only when
+you invoke it: it asks the session's current model for a title from the latest
+30 user/assistant text messages (not tool output), with a 64-token budget,
+60-second timeout and reasoning effort `none` (retrying at the model's default
+if necessary). It respects the current `/name` by including it in the prompt,
+but replaces it when you explicitly request a new title. Neither command
+requires approval. The full build lists them as `builtin`; both builds allow
+`"extensions": {"disabled": ["diff"]}`. In the full build, a user or project
+extension with the same name still replaces the native command, subject to
+normal project approval. All public extension APIs they used (`atto.exec`,
+`atto.complete`, `ctx.session` and `ctx.ui.showText`) remain available to user
+extensions in full builds. See [examples/extensions](../examples/extensions)
+for JavaScript/TypeScript examples.
 
 To turn one off, add its name to `settings.json`:
 

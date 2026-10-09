@@ -5,12 +5,12 @@ description: Write or change atto extensions (TypeScript) - events, slash comman
 
 # Writing atto extensions
 
-An extension is a TypeScript file atto loads into every session. Do not guess its API: read it first.
+An extension is a TypeScript file the full atto build loads into every session. Slim builds cannot run extensions: ask the user to switch with `atto update -variant full` first. Do not guess its API: read it first.
 
 1. Read the API.
    - `atto extensions docs` is the guide (events, ctx, UI, limits, examples).
    - `atto extensions types` prints `atto.d.ts`, the exact signatures.
-   - `atto extensions source diff` prints the source of the built-in /diff extension: a small, complete example (atto.exec, parsing, ctx.ui.showText, a slash command). `atto extensions list` shows the other built-in ones.
+   - `atto extensions source diff` prints the native Go /diff implementation (not a TypeScript extension). Use the guide and examples/extensions for TypeScript examples.
 2. Decide where it goes.
    - User extension: `~/.atto/extensions/<name>.ts` (or `<name>/index.ts` for several files). Needs no approval. This is the default.
    - Project extension: `<project>/.atto/extensions/<name>.ts`, only if the user wants it shared with the repository. It does not run until the user approves it: tell them to run `/extensions approve <name>` (or `atto extensions approve <name>` in their own terminal). Never try to approve it yourself; the shell refuses.
@@ -30,4 +30,4 @@ An extension is a TypeScript file atto loads into every session. Do not guess it
 - No Node.js: no `require`, `process` or npm packages that need them. Use `atto.exec`, `atto.fs`, `fetch`, `atto.mcp`.
 - Never put secrets (API keys, tokens) in extension files. Read them from the environment through `atto.exec`, or from a file the user keeps outside the repository.
 - Prefer small, single-purpose extensions: one file per behaviour, named for it.
-- To change a built-in extension, copy its source (`atto extensions source <name>`) to `~/.atto/extensions/<name>.ts` and edit the copy; an extension with the same name replaces the built-in one.
+- In full builds, a user or approved project extension named `diff` or `autorename` replaces the native command of that name. Write it against the public TypeScript API; do not copy the Go source into a `.ts` file.

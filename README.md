@@ -240,7 +240,7 @@ To use the terminal's own selection instead, hold the key that bypasses mouse re
 | `/context [system\|long\|normal]` | show context and cache use; allow long context or restore the tier cap |
 | `/reload` | read AGENTS.md, skills, hooks, extensions, MCP servers, `settings.json` and `models.json` again, keeping the conversation |
 | `/extensions [approve <name>]` | list extensions, or approve a project extension |
-| `/diff [--staged] [path]` | show what changed in the working tree: a summary, then the diff (a built-in extension, see `extensions/builtin/diff.ts`) |
+| `/diff [--staged] [path]` | show what changed in the working tree: a summary, then the diff (a native command, see `extensions/native_diff.go`) |
 | `/resume` | switch sessions in the agent command center (All tab) |
 | `/sessions` | the session picker: search, this directory or all, archive (`ctrl+x`), rename (`ctrl+r`) and preview saved sessions |
 | `/tree` | go back to any point of the session; earlier branches are kept |
@@ -360,11 +360,11 @@ export default function (atto) {
 - `/reload` (or `atto reload`) loads changes; the Loaded block shows each extension's status, commands and events, and errors with `file:line`.
 - Events: `session_start`, `session_end`, `turn_start`, `turn_end`, `user_prompt`, `tool_call`, `tool_result`. They run inside the hooks: `PreToolUse` hooks, then `tool_call`, the command, `tool_result`, then `PostToolUse` hooks.
 - Also `atto.exec`, `atto.fs`, `fetch`, timers, `atto.sendMessage`; dialogs and widgets are TUI-only (in `-p` and the server, dialogs get default answers).
-- `atto extensions docs` prints the guide ([docs/extensions.md](docs/extensions.md)), `atto extensions types` the type declarations, `atto extensions source diff` the source of a built-in one, `atto extensions` the list. [examples/extensions](examples/extensions) has examples to copy, such as one that shows reasoning translated by a small local model. A handler that hangs is skipped after 5 seconds and a runaway script is stopped and its extension disabled; atto goes on.
+- `atto extensions docs` prints the guide ([docs/extensions.md](docs/extensions.md)), `atto extensions types` the type declarations, `atto extensions source diff` the Go source of the native `/diff` command, `atto extensions` the list. [examples/extensions](examples/extensions) has examples to copy, such as one that shows reasoning translated by a small local model. A handler that hangs is skipped after 5 seconds and a runaway script is stopped and its extension disabled; atto goes on.
 
 **Skills** are read from `~/.atto/skills` and the project's `.atto/skills` (the first of a name wins), and from nowhere else: directories other tools share, such as `.agents/skills` and `.claude/skills`, hold what was installed for those tools.
 
-**Built-in skills.** atto ships skills of its own (Agent Skills, one `SKILL.md` each), listed in the system prompt like yours and shown as `builtin` in the Loaded block and `atto context`. Today there is one, `atto-extensions`: when you ask to customize atto, the model reads the extension API with `atto extensions docs` and `types`, writes the extension, runs `atto reload` and fixes load errors. Because the model reads skills as files, they are written to `~/.atto/cache/skills/<hash>/<name>/SKILL.md` (the hash changes when the text does). A skill of the same name in `~/.atto/skills` or the project's `.atto/skills` overrides a built-in one; `/skill:atto-extensions` runs it by hand; to turn one off: `{ "skills": { "disabled": ["atto-extensions"] } }` in `settings.json`. `atto extensions source diff` prints the source of the built-in `/diff` extension, the example the skill points to.
+**Built-in skills.** atto ships skills of its own (Agent Skills, one `SKILL.md` each), listed in the system prompt like yours and shown as `builtin` in the Loaded block and `atto context`. Today there is one, `atto-extensions`: when you ask to customize atto, the model reads the extension API with `atto extensions docs` and `types`, writes the extension, runs `atto reload` and fixes load errors. Because the model reads skills as files, they are written to `~/.atto/cache/skills/<hash>/<name>/SKILL.md` (the hash changes when the text does). A skill of the same name in `~/.atto/skills` or the project's `.atto/skills` overrides a built-in one; `/skill:atto-extensions` runs it by hand; to turn one off: `{ "skills": { "disabled": ["atto-extensions"] } }` in `settings.json`. `atto extensions source diff` prints the Go source of the native `/diff` command.
 
 **MCP.** atto has one tool, the shell, and keeps it that way: MCP servers are reached through `atto mcp` subcommands that the model runs in the shell, not through tools of their own. The tool schema and the system prompt stay the same whatever you configure (when at least one server exists the prompt gets one line naming them, in sorted order, so it changes only when your configuration does), and the prompt cache survives.
 
@@ -525,6 +525,27 @@ Agent state formerly lived in `subagents/`. Atto moves it to `agent-state/` unde
 If text looks garbled, doubled or leaves fragments behind (seen with wide characters such as Korean in Windows Terminal and other ConPTY hosts), atto can repaint every visible row on each frame instead of only the changed ones. This is on by default on Windows. Set `ATTO_FULL_REPAINT=1` to force it on, or `ATTO_FULL_REPAINT=0` to force it off, on any OS. While atto works, the line above the input animates at about 30 frames a second (only that line is rewritten); full repaint animates it every 250ms instead.
 
 The activity line's colors blend in 24-bit color when the terminal says it can (`COLORTERM=truecolor` or `24bit`, Windows Terminal, iTerm2, WezTerm, VS Code, Ghostty) and are rounded to the 256-color palette otherwise; on the Linux console and other 16-color terminals it is plain ASCII. Its teal turns amber when the model has sent nothing for 15 seconds (while no command runs), and back when output arrives.
+
+## Slim build
+
+The slim binary (`atto-slim_<os>_<arch>`, built with `-tags noext`) omits the
+JavaScript extension engine and TypeScript compiler. It is about 10 MB smaller
+than the full stripped build. `/diff` and `/autorename` are native Go commands
+in **both** builds; model providers, tools, hooks, MCP, skills and the UI remain.
+User and project extension files are not run or offered for approval in slim;
+the Loaded block and `atto extensions` report how many were ignored.
+
+Install slim on macOS/Linux:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/sebastianrcnt/atto/main/install.sh | ATTO_VARIANT=slim sh
+```
+
+On Windows, set `$env:ATTO_VARIANT = "slim"` before running `install.ps1`.
+`ATTO_CHANNEL=edge` also works with either variant. Updates preserve the running
+variant; switch explicitly with `atto update -variant slim` or
+`atto update -variant full`. A source build is `go build -tags noext ./cmd/atto`.
+
 
 ## Development
 

@@ -1,11 +1,15 @@
 #!/bin/sh
-# deploy.sh HOST... builds atto from this checkout for each ssh HOST and
+# deploy.sh [--slim] HOST... builds atto from this checkout for each ssh HOST and
 # installs it there, without GitHub: for development machines. Windows
 # hosts get %LOCALAPPDATA%\Programs\atto\atto.exe, others ~/.local/bin/atto
 # (the install scripts' defaults). The build is an edge build, so
-# "atto update" on the host keeps following the edge channel.
+# "atto update" on the host keeps following the edge channel and variant.
+# --slim or ATTO_VARIANT=slim omits the extension engine.
 set -eu
-[ $# -gt 0 ] || { echo "usage: scripts/deploy.sh HOST..." >&2; exit 2; }
+variant=${ATTO_VARIANT:-full}
+if [ "${1:-}" = --slim ]; then variant=slim; shift; fi
+case $variant in full) tags= ;; slim) tags=noext ;; *) echo "unknown ATTO_VARIANT '$variant'; use slim or full" >&2; exit 2 ;; esac
+[ $# -gt 0 ] || { echo "usage: scripts/deploy.sh [--slim] HOST..." >&2; exit 2; }
 cd "$(dirname "$0")/.."
 
 # The version CI would give this commit (see .github/workflows/ci.yml),
@@ -25,7 +29,7 @@ trap 'rm -rf "$tmp"' EXIT
 build() { # os arch -> path
 	out="$tmp/atto_$1_$2"
 	[ "$1" = windows ] && out="$out.exe"
-	CGO_ENABLED=0 GOOS=$1 GOARCH=$2 go build -trimpath \
+	CGO_ENABLED=0 GOOS=$1 GOARCH=$2 go build -trimpath -tags "$tags" \
 		-ldflags "-s -w -X github.com/sebastianrcnt/atto/update.Version=$version -X github.com/sebastianrcnt/atto/update.Channel=edge" \
 		-o "$out" ./cmd/atto
 	echo "$out"

@@ -14,22 +14,26 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
-      - run: go vet ./... && go test ./...
+      - run: go vet ./... && go test ./... && go vet -tags noext ./... && go test -tags noext ./...
       - name: Build
         run: |
           mkdir dist
           for target in darwin/amd64 darwin/arm64 linux/amd64 linux/arm64 windows/amd64 windows/arm64; do
             os=${target%/*} arch=${target#*/}
-            out=dist/atto_${os}_${arch}
-            [ "$os" = windows ] && out=$out.exe
-            CGO_ENABLED=0 GOOS=$os GOARCH=$arch go build -trimpath \
-              -ldflags "-s -w -X github.com/sebastianrcnt/atto/update.Version=${GITHUB_REF_NAME} -X github.com/sebastianrcnt/atto/update.Channel=stable" \
-              -o "$out" ./cmd/atto
+            for variant in full slim; do
+              prefix=atto tags=
+              [ "$variant" = slim ] && prefix=atto-slim tags=noext
+              out=dist/${prefix}_${os}_${arch}
+              [ "$os" = windows ] && out=$out.exe
+              CGO_ENABLED=0 GOOS=$os GOARCH=$arch go build -trimpath -tags "$tags" \
+                -ldflags "-s -w -X github.com/sebastianrcnt/atto/update.Version=${GITHUB_REF_NAME} -X github.com/sebastianrcnt/atto/update.Channel=stable" \
+                -o "$out" ./cmd/atto
+            done
           done
-          (cd dist && sha256sum atto_* > checksums.txt)
+          (cd dist && sha256sum atto*_* > checksums.txt)
       - uses: actions/attest-build-provenance@v2
         with:
-          subject-path: dist/atto_*
+          subject-path: dist/atto*_*
       - name: Publish
         env:
           GH_TOKEN: ${{ github.token }}

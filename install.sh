@@ -3,6 +3,7 @@
 #
 #   curl -fsSL https://raw.githubusercontent.com/sebastianrcnt/atto/main/install.sh | sh
 #
+# ATTO_VARIANT=slim|full picks the binary variant (default: full).
 # ATTO_CHANNEL=stable|edge picks the channel (default: stable, the latest
 # release; edge is the unstable build of main);
 # ATTO_VERSION=v0.1.0 pins an exact release and wins over ATTO_CHANNEL;
@@ -14,6 +15,7 @@ repo=sebastianrcnt/atto
 dir=${ATTO_INSTALL_DIR:-$HOME/.local/bin}
 channel=${ATTO_CHANNEL:-stable}
 version=${ATTO_VERSION:-}
+variant=${ATTO_VARIANT:-full}
 
 fail() { echo "atto install: $*" >&2; exit 1; }
 
@@ -27,7 +29,12 @@ case $(uname -m) in
   arm64 | aarch64) arch=arm64 ;;
   *) fail "unsupported CPU $(uname -m)" ;;
 esac
-asset=atto_${os}_${arch}
+case $variant in
+  full) prefix=atto ;;
+  slim) prefix=atto-slim ;;
+  *) fail "unknown ATTO_VARIANT '$variant'; use slim or full" ;;
+esac
+asset=${prefix}_${os}_${arch}
 
 # ATTO_VERSION=edge and ATTO_VERSION=latest are older spellings of
 # ATTO_CHANNEL=edge and ATTO_CHANNEL=stable; they are still accepted.

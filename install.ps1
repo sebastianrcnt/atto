@@ -2,6 +2,7 @@
 #
 #   irm https://raw.githubusercontent.com/sebastianrcnt/atto/main/install.ps1 | iex
 #
+# $env:ATTO_VARIANT = "slim" or "full" picks the binary variant (default: full).
 # $env:ATTO_CHANNEL = "stable" or "edge" picks the channel (default: stable, the
 # latest release; edge is the unstable build of main);
 # $env:ATTO_VERSION = "v0.1.0" pins an exact release and wins over ATTO_CHANNEL;
@@ -14,13 +15,19 @@ $repo = "sebastianrcnt/atto"
 $dir = if ($env:ATTO_INSTALL_DIR) { $env:ATTO_INSTALL_DIR } else { Join-Path $env:LOCALAPPDATA "Programs\atto" }
 $channel = if ($env:ATTO_CHANNEL) { $env:ATTO_CHANNEL } else { "stable" }
 $version = $env:ATTO_VERSION
+$variant = if ($env:ATTO_VARIANT) { $env:ATTO_VARIANT } else { "full" }
 
 $arch = switch ($env:PROCESSOR_ARCHITECTURE) {
     "AMD64" { "amd64" }
     "ARM64" { "arm64" }
     default { throw "atto install: unsupported CPU $env:PROCESSOR_ARCHITECTURE" }
 }
-$asset = "atto_windows_$arch.exe"
+$prefix = switch ($variant) {
+    "full" { "atto" }
+    "slim" { "atto-slim" }
+    default { throw "atto install: unknown ATTO_VARIANT '$variant'; use slim or full" }
+}
+$asset = "${prefix}_windows_$arch.exe"
 
 # ATTO_VERSION=edge and ATTO_VERSION=latest are older spellings of
 # ATTO_CHANNEL=edge and ATTO_CHANNEL=stable; they are still accepted.
