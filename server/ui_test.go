@@ -190,3 +190,24 @@ func TestUIItemOverlayPersistsWithoutChangingTruth(t *testing.T) {
 		}
 	}
 }
+
+func TestUIBlockPreservesProviderOwner(t *testing.T) {
+	h := newHarness(t)
+	th, _ := h.s.thread(h.id)
+	var path string
+	if err := th.call(func() error {
+		n := ui.Text(ui.TextProps{Text: "provider drawing"})
+		path = th.sess.Path
+		return th.uiRegistry().OpenDefault("review", ui.OpenOptions{Site: ui.Transcript, ID: "review/report", Title: "Review"}, nil, &n)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	_, entries, err := session.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	items := ItemsFromEntries(h.id, entries)
+	if len(items) != 1 || items[0].Ext != "review" || items[0].Title != "Review" {
+		t.Fatalf("provider provenance lost: %#v", items)
+	}
+}

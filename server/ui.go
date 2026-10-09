@@ -9,6 +9,7 @@ import (
 	"github.com/sebastianrcnt/atto/session"
 	"github.com/sebastianrcnt/atto/ui"
 	"log"
+	"strings"
 	"time"
 )
 
@@ -104,7 +105,7 @@ func (t *thread) persistUIBlock(m ui.Mutation) {
 	entry := t.uiEntries[i.ID]
 	if m.Method == "ui/open" {
 		if entry == "" {
-			t.sess.Append(session.Entry{Type: session.TypeUIBlock, Ext: "atto", Title: i.Options.Title, UISite: i.Site, UIID: i.ID, UIRev: i.Rev})
+			t.sess.Append(session.Entry{Type: session.TypeUIBlock, Ext: uiOwner(i.ID), Title: i.Options.Title, UISite: i.Site, UIID: i.ID, UIRev: i.Rev})
 			t.uiEntries[i.ID] = t.sess.Leaf()
 		}
 		return
@@ -130,7 +131,7 @@ func (t *thread) persistUIBlock(m ui.Mutation) {
 		}
 	}
 	if !found && m.Method == "ui/render" {
-		t.tr.Add(transcript.Item{Kind: transcript.UIBlock, Ext: "atto", Title: i.Options.Title, EntryID: entry, UITree: i.Tree, UIRevision: i.Rev, UIID: i.ID})
+		t.tr.Add(transcript.Item{Kind: transcript.UIBlock, Ext: uiOwner(i.ID), Title: i.Options.Title, EntryID: entry, UITree: i.Tree, UIRevision: i.Rev, UIID: i.ID})
 		if len(t.attached) == 0 {
 			t.tr.ForgetCompleted()
 		}
@@ -201,4 +202,9 @@ func replayUITree(n *ui.Node, itemID string) *ui.Node {
 	}
 	walk(&out)
 	return &out
+}
+
+func uiOwner(id string) string {
+	owner, _, _ := strings.Cut(id, "/")
+	return owner
 }
