@@ -3,17 +3,17 @@ package app
 import (
 	"os"
 	"testing"
+
+	"github.com/sebastianrcnt/atto/internal/testhome"
 )
 
 // New scans the home directory for skills; keep tests off the real one.
 func TestMain(m *testing.M) {
-	home, err := os.MkdirTemp("", "atto-home")
+	cleanup, err := testhome.Use()
 	if err != nil {
 		panic(err)
 	}
-	os.Setenv("HOME", home)
-	os.Setenv("USERPROFILE", home)
 	code := m.Run()
-	os.RemoveAll(home)
+	cleanup()
 	os.Exit(code)
 }

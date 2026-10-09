@@ -9,6 +9,7 @@ import (
 
 	"github.com/sebastianrcnt/atto/config"
 	"github.com/sebastianrcnt/atto/images"
+	"github.com/sebastianrcnt/atto/internal/testhome"
 	"github.com/sebastianrcnt/atto/jobs"
 	"github.com/sebastianrcnt/atto/outputs"
 )
@@ -55,13 +56,11 @@ func TestMain(m *testing.M) {
 	}
 	ShellHost = true
 	outputs.SetLimits(testLimits)
-	home, err := os.MkdirTemp("", "atto-home")
+	cleanup, err := testhome.Use()
 	if err != nil {
 		panic(err)
 	}
-	os.Setenv("HOME", home)
-	os.Setenv("USERPROFILE", home)
 	code := m.Run()
-	os.RemoveAll(home)
+	cleanup()
 	os.Exit(code)
 }
