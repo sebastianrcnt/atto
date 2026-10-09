@@ -417,6 +417,7 @@ func (c *agentCenter) shown() []centerItem {
 // Missing parents become roots; a visited set also makes corrupt cycles safe.
 // Worktree children keep their own cwd, but group under the root's project.
 func centerTree(items []centerItem) []centerItem {
+	items = centerShellParents(items)
 	ids := map[string]bool{}
 	children := map[string][]centerItem{}
 	for _, it := range items {
