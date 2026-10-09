@@ -13,25 +13,39 @@ client authors: `docs/protocol.md`. Reference implementation: `archive/atto2` (`
 |---|---|---|
 | 1 contract + runtime | `177199d`, `2a3af83`, `0086a01` | protocol revisions (`protocolVersions`, Codex-shaped `initialize`/`initialized`, `data.reason`); one event hub for every transport; `server.Client`/`Connect`; the session runtime (`server/runtime.go` and friends) owns execution: input, steer, queue, interrupts (#32 semantics), goals, prompts, shell, tree, inbox |
 | 2 TUI as client | `c4a881f`, `e43c781`, `59b30f8` | App owns no agent/writer/hooks/extensions/MCP/goal/inbox; it renders runtime notifications. `server.Live` is gone; `/remote` is `server.Scope` over the same runtime; the frozen web client is unchanged |
-| 3 workers | `d773cfc`, `2b138cb`, `7a9f540` | with the daemon each session runs in a worker (`atto _session-server`, unix socket); the TUI, panes, `atto connect`, app-server, serve, `/remote` and `-p` on a live session are its clients. Exit/Ctrl+D detaches; an unattended idle worker retires after 1 min; `/close` ends it; crash → reconnect. `ATTO_NO_DAEMON=1`/Windows: in-process as before |
+| 3 workers | `d773cfc`, `2b138cb`, `7a9f540` | with the daemon each session runs in a worker (`atto _session-server`, unix socket); the TUI, app-server, serve, `/remote` and `-p` on a live session are its clients. Exit/Ctrl+D detaches; an unattended idle worker retires after 1 min; `/close` ends it; crash → reconnect. `ATTO_NO_DAEMON=1`/Windows: in-process as before |
 | 4 transports + docs | `4b6a948`, `d4fcfae`, `a59521f` | `atto app-server --listen stdio:// \| unix:///path \| ws://IP:PORT` (hand-written RFC 6455, bearer token off loopback, Origin check, `--allow-origin`); `atto serve` has `/ws`; `docs/protocol.md` (tests keep it in step with the dispatcher); `examples/clients/stdio.py` and `index.html` |
 
 Fixes made while verifying (direct commits): `shutdown` read thread state outside the UI lock (race); test races; `TestAgentRefusals`
 flake; extension watchdog test flake; **an old daemon left running across an upgrade**: the new binary now runs in-process while
-it runs (`daemon.Usable`) and still lists/attaches/kills/stops its panes (pane ops downgrade the protocol; execution ops never do);
+it runs (`daemon.Usable`) and still supports status/stop against it (only these ops downgrade; execution ops never do);
 SIGTERM shuts app-server/serve down cleanly.
 
 Verified live (isolated `ATTO_DIR`, real model) for every phase: `-p`, `-p` with a 12 s command, app-server turns, TUI with and
 without the daemon (`scratchpad/smoke.sh`), steer, Esc detaching a running command into a job, `!`, `/jobs`, `/context`, `/model`,
-`/clear` + `/resume`, `/remote` RPC+SSE; detach mid-turn then `atto connect`; app-server `thread/resume` of the TUI's session with
+`/clear` + `/resume`, `/remote` RPC+SSE; detach mid-turn then `atto resume`; app-server `thread/resume` of the TUI's session with
 the turn appearing in the TUI; 1-minute retirement; `/close`; `kill -9` of a worker → "Reconnected."; ws turn with and without token;
 unix socket 0600 and removed on exit. CI is green after every phase.
 
 ## Things to know
 
-- **The user's real daemon is still the old version** (protocol 2, several panes). Until it stops, new `atto` prints
-  "running without the daemon" and runs in-process; `atto attach` still reaches the old panes. After closing those panes,
-  `atto daemon stop -force` switches to workers.
+- **PTY panes are removed (2026-10-09):** daemon protocol 4 manages workers only.
+  Every TUI runs in its calling terminal; `atto` starts new, `atto resume` picks
+  without starting a worker until selection, and `atto resume ID|prefix|name`
+  attaches/starts the chosen session. Center navigation switches this TUI, never
+  opens another pane. Invisible picker panes had pinned empty workers and retained
+  large TUI heaps; this intentionally reverses the previous keep-panes decision.
+- **Old daemon upgrade:** protocol 2/3 causes in-process fallback with a hint to
+  stop it. Only status and stop downgrade. Run `atto daemon stop -force` to end its
+  old sessions/work before using workers. Removed attach/connect/-c/-resume print
+  a one-line resume pointer for one release; /detach is gone. `_continue` remains
+  necessary for the no-daemon background-exit handoff.
+- **Lifetime:** SIGHUP/SIGTERM and normal worker-client exits detach; `/close` and
+  `atto daemon kill SESSION` explicitly end work. Status lists workers and names,
+  plus runtime-derived idle/working/waiting state. Unix signal cleanup also bounds
+  writes and flushes abandoned output: closing an undrained macOS PTY can block
+  even after nonblocking writes unless its output queue is flushed.
+  `ATTO_WORKER_RETENTION` can shorten the one-minute default in process tests.
 - **Behaviour changes on purpose:** switching away from a busy session (/clear, /resume, /new) no longer cancels it; in daemon
   mode exit detaches instead of ending the session (use `/close`).
 - **Known limits** (documented in tui-as-client.md): a crashed worker restores only saved session state (unsaved queued input

@@ -2,7 +2,7 @@
 
 Research/design, 2026-10-07. This is a plan for **atto's own protocol**, not
 Codex wire compatibility. Method names below are proposals unless explicitly
-identified as existing. No implementation change is part of this report.
+identified as existing. Historical research is preserved below; §8 records implementation status.
 
 ## Recommendation
 
@@ -37,7 +37,7 @@ update/restart of a busy execution worker.
 
 Interactive startup (`cmd/atto/main.go`) normally asks `daemon.Run` to start the
 whole interactive binary in a PTY pane. Inside that pane `app.Run` still does all
-execution. `atto attach` is a terminal byte relay, not a protocol client. Windows,
+execution. The former attachment command was a terminal byte relay, not a protocol client. Windows,
 non-terminals, `daemon: false` and `ATTO_NO_DAEMON` bypass this path.
 
 `App` in `app/app.go` creates `core.NewAgentSources`, `core.LoadExtensions` with
@@ -180,7 +180,7 @@ mutations belong to the server. Names in the last column are detailed in §4.
 | Usage/activity/status (`statusline.go`, activity.go, remote.go) | Existing ThreadInfo usage, TurnInfo, thread/usage; partial activity and priced/subscription metadata | Add activity/retry/tool timing/tokens and counts, long context, git/workspace, runtime memory. Distinguish session lifetime spend from active-context usage. Run custom statusLine command once in server; publish output/error, with explicit ANSI policy and memory semantics. Width/spinner/clock/cost display stay local. |
 | Agent center, all-session tree (`agents.go`, cli/daemon.go) | Partial agent/list/read scoped to parent; thread/list omits full global live hierarchy | Daemon registry sessions/list + sessions/changed merges workers/saved/agent/external parent metadata; server parent/agent APIs. Client groups/filters/folds locally, selects target without moving another client. No pane-state proxy for execution truth. |
 | Agents, agent messages/tasks (`cli/agent.go`, agentstate/) | Partial list/read only; execution via _agent-turn processes/jobs and inbox files | Migrate spawn/task/send/stop/close/report/wait to agent RPC backed by workers/registry, retaining hierarchy/slots/worktrees/final answers. Attach to a busy child worker, never concurrently resume its writer. External parents remain durable tree anchors, not fake running agents. |
-| Exit/background continuation/update (`background_exit.go`, `cli/bgrun.go`, `pane.go`) | Partial tool-background only; today detach leaves whole TUI, non-daemon background cancels/replays turn | Separate client/detach from session/close. Keep old menu behavior during in-process parity phase; daemon mode detach leaves current request/tool/queue/goal/extensions/MCP untouched. Explicit shutdown stops tree/jobs/hooks and releases lease. Updating TUI reconnects to old worker. |
+| Exit/background continuation/update (`background_exit.go`, `cli/bgrun.go`) | Partial tool-background only; today detach leaves whole TUI, non-daemon background cancels/replays turn | Separate client/detach from session/close. Keep old menu behavior during in-process parity phase; daemon mode detach leaves current request/tool/queue/goal/extensions/MCP untouched. Explicit shutdown stops tree/jobs/hooks and releases lease. Updating TUI reconnects to old worker. |
 | Ancillary UI: copy/mentions/login/update/render settings (`copy.go`, mention.go, login.go, updatecmd.go) | Not a general execution protocol | Copy/OSC52, search, editor history, selection, renderer, mouse, expansion and frontend update are local. Mentions need workspace/list when client lacks worker FS; login/logout operate server-host credentials through local privileged auth flow, never broadcast secrets in prompt/SSE. Reload model availability afterwards; preserve first-run no-model UI. |
 
 ## 3. Target architecture and ownership
@@ -272,28 +272,20 @@ how long idle workers remain resident; before retiring, snapshot all necessary
 state and ensure jobs/timers/active goals/prompt obligations are accounted for.
 A session with a future timer is not equivalent to an empty idle pane.
 
-### 3.3 Mapping the current pane model
+### 3.3 Terminal clients (decision revised 2026-10-09)
 
-Today a pane is a PTY + TUI process + output mode tracker; multiple attachments
-share the **same editor, cursor, size and keys**. OSC 7337 markers authenticate
-ready/session/name/state/detach/switch/new/open; attach requests SIGUSR1 redraw.
-This is screen sharing, not equal independent clients.
+The daemon supervises workers only. Every TUI runs in its own terminal process,
+with a client-local editor, cursor, renderer and terminal size. There is no PTY
+creation, screen relay, OSC pane control, or daemon-requested redraw. `atto`
+starts a new worker; `atto resume` picks/resolves a conversation and attaches to
+its live worker or starts one from saved state. The center switches this TUI,
+never another client or a pane. `daemon kill SESSION` closes execution, not a view.
+Only status/stop may downgrade daemon control protocol 4 to reach older daemons.
 
-Use a transition with two layers:
-
-1. Keep PTY panes and legacy `atto attach` working while the pane's TUI becomes
-   an RPC client of a daemon worker. A TUI crash then kills a view, not execution.
-   Daemon panes reference a stable session ID; worker state is authoritative.
-2. Make normal `atto attach <session>` launch a fresh local TUI protocol client.
-   Each terminal has its own draft/size/navigation. Keep explicit legacy screen
-   share only if desired. New/open/switch markers become local client navigation
-   or registry requests, not global session switches. Execution discovery/status
-   no longer relies on OSC markers or a pane's repaint loop.
-
-The daemon's idle-exit condition becomes no live workers/required schedules and
-no views, not no panes. `daemon kill`/stop UX must distinguish closing a view
-from stopping execution; `stop -force` must clearly warn it closes sessions and
-children. Pane numeric IDs can be transitional aliases; session IDs are stable.
+This reverses the earlier decision to retain the pane layer: an abandoned picker
+pane could create an empty worker before selection, pin it with a ghost client,
+and keep a large invisible TUI heap resident. One local TUI per terminal removes
+that lifetime confusion and the overlapping reopening commands.
 
 ### 3.4 `/remote`, background continuation and lease handoff
 
@@ -584,7 +576,7 @@ Java/phone UI feature work are not included (they consume the same protocol).
 | D: remaining server features | (1) prompt host and extension catalog/commands; (2) MCP/extension approval; (3) reload/context/long mode/default settings; (4) tree/navigation/summary/fork/labels/archive; (5) status command + images + diagnostics | 5–8 d | Deadlocks with extension promises; exact restore/cwd/accounting; destructive operation conflicts. Every inventory row has RPC fixture and parity test. |
 | E: TUI becomes local client | (1) protocol item-to-block rendering adapter; (2) replace input/key execution calls; (3) replace goal/jobs/status/session/extension reads; (4) remove direct ownership fields; (5) `/remote` uses common facade, retain legacy background path | 2–4 d | Optimistic UI duplication, changed notices/focus, no-model/login; app rendering golden tests + local/web simultaneous parity; App cannot reach agent/writer. |
 | F: daemon session workers | (1) worker entrypoint/socket readiness/lease; (2) registry find-or-start/routing; (3) connect/attach/stdio bridge; (4) PTY view-to-worker reference and crash survival; (5) gateway serve/remote routing + revocation | 6–9 d | Writer split-brain, stale sockets, cwd/env and secrets, mixed protocols; kill view during fake stream/tool and prove same worker/turn continues. |
-| G: frontend lifecycle & center | (1) detach vs close UX; (2) independent local atto attach; (3) sessions registry center + tree; (4) idle policy/worker-version update; (5) retire handoff path for managed sessions | 4–7 d | Intentional lifetime change, orphan resources, scheduling timers without views; restart/update TUI does not repeat provider request; session close still cleans tree. |
+| G: frontend lifecycle & center | (1) detach vs close UX; (2) independent local TUI resume; (3) sessions registry center + tree; (4) idle policy/worker-version update; (5) retire handoff path for managed sessions | 4–7 d | Intentional lifetime change, orphan resources, scheduling timers without views; restart/update TUI does not repeat provider request; session close still cleans tree. |
 | H: agent/print convergence | (1) protocol-backed agent spawn/tasks/messages; (2) child worker slots/worktree/shutdown; (3) final-answer/wait/report parity and external anchors; (4) migrate saved print/background workflows; (5) remove obsolete execution paths | 7–11 d | Duplicate final answers/turn consumers, close/spawn races, print output contract; existing CLI/agent regressions plus protocol tree tests. |
 | I: release hardening | (1) chaos/backpressure/security/version tests; (2) legacy read-only fallback + rollout docs; (3) cleanup imports/dead adapters, review all inventory rows | 3–5 d | Lost accepted input, schema skew, platform shutdown; full offline test matrix and no-code-path execution fallback on managed sessions. |
 
@@ -731,7 +723,7 @@ Primary ownership/input: `app/app.go`, `queue.go`, `goal.go`, `inbox.go`,
 `usershell.go`, `commands.go`, `remote.go`, `remoteprompt.go`, `background_exit.go`.
 Session/context/UI: `app/resume.go`, `navigate.go`, `branchsummary.go`, `context.go`,
 `loaded.go`, `items.go`, `extensions.go`, `blockdisplay.go`, `exttext.go`, `mcp.go`,
-`images.go`, `statusline.go`, `activity.go`, `agents.go`, `tree.go`, `pane*.go`.
+`images.go`, `statusline.go`, `activity.go`, `agents.go`, `tree.go`, `signals_*.go`.
 Shared execution: `core/core.go`, `goal.go`, `reload.go`, `extensions.go`, `mcp.go`,
 `loaded.go`, `core/transcript/{builder,transcript,display}.go`;
 `agent/{agent,branch,usershell,bash}.go`.
@@ -748,7 +740,7 @@ context,mcp}.go`, `cmd/atto/main.go`. Extension/notification/tree semantics:
 The split follows the archived implementation's decisions: detach does not stop
 execution; goals, jobs and timers continue without clients; prompts are server
 objects, the first answer wins and unattended prompts are not auto-answered;
-clients are equal; daemon PTY panes and `atto attach` remain; the protocol is
+clients are equal; daemon PTY panes were removed on 2026-10-09; the protocol is
 versioned and negotiated; Windows retains an in-process runtime. The TUI keeps
 its present execution path during phase 1 and becomes a runtime client in phase 2.
 
@@ -934,14 +926,13 @@ Workers use `DefaultSessionRetention` (one minute). Client EOF and explicit deta
 leave work alone. The phase-1 runtime's retirement predicate and lane recheck remain
 the authority: runs, shells, queued work, active unheld goals, jobs, timers, retries
 and unanswered prompts prevent retirement. Retention is injectable through the
-hidden worker flag for tests, not a new user settings policy. Daemon protocol 3
-adds worker discovery and listing (incarnation ID, session, cwd, clients, busy,
-version, pid). Explicit daemon stop closes workers too; only this stop operation
+hidden worker flag and ATTO_WORKER_RETENTION for tests, not a user settings policy. Daemon protocol 4
+retains worker discovery and listing (incarnation ID, session, cwd, clients, busy,
+version, pid). Explicit daemon stop closes workers too; only status and stop operations
 can use an older daemon control revision after an upgrade, never execution.
 
-Plain interactive atto and daemon panes use worker sockets when the daemon is
-available. `atto connect [session]` opens an independent TUI, with its own editor;
-`atto attach` still shares a pane's terminal bytes. Exit, `/quit` and empty-editor
+Plain interactive atto uses worker sockets when the daemon is available.
+`atto resume [session]` opens an independent TUI, with its own editor. Exit, `/quit` and empty-editor
 Ctrl+D detach, including during a turn. `/close` closes the runtime with reason
 `close`. `/clear`, `/new`, `/resume` and `/fork` move this client to another worker;
 old connections cannot apply notifications or callbacks to the new view. Startup
@@ -961,10 +952,10 @@ identity and interactive capability. `/remote` uses the same facade and Scope
 policy, including terminal-local commands and session switching; the frozen web
 client is unchanged.
 
-`atto -p -session/-c` on a live worker sends input through that worker and returns
+`atto -p -session ID` on a live worker sends input through that worker and returns
 the final answer in text or JSON. Like archived phase H, worker print refuses
 stream-json and per-run goal/image/model/effort/max-step overrides rather than
-silently changing a shared runtime; use `atto connect` for those controls. It waits
+silently changing a shared runtime; use `atto resume` for those controls. It waits
 past stale idle notifications and reports step/token usage. Worker print interruption follows runtime user-interrupt semantics, including
 hosted-command detach; standalone print keeps its ordinary signal cancellation.
 Plain print,
@@ -984,7 +975,7 @@ stale and failed-start cleanup, injected idle retirement without canceling detac
 turns, protocol-facade fanout/cursors/recovery identities, SSE capabilities and
 version refusal. Print tests cover answers, usage and stale idle notifications.
 Real-binary daemon PTY tests cover prompt/answer, Ctrl+D exit, killing the TUI
-mid-turn, `atto connect` to the same worker/turn, a simultaneous app-server client
+mid-turn, `atto resume` to the same worker/turn, a simultaneous app-server client
 seeing one answer, print through that worker, transparent worker-crash reconnect
 and `/close`. Phase-1 tests continue to cover retirement blockers (goals, jobs,
 timers and prompts); phase-2 in-process and hosted user-interrupt tests remain.
@@ -1048,3 +1039,27 @@ always uses its existing token. Socket reconnect uses fresh snapshots, not a new
 arbitrary replay API. No full Codex adapter, durable input journal, `atto agent`
 execution change or frozen web-client change was made. Examples intentionally
 omit production reconnect/backoff and complete extension/image rendering.
+
+### Terminal-client simplification — 2026-10-09
+
+**Done:** daemon control protocol 4 supervises only session workers. `atto`,
+`atto resume [ID|unique prefix|name]`, and the standalone agent center open a
+TUI in the calling terminal. The resume view creates neither worker nor empty
+session before selection; live sessions are first/marked, and the default cursor
+continues the most recent conversation. Enter/→ and `n` in the center switch this
+TUI's worker connection, leaving accepted work in the previous worker untouched.
+SIGHUP/SIGTERM detach without `/close` semantics; `/close` and daemon kill end work.
+Unix terminal output uses a separate nonblocking descriptor; signal cleanup bounds
+mode-restoration writes and flushes abandoned output before close (macOS otherwise
+waits for an undrained PTY). Normal rendering still waits for terminal output.
+Multiple terminals share runtime input/notifications, not screens or terminal sizes.
+
+Removed commands/flags: attach, connect, /detach, -c and -resume. The removed CLI
+commands/flags give a one-line pointer for one release. `_continue` is retained
+only for the no-daemon background-exit handoff. Protocol 2/3 daemons cause execution
+to fall back in-process; diagnostics and stop remain upgrade-compatible.
+
+The earlier phase notes below/above describe the migration at that time, not a
+promise to keep pane behavior. app-server, serve, /remote, Swing, examples and
+agent execution are unchanged. Worker crash/registry/durable-input limitations
+remain as documented.

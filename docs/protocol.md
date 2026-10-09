@@ -222,7 +222,7 @@ by `TestProtocolReferenceMethods`; adding a method without documenting it fails.
 | `ping` | `{}` | `{}`; ordering fence on the same connection |
 | `models/list` | `{}` | `{models:[{id,name,contextWindow,efforts,hasKey,images}]}` |
 | `models/reload` | T | `{}`; reload configured models |
-| `worker/state` | T | `{id,session,cwd,clients,busy,version,pid}`; diagnostics, no attachment added |
+| `worker/state` | T | `{id,session,name,state:idle|working|waiting,cwd,clients,busy,version,pid}`; diagnostics, no attachment added |
 
 ### Threads and navigation
 
@@ -491,3 +491,15 @@ over an untrusted plain-WS network. Keys must not appear in client settings,
 transcripts, notifications or diagnostic logging. OAuth URLs open on the client.
 The native protocol exposes select, multiSelect and input prompts; confirms
 are single-select Yes/No prompts, not separate bidirectional JSON-RPC requests.
+
+## Daemon control (local CLI discovery)
+
+The daemon's framed Unix-socket control protocol is revision **4**, distinct from
+JSON-RPC protocol revisions. Operations are `worker` (find/start), `workers` and
+`status` (list), `kill` (close session/work), and `stop` (force required for live
+workers). It no longer hosts PTYs or transports terminal screens. Every TUI is
+an independent worker client; center navigation only changes that client's
+attachment. Only `status`/`stop` downgrade to revisions 2/3 for upgrades; execution
+falls back in-process until an incompatible old daemon is stopped. No JSON-RPC
+method was removed; worker/state adds name and state diagnostics. Worker retention defaults to one minute;
+`ATTO_WORKER_RETENTION` accepts a duration override for process tests/deployments.

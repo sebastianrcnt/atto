@@ -122,15 +122,14 @@ A model can set:
 atto                                  # interactive session
 atto "fix the build"                  # interactive, starting with this message
 atto -m local/my-model                # pick the model
-atto -c                               # continue the last session here
-atto -resume                          # pick a saved session
+atto resume                           # pick a session (Enter: most recent)
+atto resume ID                        # resume by ID, unique prefix or name
 atto -p "fix the failing test"        # one prompt, non-interactive
 git diff | atto -p "review this"      # stdin is appended to the prompt
 atto -p -image shot.png "why?"        # attach images (repeatable)
 pngpaste - | atto -p "what is this?"  # an image on stdin is attached too
 atto -p -output-format json "..."     # also: stream-json
 atto -p -goal "make the tests pass"
-atto attach                           # back to an atto left running (see below)
 ```
 
 ### Sessions keep running: the daemon
@@ -143,29 +142,37 @@ An unattended worker with no work retires after one minute; its saved conversati
 can still be resumed.
 
 The daemon starts on demand, runs per user and is never installed as a service
-(no launchd, systemd or scheduled task). Its PTY panes remain: `atto attach` shares
-a pane's screen and keys, while `atto connect` opens an independent TUI/editor on
-the same worker. Several frontends can use one conversation without another writer.
+(no launchd, systemd or scheduled task). It supervises workers only: every TUI
+runs in its calling terminal process with its own editor and terminal size.
+Several clients may attach and send input to the same conversation.
 
 ```sh
-atto attach            # the most recent pane no terminal shows
-atto attach 3          # pane 3, or its session ID (a prefix will do)
-atto attach -l         # running panes and session workers
-atto connect SESSION   # an independent TUI on this worker
-atto connect           # latest saved conversation here, else a new one
+atto                   # new conversation in this terminal
+atto resume            # this directory's sessions; Enter continues the latest
+atto resume SESSION    # ID, unique ID prefix, or case-insensitive session name
 atto agents            # the agent command center, including live workers
-atto daemon kill 3     # end a pane's TUI; its worker and work continue
-atto daemon stop -force # stop panes and workers, including their work
+atto daemon status     # sessions, names, directories, clients, state and version
+atto daemon kill SESSION # close the worker and end its work (like /close)
+atto daemon stop -force # stop workers, including their work
 ```
 
-`/detach` still leaves a pane running, so `atto attach` returns to that same screen.
-`/clear`, `/new`, `/resume` and `/fork` switch only this client's conversation;
+The resume picker starts no worker until a session is chosen. Live workers are
+marked and listed first; the cursor selects the most recently used conversation.
+Esc/Ctrl+C exits without starting anything. Ambiguous names or prefixes list the
+matching session IDs.
+
+`/clear`, `/new`, `/resume` and `/fork` switch only this TUI's conversation;
 accepted work in the previous worker continues. `/remote` controls the same worker
 from the frozen web client. `atto app-server` and `atto serve` route sessions to
-workers too; pass `-in-process` to use single-process operation. `atto -p -session`
-(or `-c`) on a live worker routes its prompt there (text/JSON; per-run overrides and
-stream-json are refused with a pointer to `atto connect`). Other print runs and
-agent CLI turns retain their existing execution path.
+workers too; pass `-in-process` to use single-process operation. `atto -p -session ID`
+on a live worker routes its prompt there (text/JSON; per-run overrides and
+stream-json are refused with a pointer to `atto resume`). Other print runs and
+agent CLI turns retain their existing execution path. `_continue` remains an
+internal helper for the in-process busy-exit menu.
+
+Daemon control protocol 4 has no PTY screen relay or pane operations. Across an
+upgrade, an older running daemon triggers in-process fallback with a hint to stop
+it; `atto daemon status` and `stop [-force]` still work against it.
 
 `"daemon": false` or `ATTO_NO_DAEMON=1` keeps the in-process runtime: exit closes
 its sessions and stops their jobs, and the busy exit menu still offers “Run in
@@ -189,7 +196,7 @@ workers still retire normally, and `atto daemon stop -force` can stop an older d
 | `Esc` | interrupt, or send pending steers now; a running hosted model command keeps running as a job (`/jobs`) |
 | `Ctrl+Enter` | while the agent works, interrupt it and send the prompt (after pending steers) as a new turn at once; an active goal is not paused but waits for you after that turn. `Ctrl+G` does the same where the terminal can't tell `Ctrl+Enter` from `Enter` (atto asks for xterm modifyOtherKeys and the kitty keyboard protocol; Terminal.app, `screen`, the Windows console and tmux without `extended-keys on` don't send it) |
 | `Esc` `Esc` | on an empty prompt: open the session tree to go back to an earlier message and edit it |
-| `←` | on an empty prompt: the agent command center (also `/agents`), as codex's: every atto session, the daemon's running ones and the saved ones, grouped by project, with tabs (`Tab`/`Shift+Tab`) for All, Needs you (a question is open or a goal waits for you), Working, Ready and Inactive (saved), and the selected session's last message, project, branch and first prompt on the right. `→` or `Enter` goes to it: a running session's pane is shown on this terminal, a saved one opens in a new pane; `n` starts a new session in the selected one's project; `/` searches; `←`, `Esc` or `Ctrl+C` comes back (`Ctrl+C` closes only the center, without interrupting a running turn or shell command). Run outside the daemon it resumes a saved session in place. Agents appear as a tree under the session that started them (shell-started agents have an “agents started from a shell” parent). `Space` folds/unfolds a tree; tabs and search include agents and reveal matching rows with their ancestors. Agent rows show their path, role, model, status and worktree branch; details show the task, last answer/report and turn tokens/duration. A running agent opens read-only with `Ctrl+R` to refresh until it finishes |
+| `←` | on an empty prompt: the agent command center (also `/agents`), as codex's: every atto session, the daemon's running ones and the saved ones, grouped by project, with tabs (`Tab`/`Shift+Tab`) for All, Needs you (a question is open or a goal waits for you), Working, Ready and Inactive (saved), and the selected session's last message, project, branch and first prompt on the right. `→` or `Enter` goes to it: this TUI attaches to its worker (or starts one from the saved file), detaching from the previous worker; `n` starts a new session in the selected one's project; `/` searches; `←`, `Esc` or `Ctrl+C` comes back (`Ctrl+C` closes only the center, without interrupting a running turn or shell command). Agents appear as a tree under the session that started them (shell-started agents have an “agents started from a shell” parent). `Space` folds/unfolds a tree; tabs and search include agents and reveal matching rows with their ancestors. Agent rows show their path, role, model, status and worktree branch; details show the task, last answer/report and turn tokens/duration. A running agent opens read-only with `Ctrl+R` to refresh until it finishes |
 | `Shift+Tab` | cycle reasoning effort |
 | `Ctrl+T` | expand everything: thinking, command groups and every command's full output; again to fold it all back (or click one block) |
 | `Ctrl+B` | move the running command to the background: it keeps running as a job (`/jobs`), the agent goes on and gets an `[atto event]` when it exits |
@@ -234,7 +241,7 @@ To use the terminal's own selection instead, hold the key that bypasses mouse re
 | `/reload` | read AGENTS.md, skills, hooks, extensions, MCP servers, `settings.json` and `models.json` again, keeping the conversation |
 | `/extensions [approve <name>]` | list extensions, or approve a project extension |
 | `/diff [--staged] [path]` | show what changed in the working tree: a summary, then the diff (a built-in extension, see `extensions/builtin/diff.ts`) |
-| `/resume` | resume a saved session: the agent command center on its Inactive tab |
+| `/resume` | switch sessions in the agent command center (All tab) |
 | `/sessions` | the session picker: search, this directory or all, archive (`ctrl+x`), rename (`ctrl+r`) and preview saved sessions |
 | `/tree` | go back to any point of the session; earlier branches are kept |
 | `/fork` | start a new session from an earlier message |
@@ -245,7 +252,6 @@ To use the terminal's own selection instead, hold the key that bypasses mouse re
 | `/goal [<objective>\|clear\|edit\|pause\|resume]` | set or view the goal for a long-running task, as in codex: bare `/goal` (or `status`) shows it with the time and tokens used, `help` shows the usage, `edit` opens a prompt, a new objective asks before replacing an unfinished goal. The words help and status alone never become an objective. Clearing or pausing while a turn runs is told to the model. A message sent while the goal is waiting, paused, stalled or usage limited carries a short note saying so, so the model answers instead of resuming goal work; a message sent while a goal turn runs says the goal is still active. A turn that fails for any reason a retry might fix (anything but an interrupt, a usage limit, an authentication failure or a request the provider rejected) is retried after 10s, 30s, 1m, 2m, 5m and 10m before the goal stalls (each turn has already sent a failed request up to 5 more times itself); Esc, `/goal pause` and `/goal clear` end the wait. The status shows at the right of the status line ("Pursuing goal (14m)"), Esc pauses it, and opening a session with a paused or stalled goal asks whether to resume |
 | `/agents` | the agent command center (as `←` on an empty prompt) |
 | `/close` | stop this session and its work, then exit the TUI |
-| `/detach` | leave the session running in the daemon and return to the shell; `atto attach` comes back |
 | `/remote [on [port]\|off]` | control this session from a phone or browser: serves atto's web client on port 7879 (or `"remote": {"port": N}` in `settings.json`), prints its link and a QR code, and marks messages sent from there "from remote"; `off` closes every connection and revokes the link |
 | `/jobs`, `/stop` | list or stop background jobs |
 | `/timer`, `/timers` | wake the agent later, or list pending timers |
@@ -293,7 +299,7 @@ Keys are exact `provider/model` IDs. A positive cap compacts at 90% of that many
 Manage sessions from the shell, without the TUI:
 
 ```
-atto resume [id]                     resume a session (no id opens the picker; an id may be a unique prefix)
+atto resume [id|name]                resume a session (no argument: picker; IDs may be unique prefixes)
 atto sessions [-all] [-archived] [-json] [-n N]   list this directory's sessions (-all: every directory)
 atto sessions show <id>              details and the last user messages
 atto sessions rename <id> <name>
@@ -464,7 +470,7 @@ Agent state formerly lived in `subagents/`. Atto moves it to `agent-state/` unde
 
 | Path | Contents |
 | --- | --- |
-| `settings.json` | default model and effort, renderer, `mouse`, `toolGroups` (`false`: no command groups), `spinnerVerbs` (the word the activity line shows while commands run, drawn once per turn: `en`, the default, made-up English verbs; `ko`, made-up Korean words, as `글벅거리는 중…`; `ko-literary`, Korean verbs; `off`, just `Working…`), `spinnerScanner` (`true`: a sweeping `▰▱` scanner before that word), status line, hooks, `updateCheck`, `doubleEscapeAction` (`tree`, `fork` or `none`), `branchSummary.skipPrompt`, `toolOutputTokenLimit` (how much of a command's output the model gets, default 10000 tokens; the middle is cut and the full output saved to a file, as in codex), `backgroundExit` (experimental: `false` turns off the exit menu that offers "Run in background" while a turn runs), `remote.port` (`/remote`'s port, default 7879), `daemon` (`false`: run the TUI directly instead of in a daemon pane), `extensions` (`disabled` names, handler `timeout` in seconds), `skills.disabled` (built-in skills to turn off), `agents` (`enabled`, `maxDepth`, `maxConcurrent`, `model`, `effort`) |
+| `settings.json` | default model and effort, renderer, `mouse`, `toolGroups` (`false`: no command groups), `spinnerVerbs` (the word the activity line shows while commands run, drawn once per turn: `en`, the default, made-up English verbs; `ko`, made-up Korean words, as `글벅거리는 중…`; `ko-literary`, Korean verbs; `off`, just `Working…`), `spinnerScanner` (`true`: a sweeping `▰▱` scanner before that word), status line, hooks, `updateCheck`, `doubleEscapeAction` (`tree`, `fork` or `none`), `branchSummary.skipPrompt`, `toolOutputTokenLimit` (how much of a command's output the model gets, default 10000 tokens; the middle is cut and the full output saved to a file, as in codex), `backgroundExit` (experimental: `false` turns off the exit menu that offers "Run in background" while a turn runs), `remote.port` (`/remote`'s port, default 7879), `daemon` (`false`: run sessions in-process instead of in daemon workers), `extensions` (`disabled` names, handler `timeout` in seconds), `skills.disabled` (built-in skills to turn off), `agents` (`enabled`, `maxDepth`, `maxConcurrent`, `model`, `effort`) |
 | `agents/` | agent roles (`<name>.md`) |
 | `agent-state/` | state, turns and coordination files for agents each session started (separate from roles) |
 | `hook-approvals.json` | project hook decisions, scoped to settings file and content hash |
