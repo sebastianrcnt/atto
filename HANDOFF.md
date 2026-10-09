@@ -1,76 +1,77 @@
-# Handoff — 2026-10-09 (night)
+# Handoff — 2026-10-09 (evening)
 
-State when this was written: `main` = `a59521f` + this handoff + a CRLF test fix (pushed; CI run 37855272565 green on all platforms); the locally installed `atto` was built from it. Nothing is running;
-agents `/root/split2`, `/root/split3` and `/root/split4` are closed and their branches deleted. Open issues: none from tonight.
+State when this was written: `main` = `0036514` + this handoff, pushed; the locally installed `atto` (`go install -ldflags="-s -w"`,
+26 MB) is built from it, and `win` runs the same build. One implementation is running: the agent model (below), in a Claude
+Code Sonnet worktree. CI is nightly (03:00 KST): today's changes get their first Windows/Linux run tonight.
 
-## Engine / front-end split (done tonight)
+A picture of the whole structure (concepts, processes, memory, agents, commands, status): https://claude.ai/artifact/3KkHWQiWTpwHshzVh2oxMc
 
-The user's request: separate execution from front ends, so any client (TUI, web, others) attaches and detaches and atto can run
-without its TUI, the way Codex's app-server does. Design and per-phase status: `docs/tui-as-client.md`. Protocol reference for
-client authors: `docs/protocol.md`. Reference implementation: `archive/atto2` (`1a9dc7a`).
+## Structure in one paragraph
 
-| Phase | Commits | What |
+Five concepts. A **session** is a JSONL file (the source of truth). A **worker** (`atto _session-server`) executes one session.
+The **daemon** (`atto _daemon`) only starts, lists and retires workers; it holds no screens. **Clients** (TUI, Swing, web,
+`app-server`, `-p`, scripts) attach to workers over JSON-RPC and only render. An **agent** is a session started by another
+session; its identity is its session ID and its tree position is metadata. Without the daemon (Windows, `ATTO_NO_DAEMON=1`)
+the worker runs inside the client process. Keep this separation strict: clients never read `~/.atto` or the daemon directly.
+
+## Done today (2026-10-09)
+
+| What | Commits | Notes |
 |---|---|---|
-| 1 contract + runtime | `177199d`, `2a3af83`, `0086a01` | protocol revisions (`protocolVersions`, Codex-shaped `initialize`/`initialized`, `data.reason`); one event hub for every transport; `server.Client`/`Connect`; the session runtime (`server/runtime.go` and friends) owns execution: input, steer, queue, interrupts (#32 semantics), goals, prompts, shell, tree, inbox |
-| 2 TUI as client | `c4a881f`, `e43c781`, `59b30f8` | App owns no agent/writer/hooks/extensions/MCP/goal/inbox; it renders runtime notifications. `server.Live` is gone; `/remote` is `server.Scope` over the same runtime; the frozen web client is unchanged |
-| 3 workers | `d773cfc`, `2b138cb`, `7a9f540` | with the daemon each session runs in a worker (`atto _session-server`, unix socket); the TUI, app-server, serve, `/remote` and `-p` on a live session are its clients. Exit/Ctrl+D detaches; an unattended idle worker retires after 1 min; `/close` ends it; crash → reconnect. `ATTO_NO_DAEMON=1`/Windows: in-process as before |
-| 4 transports + docs | `4b6a948`, `d4fcfae`, `a59521f` | `atto app-server --listen stdio:// \| unix:///path \| ws://IP:PORT` (hand-written RFC 6455, bearer token off loopback, Origin check, `--allow-origin`); `atto serve` has `/ws`; `docs/protocol.md` (tests keep it in step with the dispatcher); `examples/clients/stdio.py` and `index.html` |
+| Engine/front-end split (overnight) | `177199d` … `a59521f` | runtime owns execution, workers, `app-server --listen stdio/unix/ws`; `docs/tui-as-client.md`, `docs/protocol.md` |
+| Swing client | `7098497` … `ec9a016` | `clients/swing`, JDK 21 only; not bundled into atto (decided) |
+| PTY panes removed | `c39c0f9`, `90e5da7`, `8eaba18` | daemon protocol 4, workers only; commands are `atto` and `atto resume [ID\|name]`; `attach`, `connect`, `/detach`, `-c`, `-resume` removed (pointer message); `atto daemon kill SESSION` |
+| Archived sessions zstd | `f258d85`, `9879a0b`, `2013169` | `archived_sessions/*.jsonl.zst`; `atto sessions compress` migrated 24 → 8.4 MB here |
+| Agent `@ID` addresses, no shared outside parent | `fb92f37` … `a8b4023` | being superseded by the agent model work |
+| Command output to disk | `29df39a` … `0965dbd` | `outputs/<session>/*.log.zst`, head/tail 32 MB caps, 1 GB total, `atto output`; deleted with the session |
+| Test temp-home leak | `f97b033` | `internal/testhome`; tests had left 12 GB of read-only Go module caches in TMPDIR (cleaned) |
+| Backup / restore / clean / uninstall | `ffaca38`, `537c952` | `maint/`; backup excludes secrets unless `-with-secrets` |
+| `desktop.go` split, POSIX sh prompt | `27c2a25`, `61a6017` | bash prompt text byte-identical |
+| Slim build | `5b81abc`, `33c62e7`, `15b375d` | `-tags noext`, 16 MB vs 26 MB; `/diff` and `/autorename` ported to Go; releases ship `atto-slim_*`; `atto update -variant` |
+| Memory | `94298a8` … `83c8be2` | protocol 3 tail snapshots + `thread/items` paging; unattached workers hold no display items; real 62 MB session: worker 653 → 45 MB, TUI 295 → 27 MB; `docs/session-memory.md` |
+| Design docs | `6de440c`, `05aecea`, `5725da4`, `fb47b91`, `0036514` | `docs/agent-model.md` (decided), `docs/session-segments.md` (on hold) |
 
-Fixes made while verifying (direct commits): `shutdown` read thread state outside the UI lock (race); test races; `TestAgentRefusals`
-flake; extension watchdog test flake; **an old daemon left running across an upgrade**: the new binary now runs in-process while
-it runs (`daemon.Usable`) and still supports status/stop against it (only these ops downgrade; execution ops never do);
-SIGTERM shuts app-server/serve down cleanly.
+Every merge: full tests (both build tags), `-race`, Windows vet, `smoke.sh`, plus live checks of the change with a real model in
+an isolated `ATTO_DIR`.
 
-Verified live (isolated `ATTO_DIR`, real model) for every phase: `-p`, `-p` with a 12 s command, app-server turns, TUI with and
-without the daemon (`scratchpad/smoke.sh`), steer, Esc detaching a running command into a job, `!`, `/jobs`, `/context`, `/model`,
-`/clear` + `/resume`, `/remote` RPC+SSE; detach mid-turn then `atto resume`; app-server `thread/resume` of the TUI's session with
-the turn appearing in the TUI; 1-minute retirement; `/close`; `kill -9` of a worker → "Reconnected."; ws turn with and without token;
-unix socket 0600 and removed on exit. CI is green after every phase.
+## In progress
 
-## Things to know
+**Agent model** (Sonnet worktree under `.claude/worktrees/`, brief `/tmp/atto-runs/w18_agentmodel_impl.txt`, spec
+`docs/agent-model.md`): agent = session ID, metadata in the session header (parent, root, depth, `/root/…` path label, name, role,
+`spawnedBy` {session, model, effort, turn, tool call id}); state `agent-state/<id>.json`; outside spawns are parentless roots;
+new worktrees `atto/<id>`; **no on/off setting, no depth limit, no concurrency limit** (user: "완전 자유"); every model shell
+command gets `ATTO_TOOL_CALL_ID`; migration = refuse while agent work runs → automatic backup → one-pass conversion → marker
+last (on error: `atto restore`); agent turns run in session workers (phase H). Verify before merging: live spawn + attach a TUI
+mid-turn, migration on a copy of the real `agent-state/`, send/interrupt/queued tasks unchanged.
 
-- **PTY panes are removed (2026-10-09):** daemon protocol 4 manages workers only.
-  Every TUI runs in its calling terminal; `atto` starts new, `atto resume` picks
-  without starting a worker until selection, and `atto resume ID|prefix|name`
-  attaches/starts the chosen session. Center navigation switches this TUI, never
-  opens another pane. Invisible picker panes had pinned empty workers and retained
-  large TUI heaps; this intentionally reverses the previous keep-panes decision.
-- **Old daemon upgrade:** protocol 2/3 causes in-process fallback with a hint to
-  stop it. Only status and stop downgrade. Run `atto daemon stop -force` to end its
-  old sessions/work before using workers. Removed attach/connect/-c/-resume print
-  a one-line resume pointer for one release; /detach is gone. `_continue` remains
-  necessary for the no-daemon background-exit handoff.
-- **Lifetime:** SIGHUP/SIGTERM and normal worker-client exits detach; `/close` and
-  `atto daemon kill SESSION` explicitly end work. Status lists workers and names,
-  plus runtime-derived idle/working/waiting state. Unix signal cleanup also bounds
-  writes and flushes abandoned output: closing an undrained macOS PTY can block
-  even after nonblocking writes unless its output queue is flushed.
-  `ATTO_WORKER_RETENTION` can shorten the one-minute default in process tests.
-- **Behaviour changes on purpose:** switching away from a busy session (/clear, /resume, /new) no longer cancels it; in daemon
-  mode exit detaches instead of ending the session (use `/close`).
-- **Known limits** (documented in tui-as-client.md): a crashed worker restores only saved session state (unsaved queued input
-  and in-flight extension prompts are lost); the daemon's worker registry is in memory (workers orphaned by a daemon crash are not
-  adopted; leases still prevent a second writer); no durable input journal; no full Codex-dialect adapter; WS reconnect is
-  snapshot-based.
-- **`atto agent` execution was deliberately not moved** onto workers (phase H). It is used constantly; move it only with care.
-- A fresh `ATTO_DIR` picks the first available model until the catalog cache exists (old behaviour, not a regression).
-- VMs (linuxvm, winvm) are down; Windows coverage is `GOOS=windows go vet` plus CI.
+## Next, in order
 
-## Not done / open decisions
+1. **`thread/list` extension** (brief `/tmp/atto-runs/w18b_overview.txt`): the command center and `atto resume` picker get
+   agent metadata and needs-you flags from `thread/list`; remove `scanCenter`'s direct disk/daemon reads; Swing uses the same.
+   No new overview method, no push notifications (decided).
+2. **Command center tidy-up:** `a` archive/unarchive, `d` delete, finished agent trees folded by default, no `/root/` prefix.
+3. **Windows daemon:** workers on Windows (AF_UNIX sockets work since Windows 10). Verify on `win`.
+4. Small: the startup Config line lists `~\.atto\settings.json` twice on Windows; a `cli` test failed once under full load (not reproduced in 6 reruns).
 
-1. Phase H: `atto agent spawn/task/wait` through workers; durable accepted-input journaling and request dedupe.
-2. `-m` / `enabled` restrictions for `atto agent`; request log "all" mode; macOS route-change pool reset (all still undecided).
-3. **Done (2026-10-09): lazy transcript display loading.** Revision 3 tail snapshots
-   and disk pages; TUI/Swing scroll-up loading; full revision 2 compatibility;
-   streaming context-only/archive reads and JSON writes; unattached workers retain
-   no completed display items. Synthetic process memory regressions and measurements
-   are documented in `docs/session-memory.md`.
+## Decisions and things to know
+
+- **Translate extension disabled** (`settings.json` `extensions.disabled`): it saved every translation twice and made sessions grow; no cache API needed.
+- **Session segmentation on hold**; revisit only if several sessions get large (see the doc's status note).
+- **Env vars are tracking, not security:** `ATTO_SESSION_ID`, `ATTO_AGENT`, `ATTO_TOOL_CALL_ID` can be changed by the model.
+- **Machines:** this Mac (macOS arm64) is the main test host. `win` (coolguy-w13, AMD64) runs atto with the local model only
+  (`llama-cpp/orca-local` at 192.168.0.235:8081, no API keys); deploy with `scripts/deploy.sh win` after Windows-relevant changes.
+  linuxvm/winvm are down.
+- A crashed worker restores only saved session state; the daemon's worker registry is in memory; no durable input journal; no full Codex-dialect adapter.
+- A fresh `ATTO_DIR` picks the first available model until the catalog cache exists (copy `~/.atto/cache` for live tests).
+- Live tests on copies of real sessions: pause their goal first; resuming a copy with an active goal starts goal work in the real project directory.
 
 ## How the work is done
 
-- Implementation goes to `atto agent spawn NAME "<brief>" -worktree -m openai/gpt-6.1-sol -effort high`, run from a plain shell.
-  Briefs live in `/tmp/atto-runs/` (`common2.txt`, `w12_common.txt`, `w12_phase*.txt`). gpt-6.1-sol tends to stop after part of a
-  brief: end briefs with "you alone do all of it in this turn".
-- Before merging: full checks, `-race` on touched packages, a build in the scratchpad, `smoke.sh BINARY` (SMOKE OK), then live
-  checks of what changed.
+- Implementation goes to `atto agent spawn NAME "<brief>" -worktree -m openai/gpt-6.1-sol -effort high` (from a plain shell) or
+  to Claude Code Sonnet subagents in worktrees (the user rates them about equal). Briefs live in `/tmp/atto-runs/`. End briefs
+  with "you alone do all of it in this turn"; gpt-6.1-sol still sometimes stops after the groundwork, so send it back with a
+  list of what is left.
+- Before merging: rebase on main, full checks (`gofmt`, vet with and without `-tags noext`, `GOOS=windows go vet`, `go test ./...`
+  with `ATTO_SESSION_ID`/`ATTO_AGENT` unset, `-race` on touched packages), `scratchpad/smoke.sh BINARY`, live checks of what changed;
+  then merge, `go install -ldflags="-s -w" ./cmd/atto`, push, close the agent and delete its branch.
 - Sources of truth: the GitHub issues and the memory directory `~/.claude/projects/-Volumes-t5-atto/memory/`.
