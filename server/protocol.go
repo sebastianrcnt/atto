@@ -13,8 +13,7 @@
 // and frontend shutdown detach; thread/close explicitly stops the session
 // (/close uses reason "close"). Unattended idle workers retire after one
 // minute, but turns, jobs, timers, active unheld goals and prompts retain them.
-// app-server -in-process, ATTO_NO_DAEMON and Windows retain the
-// in-process runtime. A routing facade translates event cursors and client
+// app-server -in-process and ATTO_NO_DAEMON retain the in-process runtime. A routing facade translates event cursors and client
 // provenance; its protocol revision is distinct from daemon control revision 4.
 // Worker crashes recover saved sessions, not durable in-flight inputs/promises.
 //

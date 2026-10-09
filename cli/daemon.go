@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"syscall"
 	"text/tabwriter"
 	"time"
 
@@ -125,5 +124,5 @@ func RunAgents(args []string, out io.Writer) error {
 	if err != nil {
 		return err
 	}
-	return syscall.Exec(exe, argv, os.Environ())
+	return execSelf(exe, argv)
 }

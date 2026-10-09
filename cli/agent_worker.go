@@ -16,7 +16,7 @@ import (
 // With the daemon, an agent's turns run in the worker of the agent's own
 // session, the runtime every other session has: atto agent is a client that
 // finds or starts that worker and asks it for the turn (agent/turn). Without
-// the daemon (ATTO_NO_DAEMON=1, "daemon": false, Windows), or when the worker
+// the daemon (ATTO_NO_DAEMON=1, "daemon": false), or when the worker
 // cannot be had (another process holds the session's writer lease, say a
 // turn started before an upgrade that is still finishing), a turn is a job
 // process, atto _agent-turn, as it always was.
