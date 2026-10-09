@@ -237,3 +237,6 @@ func IsItem(site Site) bool {
 func ValidSite(site Site) bool {
 	return IsItem(site) || site == Pane || site == Band || site == Status || site == Toast || site == Transcript || site == Dialog
 }
+
+// KnownElement reports whether a type belongs to the v1 portable catalog.
+func KnownElement(kind string) bool { _, ok := schemas[kind]; return ok }

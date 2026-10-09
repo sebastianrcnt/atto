@@ -54,8 +54,12 @@ func (e *Elements) SetTree(site ui.Site, id string, rev int64, n *ui.Node) error
 	}
 	e.controls = nil
 	keys := map[string]bool{}
+	autoFocused := false
 	var walk func(ui.Node)
 	walk = func(n ui.Node) {
+		if !ui.KnownElement(n.Type) {
+			return
+		}
 		if n.Key != "" {
 			keys[n.Key] = true
 		}
@@ -86,8 +90,9 @@ func (e *Elements) SetTree(site ui.Site, id string, rev int64, n *ui.Node) error
 		}
 		if n.Props["disabled"] != true && (n.Type == "Button" || n.Type == "Input" || n.Type == "Select" || n.Type == "Collapse") {
 			e.controls = append(e.controls, n)
-			if n.Key == focusedKey {
+			if n.Key == focusedKey || focusedKey == "" && propBool(n, "autoFocus") && !autoFocused {
 				e.focus = len(e.controls) - 1
+				autoFocused = true
 			}
 		}
 		if n.Type != "Collapse" || e.open[n.Key] {

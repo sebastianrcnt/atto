@@ -88,6 +88,7 @@ type binding struct {
 	fn    Handler
 }
 type live struct {
+	order int
 	Instance
 	owner      string
 	props      map[string]any
@@ -103,6 +104,7 @@ type live struct {
 // handler or publisher while holding its mutex. Dispatch schedules timer work on
 // the owning session lane. Publish should preserve the order of lane work.
 type Registry struct {
+	siteSeq int
 	// Enqueue dispatches accepted callbacks after Route returns; worker lanes use it.
 	Enqueue         func(context.Context, Handler, Action)
 	providerRenders map[string][]time.Time
@@ -210,6 +212,10 @@ func (r *Registry) OpenDefault(owner string, o OpenOptions, props map[string]any
 	if o.Title == "" {
 		o.Title = o.ID
 	}
+	o.Title = CleanText(o.Title)
+	if len(o.Title) > 4096 {
+		return fmt.Errorf("title exceeds 4096 bytes")
+	}
 	if o.Placement == "" {
 		o.Placement = "auto"
 	}
@@ -251,7 +257,8 @@ func (r *Registry) OpenDefault(owner string, o OpenOptions, props map[string]any
 			r.mu.Unlock()
 			return fmt.Errorf("live site limit")
 		}
-		s = &live{owner: owner}
+		r.siteSeq++
+		s = &live{owner: owner, order: r.siteSeq}
 		r.sites[m] = s
 	} else if s.owner != owner {
 		r.mu.Unlock()
@@ -566,12 +573,16 @@ func (r *Registry) Snapshot() Snapshot {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	out := Snapshot{Version: 1, Instances: []Instance{}}
+	order := map[Match]int{}
 	for _, s := range r.sites {
 		if !IsItem(s.Site) && s.Site != Transcript && (s.Options.ExpiresAt == 0 || s.Options.ExpiresAt > time.Now().UnixMilli()) {
 			out.Instances = append(out.Instances, copyInstance(s.Instance))
+			order[Match{s.Site, s.ID}] = s.order
 		}
 	}
-	sort.Slice(out.Instances, func(i, j int) bool { return out.Instances[i].Rev < out.Instances[j].Rev })
+	sort.Slice(out.Instances, func(i, j int) bool {
+		return order[Match{out.Instances[i].Site, out.Instances[i].ID}] < order[Match{out.Instances[j].Site, out.Instances[j].ID}]
+	})
 	return out
 }
 func (r *Registry) Route(ctx context.Context, a Action) error {
@@ -730,6 +741,9 @@ func findNode(n *Node, key string) *Node {
 	}
 	if n.Key == key {
 		return n
+	}
+	if !KnownElement(n.Type) {
+		return nil
 	}
 	for i := range n.Children {
 		if c := findNode(&n.Children[i], key); c != nil {

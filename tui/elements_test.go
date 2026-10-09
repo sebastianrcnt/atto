@@ -128,3 +128,21 @@ func TestElementCellClicksSelectAndButtons(t *testing.T) {
 		t.Fatal(events)
 	}
 }
+
+func TestUnknownElementDescendantsArePassive(t *testing.T) {
+	n := ui.Node{Type: "future", Props: map[string]any{}, Children: []ui.Node{ui.Button(ui.ButtonProps{Key: "invisible", Label: "Fallback label", Hotkey: "f"})}}
+	e := &Elements{}
+	if err := e.SetTree(ui.Pane, "atto/p", 1, &n); err != nil {
+		t.Fatal(err)
+	}
+	e.SetFocused(true)
+	called := false
+	e.OnAction = func(ui.Action) { called = true }
+	e.HandleInput("f")
+	if called || len(e.controls) > 0 {
+		t.Fatal("unknown subtree routed action")
+	}
+	if !strings.Contains(strings.Join(e.Render(40), "\n"), "Fallback label") {
+		t.Fatal("passive fallback missing")
+	}
+}

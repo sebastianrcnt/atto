@@ -181,7 +181,7 @@ func (a *App) paneLines(i ui.Instance, width, rows int) []string {
 	tabs := a.liveUI(ui.Pane)
 	var titles []string
 	for index, p := range tabs {
-		title := p.Options.Title
+		title := ui.CleanText(p.Options.Title)
 		if index == a.paneTab {
 			title = tui.Bold(title)
 		}
@@ -239,6 +239,10 @@ func (p *paneDock) Click(line int) bool {
 // high-priority goal/activity are retained before low-priority contributions.
 func (a *App) renderUIStatus(width int) []string {
 	items := a.liveUI(ui.Status)
+	sequence := map[string]int{}
+	for index, i := range items {
+		sequence[i.ID] = index
+	}
 	sort.SliceStable(items, func(i, j int) bool { return items[i].Options.Priority > items[j].Options.Priority })
 	type rendered struct {
 		instance ui.Instance
@@ -286,7 +290,7 @@ func (a *App) renderUIStatus(width int) []string {
 		if len(row) == 0 {
 			continue
 		}
-		sort.SliceStable(row, func(i, j int) bool { return row[i].instance.Rev < row[j].instance.Rev })
+		sort.SliceStable(row, func(i, j int) bool { return sequence[row[i].instance.ID] < sequence[row[j].instance.ID] })
 		var start, end []string
 		for _, r := range row {
 			if r.instance.Options.Align == "end" {

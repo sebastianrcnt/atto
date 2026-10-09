@@ -337,3 +337,18 @@ func TestHungRendererIsBoundedAndCancelled(t *testing.T) {
 		t.Fatal("did not restore default")
 	}
 }
+
+func TestSiteSnapshotKeepsRegistrationOrder(t *testing.T) {
+	r := NewRegistry(nil, nil)
+	defer r.Stop()
+	for _, id := range []string{"atto/a", "atto/b"} {
+		n := Text(TextProps{Text: id})
+		_ = r.OpenDefault("atto", OpenOptions{Site: Band, ID: id}, nil, &n)
+	}
+	time.Sleep(110 * time.Millisecond)
+	r.UpdateProps(Match{Band, "atto/a"}, map[string]any{"changed": true})
+	instances := r.Snapshot().Instances
+	if instances[0].ID != "atto/a" || instances[1].ID != "atto/b" {
+		t.Fatal("unstable site ordering", instances)
+	}
+}
