@@ -82,9 +82,7 @@ func (a *App) cmdGoal(arg string) {
 			a.add(&infoBlock{title: goalUsage, hint: "No goal is currently set."})
 			return
 		}
-		c := *g
-		c.Seconds = a.goalElapsed()
-		a.add(&contextBlock{lines: goalSummaryLines(&c, a.goalHeld())})
+		a.send("/goal "+arg, nil, "auto")
 		return
 	case "edit":
 		a.editGoal()

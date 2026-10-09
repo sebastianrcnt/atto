@@ -167,7 +167,7 @@ func (t *thread) cmdGoal(client, arg string) {
 			t.infoNotice(goalUsage, "No goal is currently set.")
 			return
 		}
-		t.infoNotice("Goal "+g.Status.Label(), g.Objective+"\n"+g.Summary())
+		t.openGoalPane(client)
 		return
 	case "clear":
 		t.clearGoal()

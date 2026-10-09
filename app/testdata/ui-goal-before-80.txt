@@ -1,0 +1,7 @@
+  Goal
+  Status: active
+  Objective: ship it
+  Time used: 0s
+  Tokens used: 0
+
+  Commands: /goal edit, /goal pause, /goal clear

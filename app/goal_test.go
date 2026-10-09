@@ -190,7 +190,9 @@ func TestGoalSummaryPerStatus(t *testing.T) {
 	a := goalApp(t)
 	goalCommand(a, "ship it")
 	goalCommand(a, "")
-	if got := goalText(a); !strings.Contains(got, "Status: active") || !strings.Contains(got, "Commands: /goal edit, /goal pause, /goal clear") {
+	var got string
+	a.ui.Do(func() { got = plainLines(a.renderPortable(80)) })
+	if !strings.Contains(got, "Status: active") || !strings.Contains(got, "p: Pause") {
 		t.Fatalf("bare /goal shows the summary:\n%s", got)
 	}
 }

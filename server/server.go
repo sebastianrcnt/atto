@@ -468,6 +468,7 @@ func (s *Server) newThread(o threadOptions) (*thread, error) {
 	t.loaded = core.Collect(ag, src, o.modelFrom, o.effortFrom)
 	t.catalogVer = t.catalogVersion()
 	t.initUIStatus()
+	t.initUIGoal()
 	t.startLane()
 	s.mu.Lock()
 	s.threads[t.id] = t

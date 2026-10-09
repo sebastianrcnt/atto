@@ -2,6 +2,7 @@ package app
 
 import (
 	"fmt"
+	"github.com/sebastianrcnt/atto/goal"
 	"github.com/sebastianrcnt/atto/tui"
 	"github.com/sebastianrcnt/atto/ui"
 	"os"
@@ -33,6 +34,9 @@ func builtinGolden(t *testing.T, name string, width int, lines []string) {
 
 func TestPortableStatusGoldens(t *testing.T) {
 	a := statusApp(t, nil)
+	oldRSS := rssBytes.Load()
+	rssBytes.Store(0)
+	defer rssBytes.Store(oldRSS)
 	before := a.renderStatus(80)
 	builtinGolden(t, "status-before", 80, before)
 	snap := &ui.Snapshot{Version: 1, Instances: []ui.Instance{}}
@@ -50,4 +54,26 @@ func TestPortableStatusGoldens(t *testing.T) {
 	for _, w := range []int{40, 80, 120, 160} {
 		builtinGolden(t, "status", w, a.renderStatus(w))
 	}
+}
+
+func TestPortableGoalPane(t *testing.T) {
+	a := goalApp(t)
+	goalCommand(a, "ship it")
+	goalCommand(a, "")
+	within(t, a, "goal pane", func() bool { return len(a.liveUI(ui.Pane)) == 1 })
+	a.ui.Do(func() {
+		before := &contextBlock{lines: goalSummaryLines(a.theGoal(), false)}
+		builtinGolden(t, "goal-before", 80, before.Render(80))
+		for _, w := range []int{40, 80, 120, 160} {
+			builtinGolden(t, "goal", w, a.renderPortable(w))
+		}
+		e := a.elements[ui.Match{Site: ui.Pane, ID: "atto/goal"}]
+		e.SetFocused(true)
+		e.HandleInput("p")
+	})
+	settle(a)
+	within(t, a, "pane paused", func() bool { return a.theGoal().Status == goal.Paused })
+	a.ui.Do(func() { a.elements[ui.Match{Site: ui.Pane, ID: "atto/goal"}].HandleInput("c") })
+	settle(a)
+	within(t, a, "pane cleared", func() bool { return a.theGoal() == nil })
 }
