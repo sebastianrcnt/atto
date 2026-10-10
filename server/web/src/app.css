@@ -1170,9 +1170,22 @@ body {
   color: transparent;
   width: fit-content;
 }
-.composer-area > .shimmer {
-  font-size: 11px;
-  padding: 2px 4px 8px;
+/* The busy cursor at the transcript tail, in place of a status line. */
+.transcript-tail {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-height: 0;
+  color: var(--muted);
+  font-size: 12px;
+  margin: -8px 0 16px;
+}
+.transcript-tail:empty {
+  display: none;
+}
+.tail-cursor {
+  color: var(--accent);
+  animation: pulse 1s infinite;
 }
 @keyframes shimmer {
   to {

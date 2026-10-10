@@ -599,10 +599,13 @@ function nativeItem(v: View, i: Data, meta = true) {
     const lines = output.split('\n');
     const clipped = !expanded && (lines.length > 18 || output.length > 4000);
     const preview = clipped ? lines.slice(-18).join('\n').slice(-4000) : output;
+    // No output yet (a running command): no empty box under the command.
+    const body = streamBody(code(preview));
+    body.hidden = !output;
     details.append(
       title,
       code(i.command || '', { language: i.shell ? 'shell' : 'bash' }),
-      streamBody(code(preview)),
+      body,
     );
     // Only user disclosure choices persist. Browser toggle events also fire on
     // insertion; remembering those accidentally kept completed tools open.
@@ -819,6 +822,7 @@ function transcriptItem(v: View, i: Data) {
               .childNodes,
           ),
         );
+        if (body.hidden !== !output) body.hidden = !output;
         let more = old.node.querySelector<HTMLButtonElement>('.output-more');
         if (clipped && !more) {
           more = button('Show more', () => {
@@ -843,6 +847,38 @@ function transcriptItem(v: View, i: Data) {
       b.classList.add('output-more');
   itemDOM.set(key, { node, type: i.type, rev: i.rev, uiId: i.uiId });
   return node;
+}
+// While a turn runs with no text streaming (thinking, a tool running, waiting
+// on the model), a quiet cursor sits after the last transcript item. It is its
+// own small region: showing or hiding it never redraws a transcript item.
+function transcriptTail(v: View) {
+  let streaming = false;
+  for (let n = v.items.length - 1; n >= 0; n--) {
+    const i = v.items[n];
+    if (
+      i.status === 'inProgress' &&
+      (i.type === 'agentMessage' || i.type === 'reasoning')
+    ) {
+      streaming = true;
+      break;
+    }
+    if (i.type === 'userMessage') break;
+  }
+  const activity =
+    typeof v.info.activity === 'string'
+      ? v.info.activity
+      : v.info.activity?.phase;
+  const phase = !v.info.busy || streaming ? '' : activity || 'Thinking';
+  return region(v.info.threadId + '\0tail', [phase], () => {
+    const tail = el('div', null, 'transcript-tail');
+    tail.setAttribute('aria-live', 'polite');
+    if (phase)
+      tail.append(
+        el('span', '▌', 'tail-cursor'),
+        el('span', phase.replace(/…$/, '') + '…', 'tail-phase'),
+      );
+    return tail;
+  });
 }
 function showModal(
   title: string,
@@ -1669,25 +1705,6 @@ function composer(v: View, instances: Data[], above: boolean) {
       }),
     );
   }
-  if (v.info.busy)
-    parts.push(
-      region(
-        id + '\0activity',
-        [
-          typeof v.info.activity === 'string'
-            ? v.info.activity
-            : v.info.activity?.phase,
-        ],
-        () =>
-          el(
-            'div',
-            typeof v.info.activity === 'string'
-              ? v.info.activity
-              : (v.info.activity?.phase || 'Thinking') + '…',
-            'shimmer',
-          ),
-      ),
-    );
   const formParts: HTMLElement[] = [];
   const ims = attachments.get(id) || [];
   if (ims.length)
@@ -2181,6 +2198,7 @@ function paint() {
             return welcome;
           }),
         );
+      children.push(transcriptTail(v));
       syncChildren(sc, children);
       regions.set(listKey, { node: sc, inputs: transcriptInputs });
       dom.listVersion = v.listVersion;
@@ -2189,8 +2207,11 @@ function paint() {
         if (key.startsWith(active + '\0') && !loaded.has(key))
           itemDOM.delete(key);
     }
+    transcriptTail(v);
     if (dom.writable !== writable(v)) {
-      for (const node of sc.querySelectorAll<HTMLButtonElement>('.message-edit'))
+      for (const node of sc.querySelectorAll<HTMLButtonElement>(
+        '.message-edit',
+      ))
         node.disabled = !writable(v);
       dom.writable = writable(v);
     }

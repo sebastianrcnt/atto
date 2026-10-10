@@ -327,6 +327,9 @@ function find(text: string) {
     },
     28,
   );
+  (globalThis as any).flush();
+  const userRow = document.querySelector('[data-item=user]');
+  assert(userRow, 'user row drawn');
   ws.onmessage({
     data: JSON.stringify({
       method: 'turn/started',
@@ -334,6 +337,97 @@ function find(text: string) {
       params: { threadId: 't' },
     }),
   });
+  (globalThis as any).flush();
+  const transcript = document.getElementById('transcript')!;
+  const tail = transcript.querySelector<HTMLElement>('.transcript-tail')!;
+  assert(
+    tail &&
+      transcript.childNodes[transcript.childNodes.length - 1] === tail &&
+      tail.textContent?.includes('Thinking…'),
+    'busy turn without streaming text shows a tail indicator in the transcript',
+  );
+  assert(
+    !document.querySelector('.composer-area')!.querySelector('.shimmer'),
+    'no activity line above the composer',
+  );
+  assert(
+    document.querySelector('[data-item=user]') === userRow,
+    'tail indicator does not redraw transcript items',
+  );
+  ws.onmessage({
+    data: JSON.stringify({
+      method: 'turn/activity',
+      params: { threadId: 't', activity: { phase: 'Working' } },
+    }),
+  });
+  (globalThis as any).flush();
+  assert(
+    transcript.querySelector('.transcript-tail') === tail &&
+      tail.textContent?.includes('Working…') &&
+      document.querySelector('[data-item=user]') === userRow,
+    'tail follows the activity phase in place',
+  );
+  emit(
+    'item/started',
+    {
+      id: 'quiet-tool',
+      type: 'commandExecution',
+      status: 'inProgress',
+      description: 'Wait',
+      command: 'sleep 1',
+      output: '',
+    },
+    29.5,
+  );
+  (globalThis as any).flush();
+  const quiet = document.querySelector<HTMLElement>('[data-item=quiet-tool]')!;
+  const quietBody = quiet.querySelector<HTMLElement>('.stream-body')!;
+  assert(quietBody.hidden, 'running tool without output has no output box');
+  assert(
+    transcript.childNodes[transcript.childNodes.length - 1] === tail,
+    'tail stays after the last item',
+  );
+  ws.onmessage({
+    data: JSON.stringify({
+      method: 'item/delta',
+      params: { threadId: 't', itemId: 'quiet-tool', delta: 'tick' },
+    }),
+  });
+  (globalThis as any).flush();
+  assert(
+    document.querySelector('[data-item=quiet-tool]') === quiet &&
+      !quietBody.hidden &&
+      quietBody.textContent?.includes('tick'),
+    'first output shows the box in place',
+  );
+  emit(
+    'item/started',
+    { id: 'answer', type: 'agentMessage', status: 'inProgress', text: '' },
+    29.6,
+  );
+  (globalThis as any).flush();
+  assert(
+    transcript.querySelector('.transcript-tail') === tail && !tail.textContent,
+    'streaming text hides the tail indicator',
+  );
+  emit(
+    'item/completed',
+    { id: 'answer', type: 'agentMessage', status: 'completed', text: 'Done' },
+    29.7,
+  );
+  emit(
+    'item/completed',
+    {
+      id: 'quiet-tool',
+      type: 'commandExecution',
+      status: 'completed',
+      description: 'Wait',
+      command: 'sleep 1',
+      output: 'tick',
+      exitCode: 0,
+    },
+    29.8,
+  );
   (globalThis as any).flush();
   ws.onmessage({
     data: JSON.stringify({
@@ -445,6 +539,10 @@ function find(text: string) {
     }),
   });
   (globalThis as any).flush();
+  assert(
+    !document.querySelector('.transcript-tail')!.textContent,
+    'tail indicator gone when the turn ends',
+  );
   assert(
     !(document.querySelector('.tool-chip') as HTMLDetailsElement).open,
     'completed tool auto-collapsed',
