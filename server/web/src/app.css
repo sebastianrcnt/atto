@@ -817,13 +817,28 @@ body {
 .item.user header {
   margin-bottom: 2px;
 }
-.fork {
-  opacity: 0;
+/* Edit (fork from a message) stays quiet: a small muted text button, shown
+   on hover/focus where the device can hover, always visible on touch. */
+.item header .message-edit {
+  margin-left: auto;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  padding: 0 2px;
+  font-size: 11px;
   transition: opacity 0.15s;
 }
-.user:hover .fork,
-.user:focus-within .fork {
-  opacity: 1;
+.item header .message-edit:hover:not(:disabled) {
+  color: var(--text);
+}
+@media (hover: hover) {
+  .message-edit {
+    opacity: 0;
+  }
+  .user:hover .message-edit,
+  .user:focus-within .message-edit {
+    opacity: 1;
+  }
 }
 .item.notice,
 .item.compaction {
@@ -1162,11 +1177,6 @@ body {
 @keyframes shimmer {
   to {
     background-position: -250% 0;
-  }
-}
-@media (hover: none) {
-  .fork {
-    opacity: 1;
   }
 }
 @media (max-width: 700px) {

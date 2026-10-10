@@ -538,26 +538,27 @@ function nativeItem(v: View, i: Data, meta = true) {
   if (meta && ['userMessage', 'agentMessage'].includes(i.type)) {
     const head = el('header', i.type === 'userMessage' ? 'You' : 'Atto');
     if (i.type === 'userMessage' && i.entryId) {
-      head.append(
-        button(
-          'Fork',
-          () =>
-            void run(async () => {
-              const r = await call(
-                'thread/fork',
-                { entryId: i.entryId },
-                v.info.threadId,
-              );
-              await open({ threadId: r.threadId });
-              if (r.input) drafts.set(active, r.input);
-              recoverImages(active, r.images || []);
-              schedule();
-            }),
-          !writable(v),
-        ),
+      // Edit forks at this message: a new session with its text in the editor.
+      const edit = button(
+        'Edit',
+        () =>
+          void run(async () => {
+            const r = await call(
+              'thread/fork',
+              { entryId: i.entryId },
+              v.info.threadId,
+            );
+            await open({ threadId: r.threadId });
+            if (r.input) drafts.set(active, r.input);
+            recoverImages(active, r.images || []);
+            schedule();
+          }),
+        !writable(v),
       );
+      edit.className = 'message-edit';
+      edit.title = 'Edit and resend from here, in a new session';
+      head.append(edit);
     }
-    head.querySelector('button')?.classList.add('fork');
     e.append(head);
   }
   if (i.type === 'commandExecution') {
@@ -2189,7 +2190,7 @@ function paint() {
           itemDOM.delete(key);
     }
     if (dom.writable !== writable(v)) {
-      for (const node of sc.querySelectorAll<HTMLButtonElement>('.fork'))
+      for (const node of sc.querySelectorAll<HTMLButtonElement>('.message-edit'))
         node.disabled = !writable(v);
       dom.writable = writable(v);
     }

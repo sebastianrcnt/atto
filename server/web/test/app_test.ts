@@ -361,7 +361,11 @@ function find(text: string) {
   (globalThis as any).flush();
   assert(
     document.querySelector('.queue')?.textContent?.includes('Next task') &&
-      find('Edit'),
+      Array.from(
+        document.querySelector('.queue')!.querySelectorAll('button'),
+      ).some(
+        (b) => b.textContent === 'Edit',
+      ),
     'shared queue tree above composer with takeback',
   );
   assert(
@@ -451,10 +455,14 @@ function find(text: string) {
       ?.textContent?.includes('exit 0 · 1.2s'),
     'tool metrics',
   );
+  const edits = document.querySelectorAll<HTMLButtonElement>('.message-edit');
   assert(
-    document.querySelectorAll('.fork').length === 1,
-    'fork only on user messages',
+    edits.length === 1 &&
+      edits[0].textContent === 'Edit' &&
+      edits[0].title === 'Edit and resend from here, in a new session',
+    'Edit (fork from here) only on user messages',
   );
+  assert(!find('Fork'), 'no Fork label');
   assert(
     document.querySelector('.thinking')?.textContent?.includes('Thinking'),
     'human reasoning label',
