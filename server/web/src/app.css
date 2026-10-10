@@ -1135,6 +1135,11 @@ body {
 .queue:empty {
   display: none;
 }
+.runtime-notice {
+  font-size: 11px;
+  color: var(--muted);
+  padding: 2px 4px 6px;
+}
 .queue-title {
   font-size: 10px;
   color: var(--muted);

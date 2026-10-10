@@ -1141,8 +1141,10 @@ function sortedRows() {
           (i) => i.type === 'commandExecution' && i.status === 'inProgress',
         ),
       openPrompt: !!v.info.prompt,
+      // The row's preview is the session's first prompt; the loaded page of
+      // a long session starts later.
       preview:
-        v.items.find((i) => i.type === 'userMessage')?.text || row.preview,
+        row.preview || v.items.find((i) => i.type === 'userMessage')?.text,
       lastMessage:
         [...v.items].reverse().find((i) => i.type === 'agentMessage')?.text ||
         row.lastMessage,
@@ -1227,13 +1229,25 @@ async function mutate(row: Data, method: string) {
   await refreshInventory();
   schedule();
 }
+// A session's title, the same in its tab, the sidebar and recents: its name,
+// else its inventory row's agent name or preview (the session's first prompt).
+// The first loaded user message stands in only when the inventory knows no
+// prompt: a page of a long session starts after its first prompt.
+function sessionTitle(row?: Data, v?: View) {
+  return (
+    v?.info.name ||
+    row?.name ||
+    row?.agent?.name ||
+    row?.preview ||
+    v?.items.find((i) => i.type === 'userMessage')?.text ||
+    'New session'
+  );
+}
 // A session row's main button (sidebar and the empty state's recents).
 function sessionButton(row: Data) {
   const b = button('', () => void run(() => open(row)), !online);
   b.className = 'session-row';
-  const title = plainMarkdown(
-    row.name || row.agent?.name || row.preview || 'New session',
-  );
+  const title = plainMarkdown(sessionTitle(row));
   const heading = el('div', null, 'session-heading');
   const dot = el('span', null, 'state-dot ' + sessionState(row));
   dot.title = sessionState(row).replace('-', ' ');
@@ -1992,6 +2006,22 @@ function composer(v: View, instances: Data[], above: boolean) {
   );
   formParts.push(bar);
   syncChildren(form, formParts);
+  // A worker of an older build (busy when the session was opened, or too old
+  // to be replaced): the snapshot says so; a current worker's clears it.
+  if (v.info.runtimeOutdated)
+    parts.push(
+      region(id + '\0runtime', [v.info.runtimeVersion], () => {
+        const note = el(
+          'div',
+          'This session runs an older atto (' +
+            (v.info.runtimeVersion || 'unknown version') +
+            '). It will update the next time it is idle and reopened.',
+          'runtime-notice',
+        );
+        note.setAttribute('role', 'note');
+        return note;
+      }),
+    );
   parts.push(form);
   const status = region(
     id + '\0status',
@@ -2198,7 +2228,7 @@ function paint() {
   );
   const top = region(
     'topbar',
-    [active, online, tabKey, writable(current())],
+    [active, online, tabKey, inventory, writable(current())],
     () => {
       const top = el('div', null, 'topbar');
       top.append(
@@ -2208,15 +2238,16 @@ function paint() {
         }),
       );
       top.firstElementChild!.classList.add('mobile-menu');
-      const tabs = region('tabs', [active, online, tabKey], () => {
+      const tabs = region('tabs', [active, online, tabKey, inventory], () => {
         const tabs = el('div', null, 'tabs');
         for (const [id, v] of views) {
           const tab = button(
             (v.info.busy ? '◌ ' : v.info.prompt ? '! ' : '') +
               plainMarkdown(
-                v.info.name ||
-                  v.items.find((i) => i.type === 'userMessage')?.text ||
-                  'New session',
+                sessionTitle(
+                  inventory.find((r) => r.threadId === id),
+                  v,
+                ),
               ),
             () => {
               active = id;

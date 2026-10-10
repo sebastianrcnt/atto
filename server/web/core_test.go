@@ -88,6 +88,21 @@ func TestTypeScriptPageWorkflow(t *testing.T) {
 	}
 }
 
+func TestTypeScriptTitleAndRuntimeNotice(t *testing.T) {
+	runTS(t, "test/title_test.ts", func(vm *goja.Runtime) {
+		for _, step := range []string{"checkTitle", "checkTitleAfter", "checkTitleNew"} {
+			for range 20 {
+				if _, e := vm.RunString("flush()"); e != nil {
+					t.Fatal(e)
+				}
+			}
+			if _, e := vm.RunString(step + "()"); e != nil {
+				t.Fatalf("%s: %v", step, e)
+			}
+		}
+	})
+}
+
 func TestTypeScriptRestoreTabs(t *testing.T) {
 	for _, scenario := range []string{"hash-and-storage", "storage-only", "no-storage", "all-gone"} {
 		t.Run(scenario, func(t *testing.T) {

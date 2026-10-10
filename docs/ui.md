@@ -546,7 +546,8 @@ The browser keeps one layout/sidebar/topbar/tabs shell and a detached, persisten
 thread view for every open tab. Each thread owns its transcript scroller,
 composer area/form and one textarea. Small metadata input tuples invalidate
 individual regions (pane, band, queue, suggestions, attachments, toolbar,
-status, toasts, dialogs and the transcript-tail activity cursor); transcript
+status, toasts, dialogs, the older-runtime notice and the transcript-tail
+activity cursor); transcript
 text is not part of those
 inputs. Inventory refreshes compare results, and thread inventory versions
 exclude deltas. Sidebar and per-thread scroller offsets survive region updates
@@ -580,6 +581,15 @@ on connect they are reopened like sidebar rows, missing threads are dropped,
 and with nothing to restore the empty page lists recent sessions. Nothing is
 ever created automatically. The checkpoint tree is terminal-only; a user
 message's Edit button forks from it.
+
+Runtime notice and titles (2026-10-10): a session whose snapshot says
+`runtimeOutdated` (its worker runs an older build than `atto serve` and was
+busy, or is too old to be replaced; see docs/protocol.md, Worker upgrades) gets
+a one-line muted note above the composer, its own region keyed by
+`runtimeVersion`; the next snapshot from a current worker drops it. Tabs, the
+sidebar and recents share one title: the name, else the inventory row's agent
+name or preview (the session's first prompt), and the first loaded user message
+only when the inventory knows no prompt.
 
 No framework, HTML parsing, new runtime dependency, CSP change or protocol
 change accompanies this renderer. The bounded `atto-paint` performance entries
