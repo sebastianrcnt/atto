@@ -360,10 +360,15 @@ img {
   padding-left: 12px;
   margin-top: 8px;
 }
-.streaming:after {
+.streaming:after,
+.streaming > p:last-child:after {
   content: ' ▌';
   color: var(--accent);
   animation: pulse 1s infinite;
+}
+/* Text ending in a paragraph carries the cursor on its last line. */
+.streaming:has(> p:last-child):after {
+  content: none;
 }
 .shimmer {
   color: var(--muted);
