@@ -98,8 +98,10 @@
 //	               the thread goes on; one with retention 0 that is left
 //	               idle closes (reason: clear, resume, exit). Jobs, timers, goals
 //	               and prompts prevent retirement; worker retention defaults to 1m.
-//	worker/state   {threadId}  → {id, session, name, state, cwd, clients, busy, version, pid}
+//	worker/state   {threadId}  → {id, session, name, state, cwd, clients, busy, version, pid, replaceable}
 //	               internal worker registry diagnostics; no attachment is added.
+//	worker/retire  {threadId, reason?}  → {retired, reason?}  (daemon only: close an
+//	               idle session, ending nothing, for a worker of the current build)
 //	thread/close   {threadId, reason?}  → {closed, stoppedJobs?, notices?}
 //	thread/read    {threadId, offline?}  (offline: from the file, not loading it)
 //	thread/setModel, thread/setEffort  {..., saveDefault?}
@@ -490,6 +492,12 @@ type ThreadInfo struct {
 	SessionPath    string    `json:"sessionPath,omitempty"`
 	LongContext    bool      `json:"longContext,omitempty"`
 	ServerInstance string    `json:"serverInstanceId,omitempty"`
+	// RuntimeVersion is the atto build running the thread (its worker's,
+	// in a daemon); a facade fills it in for workers too old to say.
+	// RuntimeOutdated, set by a facade, means that build is older than
+	// the facade's own: the worker is replaced once idle and reopened.
+	RuntimeVersion  string `json:"runtimeVersion,omitempty"`
+	RuntimeOutdated bool   `json:"runtimeOutdated,omitempty"`
 }
 
 // Activity is what a run is doing, as the activity line shows it

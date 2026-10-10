@@ -298,6 +298,7 @@ func (t *thread) snapshot() ThreadInfo {
 	}
 	info.EventID = t.s.eventSeq()
 	info.ServerInstance = t.s.instance
+	info.RuntimeVersion = t.s.Version
 	return info
 }
 

@@ -132,7 +132,7 @@ var threadMethods = map[string]func(t *thread, client string, p threadParams) (a
 		if t.prompt != nil || (t.goal.Active() && t.goal.Held()) {
 			state = "waiting"
 		}
-		return map[string]any{"id": t.s.instance, "session": t.id, "name": t.name, "state": state, "cwd": t.cwd, "clients": len(t.attached), "busy": busy, "openPrompt": t.prompt != nil, "goalWaiting": t.goal.Goal != nil && (t.goal.Held() || t.goal.Goal.Status == goal.Paused || t.goal.Goal.Status == goal.Blocked || t.goal.Goal.Status == goal.UsageLimited), "version": t.s.Version, "pid": os.Getpid()}, nil
+		return map[string]any{"id": t.s.instance, "session": t.id, "name": t.name, "state": state, "cwd": t.cwd, "clients": len(t.attached), "busy": busy, "openPrompt": t.prompt != nil, "goalWaiting": t.goal.Goal != nil && (t.goal.Held() || t.goal.Goal.Status == goal.Paused || t.goal.Goal.Status == goal.Blocked || t.goal.Goal.Status == goal.UsageLimited), "version": t.s.Version, "pid": os.Getpid(), "replaceable": true}, nil
 	},
 	"mcp/list": func(t *thread, client string, p threadParams) (any, error) {
 		if t.mcp == nil {

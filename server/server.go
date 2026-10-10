@@ -305,6 +305,12 @@ func (s *Server) call(ctx context.Context, method string, raw json.RawMessage) (
 			reason = "other"
 		}
 		return s.closeThread(t, closeMode{reason: reason}), nil
+	case "worker/retire":
+		t, err := s.thread(p.ThreadID)
+		if err != nil {
+			return nil, err
+		}
+		return s.retireForUpgrade(t), nil
 	case "thread/items", "thread/entry":
 		if p.Offline {
 			path, err := session.Find(p.ThreadID)
@@ -893,6 +899,64 @@ func (t *thread) retirable() bool {
 	return true
 }
 
+// upgradeBlocker is why the thread cannot be closed for its worker to be
+// replaced by one of another build ("" when it can): anything running or
+// waiting, held only in memory, or an attached client that would not
+// follow the session to the new worker. On the lane.
+func (t *thread) upgradeBlocker() string {
+	switch {
+	case t.closing:
+		return "closing"
+	case t.sess == nil || !saved(t.sess.Path):
+		return "unsaved" // a new session lives in memory until its first entry
+	case t.mgd != nil && t.mgd.busy():
+		return "agent turn"
+	case t.turns.Busy || t.shell != nil || len(t.pendingShell) > 0 || t.summary != nil || t.pendingTree != "" || t.handoff.pending:
+		return "busy"
+	case len(t.turns.Queued) > 0 || len(t.turns.PendingEvents) > 0 || t.turns.SendNow != nil || len(t.steers) > 0:
+		return "pending input"
+	case t.goal.Active():
+		return "goal"
+	case t.prompt != nil || len(t.prompts) > 0 || len(t.gates) > 0 || t.login != nil:
+		return "prompt"
+	case t.retryTimer != nil:
+		return "retry"
+	case t.jobCount > 0 || t.timerCount > 0 || jobs.ActiveCount(t.id) > 0 || len(events.Timers(t.id)) > 0:
+		return "jobs"
+	}
+	for c := range t.attached {
+		if !t.s.reattaches(c) {
+			return "client"
+		}
+	}
+	return ""
+}
+
+func saved(path string) bool { _, err := os.Stat(path); return err == nil }
+
+// retireResult is worker/retire's result.
+type retireResult struct {
+	Retired bool   `json:"retired"`
+	Reason  string `json:"reason,omitempty"` // why not
+}
+
+// retireForUpgrade is worker/retire: the thread closes now if it is idle
+// (upgradeBlocker), ending nothing (no SessionEnd, jobs and goal kept), so
+// that a worker of the current build can open the session again; its
+// clients get thread/closed with reason "upgrade". The check and the
+// close are one step on the lane: input arriving after it is refused.
+func (s *Server) retireForUpgrade(t *thread) retireResult {
+	why := ""
+	_ = t.call(func() error { why = t.upgradeBlocker(); return nil })
+	if why != "" {
+		return retireResult{Reason: why}
+	}
+	if !s.closeThread(t, closeMode{reason: "upgrade", upgrade: true}).Closed {
+		return retireResult{Reason: "busy"}
+	}
+	return retireResult{Retired: true}
+}
+
 // maybeRetire closes the thread once it has been retirable for the
 // retention period.
 func (t *thread) maybeRetire() {
@@ -937,6 +1001,7 @@ type closeMode struct {
 	reason  string // for SessionEnd
 	retire  bool   // recheck idle/unattended status on the lane
 	handoff bool   // a background run took the session over: end nothing
+	upgrade bool   // a worker of another build takes over: end nothing, recheck upgradeBlocker on the lane
 }
 
 var closeHandoff = closeMode{handoff: true}
@@ -948,7 +1013,7 @@ var closeHandoff = closeMode{handoff: true}
 func (s *Server) closeThread(t *thread, m closeMode) detachResult {
 	var done, shellDone chan struct{}
 	if t.call(func() error {
-		if t.closing || m.retire && !t.retirable() {
+		if t.closing || m.retire && !t.retirable() || m.upgrade && t.upgradeBlocker() != "" {
 			return errThreadClosed
 		}
 		t.closing = true
@@ -986,7 +1051,7 @@ func (s *Server) closeThread(t *thread, m closeMode) detachResult {
 	_ = t.call(func() error { return nil }) // the run's end reaches the lane first
 	t.inboxOff.Store(true)
 	var res detachResult
-	if !m.handoff {
+	if !m.handoff && !m.upgrade {
 		if t.sess.ReadOnly() == "" && t.readOnly == "" {
 			switch {
 			case t.mgd != nil && m.retire:

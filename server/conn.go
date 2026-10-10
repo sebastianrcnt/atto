@@ -24,6 +24,7 @@ type clientConn struct {
 	id          string
 	name        string
 	interactive bool
+	reattach    bool // follows an upgrade close (Capabilities.Reattach)
 }
 
 type clientKey struct{}
@@ -143,6 +144,14 @@ func (s *Server) removeClient(c *clientConn) {
 	delete(s.clients, c.id)
 	s.mu.Unlock()
 	s.clientGone(c.id)
+}
+
+// reattaches reports whether client id follows an upgrade close.
+func (s *Server) reattaches(id string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	c := s.clients[id]
+	return c != nil && c.reattach
 }
 
 // interactiveClients counts the connected clients that answer prompts.

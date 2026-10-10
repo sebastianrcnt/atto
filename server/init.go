@@ -23,6 +23,11 @@ type Capabilities struct {
 	UI          *ui.Capabilities `json:"ui,omitempty"`
 	Interactive bool             `json:"interactive,omitempty"`
 	Images      bool             `json:"images,omitempty"`
+	// Reattach says the client follows a thread/closed of reason
+	// "upgrade" by opening the session again (its worker was replaced
+	// by one of the current build). Workers are only replaced while
+	// every attached client says so.
+	Reattach bool `json:"reattach,omitempty"`
 }
 
 // negotiate checks that the client speaks the current protocol revision,
@@ -66,6 +71,7 @@ func (s *Server) initialize(ctx context.Context, p threadParams) (any, error) {
 			c.name = p.Client.Name
 		}
 		c.interactive = p.Capabilities != nil && p.Capabilities.Interactive
+		c.reattach = p.Capabilities != nil && p.Capabilities.Reattach
 		if p.Capabilities != nil {
 			c.ui = p.Capabilities.UI
 		}
