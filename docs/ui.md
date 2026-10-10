@@ -545,8 +545,9 @@ See docs/ui-stage-4-report.md for verification and screenshot paths.
 The browser keeps one layout/sidebar/topbar/tabs shell and a detached, persistent
 thread view for every open tab. Each thread owns its transcript scroller,
 composer area/form and one textarea. Small metadata input tuples invalidate
-individual regions (pane, band, queue, suggestions, activity, attachments,
-toolbar, status, toasts and dialogs); transcript text is not part of those
+individual regions (pane, band, queue, suggestions, attachments, toolbar,
+status, toasts, dialogs and the transcript-tail activity cursor); transcript
+text is not part of those
 inputs. Inventory refreshes compare results, and thread inventory versions
 exclude deltas. Sidebar and per-thread scroller offsets survive region updates
 and tab detachment/reattachment.
@@ -568,6 +569,17 @@ never replaced within a thread view: ordinary typing still schedules no paint
 (except changing slash suggestions), and all paints still wait for an IME
 composition to end. Initial/resize sizing is measured after DOM attachment;
 subsequent editor growth happens only on input, draft-value changes or resize.
+
+Phone pass (2026-10-10): the composer is one line by default with small
+content-sized model/effort pickers (the native select lies invisibly over the
+label, keeping 16px on touch). A busy turn with no text streaming shows a
+cursor and the activity phase after the last transcript item instead of a line
+above the composer. Open tabs (with their offline flag) and the active tab are
+saved in localStorage and the active thread in `#s=<threadId>` (the hash wins);
+on connect they are reopened like sidebar rows, missing threads are dropped,
+and with nothing to restore the empty page lists recent sessions. Nothing is
+ever created automatically. The checkpoint tree is terminal-only; a user
+message's Edit button forks from it.
 
 No framework, HTML parsing, new runtime dependency, CSP change or protocol
 change accompanies this renderer. The bounded `atto-paint` performance entries
