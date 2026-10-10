@@ -13,6 +13,12 @@ import (
 
 func runTS(t *testing.T, entry string, after func(*goja.Runtime)) {
 	t.Helper()
+	runTSWith(t, entry, "", after)
+}
+
+// runTSWith runs setup (JavaScript) after the shims, before the bundle.
+func runTSWith(t *testing.T, entry, setup string, after func(*goja.Runtime)) {
+	t.Helper()
 	res := api.Build(api.BuildOptions{EntryPoints: []string{entry}, Bundle: true, Write: false, Outfile: "test.js", Format: api.FormatIIFE, Target: api.ES2017, LogLevel: api.LogLevelSilent})
 	if len(res.Errors) > 0 {
 		t.Fatal(res.Errors)
@@ -25,7 +31,7 @@ func runTS(t *testing.T, entry string, after func(*goja.Runtime)) {
 	if _, e = vm.RunString(string(shim)); e != nil {
 		t.Fatal(e)
 	}
-	if entry == "test/app_test.ts" {
+	if entry != "test/core_test.ts" {
 		sock, e := os.ReadFile("test/socket.js")
 		if e != nil {
 			t.Fatal(e)
@@ -42,6 +48,9 @@ func runTS(t *testing.T, entry string, after func(*goja.Runtime)) {
 		t.Fatal(e)
 	}
 	if _, e = vm.RunString("globalThis.fixture=" + string(b)); e != nil {
+		t.Fatal(e)
+	}
+	if _, e = vm.RunString(setup); e != nil {
 		t.Fatal(e)
 	}
 	if _, e = vm.RunString(string(res.OutputFiles[0].Contents)); e != nil {
@@ -71,6 +80,25 @@ func TestTypeScriptPageWorkflow(t *testing.T) {
 						}
 					}
 					if _, e := vm.RunString(fmt.Sprint(step, "()")); e != nil {
+						t.Fatalf("%s: %v", step, e)
+					}
+				}
+			})
+		})
+	}
+}
+
+func TestTypeScriptRestoreTabs(t *testing.T) {
+	for _, scenario := range []string{"hash-and-storage", "storage-only", "no-storage", "all-gone"} {
+		t.Run(scenario, func(t *testing.T) {
+			runTSWith(t, "test/restore_test.ts", fmt.Sprintf("globalThis.scenario=%q", scenario), func(vm *goja.Runtime) {
+				for _, step := range []string{"checkRestore", "checkRestoreAfter"} {
+					for range 20 {
+						if _, e := vm.RunString("flush()"); e != nil {
+							t.Fatal(e)
+						}
+					}
+					if _, e := vm.RunString(step + "()"); e != nil {
 						t.Fatalf("%s: %v", step, e)
 					}
 				}

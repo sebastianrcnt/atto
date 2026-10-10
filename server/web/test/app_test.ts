@@ -12,9 +12,23 @@ function find(text: string) {
 (globalThis as any).openPage = () => {
   assert(ws.url.endsWith('/ws'), 'socket at /ws');
   assert(ws.protocols.join() === 'atto.rpc.v3', 'no credential offer');
+  assert(
+    document.querySelector('.recents')?.textContent?.includes('Test') &&
+      find('New session').classList.contains('new-secondary'),
+    'empty state shows recent sessions, New session secondary',
+  );
+  assert(
+    !sent.some((m) => m.method === 'thread/start'),
+    'no session is created automatically',
+  );
   find('New session').click();
 };
 (globalThis as any).checkPage = () => {
+  assert(
+    location.hash === '#s=t' &&
+      JSON.parse(localStorage.getItem('atto.web.tabs')!).active === 't',
+    'open session saved in hash and storage',
+  );
   assert(
     document.getElementById('transcript')?.textContent?.includes('Initial'),
     'tail hydrated',

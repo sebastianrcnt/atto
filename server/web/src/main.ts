@@ -287,6 +287,120 @@ function event(m: Data) {
   if (m.method === 'commands/changed' || m.method === 'thread/reloaded')
     void run(() => loadCommands(id));
 }
+// Open tabs survive a reload: their thread IDs (and whether each was read
+// offline, an archived session) and the active one live in localStorage, the
+// active one also in location.hash (#s=<threadId>) so a reload or bookmark of a
+// session works without storage. The hash wins. Storage may be unavailable.
+const tabsKey = 'atto.web.tabs';
+let restored = false,
+  restoring = false,
+  savedTabs = '';
+function hashThread() {
+  const m = /^#s=(.+)$/.exec(location.hash || '');
+  if (!m) return '';
+  try {
+    return decodeURIComponent(m[1]);
+  } catch {
+    return '';
+  }
+}
+type SavedTabs = { tabs: { id: string; offline?: boolean }[]; active: string };
+function loadTabs(): SavedTabs {
+  try {
+    const d = JSON.parse(localStorage.getItem(tabsKey) || 'null');
+    if (d && Array.isArray(d.tabs))
+      return {
+        tabs: d.tabs.filter((t: Data) => t && typeof t.id === 'string'),
+        active: typeof d.active === 'string' ? d.active : '',
+      };
+  } catch {}
+  return { tabs: [], active: '' };
+}
+// Called from paint once the first restore attempt is over.
+function persistTabs() {
+  const state = JSON.stringify({
+    tabs: [...views].map(([id, v]) => ({ id, offline: !!v.info.offline })),
+    active,
+  });
+  if (state !== savedTabs) {
+    savedTabs = state;
+    try {
+      localStorage.setItem(tabsKey, state);
+    } catch {}
+  }
+  const hash = active ? '#s=' + encodeURIComponent(active) : '';
+  if ((location.hash || '') !== hash)
+    try {
+      history.replaceState(
+        null,
+        '',
+        hash || location.pathname + location.search,
+      );
+    } catch {}
+}
+// Re-open threads like open(row): archived ones are read offline, the others
+// resumed. Threads that no longer exist are dropped silently. Never starts one.
+async function reopen(ids: string[]) {
+  const r = await rpc.call('thread/list', {
+    includeArchived: true,
+    includeAgents: true,
+    includeClosedAgents: true,
+  });
+  const rows = new Map<string, Data>(
+    (r.threads || []).map((t: Data) => [t.threadId, t]),
+  );
+  await Promise.all(
+    ids.map(async (id) => {
+      const row = rows.get(id);
+      if (!row || views.has(id)) return;
+      try {
+        if (row.archived) await hydrate(id, 'thread/read', { offline: true });
+        else await hydrate(id, 'thread/resume');
+      } catch {}
+    }),
+  );
+}
+async function restoreTabs() {
+  const saved = loadTabs(),
+    hashed = hashThread();
+  const ids = saved.tabs.map((t) => t.id);
+  if (hashed && !ids.includes(hashed)) ids.push(hashed);
+  restoring = true;
+  schedule();
+  try {
+    if (ids.length) await reopen(ids);
+    // Tabs keep their saved order, whichever finished loading first.
+    const opened = [...views];
+    views.clear();
+    for (const id of ids) {
+      const v = opened.find(([key]) => key === id)?.[1];
+      if (v) views.set(id, v);
+    }
+    for (const [id, v] of opened) if (!views.has(id)) views.set(id, v);
+    active =
+      [hashed, saved.active, active, ...views.keys()].find(
+        (id) => !!id && views.has(id),
+      ) || '';
+  } finally {
+    restoring = false;
+    restored = true;
+    schedule();
+  }
+}
+window.onhashchange = () => {
+  const id = hashThread();
+  if (!id || id === active || !online) return;
+  if (views.has(id)) {
+    active = id;
+    context = null;
+    schedule();
+  } else
+    void run(async () => {
+      await reopen([id]);
+      if (views.has(id)) active = id;
+      schedule();
+    });
+};
 function connect() {
   clearTimeout(reconnectTimer);
   socket = new WebSocket(
@@ -336,6 +450,7 @@ function connect() {
         ),
       );
       models = (await rpc.call('models/list')).models || [];
+      if (!restored) await restoreTabs();
       await refreshInventory();
       schedule();
     });
@@ -1112,6 +1227,39 @@ async function mutate(row: Data, method: string) {
   await refreshInventory();
   schedule();
 }
+// A session row's main button (sidebar and the empty state's recents).
+function sessionButton(row: Data) {
+  const b = button('', () => void run(() => open(row)), !online);
+  b.className = 'session-row';
+  const title = plainMarkdown(
+    row.name || row.agent?.name || row.preview || 'New session',
+  );
+  const heading = el('div', null, 'session-heading');
+  const dot = el('span', null, 'state-dot ' + sessionState(row));
+  dot.title = sessionState(row).replace('-', ' ');
+  dot.setAttribute('aria-label', dot.title);
+  heading.append(
+    dot,
+    el('span', title, 'session-title'),
+    el('small', relativeTime(row.updatedAt), 'session-time'),
+  );
+  const preview = el(
+    'small',
+    plainMarkdown(row.lastMessage || row.preview || 'No messages yet'),
+    'session-preview',
+  );
+  b.append(heading, preview);
+  b.title = title;
+  return b;
+}
+// The latest few top-level sessions, newest first.
+function recentRows() {
+  const time = (r: Data) => Date.parse(r.updatedAt) || 0;
+  return inventory
+    .filter((r) => !r.agent)
+    .sort((a, b) => time(b) - time(a))
+    .slice(0, 6);
+}
 function inventoryUI() {
   const s = el('aside', null, 'sidebar' + (sidebar ? ' visible' : ''));
   s.setAttribute('aria-label', 'Sessions');
@@ -1167,27 +1315,8 @@ function inventoryUI() {
       'inventory-row' + (active === row.threadId ? ' active' : ''),
     );
     r.style.marginLeft = Math.min(row.displayDepth, 8) * 12 + 'px';
-    const b = button('', () => void run(() => open(row)), !online);
-    b.className = 'session-row';
-    const title = plainMarkdown(
-      row.name || row.agent?.name || row.preview || 'New session',
-    );
-    const heading = el('div', null, 'session-heading');
-    const dot = el('span', null, 'state-dot ' + sessionState(row));
-    dot.title = sessionState(row).replace('-', ' ');
-    dot.setAttribute('aria-label', dot.title);
-    heading.append(
-      dot,
-      el('span', title, 'session-title'),
-      el('small', relativeTime(row.updatedAt), 'session-time'),
-    );
-    const preview = el(
-      'small',
-      plainMarkdown(row.lastMessage || row.preview || 'No messages yet'),
-      'session-preview',
-    );
-    b.append(heading, preview);
-    b.title = title;
+    const b = sessionButton(row);
+    const title = b.title;
     r.append(b);
     const menu = button(
       '⋯',
@@ -2132,19 +2261,51 @@ function paint() {
   let restoreThreadScroll: number | undefined;
   if (!v) {
     workspaceParts.push(
-      region('empty', [online], () => {
-        const empty = el('div', null, 'empty');
-        empty.append(
-          el('div', '✳', 'empty-mark'),
-          el('h2', 'What would you like to build?'),
-          el(
-            'p',
-            'A little help for your next big idea. Start a session, or pick up where you left off.',
-          ),
-          button('New session', () => void run(() => open()), !online),
-        );
-        return empty;
-      }),
+      region(
+        'empty',
+        [online, restoring, inventory, Math.floor(Date.now() / 60000)],
+        () => {
+          const empty = el('div', null, 'empty');
+          if (restoring) {
+            empty.append(el('p', 'Reopening your sessions…', 'muted'));
+            return empty;
+          }
+          const recents = recentRows();
+          empty.append(
+            el('div', '✳', 'empty-mark'),
+            el(
+              'h2',
+              recents.length
+                ? 'Pick up where you left off'
+                : 'What would you like to build?',
+            ),
+          );
+          if (recents.length) {
+            const list = el('div', null, 'recents');
+            list.setAttribute('aria-label', 'Recent sessions');
+            for (const row of recents) {
+              const r = el('div', null, 'inventory-row');
+              r.append(sessionButton(row));
+              list.append(r);
+            }
+            empty.append(list);
+          } else
+            empty.append(
+              el(
+                'p',
+                'A little help for your next big idea. Start a session to begin.',
+              ),
+            );
+          const start = button(
+            'New session',
+            () => void run(() => open()),
+            !online,
+          );
+          start.className = recents.length ? 'new-secondary' : 'new-primary';
+          empty.append(start);
+          return empty;
+        },
+      ),
     );
   } else {
     const dom = threadDOM(v);
@@ -2417,6 +2578,7 @@ function paint() {
     );
   syncChildren(workspace, workspaceParts);
   syncChildren(layout, layoutParts);
+  if (restored) persistTabs();
   if (v) {
     const dom = threadDOM(v);
     const size = innerWidth + 'x' + innerHeight + ':' + dom.input.clientWidth;
