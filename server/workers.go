@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"github.com/sebastianrcnt/atto/agentstate"
 	"github.com/sebastianrcnt/atto/session"
+	"github.com/sebastianrcnt/atto/update"
 	"sync"
 	"time"
 )
@@ -39,6 +40,8 @@ type workerRoute struct {
 	c        *Client
 	thread   string
 	instance string
+	version  string // the worker's build (its initialize answer)
+	attached bool   // the frontend client attached through it
 }
 
 type workerRouting struct {
@@ -124,6 +127,29 @@ func (s *Server) routeCall(ctx context.Context, method string, raw json.RawMessa
 	if err != nil {
 		return nil, err, true
 	}
+	out, err := s.routeTo(ctx, r, method, raw)
+	if errors.Is(err, ErrClosed) && rereadable[method] {
+		// The worker went (replaced by a newer build, or crashed) as the
+		// request left: reads are safe to send again, to the new one.
+		select {
+		case <-r.c.Done():
+		case <-time.After(time.Second):
+		}
+		if r, err = s.workerRoute(ctx, p, method == "thread/start"); err != nil {
+			return nil, err, true
+		}
+		out, err = s.routeTo(ctx, r, method, raw)
+	}
+	return out, err, true
+}
+
+// rereadable are the routed requests a facade may send again when the
+// worker's connection ended under them: they change nothing.
+var rereadable = map[string]bool{"thread/resume": true, "thread/read": true, "thread/items": true, "thread/attach": true, "thread/entry": true, "thread/context": true, "commands/list": true}
+
+// routeTo sends one request to the worker of route r and translates the
+// answer for this facade's clients.
+func (s *Server) routeTo(ctx context.Context, r *workerRoute, method string, raw json.RawMessage) (any, error) {
 	params := map[string]any{}
 	_ = json.Unmarshal(raw, &params)
 	if params == nil {
@@ -141,8 +167,13 @@ func (s *Server) routeCall(ctx context.Context, method string, raw json.RawMessa
 		// A worker ends with its session: losing it while closing is
 		// the close having happened.
 		if method != "thread/close" || !errors.Is(err, ErrClosed) {
-			return nil, err, true
+			return nil, err
 		}
+	}
+	if method == "thread/attach" {
+		s.routing.mu.Lock()
+		r.attached = true
+		s.routing.mu.Unlock()
 	}
 	if method == "thread/detach" || method == "thread/close" {
 		s.forgetRoute(clientOf(ctx), r)
@@ -150,6 +181,18 @@ func (s *Server) routeCall(ctx context.Context, method string, raw json.RawMessa
 	}
 	if out == nil {
 		out = map[string]any{}
+	}
+	if _, snapshot := out["items"]; snapshot && out["threadId"] != nil {
+		// Which atto runs the thread: workers before runtimeVersion only
+		// said so in initialize.
+		version, _ := out["runtimeVersion"].(string)
+		if version == "" {
+			version = r.version
+			out["runtimeVersion"] = version
+		}
+		if version != "" && version != s.Version && !update.Newer(version, s.Version) {
+			out["runtimeOutdated"] = true
+		}
 	}
 	if seq, ok := out["eventId"].(float64); ok {
 		// A snapshot's cursor must refer to the facade's stream, not to a
@@ -163,9 +206,9 @@ func (s *Server) routeCall(ctx context.Context, method string, raw json.RawMessa
 			}
 			select {
 			case <-ctx.Done():
-				return nil, ctx.Err(), true
+				return nil, ctx.Err()
 			case <-r.c.Done():
-				return nil, ErrClosed, true
+				return nil, ErrClosed
 			case <-time.After(time.Millisecond):
 			}
 		}
@@ -176,7 +219,7 @@ func (s *Server) routeCall(ctx context.Context, method string, raw json.RawMessa
 	s.routing.mu.Lock()
 	s.remapWorkerClients(out, r.instance)
 	s.routing.mu.Unlock()
-	return out, nil, true
+	return out, nil
 }
 
 func (s *Server) workerRoute(ctx context.Context, p threadParams, start bool) (*workerRoute, error) {
@@ -189,10 +232,15 @@ func (s *Server) workerRoute(ctx context.Context, p threadParams, start bool) (*
 		routing.mu.Unlock()
 		return nil, ErrClosed
 	}
+	reattach := false
 	if !start {
 		if r := routing.routes[client][p.ThreadID]; r != nil {
 			select {
 			case <-r.c.Done():
+				// Its worker ended: replaced by one of the current build,
+				// or crashed. The new one follows this client as the old
+				// one did.
+				reattach = r.attached
 				r.c.Close()
 				delete(routing.routes[client], p.ThreadID)
 			default:
@@ -217,13 +265,16 @@ func (s *Server) workerRoute(ctx context.Context, p threadParams, start bool) (*
 	var init struct {
 		Client   string `json:"clientId"`
 		Instance string `json:"serverInstanceId"`
+		Version  string `json:"version"`
 		EventID  int64  `json:"eventId"`
 		Protocol int    `json:"protocolVersion"`
 	}
-	var capabilities *Capabilities
+	// The facade follows a worker's replacement (forwardWorker), so it
+	// says Reattach for its clients.
+	capabilities := &Capabilities{Images: true, Reattach: true}
 	if cc := connOf(ctx); cc != nil {
 		s.mu.Lock()
-		capabilities = &Capabilities{Interactive: cc.interactive, Images: true, UI: cc.ui}
+		capabilities.Interactive, capabilities.UI = cc.interactive, cc.ui
 		s.mu.Unlock()
 	}
 	err = c.Call(ctx, "initialize", map[string]any{"protocolVersions": []int{ProtocolVersion}, "clientInfo": ClientInfo{Name: "atto-gateway", Version: s.Version}, "capabilities": capabilities}, &init)
@@ -239,7 +290,7 @@ func (s *Server) workerRoute(ctx context.Context, p threadParams, start bool) (*
 		c.Close()
 		return nil, err
 	}
-	r := &workerRoute{c: c, thread: id, instance: init.Instance}
+	r := &workerRoute{c: c, thread: id, instance: init.Instance, version: init.Version}
 	routing.mu.Lock()
 	if routing.routes == nil {
 		routing.routes = map[string]map[string]*workerRoute{}
@@ -299,6 +350,13 @@ func (s *Server) workerRoute(ctx context.Context, p threadParams, start bool) (*
 		for range c.Events() {
 		}
 	}()
+	if reattach {
+		if err := c.Call(ctx, "thread/attach", map[string]any{"threadId": id}, nil); err == nil {
+			routing.mu.Lock()
+			r.attached = true
+			routing.mu.Unlock()
+		}
+	}
 	return r, nil
 }
 
@@ -322,6 +380,13 @@ func (s *Server) forwardWorker(r *workerRoute) {
 			}
 		}
 		if n.Method == "thread/closed" {
+			if p["reason"] == "upgrade" {
+				// The worker makes way for one of the current build:
+				// once it is gone, clients read again (events/reset
+				// below) and their routes reach the new one.
+				s.routing.mu.Unlock()
+				continue
+			}
 			closedThread = true
 		}
 		s.publish(n.Method, p)
