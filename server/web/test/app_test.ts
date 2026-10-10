@@ -46,6 +46,14 @@ function find(text: string) {
     'inventory repaint preserves sidebar node and scroll',
   );
   const prompt = document.getElementById('prompt') as HTMLTextAreaElement;
+  assert(prompt.rows === 1, 'composer starts as one line');
+  const model = document.getElementById('model')!;
+  assert(
+    model.parentNode &&
+      (model.parentNode as HTMLElement).classList.contains('picker') &&
+      (model.parentNode as HTMLElement).textContent?.startsWith('Local'),
+    'model picker label shows the whole model name',
+  );
   prompt.value = 'hello';
   prompt.oninput!({} as any);
   (globalThis as any).flush();

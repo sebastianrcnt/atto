@@ -991,24 +991,25 @@ body {
   text-overflow: clip;
 }
 .composer-area {
-  padding-top: 8px;
-  padding-bottom: 12px;
+  padding-top: 6px;
+  padding-bottom: 8px;
 }
 .composer {
   background: var(--surface);
-  border-radius: 18px;
-  padding: 10px 12px;
+  border-radius: 16px;
+  padding: 6px 8px 4px 10px;
   box-shadow: 0 4px 20px #00000008;
 }
 .composer:focus-within {
   border-color: color-mix(in srgb, var(--accent) 60%, var(--border));
 }
 .composer textarea {
-  min-height: 56px;
+  display: block;
+  min-height: 0;
   resize: none;
-  padding: 6px 4px;
+  padding: 4px 2px;
   font-size: 14px;
-  line-height: 1.6;
+  line-height: 1.5;
   border-radius: 0;
   outline: none;
 }
@@ -1017,35 +1018,72 @@ body {
 }
 .composer .toolbar {
   flex-wrap: nowrap;
-  gap: 4px;
-  margin-top: 4px;
+  align-items: center;
+  gap: 2px;
+  margin-top: 2px;
+  min-height: 28px;
 }
-.composer .toolbar > button,
-.composer select {
+.composer .toolbar > button {
   font-size: 11px;
   border: 0;
   background: transparent;
-  padding: 5px 7px;
+  padding: 4px 6px;
   max-width: 160px;
 }
-.composer select {
-  color: var(--muted);
-  min-width: 0;
-}
 .composer .toolbar > button:first-of-type {
-  font-size: 22px;
-  padding: 0 5px;
+  font-size: 18px;
+  padding: 0 4px;
   line-height: 1;
+}
+/* Model/effort: small text sized to its content; the native select is laid
+   invisibly over it (see picker() in main.ts). */
+.picker {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+  max-width: 220px;
+  border-radius: 6px;
+  color: var(--muted);
+  font-size: 11px;
+  padding: 4px 6px;
+}
+.picker:hover {
+  background: var(--field);
+}
+.picker:focus-within {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+.picker-label {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.picker-label:after {
+  content: ' ▾';
+  font-size: 9px;
+}
+.composer .picker > select {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  max-width: none;
+  opacity: 0;
+  padding: 0;
+  border: 0;
+  cursor: pointer;
 }
 .composer .toolbar > .send {
   margin-left: auto;
   background: var(--text);
   color: var(--surface);
-  width: 32px;
-  height: 32px;
+  width: 28px;
+  height: 28px;
   flex: none;
   border-radius: 50%;
-  font-size: 20px;
+  font-size: 16px;
   padding: 0;
 }
 .composer-more {
@@ -1074,7 +1112,13 @@ body {
 .status {
   font-size: 10px;
   align-items: center;
-  padding: 8px 2px 0;
+  padding: 3px 4px 0;
+  line-height: 16px;
+}
+.status .ui-tree {
+  font-size: 11px;
+  line-height: 16px;
+  max-height: 16px;
 }
 .status > button {
   border: 0;
@@ -1212,13 +1256,12 @@ body {
   .transcript {
     padding: 20px 16px;
   }
-  .composer select {
-    max-width: 105px;
-    font-size: 10px;
+  .picker {
+    max-width: 40vw;
   }
   .composer .toolbar > button {
-    font-size: 10px;
-    padding: 5px;
+    font-size: 11px;
+    padding: 4px 5px;
   }
   .topbar {
     gap: 3px;
@@ -1230,7 +1273,8 @@ body {
     max-width: 170px;
   }
   .composer-area {
-    padding-bottom: max(10px, env(safe-area-inset-bottom));
+    padding-top: 4px;
+    padding-bottom: max(6px, env(safe-area-inset-bottom));
   }
   .empty {
     padding: 24px;

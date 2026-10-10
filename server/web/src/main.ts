@@ -79,11 +79,34 @@ function schedule() {
       if (!composing) paint();
     });
 }
-// The prompt grows with its text, up to 30% of the window.
+// The prompt starts as one line and grows with its text, up to 30% of the
+// window.
 function growPrompt(input: HTMLTextAreaElement) {
   input.style.height = 'auto';
-  input.style.height =
-    Math.min(Math.max(56, input.scrollHeight), innerHeight * 0.3) + 'px';
+  input.style.height = Math.min(input.scrollHeight, innerHeight * 0.3) + 'px';
+}
+// A compact toolbar picker: the visible label is small text sized to its
+// content, the native select sits invisibly on top of it (so taps and keys
+// open the system picker, and on touch devices it keeps its 16px font, below
+// which iOS zooms on focus).
+function picker(select: HTMLSelectElement, title: string) {
+  const wrap = el('span', null, 'picker');
+  const label = el('span', null, 'picker-label');
+  const sync = () => {
+    const o = Array.from(select.querySelectorAll('option')).find(
+      (o) => o.value === select.value,
+    );
+    label.textContent = o?.textContent || select.value;
+  };
+  sync();
+  const change = select.onchange;
+  select.onchange = (e) => {
+    sync();
+    change?.call(select, e);
+  };
+  wrap.title = title;
+  wrap.append(label, select);
+  return wrap;
 }
 // Only the slash-command menu depends on the typed text.
 function slashMenu(text: string) {
@@ -1537,6 +1560,7 @@ function threadDOM(v: View) {
     const area = el('div', null, 'composer-area');
     const form = el('div', null, 'composer');
     const input = el('textarea');
+    input.rows = 1;
     input.dataset.focusId = 'prompt';
     input.dataset.thread = id;
     input.setAttribute('aria-label', 'Message');
@@ -1785,7 +1809,7 @@ function composer(v: View, instances: Data[], above: boolean) {
       model.disabled = !writable(v);
       model.onchange = () =>
         void run(() => settings('thread/setModel', { model: model.value }));
-      bar.append(model);
+      bar.append(picker(model, 'Model'));
       const effort = el('select');
       effort.id = 'effort';
       effort.dataset.focusId = 'effort';
@@ -1801,8 +1825,9 @@ function composer(v: View, instances: Data[], above: boolean) {
       effort.disabled = !writable(v);
       effort.onchange = () =>
         void run(() => settings('thread/setEffort', { effort: effort.value }));
-      bar.append(effort);
-      if (!effort.children.length) effort.hidden = true;
+      const effortPicker = picker(effort, 'Reasoning effort');
+      bar.append(effortPicker);
+      if (!effort.children.length) effortPicker.hidden = true;
       if (v.info.busy) {
         bar.append(
           button('Steer', () => void run(() => submit()), !writable(v)),
