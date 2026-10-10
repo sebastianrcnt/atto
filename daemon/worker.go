@@ -44,9 +44,13 @@ const workerStartWait = 20 * time.Second
 // worker is a running session worker, in the daemon.
 type worker struct {
 	info  Worker
-	cmd   *exec.Cmd
+	cmd   *exec.Cmd // nil for a worker adopted from an older daemon
 	done  chan struct{}
 	stdin io.WriteCloser // where the daemon asks a worker to stop, where signals cannot
+	// conn, for an adopted worker, is the connection the daemon holds to
+	// it: its end is the worker's.
+	conn *server.Client
+	kept string // why the worker of an older build was last kept (logged once)
 }
 
 // workerReq is the "worker" request's answer.
@@ -54,6 +58,8 @@ type workerAnswer struct {
 	Worker
 	Error    string `json:"error,omitempty"`
 	ReadOnly string `json:"readOnly,omitempty"`
+	// Retry: the daemon is handing over to a newer one; ask again.
+	Retry bool `json:"retry,omitempty"`
 }
 
 // startWorker finds or starts the worker for h: Target names a session to
@@ -63,11 +69,21 @@ func (d *daemon) startWorker(h Hello) workerAnswer {
 	d.wmu.Lock() // one start at a time: repeated starts converge
 	defer d.wmu.Unlock()
 	d.mu.Lock()
-	stopping := d.stopping
+	stopping, handover := d.stopping, d.handover
+	if !stopping {
+		d.starting++
+		d.idle.Stop()
+	}
 	d.mu.Unlock()
 	if stopping {
-		return workerAnswer{Error: "the daemon is stopping"}
+		return workerAnswer{Error: "the daemon is stopping", Retry: handover}
 	}
+	defer func() {
+		d.mu.Lock()
+		d.starting--
+		d.idleCheck()
+		d.mu.Unlock()
+	}()
 	if h.Target != "" {
 		d.mu.Lock()
 		exact := d.workers[h.Target]
@@ -79,7 +95,7 @@ func (d *daemon) startWorker(h Hello) workerAnswer {
 		}
 		d.mu.Unlock()
 		if exact != nil {
-			return workerAnswer{Worker: exact.info}
+			return d.current(exact, h)
 		}
 		path, err := session.Find(h.Target)
 		if err != nil {
@@ -87,7 +103,7 @@ func (d *daemon) startWorker(h Hello) workerAnswer {
 				return workerAnswer{Error: err.Error()}
 			}
 			if len(live) == 1 {
-				return workerAnswer{Worker: live[0].info}
+				return d.current(live[0], h)
 			}
 			if len(live) == 0 {
 				return workerAnswer{Error: err.Error()}
@@ -119,14 +135,19 @@ func (d *daemon) startWorker(h Hello) workerAnswer {
 		found := d.workers[saved.ID]
 		d.mu.Unlock()
 		if found != nil {
-			return workerAnswer{Worker: found.info}
+			return d.current(found, h)
 		}
 		h.Target = saved.ID
 		if saved.Cwd != "" {
 			h.Cwd = saved.Cwd
 		}
 	}
+	return d.launch(h)
+}
 
+// launch starts a worker for h (wmu held): Target is the session to
+// resume, "" a new one.
+func (d *daemon) launch(h Hello) workerAnswer {
 	sock, err := workerSocket()
 	if err != nil {
 		return workerAnswer{Error: err.Error()}
@@ -196,19 +217,22 @@ func (d *daemon) startWorker(h Hello) workerAnswer {
 	d.idle.Stop()
 	d.mu.Unlock()
 	go func() {
-		defer close(w.done)
 		_ = cmd.Wait()
 		removeSocket(sock)
-		d.mu.Lock()
-		if d.workers[w.info.Session] == w {
-			delete(d.workers, w.info.Session)
-		}
-		if len(d.workers) == 0 {
-			d.idle.Reset(d.idleAfter)
-		}
-		d.mu.Unlock()
+		d.forget(w)
 	}()
 	return workerAnswer{Worker: w.info}
+}
+
+// forget drops worker w, which ended, from the registry.
+func (d *daemon) forget(w *worker) {
+	d.mu.Lock()
+	if d.workers[w.info.Session] == w {
+		delete(d.workers, w.info.Session)
+	}
+	d.idleCheck()
+	d.mu.Unlock()
+	close(w.done)
 }
 
 func (d *daemon) workerList() []Worker {
@@ -236,6 +260,7 @@ func (d *daemon) workerList() []Worker {
 			}
 			out[i].Name, out[i].State = state.Name, state.State
 			out[i].OpenPrompt, out[i].GoalWaiting = state.OpenPrompt, state.GoalWaiting
+			out[i].Replaceable = state.Replaceable
 		}
 	}
 	slices.SortFunc(out, func(a, b Worker) int { return a.Started.Compare(b.Started) })
@@ -255,7 +280,11 @@ func (d *daemon) stopWorkers() {
 	}
 	d.mu.Unlock()
 	for _, w := range workers {
-		stopWorker(w)
+		if w.cmd == nil {
+			go closeAdopted(w)
+		} else {
+			stopWorker(w)
+		}
 	}
 	deadline := time.After(5 * time.Second)
 	for _, w := range workers {
@@ -263,10 +292,21 @@ func (d *daemon) stopWorkers() {
 		case <-w.done:
 		case <-deadline:
 			for _, w := range workers {
-				_ = w.cmd.Process.Kill()
+				killWorker(w)
 			}
 			return
 		}
+	}
+}
+
+// killWorker ends worker w at once.
+func killWorker(w *worker) {
+	if w.cmd != nil {
+		_ = w.cmd.Process.Kill()
+		return
+	}
+	if p, err := os.FindProcess(w.info.PID); err == nil {
+		_ = p.Kill()
 	}
 }
 
@@ -341,19 +381,34 @@ func cleanWorkerSockets() {
 // -effort). A session another process writes comes back as readOnly (no
 // worker).
 func StartWorker(id, cwd string, args []string) (w Worker, readOnly string, err error) {
+	// A daemon handing over to a newer one answers Retry, or goes while
+	// answering: the next request reaches (or starts) its successor.
+	for attempt := 0; ; attempt++ {
+		var retry bool
+		w, readOnly, retry, err = startWorker(id, cwd, args)
+		if !retry || attempt >= 50 {
+			return w, readOnly, err
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+}
+
+func startWorker(id, cwd string, args []string) (Worker, string, bool, error) {
 	c, typ, b, err := request(Hello{Op: "worker", Target: id, Cwd: cwd, Env: os.Environ(), Args: args}, true)
 	if err != nil {
-		return Worker{}, "", err
+		// Only a connection lost before any answer can be the daemon
+		// handing over (asking again finds the same worker anyway).
+		return Worker{}, "", errors.Is(err, ErrUnavailable) && strings.Contains(err.Error(), "EOF"), err
 	}
 	defer c.Close()
 	var a workerAnswer
 	if typ != fWorker || json.Unmarshal(b, &a) != nil {
-		return Worker{}, "", errors.New("daemon: unexpected answer")
+		return Worker{}, "", false, errors.New("daemon: unexpected answer")
 	}
 	if a.Error != "" {
-		return Worker{}, "", errors.New(a.Error)
+		return Worker{}, "", a.Retry, errors.New(a.Error)
 	}
-	return a.Worker, a.ReadOnly, nil
+	return a.Worker, a.ReadOnly, false, nil
 }
 
 // Workers lists the daemon's session workers; none when no daemon runs.
@@ -448,6 +503,10 @@ func RunWorker(version string, args []string) error {
 		return fail("error", err)
 	}
 	fmt.Printf("ready %s\n", info.ID)
+	// Nothing more goes to the daemon's pipe: a worker outlives the
+	// daemon that started it when that hands over to a newer one, and a
+	// write to a pipe nobody reads would end it.
+	detachStdout()
 	go func() {
 		for {
 			c, err := ln.Accept()

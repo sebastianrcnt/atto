@@ -55,6 +55,9 @@ type Worker struct {
 	PID         int       `json:"pid"`
 	Cwd         string    `json:"cwd"`
 	Started     time.Time `json:"started"`
+	// Replaceable: the worker closes for an upgrade on request
+	// (worker/retire) and outlives its daemon (a handover).
+	Replaceable bool `json:"replaceable,omitempty"`
 }
 
 // Exit acknowledges a successful control operation.

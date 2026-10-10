@@ -72,3 +72,14 @@ func stopRequests() (<-chan struct{}, func()) {
 	}()
 	return out, func() { signal.Stop(sigs); close(done) }
 }
+
+// detachStdout points standard output at the null device.
+func detachStdout() {
+	f, err := os.OpenFile(os.DevNull, os.O_WRONLY, 0)
+	if err != nil {
+		return
+	}
+	if windows.SetStdHandle(windows.STD_OUTPUT_HANDLE, windows.Handle(f.Fd())) == nil {
+		os.Stdout = f
+	}
+}

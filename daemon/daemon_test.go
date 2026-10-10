@@ -16,8 +16,12 @@ import (
 
 // TestMain lets the test binary serve as a session worker.
 func TestMain(m *testing.M) {
+	if len(os.Args) > 1 && os.Args[1] == "-version" { // the binary on disk, asked by a daemon
+		fmt.Println("atto", testVersion())
+		return
+	}
 	if len(os.Args) > 1 && os.Args[1] == "_session-server" { // a session worker
-		if err := RunWorker("test", os.Args[2:]); err != nil {
+		if err := RunWorker(testVersion(), os.Args[2:]); err != nil {
 			os.Exit(1)
 		}
 		return
@@ -25,7 +29,7 @@ func TestMain(m *testing.M) {
 	if len(os.Args) > 1 && os.Args[1] == "_daemon" { // a daemon started on demand
 		exe, err := os.Executable()
 		if err == nil {
-			err = Serve(exe)
+			err = Serve(exe, testVersion())
 		}
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
@@ -34,6 +38,15 @@ func TestMain(m *testing.M) {
 		return
 	}
 	os.Exit(m.Run())
+}
+
+// testVersion is the build test workers and daemons say they are, and
+// the test binary on disk answers -version with: ATTO_TEST_VERSION.
+func testVersion() string {
+	if v := os.Getenv("ATTO_TEST_VERSION"); v != "" {
+		return v
+	}
+	return "test"
 }
 
 // conn is a test client: it reads frames in the background.
@@ -106,7 +119,10 @@ func startDaemon(t *testing.T, idle time.Duration) chan error {
 		t.Fatal(err)
 	}
 	done := make(chan error, 1)
-	go func() { done <- Serve(exe) }()
+	noHandover.Store(true)
+	t.Cleanup(func() { noHandover.Store(false) })
+	version := testVersion()
+	go func() { done <- Serve(exe, version) }()
 	deadline := time.Now().Add(5 * time.Second)
 	for {
 		if c, err := net.Dial("unix", SocketPath()); err == nil {

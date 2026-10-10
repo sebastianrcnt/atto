@@ -149,6 +149,21 @@ func Kill(target string) error {
 	return c.Close()
 }
 
+// Describe tells which daemon runs: ErrUnavailable when none does; a
+// daemon from before the "info" request answers an error.
+func Describe() (Info, error) {
+	c, typ, b, err := request(Hello{Op: "info"}, false)
+	if err != nil {
+		return Info{}, err
+	}
+	defer c.Close()
+	var out Info
+	if typ != fWorker || json.Unmarshal(b, &out) != nil {
+		return Info{}, errors.New("daemon: unexpected answer")
+	}
+	return out, nil
+}
+
 // Status tolerates old daemons for diagnostics only. Old pane listings
 // are decoded locally, never made available as attachment targets.
 func Status() ([]Worker, error) {

@@ -10,6 +10,7 @@ import (
 
 	"github.com/sebastianrcnt/atto/app"
 	"github.com/sebastianrcnt/atto/daemon"
+	"github.com/sebastianrcnt/atto/update"
 )
 
 const daemonUsage = `usage:
@@ -55,7 +56,7 @@ func RunDaemonServe([]string, io.Writer) error {
 	if err != nil {
 		return err
 	}
-	return daemon.Serve(exe)
+	return daemon.Serve(exe, update.Current())
 }
 
 // listWorkers lists the sessions the daemon's workers run.
@@ -63,6 +64,11 @@ func listWorkers(out io.Writer) error {
 	ws, err := daemon.Status()
 	if err != nil {
 		return err
+	}
+	if info, err := daemon.Describe(); err == nil {
+		fmt.Fprintf(out, "daemon %s (pid %d, started %s ago)\n", info.Version, info.PID, age(info.Started))
+	} else if !errors.Is(err, daemon.ErrUnavailable) {
+		fmt.Fprintln(out, "daemon of an older atto build")
 	}
 	if len(ws) == 0 {
 		fmt.Fprintln(out, "no session worker is running in the daemon")

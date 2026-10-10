@@ -132,7 +132,7 @@ func TestServeReplacesDeadDaemonsSocket(t *testing.T) {
 		t.Fatal(err)
 	}
 	done := make(chan error, 1)
-	go func() { done <- Serve(exe) }()
+	go func() { done <- Serve(exe, "test") }()
 	waitFor(t, "the new daemon", 10*time.Second, func() bool {
 		c, err := trustedDial(SocketPath())
 		if err == nil {
