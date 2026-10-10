@@ -1268,9 +1268,15 @@ async function nativeCommand(v: View, text: string) {
         await detach(v.info.threadId);
       }
       return true;
+    // The checkpoint tree is a terminal feature; Edit on a message forks.
     case 'tree':
     case 'fork':
-      await treeDialog(v, name === 'fork');
+      warn(
+        '/' +
+          name +
+          ' is only available in the terminal' +
+          (name === 'fork' ? '. Use Edit on a message to resend from there.' : '.'),
+      );
       return true;
     case 'archive':
       await mutate({ ...v.info, threadId: v.info.threadId }, 'thread/archive');
@@ -1319,82 +1325,6 @@ async function nativeCommand(v: View, text: string) {
       }
   }
   return false;
-}
-async function treeDialog(v: View, fork = false) {
-  const r = await call(
-    'thread/tree',
-    { offline: !!v.info.offline },
-    v.info.threadId,
-  );
-  const body = el('div');
-  const entries = new Map<string, Data>(
-    (r.entries || []).map((e: Data) => [e.id, e]),
-  );
-  for (const entry of r.entries || []) {
-    const row = el('div', null, 'pending-row');
-    let parent = entry.parentId,
-      depth = 0;
-    const seen = new Set<string>();
-    while (parent && entries.has(parent) && !seen.has(parent) && depth < 12) {
-      seen.add(parent);
-      depth++;
-      parent = entries.get(parent)!.parentId;
-    }
-    row.style.paddingLeft = depth + 'ch';
-    row.append(
-      el(
-        'span',
-        (
-          entry.label ||
-          entry.message?.content?.find((b: Data) => b.type === 'text')?.text ||
-          entry.summary ||
-          entry.notes ||
-          entry.title ||
-          entry.type ||
-          'Checkpoint'
-        ).slice(0, 160) +
-          ' · ' +
-          entry.id,
-      ),
-      button(
-        'Fork',
-        () =>
-          void run(async () => {
-            const s = await call(
-              'thread/fork',
-              { entryId: entry.id },
-              v.info.threadId,
-            );
-            localModal = null;
-            await open({ threadId: s.threadId });
-            if (s.input) drafts.set(active, s.input);
-            recoverImages(active, s.images || []);
-            schedule();
-          }),
-        !writable(v),
-      ),
-    );
-    if (!fork)
-      row.append(
-        button(
-          'Go here',
-          () =>
-            void run(async () => {
-              if (!confirm('Move to this branch checkpoint?')) return;
-              await call(
-                'thread/navigate',
-                { entryId: entry.id, summary: { mode: 'none' } },
-                v.info.threadId,
-              );
-              localModal = null;
-              schedule();
-            }),
-          !writable(v),
-        ),
-      );
-    body.append(row);
-  }
-  showModal('Checkpoints', body);
 }
 const sending = new Set<string>();
 async function submit(intent = 'auto') {
@@ -2138,7 +2068,6 @@ function paint() {
       top.append(tabs);
       if (active)
         top.append(
-          button('Tree', () => void run(() => treeDialog(current()!))),
           button(
             'Rename',
             () => {

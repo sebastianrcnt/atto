@@ -742,5 +742,25 @@ function find(text: string) {
       (globalThis as any).reconnectItem,
     'reconnect keeps identical snapshot row',
   );
+  const input = document.getElementById('prompt') as HTMLTextAreaElement;
+  input.value = '/tree';
+  input.oninput!({} as any);
+  input.onkeydown!({
+    key: 'Enter',
+    shiftKey: false,
+    isComposing: false,
+    preventDefault() {},
+  } as any);
+};
+(globalThis as any).checkTerminalOnly = () => {
+  assert(
+    !sent.some((m) => m.method === 'thread/tree') &&
+      !document.querySelector('[role=dialog]') &&
+      document.body.textContent?.includes(
+        '/tree is only available in the terminal',
+      ),
+    '/tree shows a terminal-only notice and opens nothing',
+  );
+  assert(!find('Tree'), 'no Tree button in the topbar');
   (globalThis as any).testDone = true;
 };

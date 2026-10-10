@@ -64,7 +64,7 @@ func TestTypeScriptPageWorkflow(t *testing.T) {
 	for _, width := range []string{"phone", "desktop"} {
 		t.Run(width, func(t *testing.T) {
 			runTS(t, "test/app_test.ts", func(vm *goja.Runtime) {
-				for _, step := range []string{"openPage", "checkPage", "checkTurn", "checkMutation", "checkPageMerge", "checkDialog", "checkAction", "checkSecondTab", "checkTabBack", "checkReconnect"} {
+				for _, step := range []string{"openPage", "checkPage", "checkTurn", "checkMutation", "checkPageMerge", "checkDialog", "checkAction", "checkSecondTab", "checkTabBack", "checkReconnect", "checkTerminalOnly"} {
 					for range 20 {
 						if _, e := vm.RunString("flush()"); e != nil {
 							t.Fatalf("before %s: %v", step, e)
