@@ -89,7 +89,9 @@ string IDs. Requests on a connection are handled in order; `ping` is a fence.
 other revisions, or no list, gets `unsupportedProtocol` with a message naming
 the revision served (older revisions are no longer accepted).
 `clientInfo` uses Codex's name/title/version shape; capabilities currently use
-`interactive` (can answer prompts) and `images`. Unknown capability fields,
+`interactive` (can answer prompts), `images` and `reattach` (the client follows a
+`thread/closed` of reason `upgrade` by opening the session again; see
+[Worker upgrades](#worker-upgrades)). Unknown capability fields,
 such as Codex's `experimentalApi`, are tolerated, not a promise to implement
 that feature. `settings.toolGroups` is a display preference. Send `initialized`
 after the result; it is an acknowledgment, **not a mandatory gate**. Repeated
@@ -160,7 +162,11 @@ the redundant `jsonrpc` field on notifications.
 `priced`, `subscription`, `turnId`, `items`, `usage`, `turn`, `pending`, `context`,
 `eventId`, `serverInstanceId`, `prompt`, `goal`, `extensionUi`, `runKind`,
 `activity`, `jobs`, `timers`, `readOnly`, `offline`, `sessionPath`, `longContext`,
-`hasMore`, `before`. Snapshot replies always include `items`,
+`hasMore`, `before`, `runtimeVersion`, `runtimeOutdated`. `runtimeVersion` is the
+atto build executing the thread (the worker's; a facade fills it in from the
+worker's `initialize` for workers older than the field); `runtimeOutdated`, set
+by a facade such as `atto serve`, means that build is older than the facade's
+own `initialize` `version` (see [Worker upgrades](#worker-upgrades)). Snapshot replies always include `items`,
 `hasMore` and `before`, even for an empty tail. `context` is the loaded AGENTS/skills/hooks/extensions/MCP/config report.
 A read-only/offline snapshot is not an execution owner. Use resume before writes.
 
@@ -244,7 +250,8 @@ by `TestProtocolReferenceMethods`; adding a method without documenting it fails.
 | `ping` | `{}` | `{}`; ordering fence on the same connection |
 | `models/list` | `{}` | `{models:[{id,name,contextWindow,efforts,hasKey,images}]}` |
 | `models/reload` | T | `{}`; reload configured models |
-| `worker/state` | T | `{id,session,name,state:idle|working|waiting,cwd,clients,busy,version,pid}`; diagnostics, no attachment added |
+| `worker/state` | T | `{id,session,name,state:idle|working|waiting,cwd,clients,busy,version,pid,replaceable?}`; diagnostics, no attachment added; `replaceable`: the worker understands `worker/retire` and outlives its daemon |
+| `worker/retire` | T + `{reason?:"upgrade"}` | `{retired,reason?}`; for the daemon: close the session now if it is idle, ending nothing, so that a worker of the current build reopens it; `reason` says why not (`unsaved`, `busy`, `pending input`, `goal`, `prompt`, `retry`, `jobs`, `client`, `agent turn`, `closing`). See [Worker upgrades](#worker-upgrades) |
 
 ### Threads and navigation
 
@@ -401,7 +408,7 @@ clientId filtering. `events/reset` may be global or worker-scoped.
 | `thread/status` | T + `{jobs,timers}` |
 | `thread/branchChanged` | T; reread snapshot after branch movement |
 | `thread/reloaded` | T + `{context,changes,promptChanged,note}` or `{error}` |
-| `thread/closed` | T + `{reason,handoff}`; explicit close/idle retirement |
+| `thread/closed` | T + `{reason,handoff}`; explicit close/idle retirement; reason `upgrade`: the worker made way for one of the current build, reopen the session (`capabilities.reattach`) |
 | `thread/handedOff` | T + `{line?}` or `{finished:true}` |
 | `thread/handoffFailed` | T + `{error}` |
 | `events/reset` | `{eventId,serverInstanceId,threadId?}`; replace snapshot, don't append replay twice |
@@ -540,6 +547,62 @@ attachment. Only `status`/`stop` downgrade to revisions 2/3 for upgrades; execut
 falls back in-process until an incompatible old daemon is stopped. No JSON-RPC
 method was removed; worker/state adds name and state diagnostics. Worker retention defaults to one minute;
 `ATTO_WORKER_RETENTION` accepts a duration override for process tests/deployments.
+`info` answers `{version,pid,exe,started}` of the daemon (`atto daemon status`
+prints it); daemons before it answer an error. A `worker` answer may carry
+`retry:true` while a daemon hands over to a newer one: ask again.
+
+### Worker upgrades
+
+Updating atto replaces the binary on disk, not the processes that run the old
+one; a worker otherwise keeps its build until it retires, which an attached
+client prevents indefinitely.
+
+- **Who compares:** the daemon, against the executable it starts workers from
+  (its own path, asked with `-version` and cached by size and modification time),
+  not the client's version. Any difference counts, so an older client still
+  running cannot downgrade a worker, and a newer client meeting a binary on
+  disk older than itself changes nothing.
+- **When:** a `worker` request (any client opening, attaching to or resuming the
+  session) that finds the session's worker on another build asks it
+  `worker/retire`. The worker checks on its lane that it is idle (saved to disk;
+  no turn, compaction, user shell, branch summary or handoff; no queued or
+  pending input; no active goal, held or not; no open prompt, dialog, picker
+  or login; no goal retry; no jobs or timers; no running agent turn) and that
+  every attached client declared `capabilities.reattach`, and in the same lane
+  step marks the thread closing. Input arriving after that is refused
+  (the TUI and the web put it back into the editor), never accepted and lost.
+  The session then closes ending nothing: no SessionEnd hooks, its goal and
+  jobs stay, unlike an idle retirement. The daemon waits for the process,
+  starts the session from the binary on disk and answers with the new worker;
+  the log (`~/.atto/logs/daemon.log`) gets `replaced the worker of session …`,
+  or once per reason `kept the worker … for now: <reason>`. A busy worker is
+  never interrupted: it is replaced at a later request once idle.
+- **Other clients:** they get `thread/closed` with reason `upgrade`, then their
+  connection ends. The TUI does not treat it as a close: it reconnects to the
+  new worker (as after a crash), keeps its editor draft and says which build now
+  runs the session. A facade (`atto serve`, `app-server`) does not relay that
+  `thread/closed`: once the old worker's stream ends it publishes
+  `events/reset`, and the next request of each of its clients reaches the new
+  worker, attaching first when the client was attached; reads that fail because
+  the old connection ended under them are sent again. Clients without
+  `reattach` (older TUIs and gateways, `atto -p`, scripts) keep the old worker
+  until they detach.
+- **The daemon:** it only supervises; workers are processes of their own. After
+  answering a `worker` request, a daemon whose own build differs from the
+  binary on disk hands over when every worker is `replaceable`: it writes its
+  registry to `run/handover.json`, stops listening, releases its lock and starts
+  `atto _daemon` from the binary on disk, which adopts the listed workers that
+  still answer (it holds a connection to each to learn of its end, and stops them
+  with `thread/close`). Workers redirect their standard output to the null
+  device once ready, so the old daemon's pipe going away cannot end them.
+- **Older builds:** workers and daemons from before this mechanism cannot take
+  part: such a worker is never replaced (close the session when idle and reopen
+  it), such a daemon never replaces workers or hands over (it exits once its last
+  worker has gone, or with `atto daemon stop -force`). A new session that has
+  not saved its first entry is not replaced either: it lives only in memory.
+- **Browser:** the web client shows a small notice in a session whose snapshot
+  says `runtimeOutdated`; it goes away with the next snapshot from a current
+  worker.
 
 ## Revision 3: lazy transcript loading
 
