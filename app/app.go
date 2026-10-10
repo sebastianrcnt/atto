@@ -191,6 +191,10 @@ type App struct {
 	quitOnce sync.Once
 	quitting bool
 	closed   bool
+	// upgrading: the session's worker closed to be replaced by one of the
+	// current build (thread/closed reason "upgrade"); the reconnect that
+	// follows is expected.
+	upgrading bool
 }
 
 // newApp makes the App with what it shows, before it connects.
@@ -350,7 +354,7 @@ func (a *App) show(info server.ThreadInfo) {
 	if a.workers() && info.Cwd != "" {
 		a.cwd = info.Cwd
 	}
-	a.closed = false
+	a.closed, a.upgrading = false, false
 	a.applySnapshot(info)
 	a.treeEntries, a.treeLeaf = nil, ""
 	a.loadCatalog()

@@ -164,6 +164,16 @@ func (a *App) onNotification(n server.Notification) {
 		}
 		a.doQuit()
 	case "thread/closed":
+		var why struct {
+			Reason string `json:"reason"`
+		}
+		if json.Unmarshal(n.Params, &why) == nil && why.Reason == "upgrade" && a.conn != nil && a.conn.own == nil {
+			// The worker makes way for one of the current atto build:
+			// disconnected reconnects to it once this one is gone.
+			a.upgrading = true
+			a.busy = false
+			return
+		}
 		a.closed = true
 		if !p.Handoff && !a.quitting {
 			a.notice("This session was closed.")

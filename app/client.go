@@ -58,7 +58,7 @@ func dialConn(c *server.Client, own *server.Server) (*conn, error) {
 	err := c.Call(context.Background(), "initialize", map[string]any{
 		"protocolVersions": []int{server.ProtocolVersion},
 		"clientInfo":       map[string]string{"name": "atto-tui", "version": Version},
-		"capabilities":     server.Capabilities{Interactive: true, Images: true, UI: &ui.Capabilities{Version: 1, Surface: "terminal", Elements: ui.Catalog()}},
+		"capabilities":     server.Capabilities{Interactive: true, Images: true, Reattach: true, UI: &ui.Capabilities{Version: 1, Surface: "terminal", Elements: ui.Catalog()}},
 	}, &init)
 	if err != nil {
 		c.Close()
@@ -227,7 +227,9 @@ func (a *App) disconnected() {
 		return
 	}
 	if a.conn != nil && a.conn.own == nil && a.threadID != "" && !a.closed {
-		a.notice("The session's runtime ended; reconnecting…")
+		if !a.upgrading {
+			a.notice("The session's runtime ended; reconnecting…")
+		}
 		a.reconnect(a.conn, 0)
 		return
 	}
@@ -266,8 +268,13 @@ func (a *App) reconnect(dead *conn, attempt int) {
 			if cn != nil {
 				a.use(cn)
 			}
+			upgraded := a.upgrading
 			a.show(info)
-			a.notice("Reconnected.")
+			if upgraded {
+				a.notice("The session now runs atto %s.", info.RuntimeVersion)
+			} else {
+				a.notice("Reconnected.")
+			}
 		})
 	}()
 }
