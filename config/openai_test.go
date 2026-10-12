@@ -79,6 +79,10 @@ func TestOpenAIPresetWithOAuth(t *testing.T) {
 	if !ok || ref.KeyFunc == nil {
 		t.Fatalf("oauth ref %+v", ref)
 	}
+	// Sign in with ChatGPT draws on the subscription: prices only estimate.
+	if !ref.Provider.Subscription || m.Providers["openai"].Subscription {
+		t.Fatalf("login not marked as a subscription (or the shared provider changed): %+v", ref.Provider)
+	}
 	tok, err := ref.KeyFunc(context.Background())
 	if err != nil || tok != "acc" {
 		t.Fatalf("valid token not reused: %q %v", tok, err)
@@ -92,7 +96,7 @@ func TestOpenAIPresetWithOAuth(t *testing.T) {
 	}
 	RemoveAuth("openai")
 	m.auth, _ = LoadAuth()
-	if r, _ := m.Find("openai", "gpt-5.2"); r.KeyFunc != nil || r.APIKey != "sk-explicit" {
+	if r, _ := m.Find("openai", "gpt-5.2"); r.KeyFunc != nil || r.APIKey != "sk-explicit" || r.Provider.Subscription {
 		t.Fatalf("explicit key: %+v", r)
 	}
 }

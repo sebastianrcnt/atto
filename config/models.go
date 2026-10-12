@@ -15,6 +15,7 @@ import (
 	"sync"
 
 	"github.com/sebastianrcnt/atto/ai"
+	"github.com/sebastianrcnt/atto/auth"
 )
 
 // ModelsFile is the contents of models.json (schema ported from pi, MIT,
@@ -78,7 +79,8 @@ type Provider struct {
 	MaxTokensField string         `json:"maxTokensField,omitempty"`
 	ExtraBody      map[string]any `json:"extraBody,omitempty"`
 	// Subscription marks a flat-rate plan (ChatGPT login, OpenCode Go):
-	// the models' prices then only estimate the usage at API rates.
+	// the models' prices then only estimate the usage at API rates. List
+	// sets it for a provider whose credential is a subscription login.
 	Subscription bool `json:"subscription,omitempty"`
 	// LlamaCppMetadata probes runtime limits and thinking controls on load.
 	LlamaCppMetadata bool `json:"llamaCppMetadata,omitempty"`
@@ -723,6 +725,13 @@ func (m ModelsFile) List() []ModelRef {
 	for _, n := range names {
 		p := m.Providers[n]
 		key, oauth := p.resolveKey(n, m.auth)
+		if oauth {
+			// A login on a flat-rate plan (Sign in with ChatGPT) draws on the
+			// subscription; an API key for the same provider stays API-priced.
+			if o := auth.GetOAuthProvider(n); o != nil && o.Subscription {
+				p.Subscription = true
+			}
+		}
 		for _, mod := range p.Models {
 			ref := ModelRef{ProviderName: n, Provider: p, Model: mod, APIKey: key}
 			if oauth {

@@ -10,6 +10,10 @@ import "context"
 type OAuthProvider struct {
 	ID   string // provider id in auth.json and models.json
 	Name string // shown in login pickers
+	// Subscription marks a login that draws usage from a flat-rate plan
+	// (both ChatGPT logins): models used through it are priced as an
+	// estimate, not at API rates.
+	Subscription bool
 	// Login runs the browser flow; deviceID is this installation's UUID.
 	Login   func(ctx context.Context, ui UI, deviceID string) (Credential, error)
 	Refresh func(ctx context.Context, c Credential) (Credential, error)
@@ -26,7 +30,7 @@ var (
 func OAuthProviders() []OAuthProvider {
 	return []OAuthProvider{
 		{
-			ID: "openai", Name: "OpenAI (ChatGPT subscription)",
+			ID: "openai", Name: "OpenAI (ChatGPT subscription)", Subscription: true,
 			Login: func(ctx context.Context, ui UI, deviceID string) (Credential, error) {
 				return NewChatGPTClient(deviceID).Login(ctx, ui)
 			},
@@ -35,7 +39,7 @@ func OAuthProviders() []OAuthProvider {
 			},
 		},
 		{
-			ID: "openai-codex", Name: "OpenAI Codex (ChatGPT Plus/Pro, legacy)",
+			ID: "openai-codex", Name: "OpenAI Codex (ChatGPT Plus/Pro, legacy)", Subscription: true,
 			Login: func(ctx context.Context, ui UI, _ string) (Credential, error) {
 				return NewCodexClient().Login(ctx, ui)
 			},
