@@ -737,6 +737,7 @@ func (m ModelsFile) List() []ModelRef {
 			if oauth {
 				ref.KeyFunc = func(ctx context.Context) (string, error) { return OAuthToken(ctx, n) }
 			}
+			ref.waiveTiers()
 			out = append(out, ref)
 		}
 	}
