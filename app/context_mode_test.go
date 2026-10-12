@@ -105,6 +105,7 @@ func TestCompactBlockReason(t *testing.T) {
 	for _, tc := range []struct{ reason, want string }{
 		{agent.ReasonPriceTier, "price tier above 272.0k"},
 		{agent.ReasonSetting, "compaction.limits 272.0k"},
+		{agent.ReasonSubscription, "subscription context 272.0k"},
 		{"", ""},
 	} {
 		for _, running := range []bool{true, false} {
@@ -217,7 +218,7 @@ func setTestLongContext(a *App, long bool) {
 	if long {
 		ref.Model.Cost = nil
 	}
-	a.info.AutoCompactLimit = agent.AutoCompactLimit(ref.Model)
+	a.info.AutoCompactLimit = agent.AutoCompactLimit(ref)
 	a.info.AutoCompactCap = 0
 	if !long {
 		a.info.AutoCompactCap = ref.Model.Cost.ContextPriceBoundary()

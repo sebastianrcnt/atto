@@ -25,8 +25,11 @@ type ContextInfo struct {
 	CompactLimit  int         `json:"compactLimit,omitempty"`
 	// Cap is the tier cap below the window (0: none), and PriceCap that
 	// it is the model's price boundary rather than settings.json's.
+	// CapReason is the agent's reason for it (agent.ReasonPriceTier,
+	// ReasonSetting, ReasonSubscription).
 	Cap         int              `json:"cap,omitempty"`
 	PriceCap    bool             `json:"priceCap,omitempty"`
+	CapReason   string           `json:"capReason,omitempty"`
 	LongContext bool             `json:"longContext,omitempty"`
 	Breakdown   *agent.Breakdown `json:"breakdown,omitempty"`
 	System      string           `json:"systemPrompt,omitempty"` // view system
@@ -38,9 +41,9 @@ func (t *thread) contextInfo(view string) ContextInfo {
 	m := t.model()
 	c := ContextInfo{Loaded: core.Collect(t.agent, t.hookSrc, t.modelFrom, t.effortFrom), ContextTokens: t.ctx,
 		ContextWindow: m.Model.ContextWindow, LongContext: t.agent.LongContext(), Usage: t.total, Busy: t.turns.Busy}
-	c.CompactLimit, c.Cap = t.agent.CompactionLimit()
-	c.PriceCap = c.Cap > 0 && c.Cap == m.Model.Cost.ContextPriceBoundary()
-	if m.Model.Cost.ContextPriceBoundary() == 0 {
+	c.CompactLimit, c.Cap, c.CapReason = t.agent.CompactionPlan()
+	c.PriceCap = c.CapReason == agent.ReasonPriceTier
+	if m.Model.Cost.ContextPriceBoundary() == 0 && m.SubscriptionContext() == 0 {
 		c.tierNote = "No tier cap: no tier data known for this model."
 		if m.Model.Cost != nil && len(m.Model.Cost.Tiers) > 0 {
 			c.tierNote = "No tier cap: known tiers do not increase the input price."

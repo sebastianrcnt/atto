@@ -96,7 +96,7 @@ type Item struct {
 	// Compaction: the context estimate before and after (After is zero for
 	// sessions saved before it was recorded).
 	Auto         bool
-	Reason       string // agent.ReasonPriceTier or ReasonSetting, with Cap
+	Reason       string // agent.ReasonPriceTier, ReasonSetting or ReasonSubscription, with Cap
 	Cap          int
 	TokensBefore int
 	TokensAfter  int

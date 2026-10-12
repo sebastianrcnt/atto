@@ -182,7 +182,8 @@ type (
 	}
 	// CompactStart, CompactDelta and CompactEnd bracket a compaction.
 	// A cap that lowered an automatic compaction's trigger is named by
-	// Reason (ReasonPriceTier or ReasonSetting) and Cap, the token size.
+	// Reason (ReasonPriceTier, ReasonSetting or ReasonSubscription) and Cap,
+	// the token size.
 	CompactStart struct {
 		Auto   bool
 		Reason string

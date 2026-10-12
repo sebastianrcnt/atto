@@ -19,11 +19,11 @@ func TestCompactionLimits(t *testing.T) {
 	}
 	t.Setenv("ATTO_DIR", t.TempDir())
 	m := config.Model{ID: "luna", ContextWindow: 1050000, MaxTokens: 128000}
-	if got := AutoCompactLimit(m); got != 922000 {
+	if got := AutoCompactLimit(config.ModelRef{Model: m}); got != 922000 {
 		t.Fatal(got)
 	}
 	m.Cost = &ai.ModelCost{Tiers: []ai.ModelCostTier{{InputTokensAbove: 500000}, {InputTokensAbove: 0}, {InputTokensAbove: 272000}}}
-	if got := AutoCompactLimit(m); got != 244800 {
+	if got := AutoCompactLimit(config.ModelRef{Model: m}); got != 244800 {
 		t.Fatal(got)
 	}
 	a := New(config.ModelRef{ProviderName: "test", Model: m}, "", t.TempDir())
@@ -48,11 +48,11 @@ func TestCompactionLimits(t *testing.T) {
 		t.Fatal("provider/model key", got)
 	}
 	m.ContextWindow, m.MaxTokens = 200000, 100000
-	if got := AutoCompactLimit(m); got != 100000 {
+	if got := AutoCompactLimit(config.ModelRef{Model: m}); got != 100000 {
 		t.Fatal("never raise window limit", got)
 	}
 	m.ContextWindow = 0
-	if got := AutoCompactLimit(m); got != 0 {
+	if got := AutoCompactLimit(config.ModelRef{Model: m}); got != 0 {
 		t.Fatal(got)
 	}
 }

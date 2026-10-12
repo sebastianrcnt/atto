@@ -231,6 +231,6 @@ func setTestModel(a *App, ref config.ModelRef) {
 	p.Models = []config.Model{ref.Model}
 	a.models = config.ModelsFile{Providers: map[string]config.Provider{ref.ProviderName: p}}
 	a.info.Model = ref.ProviderName + "/" + ref.Model.ID
-	a.info.AutoCompactLimit = agent.AutoCompactLimit(ref.Model)
+	a.info.AutoCompactLimit = agent.AutoCompactLimit(ref)
 	a.info.AutoCompactCap = ref.Model.Cost.ContextPriceBoundary()
 }

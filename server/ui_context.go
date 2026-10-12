@@ -2,6 +2,8 @@ package server
 
 import (
 	"fmt"
+
+	"github.com/sebastianrcnt/atto/agent"
 	"github.com/sebastianrcnt/atto/ui"
 )
 
@@ -28,7 +30,9 @@ func ContextTree(c ContextInfo) ui.Node {
 		add("Auto-compacts at " + contextTokens(c.CompactLimit))
 	}
 	if c.Cap > 0 {
-		if c.PriceCap {
+		if c.CapReason == agent.ReasonSubscription {
+			add("The subscription gives " + c.Loaded.Model.Name + " " + contextTokens(c.Cap) + " tokens of context, without a long-context fee.")
+		} else if c.PriceCap {
 			add(c.Loaded.Model.Name + " costs more above " + contextTokens(c.Cap) + " input tokens.")
 		} else {
 			add("Cap set by settings.json compaction.limits.")

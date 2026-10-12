@@ -524,7 +524,7 @@ func SetModel(info *ThreadInfo, m config.ModelRef, models config.ModelsFile) {
 		info.Model = m.ProviderName + "/" + m.Model.ID
 	}
 	info.ModelName, info.Efforts, info.ContextWindow = models.DisplayName(m), m.Model.Levels(), m.Model.ContextWindow
-	info.AutoCompactLimit = agent.AutoCompactLimit(m.Model)
+	info.AutoCompactLimit = agent.AutoCompactLimit(m)
 	c := m.Model.Cost
 	info.Priced = c != nil && (c.Input > 0 || c.Output > 0 || c.CacheRead > 0 || c.CacheWrite > 0)
 	info.Subscription = m.Provider.Subscription

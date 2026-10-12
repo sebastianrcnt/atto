@@ -576,7 +576,7 @@ type compactBlock struct {
 	expander
 	clickable
 	auto    bool
-	reason  string // agent.ReasonPriceTier or ReasonSetting, with cap
+	reason  string // agent.ReasonPriceTier, ReasonSetting or ReasonSubscription, with cap
 	cap     int
 	running bool
 	notes   strings.Builder
@@ -621,6 +621,8 @@ func (c *compactBlock) render(width int) []string {
 		why = " · price tier above " + tui.FormatTokens(c.cap)
 	case agent.ReasonSetting:
 		why = " · compaction.limits " + tui.FormatTokens(c.cap)
+	case agent.ReasonSubscription:
+		why = " · subscription context " + tui.FormatTokens(c.cap)
 	}
 	if c.running {
 		out := []string{tui.Dim("  ◇ Compacting context" + why + " · writing handoff notes…")}

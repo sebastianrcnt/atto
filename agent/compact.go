@@ -15,10 +15,21 @@ import (
 	"github.com/sebastianrcnt/atto/session"
 )
 
-// AutoCompactLimit uses 90% of the window or first price-tier boundary,
-// further capped so the largest possible response still fits.
-func AutoCompactLimit(m config.Model) int {
-	return compactLimit(m, m.Cost.ContextPriceBoundary())
+// AutoCompactLimit uses 90% of the window or of the default cap (see
+// defaultCap), further capped so the largest possible response still fits.
+func AutoCompactLimit(m config.ModelRef) int {
+	cap, _ := defaultCap(m)
+	return compactLimit(m.Model, cap)
+}
+
+// defaultCap is the cap without settings or the long-context toggle: the
+// context a subscription gives the model without a long-context fee, else
+// the first price-tier boundary.
+func defaultCap(m config.ModelRef) (cap int, reason string) {
+	if n := m.SubscriptionContext(); n > 0 {
+		return n, ReasonSubscription
+	}
+	return m.Model.Cost.ContextPriceBoundary(), ReasonPriceTier
 }
 
 func compactLimit(m config.Model, cap int) int {
@@ -59,14 +70,21 @@ func (a *Agent) LongContext() bool {
 
 // Why a cap lowers the compaction trigger.
 const (
-	ReasonPriceTier = "price-tier" // the model costs more above Cap input tokens
-	ReasonSetting   = "setting"    // settings.json compaction.limits
+	ReasonPriceTier    = "price-tier"   // the model costs more above Cap input tokens
+	ReasonSetting      = "setting"      // settings.json compaction.limits
+	ReasonSubscription = "subscription" // the subscription's context, no long-context fee
 )
 
 // CompactionLimit returns the trigger and the effective cap (zero: window).
 func (a *Agent) CompactionLimit() (limit, cap int) {
 	limit, cap, _ = a.compactionPlan()
 	return limit, cap
+}
+
+// CompactionPlan is CompactionLimit with the cap's reason (ReasonPriceTier,
+// ReasonSetting, ReasonSubscription; "" without a cap).
+func (a *Agent) CompactionPlan() (limit, cap int, reason string) {
+	return a.compactionPlan()
 }
 
 // compactionPlan is CompactionLimit and where the cap comes from. A cap
@@ -87,7 +105,7 @@ func (a *Agent) compactionCap() (m config.ModelRef, cap int, reason string) {
 	a.cfgMu.Lock()
 	defer a.cfgMu.Unlock()
 	m = a.model
-	cap, reason = m.Model.Cost.ContextPriceBoundary(), ReasonPriceTier
+	cap, reason = defaultCap(m)
 	if n, ok := a.compactLimits[m.ProviderName+"/"+m.Model.ID]; ok && n >= 0 {
 		cap, reason = n, ReasonSetting
 	}
