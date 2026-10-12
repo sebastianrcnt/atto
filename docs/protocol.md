@@ -222,8 +222,10 @@ A read-only/offline snapshot is not an execution owner. Use resume before writes
 - **CommandInfo:** `{name,args?,description,local?,origin,extension?}`. A local
   command needs a client renderer/picker; don't silently execute a substitute.
 - **ContextInfo:** `{loaded,contextTokens,contextWindow?,compactLimit?,cap?,
-  priceCap?,longContext?,breakdown?,systemPrompt?,usage,busy}`. `breakdown` is
-  unavailable while busy. `tree?:Node` is the passive shared context card
+  priceCap?,capReason?,longContext?,breakdown?,systemPrompt?,usage,busy}`.
+  `capReason` says where `cap` comes from: `price-tier`, `setting`
+  (`compaction.limits`) or `subscription` (the plan's context, without a
+  long-context fee). `breakdown` is unavailable while busy. `tree?:Node` is the passive shared context card
   (omitted for `view:system`).
 
 **ServerInfo** (MCP): `{name,scope,transport,target,path,status,tools,error?,invalid?,hash?}`.

@@ -89,7 +89,7 @@ A provider can also set:
 - `extraBody`: extra fields for the request body
 - `api`: `"openai-completions"` (the default) or `"openai-responses"`
 - `llamaCppMetadata`: `true` to opt in to llama.cpp runtime metadata discovery (off by default)
-- `subscription`: `true` for a flat-rate plan, so the status line marks its cost as an estimate
+- `subscription`: `true` for a flat-rate plan, so the status line marks its cost as an estimate. A provider used through a subscription login (`atto login openai`, Sign in with ChatGPT) counts as one without it; an API key for the same provider stays API-priced
 
 For llama.cpp only, set `"llamaCppMetadata": true` on the provider. When
 models.json loads (including `/reload`), atto reads `/models` beside the `/v1`
@@ -114,7 +114,7 @@ A model can set:
 - `efforts`: the reasoning levels it supports
 - `effortMap`: how atto's effort levels translate into what the server expects
 - `input`: `["text", "image"]` if it accepts images (default: text only; catalog models know this already)
-- `cost`: prices in dollars per million tokens (`input`, `output`, `cacheRead`, `cacheWrite`), shown as the session's cost in the status line. Catalog models take theirs from models.dev; on a subscription (ChatGPT login, OpenCode Go) the figure is what the same usage would cost over the API, shown as `≈$0.123`
+- `cost`: prices in dollars per million tokens (`input`, `output`, `cacheRead`, `cacheWrite`), shown as the session's cost in the status line. Catalog models take theirs from models.dev; on a subscription (ChatGPT login, OpenCode Go) the figure is what the same usage would cost over the API, shown as `≈$0.123`. Where the subscription waives a model's long-context fee (GPT-6.1 Sol on a ChatGPT login, see below), the estimate leaves out that surcharge
 
 ## Use
 
@@ -299,7 +299,9 @@ A model request that fails mid-turn is sent again, up to 5 times with a growing 
 
 Auto-compaction starts at 90% of the context window, or earlier to leave room for the model's maximum output. It is checked before every request of a turn, and a new message counts toward it before it is added. If a model's prices increase above a context size, atto also caps the trigger at 90% of the first positive price-tier boundary. This works with catalog prices and `models.json` `cost.tiers`, for every provider. For example, a 272k tier compacts at 244.8k instead of entering the long-context surcharge band.
 
-`/context` reports the trigger and its reason. When a tier or `compaction.limits` lowered the trigger, the compaction block says so (`Context auto-compacted · price tier above 272.0k`), and the status line shows the trigger after the context size (`120.0k/1.1M ⇥244.8k`). `/context long` ignores the price-tier cap for this session; `/context normal` restores it. The choice survives resume and applies across model switches, but `/clear` starts in normal mode. The status line shows `long` beside the context percentage and `×2` (rounded input-price multiplier) beside cost when the last request used a surcharge tier. Context percentages always refer to the full window.
+On a ChatGPT subscription (`atto login openai`, or the legacy `openai-codex`) some models get a larger context without a long-context fee. atto keeps a small table of them: for now GPT-6.1 Sol, whose subscription context is 500k (OpenAI, 2026-10-11; the API's 272k tier is unchanged). There the cap is that context instead of the price tier, so compaction starts at 450k, as in Codex, and the cost estimate has no `×2`. Other models (GPT-6 Luna, GPT-6 Sol) keep their 272k tier on the subscription too, and an API key always uses the API's prices. The window shown by `/model` and `atto models` stays the API's; the trigger is the `⇥` in the status line.
+
+`/context` reports the trigger and its reason. When a tier, a subscription context or `compaction.limits` lowered the trigger, the compaction block says so (`Context auto-compacted · price tier above 272.0k`, `· subscription context 500.0k`), and the status line shows the trigger after the context size (`120.0k/1.1M ⇥244.8k`). `/context long` ignores the price-tier (or subscription) cap for this session; `/context normal` restores it. The choice survives resume and applies across model switches, but `/clear` starts in normal mode. The status line shows `long` beside the context percentage and `×2` (rounded input-price multiplier) beside cost when the last request used a surcharge tier. Context percentages always refer to the full window.
 
 For a persistent per-model override, add `compaction.limits` to `~/.atto/settings.json`:
 
@@ -307,7 +309,7 @@ For a persistent per-model override, add `compaction.limits` to `~/.atto/setting
 {"compaction": {"limits": {"openai/gpt-6-luna": 0, "local/my-model": 200000}}}
 ```
 
-Keys are exact `provider/model` IDs. A positive cap compacts at 90% of that many tokens, never later than the window/output limit; `0` or a cap at least as large as the context window disables the tier cap, not auto-compaction. Missing keys use the model's prices. `/context long` bypasses these caps too; `/reload` applies settings changes.
+Keys are exact `provider/model` IDs. A positive cap compacts at 90% of that many tokens, never later than the window/output limit; `0` or a cap at least as large as the context window disables the tier cap, not auto-compaction. Missing keys use the model's prices (or its subscription context). `/context long` bypasses these caps too; `/reload` applies settings changes.
 
 **Sessions** are JSONL files under `~/.atto/sessions/`. Archiving stores them as zstd-compressed `.jsonl.zst` files under `~/.atto/archived_sessions/`, keeping the same date layout. Listings, previews, history search and archived agent transcripts read them transparently. Unarchiving restores the original JSONL bytes; resuming an archived session restores it first. Existing plain archives remain readable; they are never compressed automatically. As in pi, entries form a tree: going back with `/tree` starts a new branch in the same file and keeps the old one. When that leaves work behind, atto asks whether to summarize the branch being left (optionally with your own instructions); the current model writes the summary, `Esc` cancels it, and the model sees it on the new branch. `"branchSummary": {"skipPrompt": true}` in `settings.json` never asks. `atto history grep` searches every branch and marks entries on other branches; `-active` limits it to the current one.
 
