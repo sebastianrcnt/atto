@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -120,10 +121,12 @@ func RunJob(args []string, out io.Writer) error {
 		}
 		fmt.Fprintf(out, "You will get an [atto event] when it exits. Output: atto job output %d · wait: atto job wait %d · stop: atto job kill %d\n", j.ID, j.ID, j.ID)
 	case "list", "ls":
-		list := jobs.List(*session)
+		list, listErr := jobs.ListWithErrors(*session)
 		if len(list) == 0 {
-			fmt.Fprintln(out, "no jobs")
-			return nil
+			if listErr == nil {
+				fmt.Fprintln(out, "no jobs")
+			}
+			return listErr
 		}
 		tw := tabwriter.NewWriter(out, 0, 0, 2, ' ', 0)
 		fmt.Fprintln(tw, "ID\tKIND\tSTATUS\tTIME\tCOMMAND")
@@ -134,7 +137,7 @@ func RunJob(args []string, out io.Writer) error {
 			}
 			fmt.Fprintf(tw, "%d\t%s\t%s\t%s\t%s\n", j.ID, j.KindLabel(), st, j.Runtime(), j.Label())
 		}
-		return tw.Flush()
+		return errors.Join(listErr, tw.Flush())
 	case "output", "log":
 		id, err := parseID(fs.Arg(0))
 		if err != nil {

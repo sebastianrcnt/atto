@@ -42,3 +42,30 @@ func TestJobOutputFlagsAfterID(t *testing.T) {
 		t.Fatalf("bad trailing flag: %v", err)
 	}
 }
+
+// A broken job record must not turn a partial/failed listing into "no jobs".
+func TestJobListReportsUnreadableStateAndKeepsPartialResults(t *testing.T) {
+	t.Setenv("ATTO_DIR", t.TempDir())
+	badDir := filepath.Join(jobs.Root("s"), "1")
+	if err := os.MkdirAll(badDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(badDir, "job.json"), []byte("not json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	if err := RunJob([]string{"list", "-session", "s"}, &out); err == nil || strings.Contains(out.String(), "no jobs") {
+		t.Fatalf("failed list: %q, %v", out.String(), err)
+	}
+	goodDir := filepath.Join(jobs.Root("s"), "2")
+	if err := os.Mkdir(goodDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(goodDir, "job.json"), []byte(`{"id":2,"session":"s","status":"exited","name":"readable job"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out.Reset()
+	if err := RunJob([]string{"list", "-session", "s"}, &out); err == nil || !strings.Contains(out.String(), "readable job") {
+		t.Fatalf("partial list: %q, %v", out.String(), err)
+	}
+}
