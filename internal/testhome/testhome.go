@@ -10,7 +10,9 @@ import (
 )
 
 // Use makes a temporary home for the test binary, points HOME and
-// USERPROFILE at it and returns a function that removes it. Go's module
+// USERPROFILE at it, clears inherited execution context, and returns a function
+// that removes the home. Helper-process modes must be dispatched first.
+// Go's module
 // cache, build cache and env file default to paths under the home, so a
 // `go build` run by a test would otherwise download modules into the
 // temporary home, whose read-only files os.RemoveAll cannot delete: every
@@ -28,6 +30,10 @@ func Use() (func(), error) {
 	}
 	home, err := os.MkdirTemp("", "atto-home")
 	if err != nil {
+		return nil, err
+	}
+	if err := ClearExecutionContext(); err != nil {
+		RemoveAll(home)
 		return nil, err
 	}
 	for k, v := range keep {

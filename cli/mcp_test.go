@@ -13,6 +13,7 @@ import (
 	"github.com/sebastianrcnt/atto/agent"
 	"github.com/sebastianrcnt/atto/config"
 	"github.com/sebastianrcnt/atto/daemon"
+	"github.com/sebastianrcnt/atto/internal/testhome"
 	"github.com/sebastianrcnt/atto/jobs"
 	"github.com/sebastianrcnt/atto/mcp"
 	"github.com/sebastianrcnt/atto/mcp/mcptest"
@@ -61,9 +62,10 @@ func TestMain(m *testing.M) {
 		}
 	}
 	// Helper processes keep the environment supplied by their test.
-	for _, key := range []string{config.EnvAgent, config.EnvLegacyAgent, "ATTO_SESSION_ID", config.EnvDir} {
-		os.Unsetenv(key)
+	if err := testhome.ClearExecutionContext(); err != nil {
+		panic(err)
 	}
+	os.Unsetenv(config.EnvDir)
 	// Tests run agent turns as job processes unless one asks for the daemon
 	// (a test of the worker path unsets this).
 	os.Setenv("ATTO_NO_DAEMON", "1")
